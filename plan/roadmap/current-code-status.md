@@ -2,7 +2,7 @@
 
 Status: current snapshot.
 
-Snapshot date: 2026-06-05.
+Snapshot date: 2026-06-06.
 
 This is a static inspection snapshot used to keep the planning folder aligned
 with the codebase. Counts below come from tracked files and exclude
@@ -38,7 +38,8 @@ with the codebase. Counts below come from tracked files and exclude
 - Session decomposition has landed substantially. `Session` still exists as
   the orchestrator, but collaborators now include `AudioRouter`,
   `STTCommitter`, `TTSScheduler`, `CancelOrchestrator`, `TurnRunner`, and
-  `SessionJournalSink`.
+  `SessionJournalSink`, with `SessionDebugBackends` owning debug backend
+  finalization and post-stop preservation.
 - The exact WS3 class names `InterruptionController` and
   `VoiceDeliveryLedger` are not present as source files. Current interruption
   and delivered-text behavior is split across `CancelOrchestrator`,
@@ -72,7 +73,7 @@ with the codebase. Counts below come from tracked files and exclude
   validation now exposes a first-class optional WebRTC browser stats artifact
   path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
-  1,390 lines.
+  1,356 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note but still a
   broad public surface at 280 lines and 85 lazy top-level exports. The surface
   is now pinned by a golden snapshot and documented in

@@ -49,7 +49,6 @@ from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import ExternalAgentBridge
 from easycat.noise_reduction import PassthroughNoiseReducer
-from easycat.runtime.artifacts import SnapshotArtifactStore
 from easycat.runtime.capabilities import (
     aclose_if_supported,
     clear_audio_if_supported,
@@ -58,12 +57,7 @@ from easycat.runtime.capabilities import (
     is_active_provider,
     is_passthrough_provider,
 )
-from easycat.runtime.journal import (
-    ExecutionJournal,
-    InMemoryRingBuffer,
-    JournalView,
-    ReadonlySqliteJournal,
-)
+from easycat.runtime.journal import JournalView
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
@@ -73,6 +67,7 @@ from easycat.session._builder import (
     build_session,
 )
 from easycat.session._caller_id import CallerIdState
+from easycat.session._debug_backends import SessionDebugBackends
 from easycat.session._telephony_facade import TelephonyFacade
 from easycat.session._types import (
     _TM_TO_TURN_STATE,
@@ -225,7 +220,6 @@ class Session:
         self._is_running = False
         self._closed = False
         self._stopping = False
-        self._flushed = False
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -248,6 +242,12 @@ class Session:
         # event-bus subscriptions and TurnManager bindings, and returns the
         # assembled bundle for us to unpack onto private fields.
         self._unpack(build_session(self, cfg))
+        self._debug_backends = SessionDebugBackends(
+            journal=self._journal,
+            journal_view=self._journal_view,
+            artifact_store=self._artifact_store,
+            journal_sink=self._journal_sink,
+        )
 
     def _unpack(self, components: SessionComponents) -> None:
         """Assign the assembled collaborator bundle onto private fields.
@@ -1106,11 +1106,9 @@ class Session:
         you while preserving a read-only post-stop debug surface.  Safe
         to call multiple times.
         """
-        if self._flushed:
-            return
-        self._flushed = True
-        if self._journal:
-            self._journal.finalize()
+        state = self._debug_backends.close()
+        self._journal = state.journal
+        self._artifact_store = state.artifact_store
 
     def _destroy(self) -> None:
         """Release live debug backends while keeping post-stop inspection working.
@@ -1124,43 +1122,9 @@ class Session:
         Internal: invoked by :meth:`stop` (and the ``async with`` exit
         path).  Safe to call multiple times.
         """
-        self._close()  # ensure the clean-close marker is written first
-
-        if self._journal:
-            live_journal = self._journal
-            replacement = self._preserve_journal_after_destroy(live_journal)
-            live_journal.close()
-            self._journal = replacement
-            # Update the cached JournalView so previously-cached references
-            # (e.g. ``view = session.journal``) transparently delegate to
-            # the read-only snapshot instead of the now-closed backend.
-            if self._journal_view is not None:
-                self._journal_view._journal = replacement
-
-        if self._artifact_store:
-            live_store = self._artifact_store
-            replacement_store = self._preserve_artifacts_after_destroy(live_store)
-            live_store.close()
-            self._artifact_store = replacement_store
-
-        self._journal_sink.replace_backends(
-            journal=self._journal,
-            artifact_store=self._artifact_store,
-        )
-
-    def _preserve_journal_after_destroy(self, journal: ExecutionJournal) -> ExecutionJournal:
-        db_path = getattr(journal, "db_path", None)
-        if db_path is not None:
-            return ReadonlySqliteJournal(db_path, degraded=journal.degraded)
-        if isinstance(journal, InMemoryRingBuffer):
-            return journal.snapshot()
-        return journal
-
-    def _preserve_artifacts_after_destroy(self, artifact_store: Any) -> Any:
-        store = getattr(artifact_store, "_store", None)
-        if isinstance(store, dict):
-            return SnapshotArtifactStore(store)
-        return artifact_store
+        state = self._debug_backends.destroy()
+        self._journal = state.journal
+        self._artifact_store = state.artifact_store
 
     # ── Cancellation ───────────────────────────────────────────
 
