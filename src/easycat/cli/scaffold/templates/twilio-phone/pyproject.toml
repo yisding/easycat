@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "EasyCat Twilio phone agent (Media Streams + OpenAI Agents SDK)."
 requires-python = ">=3.11"
 dependencies = [
-    "easycat[$EXTRAS]>=0.1.0",
+    "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
 ]
 
 [tool.ruff]

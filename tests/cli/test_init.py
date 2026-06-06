@@ -66,7 +66,7 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "Base extras:" in result.stdout
     assert "openai-agents, local" in result.stdout
     assert "Base package:" in result.stdout
-    assert "easycat[openai-agents,local]>=0.1.0" in result.stdout
+    assert init_module._base_requirement("openai-agents") in result.stdout
     assert "telephony" in result.stdout
     assert "webrtc" in result.stdout
     assert "Files:" in result.stdout
@@ -89,6 +89,7 @@ def test_list_templates(cli: CliRunner) -> None:
 
 
 def test_template_catalog_renders_bracketed_text_literally() -> None:
+    base_requirement = f"easycat[sdk[beta]]>={init_module._easycat_version_floor()}"
     catalog = [
         {
             "name": "demo[beta]",
@@ -97,7 +98,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "transport": "local[dev]",
             "framework": "OpenAI Agents",
             "base_extras": ("sdk[beta]",),
-            "base_requirement": "easycat[sdk[beta]]>=0.1.0",
+            "base_requirement": base_requirement,
             "files": ("agent[beta].py", ".env.example"),
             "best_for": "Teams using SDK[beta].",
             "required_env": ("OPENAI_API_KEY", "SDK[KEY]"),
@@ -115,7 +116,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "easycat[openai-agents]" in rendered
     assert "local[dev]" in rendered
     assert "sdk[beta]" in rendered
-    assert "easycat[sdk[beta]]>=0.1.0" in rendered
+    assert base_requirement in rendered
     assert "agent[beta].py" in rendered
     assert "Teams using SDK[beta]." in rendered
     assert "SDK[KEY]" in rendered
@@ -136,7 +137,9 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert set(catalog) == set(available_templates())
     assert catalog["openai-agents"]["transport"] == "local mic"
     assert catalog["openai-agents"]["base_extras"] == ["openai-agents", "local"]
-    assert catalog["openai-agents"]["base_requirement"] == "easycat[openai-agents,local]>=0.1.0"
+    assert catalog["openai-agents"]["base_requirement"] == init_module._base_requirement(
+        "openai-agents"
+    )
     assert catalog["openai-agents"]["files"] == [
         ".env.example",
         ".gitignore",
@@ -149,11 +152,11 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["openai-agents"]["optional_env"] == []
     assert catalog["text-chat"]["mode"] == "text"
     assert catalog["text-chat"]["base_extras"] == ["openai-agents"]
-    assert catalog["text-chat"]["base_requirement"] == "easycat[openai-agents]>=0.1.0"
+    assert catalog["text-chat"]["base_requirement"] == init_module._base_requirement("text-chat")
     assert "without microphone" in catalog["text-chat"]["best_for"]
     assert catalog["twilio-phone"]["base_extras"] == ["openai-agents", "telephony"]
-    assert catalog["twilio-phone"]["base_requirement"] == (
-        "easycat[openai-agents,telephony]>=0.1.0"
+    assert catalog["twilio-phone"]["base_requirement"] == init_module._base_requirement(
+        "twilio-phone"
     )
     assert "server.py" in catalog["twilio-phone"]["files"]
     assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
@@ -164,8 +167,8 @@ def test_list_templates_json(cli: CliRunner) -> None:
         "TURN_CREDENTIAL",
     ]
     assert catalog["webrtc-browser"]["base_extras"] == ["openai-agents", "webrtc"]
-    assert catalog["webrtc-browser"]["base_requirement"] == (
-        "easycat[openai-agents,webrtc]>=0.1.0"
+    assert catalog["webrtc-browser"]["base_requirement"] == init_module._base_requirement(
+        "webrtc-browser"
     )
     assert "description" in catalog["webrtc-browser"]
     for name, entry in catalog.items():

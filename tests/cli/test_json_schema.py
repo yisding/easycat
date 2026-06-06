@@ -24,6 +24,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import _DOCS_COMMAND_NOTE, app
+from easycat.cli.scaffold import init as init_module
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.validation.report import (
     GitMetadata,
@@ -214,7 +215,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert isinstance(entry["base_extras"], list)
         assert entry["base_extras"]
         assert entry["base_requirement"].startswith("easycat[")
-        assert entry["base_requirement"].endswith("]>=0.1.0")
+        assert entry["base_requirement"].endswith(f"]>={init_module._easycat_version_floor()}")
         assert isinstance(entry["required_env"], list)
         assert entry["required_env"]
         assert isinstance(entry["optional_env"], list)

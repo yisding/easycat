@@ -7,6 +7,7 @@ coding-agent scaffolding).
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import re
 import shlex
@@ -84,6 +85,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
 }
+_FALLBACK_EASYCAT_VERSION_FLOOR = "0.1.0"
 
 
 class _TemplateCatalogMetadata(TypedDict):
@@ -250,7 +252,16 @@ def _template_file_names(template_name: str) -> tuple[str, ...]:
 def _base_requirement(template_name: str) -> str:
     """Return the EasyCat package requirement generated for template defaults."""
     extras = ",".join(_TEMPLATE_BASE_EXTRAS.get(template_name, ()))
-    return f"easycat[{extras}]>=0.1.0" if extras else "easycat>=0.1.0"
+    version = _easycat_version_floor()
+    return f"easycat[{extras}]>={version}" if extras else f"easycat>={version}"
+
+
+def _easycat_version_floor() -> str:
+    """Return the EasyCat version used as generated dependency lower bound."""
+    try:
+        return importlib.metadata.version("easycat")
+    except importlib.metadata.PackageNotFoundError:
+        return _FALLBACK_EASYCAT_VERSION_FLOOR
 
 
 def _available_template_catalog() -> list[_TemplateCatalogEntry]:
@@ -542,6 +553,7 @@ def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
         "PROJECT_NAME": project_name,
         "PYPROJECT_NAME": _pyproject_name(project_name),
         "EASYCAT_CONFIG_EXTRA": _config_extra_kwargs(cfg),
+        "EASYCAT_VERSION_FLOOR": _easycat_version_floor(),
         "EXTRAS": _extras_for(cfg),
         "EXTRA_ENV_VARS": _extra_env_vars(cfg),
     }

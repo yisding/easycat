@@ -32,6 +32,7 @@ from easycat.cli.scaffold.init import (
     _TEMPLATE_CATALOG,
     _available_template_catalog,
     _base_requirement,
+    _easycat_version_floor,
     _render_text,
     _substitutions,
     _template_file_names,
@@ -165,6 +166,12 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert entry["check_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
         assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
+
+
+def test_scaffold_dependency_floor_tracks_project_version() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert _easycat_version_floor() == pyproject["project"]["version"]
 
 
 def _template_dir(name: str) -> Path:
@@ -314,6 +321,7 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
     assert "four required sections" not in test_plan
     assert "five required sections" in test_plan
     assert "base `easycat[...]` package" in test_plan
+    assert "version floor tracks" in test_plan
     assert "pyproject.toml" in test_plan
     assert "uv run easycat doctor --env-file .env" in test_plan
     assert "uv run --env-file .env python agent.py" in test_plan
@@ -436,6 +444,9 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
 
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
     assert f"easycat[{','.join(_TEMPLATE_BASE_EXTRAS[name])}]" in rendered
+    assert "$EASYCAT_VERSION_FLOOR" in pyproject
+    assert "$EASYCAT_VERSION_FLOOR" not in rendered
+    assert _base_requirement(name) in rendered
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject

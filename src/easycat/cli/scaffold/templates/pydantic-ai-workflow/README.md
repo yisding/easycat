@@ -10,8 +10,8 @@ lets EasyCat adapt the workflow through its `on_user_turn(...)` method.
 uv sync
 ```
 
-This installs `easycat[$EXTRAS]>=0.1.0` from `pyproject.toml`, including the
-framework and transport extras this template needs.
+This installs `easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR` from
+`pyproject.toml`, including the extras this generated project needs.
 
 ## Configure
 

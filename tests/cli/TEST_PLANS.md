@@ -126,6 +126,8 @@ first run.
   Check, Next steps.
 - README Install section names the rendered base `easycat[...]` package
   requirement from `pyproject.toml`.
+- The scaffolded `easycat[...]` version floor tracks the project package
+  version, so release bumps do not leave template dependencies stale.
 - README tells every OpenAI-key template to run
   `uv run easycat doctor --env-file .env` during setup.
 - `easycat init` success output mirrors each template README's run and
