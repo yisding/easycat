@@ -390,7 +390,13 @@ class STTCommitter:
                 if self._stt_task is my_task:
                     self.resolve_pending(turn, "")
 
-        self._stt_task = asyncio.create_task(_consume())
+        self._stt_task = self._runtime_scope.create_journaled_task(
+            _consume(),
+            name="stt_event_loop",
+            journal_sink=self._journal_sink,
+            turn_id=turn.id if turn is not None and turn is not self._no_turn else None,
+        )
+        self._stt_task.add_done_callback(self._runtime_scope.log_task_exception)
 
     # ── Cancellation ──────────────────────────────────────────────
 
@@ -406,11 +412,6 @@ class STTCommitter:
             pass
         self._active = False
         self._on_speech_detection_reset()
-        if self._stt_task and not self._stt_task.done():
-            self._stt_task.cancel()
-            try:
-                await self._stt_task
-            except (asyncio.CancelledError, Exception):
-                pass
+        await self._runtime_scope.cancel_and_drain("stt_event_loop")
         self._stt_task = None
         self.resolve_pending(turn, "")

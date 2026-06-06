@@ -445,6 +445,29 @@ async def test_segment_final_journal_records_confidence_and_word_timestamps() ->
 
 
 @pytest.mark.asyncio
+async def test_stt_event_loop_is_runtime_scoped_and_journaled() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(journal=journal)
+    turn = _new_turn("turn-stt-events")
+
+    committer.start_event_loop(turn)
+    task = committer.stt_task
+    assert task is not None
+    assert task in committer._runtime_scope.tasks("stt_event_loop")
+
+    await committer.cancel(turn)
+
+    assert committer.stt_task is None
+    assert not committer._runtime_scope.tasks("stt_event_loop")
+    records = [
+        record for record in journal.read() if record.data.get("task_name") == "stt_event_loop"
+    ]
+    assert records[0].name == "task_scheduled"
+    assert records[0].turn_id == "turn-stt-events"
+    assert records[-1].name in {"task_cancelled", "task_completed"}
+
+
+@pytest.mark.asyncio
 async def test_commit_requested_journal_records_pending_commit_bytes() -> None:
     """A PendingCommitReporter STT surfaces its byte count into the journal."""
 

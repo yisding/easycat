@@ -39,15 +39,18 @@ with the codebase. Counts below come from tracked files and exclude
   the orchestrator, but collaborators now include `AudioRouter`,
   `STTCommitter`, `TTSScheduler`, `CancelOrchestrator`, `TurnRunner`, and
   `SessionJournalSink`, with `SessionDebugBackends` owning debug backend
-  finalization and post-stop preservation.
+  finalization and post-stop preservation. `STTCommitter` now runs its
+  background STT event consumer through `RuntimeScope` with journaled task
+  lifecycle records.
 - The exact WS3 class names `InterruptionController` and
   `VoiceDeliveryLedger` are not present as source files. Current interruption
   and delivered-text behavior is split across `CancelOrchestrator`,
   `session/interruption.py`, `TurnContext`, and `TurnRunner`.
 - Stage wrappers exist for audio, VAD, STT, turn, agent, TTS, and transport.
   There is no current `src/easycat/stages/telephony.py` source file.
-- `RuntimeScope` exists and is used by `Session`, but some lower-level
-  collaborators still call `asyncio.create_task()` directly.
+- `RuntimeScope` exists and is used by `Session`; remaining direct
+  `asyncio.create_task()` calls in the session package are concentrated in
+  `AudioRouter` and `TurnRunner`.
 - Provider support includes OpenAI, Deepgram, ElevenLabs, and Cartesia for
   STT/TTS. Shared provider helpers, a `ProviderCatalog`, and a shared
   WebSocket STT base now exist.
