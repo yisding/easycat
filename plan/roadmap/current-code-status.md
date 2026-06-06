@@ -17,7 +17,7 @@ with the codebase. Counts below come from tracked files and exclude
   validation, coverage, socket validation, build smoke, and manual
   live-provider tests. Quick validation runs on Python 3.11, 3.12, and 3.14;
   socket validation runs on Python 3.12.
-- CLI support includes `init`, `doctor`, `explain`, `bundles list/show`,
+- CLI support includes `init`, `doctor`, `explain`, `bundles list/show/export`,
   `inspect`, and `replay`; `init` ships `openai-agents`, `pydantic-ai`,
   `pydantic-ai-workflow`, `text-chat`, `twilio-phone`, and `webrtc-browser`
   templates with enforced per-template `agent.py` line budgets. `easycat

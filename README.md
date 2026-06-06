@@ -85,6 +85,7 @@ easycat explain E102     # look up an EasyCat error code
 easycat explain --list   # list every error code and meta topic
 easycat bundles list      # list captured debug bundles and crash dumps
 easycat bundles show PATH # summarise a debug bundle or SQLite journal
+easycat bundles export PATH # write a redacted coding-agent context pack
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation

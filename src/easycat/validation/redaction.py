@@ -86,7 +86,7 @@ _KEY_VALUE_SECRET_RE = re.compile(
 )
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
-_HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:])(?:/home|/Users)/[^/\s:]+")
+_HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 _SENSITIVE_COMMAND_FLAGS = frozenset(
     {
         "--access-token",

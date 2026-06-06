@@ -49,8 +49,12 @@ M3 (journal debugging) — partial:
   `show` surfaces session id, duration, turn count, tool-call count,
   error count, artifact count, provider versions, and replay entry
   points (rendered with the new `cp_<sequence>` vocabulary).
-- `easycat bundles export --for=claude-code` — not started. Needs the
-  redaction pass from `peripheral-redaction.md`.
+- `easycat bundles export --for=claude-code|cursor|codex` — shipped as a
+  conservative flat-file context pack. It writes `README.md`,
+  `summary.json`, `timeline.md`, and `timeline.jsonl`, keeps only
+  allowlisted event structure, applies the shared validation redaction
+  helpers, and rejects `raw` until the full `RedactionPolicy` export pass
+  lands.
 - `easycat replay <path>` — shipped as a conservative wrapper over
   `RunBundle.replay(...)` with `artifact`/`simulated`/`live` fidelity,
   safe tool policies, JSON output, sequence windows, and stage filters.
@@ -72,7 +76,8 @@ guardrails today.
 >   debugger UI. The CLI's `replay` command exposes the replay
 >   fidelity classes owned over there.
 > - `peripheral-redaction.md` — `RedactionPolicy` and export-time
->   redaction. `bundles export` runs through this.
+>   redaction. `bundles export` currently uses the shared validation
+>   redaction helpers; full policy-specific export remains owned here.
 > - `peripheral-observability-and-cost.md` — `CostRecord`, OTel
 >   export, latency budgets. `bundles show` surfaces these fields.
 > - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn
@@ -600,7 +605,7 @@ pack a coding agent can consume.
 Usage: easycat bundles export [OPTIONS] BUNDLE
 
 Options:
-      --for [claude-code|cursor|codex|raw]  Consumer format [default: claude-code]
+      --for [claude-code|cursor|codex]  Consumer format [default: claude-code]
       --output PATH             Output path [default: ./<bundle>-pack/]
       --redaction TEXT          development|production|regulated [default: production]
       --include-audio / --no-include-audio  [default: no]
@@ -613,13 +618,23 @@ turn's artifacts as referenced blobs, suggested fix-code locations
 inferred from traceback frames. The user then runs their coding
 agent against the pack directory.
 
-`--redaction` runs through `peripheral-redaction.md`. Default is
-`production` — never leak unredacted data into an LLM context. Users
-who want full fidelity for local-only debugging pass `--redaction
-development` explicitly.
+`--redaction` is reserved for `peripheral-redaction.md`. Default is
+`production` — never leak unredacted data into an LLM context. The current
+context-pack writer accepts the planned policy names but applies the
+production boundary until the full policy layer lands.
 
 `--include-audio` is opt-in because audio blobs are large and most
 coding-agent debugging works from transcripts + events.
+
+Current shipped slice (2026-06-06): `--for claude-code|cursor|codex`
+writes a conservative context pack with `README.md`, `summary.json`,
+`timeline.md`, and `timeline.jsonl`. It omits raw payload fields such as
+transcripts, prompts, generated provider text, tool arguments, and tool
+results, then checks the emitted text with the shared validation redaction
+detector. `raw` export and policy-specific `development`/`regulated`
+behavior remain planned under `peripheral-redaction.md`; the current
+implementation applies the production boundary even when a different
+policy is requested.
 
 This is the command we expect most debugging sessions to use. The
 interactive debugger UI (`peripheral-eval-and-debugger-ui.md`) is
@@ -913,9 +928,9 @@ Finishes the scaffolding surface.
 Connects scaffolded projects to production debugging.
 
 - `easycat bundles list | show | export`
-- `easycat bundles export --for=claude-code|cursor|codex|raw`
-- `easycat bundles export --redaction` integration
-  (`peripheral-redaction.md`)
+- `easycat bundles export --for=claude-code|cursor|codex`
+- `easycat bundles export --for=raw` and full `--redaction` integration
+  (`peripheral-redaction.md`) remain future work
 - `easycat replay` with `artifact`/`simulated`/`live` fidelity
 - `easycat replay --fail-on-regression` for CI (future comparison layer)
 

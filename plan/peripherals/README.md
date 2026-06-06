@@ -14,13 +14,12 @@ Status from static inspection on 2026-06-06:
 - Partially landed: telephony-aware TTS output-format alignment including
   Twilio's 8 kHz PCM16 outbound preference, safe bundle defaults, testing
   helpers, Docker deployment docs, and provider capability reports.
-- Still mostly planned: full redaction policy, cost/OTel export, `easycat
-  replay`, `easycat bundles export`, forked replay, persona simulator/judge,
-  and validation command surface.
+- Still mostly planned: full redaction policy, cost/OTel export, forked replay,
+  persona simulator/judge, and the remaining validation backlog.
 
 | Plan | Status | Notes |
 |---|---|---|
-| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show`, `inspect`, `replay`, all planned scaffold templates, and template line budgets exist; export remains planned. |
+| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show/export`, `inspect`, `replay`, all planned scaffold templates, and template line budgets exist; raw export and full redaction-policy integration remain planned. |
 | [peripheral-dx-onboarding.md](peripheral-dx-onboarding.md) | Partially landed | `run`, string-keyed providers, config presets, error codes, `record_to`, log-level env support, and canonical example line budgets exist; config cleanup remains. |
 | [peripheral-redaction.md](peripheral-redaction.md) | Mostly planned | Safe default snapshots exist; full `RedactionPolicy` and export policies remain planned. |
 | [peripheral-observability-and-cost.md](peripheral-observability-and-cost.md) | Mostly planned | Debugger cost endpoint degrades to zero; real `CostRecord`, OTel export, and latency-budget objects remain planned. |

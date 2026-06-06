@@ -1,9 +1,10 @@
 # Redaction and Safe Snapshots — Peripheral
 
-> **Status (2026-05-21): mostly planned.** Current code has hard-coded safe
-> config/environment snapshot defaults in `src/easycat/runtime/safe_defaults.py`
-> and export-time use of those defaults. The full `RedactionPolicy`,
-> policy presets, and second-pass export redaction remain planned.
+> **Status (2026-06-06): mostly planned.** Current code has hard-coded safe
+> config/environment snapshot defaults in `src/easycat/runtime/safe_defaults.py`,
+> export-time use of those defaults, a shared validation redaction module, and
+> a conservative `bundles export` context pack. The full `RedactionPolicy`,
+> policy presets, and second-pass raw bundle export redaction remain planned.
 >
 > **This is a peripheral initiative.** It is not essential to the
 > debug-first thesis in `../roadmap/essential-debug-first-runtime.md`. The

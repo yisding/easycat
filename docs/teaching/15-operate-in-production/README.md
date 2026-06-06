@@ -444,6 +444,8 @@ $ uv run easycat --help
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and crash dumps, then summarize a debug bundle or
   SQLite journal from the shell.
+- **`uv run easycat bundles export <path>`** — write a redacted context pack
+  that a coding agent can read without copying raw journal payloads.
 - **`uv run easycat inspect <path>`** — friendly alias for
   `uv run easycat bundles show <path>` for bundles and SQLite journals.
 - **`uv run easycat replay <path>`** — replay a debug bundle or SQLite

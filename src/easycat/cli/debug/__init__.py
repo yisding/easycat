@@ -1,1 +1,1 @@
-"""Journal-debug commands: ``bundles list``, ``bundles show``."""
+"""Journal-debug commands: ``bundles list``, ``bundles show``, ``bundles export``."""

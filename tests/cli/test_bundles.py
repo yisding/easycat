@@ -209,6 +209,132 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["replay_entry_points"][0]["checkpoint_id"] == "cp_7"
 
 
+def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stt_final",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {
+                    "stage": "stt",
+                    "transcript": "customer said account token tok-secretvalue123456",
+                    "text": "raw caller text",
+                    "api_key": "sk-secretvalue123456",
+                },
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "error",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "agent"},
+                "error": {
+                    "type": "ProviderError",
+                    "message": "Authorization: Bearer tok-secretvalue123456 failed",
+                    "traceback": 'File "/home/yi/project/app.py", line 7, in run',
+                },
+            },
+        ],
+    )
+
+    result = cli.invoke(
+        app,
+        ["bundles", "export", str(bundle), "--for", "claude-code", "--output", str(output)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert str(output) in result.stdout
+    assert (output / "README.md").exists()
+    assert (output / "summary.json").exists()
+    assert (output / "timeline.md").exists()
+    assert (output / "timeline.jsonl").exists()
+
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["target"] == "claude-code"
+    assert summary["redaction"]["version"] == 1
+    assert summary["redaction"]["applied"] == "production"
+    assert summary["summary"]["records"] == 2
+
+    timeline_records = [
+        json.loads(line) for line in (output / "timeline.jsonl").read_text().splitlines()
+    ]
+    assert timeline_records[0]["data"] == {"stage": "stt"}
+    assert timeline_records[0]["omitted_data_fields"] == 3
+    assert timeline_records[1]["error"]["message"] == "Authorization: [REDACTED_SECRET] failed"
+    assert "~" in timeline_records[1]["error"]["traceback"]
+
+    pack_text = "\n".join(path.read_text() for path in output.iterdir() if path.is_file())
+    assert "tok-secretvalue123456" not in pack_text
+    assert "sk-secretvalue123456" not in pack_text
+    assert "customer said" not in pack_text
+    assert "raw caller text" not in pack_text
+
+
+def test_bundles_export_json(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(
+        app,
+        ["bundles", "export", str(bundle), "--output", str(output), "--json"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "bundles_export"
+    assert payload["output_path"] == str(output)
+    assert payload["target"] == "claude-code"
+    assert payload["records"] == 1
+    assert payload["format_version"] == FORMAT_VERSION
+    assert payload["summary"]["records"] == 1
+    assert payload["redaction"]["applied"] == "production"
+    assert set(payload["files"]) == {"README.md", "summary.json", "timeline.md", "timeline.jsonl"}
+
+
+def test_bundles_export_refuses_existing_output_without_force(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    output.mkdir()
+    (output / "old.txt").write_text("old")
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", str(output)])
+
+    assert result.exit_code == 101
+    assert "already exists" in result.stderr
+    assert (output / "old.txt").exists()
+
+    forced = cli.invoke(
+        app,
+        ["bundles", "export", str(bundle), "--output", str(output), "--force"],
+    )
+    assert forced.exit_code == 0, forced.stderr
+    assert not (output / "old.txt").exists()
+    assert (output / "summary.json").exists()
+
+
+def test_bundles_export_rejects_unknown_target(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--for", "raw"])
+
+    assert result.exit_code == 2
+    assert "claude-code, cursor, codex" in result.stderr
+
+
 def test_inspect_alias_matches_bundles_show(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     _make_bundle(

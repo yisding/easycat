@@ -22,6 +22,12 @@ output; it is not a separate bundle file format.
     Deliberately avoids printing raw journal lines — that's what
     ``--json`` is for when a machine-readable summary is needed.
 
+``bundles export <path>``
+    Write a redacted context pack for coding agents. The pack keeps
+    summary metadata and allowlisted event structure, but omits raw
+    transcripts, prompts, generated text, tool payloads, and provider
+    responses until the full redaction-policy layer lands.
+
 ``replay <path>``
     Walk a debug bundle or SQLite journal through ``RunBundle.replay``
     with safe defaults, including artifact fidelity and denied tool
@@ -30,15 +36,25 @@ output; it is not a separate bundle file format.
 
 from __future__ import annotations
 
+import json
+import shutil
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import typer
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
-from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
+from easycat.cli._output import (
+    emit_json,
+    json_envelope,
+    stderr_console,
+    stdout_console,
+    success,
+    warn,
+)
 from easycat.debug.bundle import (
     BundleError,
     BundleInUseError,
@@ -54,6 +70,12 @@ from easycat.runtime.replay import (
     ReplaySideEffectBlocked,
     ReplaySpec,
     ToolReplayPolicy,
+)
+from easycat.validation.redaction import (
+    REDACTION_VERSION,
+    contains_unredacted_sensitive_text,
+    redact_text,
+    redact_value,
 )
 
 bundles_app = typer.Typer(
@@ -141,6 +163,380 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
             }
             for cp in bundle.replay_entry_points
         ],
+    }
+
+
+_EXPORT_TARGETS = frozenset(("claude-code", "cursor", "codex"))
+_REDACTION_POLICIES = frozenset(("development", "production", "regulated"))
+_CONTEXT_DATA_KEYS = frozenset(
+    {
+        "boundary_reason",
+        "bridge_latency_ms",
+        "call_id",
+        "cancellation_mode",
+        "cause",
+        "caused_by_signal_id",
+        "checkpoint_id",
+        "committable",
+        "direction",
+        "display_name",
+        "duration_ms",
+        "exit_reason",
+        "fidelity",
+        "format",
+        "framework",
+        "from_unit",
+        "handoff_reason",
+        "latency_ms",
+        "model",
+        "mutation_kind",
+        "observed_stage",
+        "parent_unit_id",
+        "phase",
+        "provider",
+        "provider_name",
+        "sample_rate",
+        "signal_id",
+        "signal_kind",
+        "stage",
+        "to_unit",
+        "tool_call_id",
+        "tool_name",
+        "transition_kind",
+        "unit_id",
+        "unit_kind",
+    }
+)
+_CONTEXT_TOP_LEVEL_KEYS = _CONTEXT_DATA_KEYS | frozenset(
+    {
+        "framework",
+        "direction",
+        "bridge_latency_ms",
+    }
+)
+
+
+def _default_export_path(bundle_path: Path) -> Path:
+    return bundle_path.with_name(f"{bundle_path.stem}-pack")
+
+
+def _record_wall_ns(record: Mapping[str, Any]) -> int | None:
+    wall_ns = record.get("wall_ns")
+    if wall_ns is None:
+        timing = record.get("timing")
+        if isinstance(timing, Mapping):
+            wall_ns = timing.get("wall_ns")
+    return wall_ns if isinstance(wall_ns, int) else None
+
+
+def _redacted_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): redact_value(item, str(key))
+        for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+    }
+
+
+def _context_error(error: Any) -> dict[str, Any] | None:
+    if not isinstance(error, Mapping):
+        return None
+    redacted = _redacted_mapping(error)
+    return {key: value for key, value in redacted.items() if value not in (None, "", [], {})}
+
+
+def _context_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    for key in ("sequence", "kind", "name", "session_id", "turn_id"):
+        value = record.get(key)
+        if value not in (None, ""):
+            context[key] = redact_value(value, key)
+
+    wall_ns = _record_wall_ns(record)
+    if wall_ns is not None:
+        context["wall_ns"] = wall_ns
+
+    data = record.get("data")
+    if isinstance(data, Mapping):
+        safe_data = {
+            str(key): redact_value(data[key], str(key))
+            for key in sorted(data, key=str)
+            if str(key) in _CONTEXT_DATA_KEYS
+        }
+        if safe_data:
+            context["data"] = safe_data
+        omitted = len(data) - len(safe_data)
+        if omitted > 0:
+            context["omitted_data_fields"] = omitted
+    elif data not in (None, "", {}, []):
+        context["omitted_data_fields"] = 1
+
+    for key in sorted(_CONTEXT_TOP_LEVEL_KEYS):
+        if key in record and key not in context:
+            context[key] = redact_value(record[key], key)
+
+    refs: dict[str, Any] = {}
+    for key in ("input_ref", "output_ref"):
+        value = record.get(key)
+        if value:
+            refs[key] = redact_value(value, key)
+    if refs:
+        context["refs"] = refs
+
+    error = _context_error(record.get("error"))
+    if error:
+        context["error"] = error
+
+    tags = record.get("tags")
+    if isinstance(tags, list | tuple | set | frozenset) and tags:
+        context["tags"] = redact_value(sorted(tags, key=str), "tags")
+
+    return context
+
+
+def _context_records(bundle: RunBundle) -> list[dict[str, Any]]:
+    return [_context_record(record) for record in bundle.records()]
+
+
+def _markdown_cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return redact_text(text).replace("\n", " ").replace("|", r"\|")
+
+
+def _record_stage(record: Mapping[str, Any]) -> str:
+    data = record.get("data")
+    if isinstance(data, Mapping):
+        for key in ("stage", "observed_stage"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _record_detail(record: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    data = record.get("data")
+    if isinstance(data, Mapping):
+        for key in ("tool_name", "tool_call_id", "call_id", "phase", "unit_id", "unit_kind"):
+            value = data.get(key)
+            if value not in (None, ""):
+                parts.append(f"{key}={redact_text(str(value))}")
+    error = record.get("error")
+    if isinstance(error, Mapping):
+        error_type = error.get("type")
+        message = error.get("message")
+        if error_type:
+            parts.append(f"error_type={redact_text(str(error_type))}")
+        if message:
+            parts.append(f"error={redact_text(str(message))}")
+    return "; ".join(parts)
+
+
+def _timeline_markdown(records: list[dict[str, Any]]) -> str:
+    lines = [
+        "# Timeline",
+        "",
+        "| seq | kind | name | turn | stage | detail |",
+        "|---:|---|---|---|---|---|",
+    ]
+    for record in records:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    _markdown_cell(record.get("sequence")),
+                    _markdown_cell(record.get("kind")),
+                    _markdown_cell(record.get("name")),
+                    _markdown_cell(record.get("turn_id")),
+                    _markdown_cell(_record_stage(record)),
+                    _markdown_cell(_record_detail(record)),
+                )
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _readme_text(
+    *,
+    target: str,
+    source_path: str,
+    summary: Mapping[str, Any],
+    redaction_requested: str,
+    redaction_applied: str,
+) -> str:
+    session_id = summary.get("session_id") or "(unknown)"
+    return "\n".join(
+        [
+            "# EasyCat Debug Context Pack",
+            "",
+            f"Target: {target}",
+            f"Source: {source_path}",
+            f"Session: {session_id}",
+            f"Records: {summary.get('records', 0)}",
+            f"Errors: {summary.get('errors', 0)}",
+            "",
+            "## Files",
+            "",
+            "- summary.json: bundle metadata, provider versions, and artifact index.",
+            "- timeline.md: compact redacted event timeline for quick reading.",
+            "- timeline.jsonl: one redacted event per line for scripts and coding agents.",
+            "",
+            "## Safety Boundary",
+            "",
+            "This pack intentionally omits raw journal payload fields such as transcripts, "
+            "prompts, generated text, tool arguments, tool results, and provider responses.",
+            "Treat the original bundle or SQLite journal as sensitive.",
+            f"Requested redaction: {redaction_requested}; applied redaction: {redaction_applied}.",
+            "",
+            "## Useful Commands",
+            "",
+            "```bash",
+            "easycat bundles show <bundle> --json",
+            "easycat replay <bundle> --json",
+            "```",
+            "",
+        ]
+    )
+
+
+def _artifact_manifest(
+    bundle: RunBundle,
+    *,
+    output_path: Path,
+    include_audio: bool,
+) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    artifacts_dir = output_path / "artifacts"
+    if include_audio and bundle.artifact_blobs:
+        artifacts_dir.mkdir()
+
+    for ref, entry in sorted(bundle.artifact_index.items()):
+        artifact: dict[str, Any] = {
+            "ref": redact_value(ref, "artifact_ref"),
+            "size_bytes": entry.size_bytes,
+            "included": False,
+        }
+        data = bundle.artifact_blobs.get(ref)
+        if include_audio and data is not None:
+            filename = f"{ref}.bin"
+            (artifacts_dir / filename).write_bytes(data)
+            artifact["included"] = True
+            artifact["path"] = f"artifacts/{filename}"
+        artifacts.append(artifact)
+    return artifacts
+
+
+def _prepare_output_dir(output_path: Path, *, force: bool) -> None:
+    resolved = output_path.resolve(strict=False)
+    if resolved == Path(resolved.anchor) or resolved == Path.cwd().resolve():
+        stderr_console.print(f"  [red]✗[/] Refusing to export into [red]{output_path}[/].")
+        raise typer.Exit(1)
+
+    if output_path.exists():
+        if not force:
+            stderr_console.print(
+                f"  [red]✗[/] Output path already exists: [red]{output_path}[/]. "
+                "Use --force to replace it."
+            )
+            raise typer.Exit(101)
+        if output_path.is_symlink() or not output_path.is_dir():
+            output_path.unlink()
+        else:
+            shutil.rmtree(output_path)
+    output_path.mkdir(parents=True)
+
+
+def _assert_context_pack_redacted(output_path: Path) -> None:
+    for path in (
+        output_path / "README.md",
+        output_path / "summary.json",
+        output_path / "timeline.md",
+    ):
+        if contains_unredacted_sensitive_text(path.read_text(encoding="utf-8")):
+            raise RuntimeError(f"{path.name} contains unredacted sensitive text")
+    timeline = output_path / "timeline.jsonl"
+    if contains_unredacted_sensitive_text(timeline.read_text(encoding="utf-8")):
+        raise RuntimeError("timeline.jsonl contains unredacted sensitive text")
+
+
+def _write_context_pack(
+    bundle: RunBundle,
+    *,
+    bundle_path: Path,
+    output_path: Path,
+    target: str,
+    redaction_requested: str,
+    include_audio: bool,
+    force: bool,
+) -> dict[str, Any]:
+    _prepare_output_dir(output_path, force=force)
+
+    summary = redact_value(_summarise_bundle(bundle))
+    if not isinstance(summary, dict):
+        summary = {}
+    records = _context_records(bundle)
+    source_path = redact_text(str(bundle_path))
+    redaction_applied = "production"
+    files = ["README.md", "summary.json", "timeline.md", "timeline.jsonl"]
+
+    artifacts = _artifact_manifest(bundle, output_path=output_path, include_audio=include_audio)
+    if include_audio and artifacts:
+        files.append("artifacts/")
+
+    manifest = {
+        "provider_versions": redact_value(bundle.manifest.provider_versions),
+        "config_snapshot": redact_value(bundle.manifest.config_snapshot),
+        "env_metadata": redact_value(bundle.manifest.env_metadata),
+        "sharing_banner": redact_text(bundle.manifest.sharing_banner or bundle.sharing_banner),
+    }
+    payload = {
+        "schema_version": 1,
+        "target": target,
+        "source_path": source_path,
+        "format_version": bundle.format_version,
+        "redaction": {
+            "version": REDACTION_VERSION,
+            "requested": redaction_requested,
+            "applied": redaction_applied,
+            "boundary": "context-pack-minimal",
+        },
+        "summary": summary,
+        "manifest": manifest,
+        "artifacts": artifacts,
+        "files": files,
+    }
+
+    (output_path / "README.md").write_text(
+        _readme_text(
+            target=target,
+            source_path=source_path,
+            summary=summary,
+            redaction_requested=redaction_requested,
+            redaction_applied=redaction_applied,
+        ),
+        encoding="utf-8",
+    )
+    (output_path / "summary.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=False) + "\n",
+        encoding="utf-8",
+    )
+    (output_path / "timeline.md").write_text(_timeline_markdown(records), encoding="utf-8")
+    (output_path / "timeline.jsonl").write_text(
+        "".join(json.dumps(record, sort_keys=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    _assert_context_pack_redacted(output_path)
+    return {
+        "target": target,
+        "output_path": str(output_path),
+        "source_path": source_path,
+        "format_version": bundle.format_version,
+        "redaction": payload["redaction"],
+        "summary": summary,
+        "files": files,
+        "records": len(records),
+        "artifacts": artifacts,
     }
 
 
@@ -323,6 +719,96 @@ def inspect_bundle(
     _show_bundle_summary(bundle_path, json_output=json_output)
 
 
+# ── `easycat bundles export` ─────────────────────────────────────
+
+
+@cli_command
+def export_bundle(
+    bundle_path: Path = typer.Argument(
+        ...,
+        help=(
+            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
+            "``.easycat-bundle``) or a ``.sqlite`` journal."
+        ),
+    ),
+    export_for: str = typer.Option(
+        "claude-code",
+        "--for",
+        help="Consumer format: claude-code, cursor, or codex.",
+    ),
+    output_path: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Directory to write (default: ``./<bundle>-pack/`` next to the bundle).",
+    ),
+    redaction: str = typer.Option(
+        "production",
+        "--redaction",
+        help="Requested policy: development, production, or regulated.",
+    ),
+    include_audio: bool = typer.Option(
+        False,
+        "--include-audio/--no-include-audio",
+        help="Copy artifact blobs into the pack. Off by default.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Replace the output directory if it already exists.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    """Write a redacted context pack for a coding agent."""
+    target = export_for.strip().lower()
+    if target not in _EXPORT_TARGETS:
+        raise typer.BadParameter(
+            "target must be one of: claude-code, cursor, codex",
+            param_hint="--for",
+        )
+
+    redaction_requested = redaction.strip().lower()
+    if redaction_requested not in _REDACTION_POLICIES:
+        raise typer.BadParameter(
+            "redaction must be one of: development, production, regulated",
+            param_hint="--redaction",
+        )
+
+    bundle = _load_bundle_or_journal(bundle_path)
+    destination = output_path or _default_export_path(bundle_path)
+
+    if redaction_requested != "production" and not json_output:
+        warn("Context-pack export currently applies the conservative production boundary.")
+    if include_audio and not json_output:
+        warn(
+            "Artifact blobs may contain sensitive audio or payload data; "
+            "treat the pack as sensitive."
+        )
+
+    try:
+        payload = _write_context_pack(
+            bundle,
+            bundle_path=bundle_path,
+            output_path=destination,
+            target=target,
+            redaction_requested=redaction_requested,
+            include_audio=include_audio,
+            force=force,
+        )
+    except typer.Exit:
+        raise
+    except RuntimeError as exc:
+        stderr_console.print(f"  [red]✗[/] Export failed: {exc}")
+        raise typer.Exit(1) from None
+
+    if json_output:
+        emit_json(json_envelope("bundles_export", **payload))
+        raise typer.Exit(0)
+
+    success(f"Wrote context pack to {destination}")
+    stdout_console.print(str(destination))
+
+
 def _render_replay_summary(
     *,
     bundle_path: Path,
@@ -464,6 +950,9 @@ bundles_app.command(name="list", help="List captured bundles and crash dumps und
     list_bundles
 )
 bundles_app.command(name="show", help="Summarise a debug bundle or SQLite journal.")(show_bundle)
+bundles_app.command(name="export", help="Write a redacted context pack for a coding agent.")(
+    export_bundle
+)
 
 
-__all__: list[str] = ["bundles_app", "inspect_bundle", "replay_bundle"]
+__all__: list[str] = ["bundles_app", "export_bundle", "inspect_bundle", "replay_bundle"]
