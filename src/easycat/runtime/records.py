@@ -67,7 +67,7 @@ class ErrorInfo:
         if skip_run:
             collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
 
-        combined_notes = _combine_error_notes(notes, getattr(exc, "__notes__", None))
+        combined_notes = _combine_error_notes(notes, exc)
 
         return ErrorInfo(
             type=type(exc).__qualname__,
@@ -77,13 +77,23 @@ class ErrorInfo:
         )
 
 
-def _combine_error_notes(notes: str | None, exception_notes: object) -> str | None:
+def _combine_error_notes(notes: str | None, exc: BaseException) -> str | None:
     combined: list[str] = []
     if notes:
         combined.append(notes)
-    if isinstance(exception_notes, list):
-        combined.extend(note for note in exception_notes if note)
+    combined.extend(_exception_notes(exc))
     return "\n".join(combined) or None
+
+
+def _exception_notes(exc: BaseException) -> list[str]:
+    notes: list[str] = []
+    exception_notes = getattr(exc, "__notes__", None)
+    if isinstance(exception_notes, list):
+        notes.extend(str(note) for note in exception_notes if note)
+    if isinstance(exc, BaseExceptionGroup):
+        for child in exc.exceptions:
+            notes.extend(_exception_notes(child))
+    return notes
 
 
 @dataclass(frozen=True)

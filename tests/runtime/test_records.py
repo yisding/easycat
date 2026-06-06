@@ -91,6 +91,19 @@ class TestErrorInfo:
 
         assert info.notes == "turn_id=turn-123\nprovider=deepgram"
 
+    def test_from_exception_captures_exception_group_child_notes(self):
+        left = ValueError("bad input")
+        left.add_note("stage=stt")
+        right = RuntimeError("provider failed")
+        right.add_note("provider=openai")
+        group = ExceptionGroup("pipeline failed", [left, right])
+        group.add_note("turn_id=turn-123")
+
+        info = ErrorInfo.from_exception(group)
+
+        assert info.type == "ExceptionGroup"
+        assert info.notes == "turn_id=turn-123\nstage=stt\nprovider=openai"
+
 
 class TestSentinelRecords:
     def test_buffer_overflow_defaults(self):
