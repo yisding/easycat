@@ -352,6 +352,13 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     assert "easycat validate report PATH" in cli_section
 
 
+def test_readme_cli_doctor_documents_env_file_option() -> None:
+    """``easycat doctor`` should show the direct .env path for scaffold users."""
+    cli_section = _readme_cli_section()
+
+    assert "easycat doctor --env-file .env" in cli_section
+
+
 def test_cli_init_examples_name_target_directory() -> None:
     """``easycat init`` requires NAME unless listing templates."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

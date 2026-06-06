@@ -396,6 +396,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     assert "installed CLI form" in cli_section
     assert "uv run easycat doctor" in cli_section
+    assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (
         "easycat init --list-templates # compare scaffold templates",
         "easycat bundles list      # list captured debug bundles and crash dumps",

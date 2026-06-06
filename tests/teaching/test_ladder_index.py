@@ -227,6 +227,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "docs      show documentation entry points" in cli_section
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
+    assert "`uv run easycat doctor --env-file .env`" in cli_section
 
     top_level_commands = {command.name for command in _app.app.registered_commands}
     top_level_commands.update(group.name for group in _app.app.registered_groups)
