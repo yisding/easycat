@@ -348,3 +348,94 @@ def test_live_canary_workflows_are_guarded_and_redacted() -> None:
         "--surface stt --surface tts"
     )
     assert release_live_command in release
+
+
+def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    nightly_text = NIGHTLY_WORKFLOW.read_text()
+    release_text = RELEASE_WORKFLOW.read_text()
+    section = _validation_tasks_section(
+        "### V4.3 Harden Live Canary CI",
+        "## V5: Stress, Benchmarks, And Release Gates",
+    )
+    normalized_section = " ".join(section.split())
+
+    assert "pull_request" not in (nightly.get(True) or {})
+    live_canaries = nightly["jobs"]["live-canaries"]
+    latency = nightly["jobs"]["latency"]
+    assert live_canaries["if"] == (
+        "github.event_name != 'pull_request' && github.ref_protected == true"
+    )
+    assert latency["if"] == "github.event_name != 'pull_request' && github.ref_protected == true"
+    assert live_canaries["environment"] == "live-validation"
+    assert latency["environment"] == "live-validation"
+    for env_var in (
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+    ):
+        assert live_canaries["env"][env_var] == f"${{{{ secrets.{env_var} }}}}"
+        assert f"{env_var}: ${{{{ secrets.{env_var} }}}}" in release_text
+    assert "Mask live provider secrets" in nightly_text
+    assert "Mask live provider secrets" in release_text
+    assert "::add-mask::" in nightly_text
+    assert "::add-mask::" in release_text
+    assert "easycat validate live --provider openai --surface stt --surface tts" in nightly_text
+    assert "--release --provider openai --surface stt --surface tts" in release_text
+    assert "easycat validate latency --require-samples" in nightly_text
+    assert "actions/upload-artifact@v4" in nightly_text
+    assert "actions/upload-artifact@v4" in release_text
+    assert "retention-days: 14" in nightly_text
+    assert "retention-days: 30" in release_text
+    assert release["jobs"]["release-validation"]["environment"] == "release-validation"
+    assert "unexpected release validation skips" in release_text
+    assert "placeholder live/latency jobs" not in normalized_section
+
+    assert "Current verified state:" in section
+    for token in (
+        ".github/workflows/nightly-validation.yml",
+        "pull_request",
+        "live-canaries",
+        "latency",
+        "github.event_name != 'pull_request' && github.ref_protected == true",
+        "live-validation",
+        "OPENAI_API_KEY",
+        "DEEPGRAM_API_KEY",
+        "ELEVENLABS_API_KEY",
+        "CARTESIA_API_KEY",
+        "::add-mask::",
+        "easycat validate live --provider openai --surface stt --surface tts",
+        "--strict",
+        "--release",
+        "easycat validate latency --require-samples",
+        ".github/workflows/release-validation.yml",
+        "workflow_dispatch",
+        "release-validation",
+        (
+            '"$RELEASE_VENV/bin/easycat" validate live --release --provider openai '
+            "--surface stt --surface tts"
+        ),
+        "VALIDATION_ARTIFACTS_DIR",
+        "dist/**",
+        "tests/test_ci_workflow.py",
+        "actions/upload-artifact@v4",
+    ):
+        assert f"`{token}`" in section
+    for phrase in (
+        "no `pull_request` trigger",
+        "GitHub secrets at job scope",
+        "without `--strict` or `--release`",
+        "non-strict",
+        "expected provider-check skips",
+        "redacted provider capability reports",
+        "scopes `OPENAI_API_KEY` only to the latency validation step",
+        "manual `workflow_dispatch`",
+        "explicitly from GitHub secrets",
+        "installed-package execution outside the workspace",
+        "unexpected skips",
+        "bounded retention",
+        "absence of placeholder jobs",
+    ):
+        assert phrase in normalized_section

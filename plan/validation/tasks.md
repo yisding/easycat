@@ -1264,6 +1264,39 @@ Dependencies:
 
 - V4.2
 
+Current verified state:
+
+- `.github/workflows/nightly-validation.yml` has no `pull_request` trigger;
+  nightly `live-canaries` and `latency` jobs run only when
+  `github.event_name != 'pull_request' && github.ref_protected == true` and use
+  the `live-validation` environment.
+- Nightly `live-canaries` maps `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`,
+  `ELEVENLABS_API_KEY`, and `CARTESIA_API_KEY` from GitHub secrets at job
+  scope, masks any non-empty values with `::add-mask::`, then runs
+  `easycat validate live --provider openai --surface stt --surface tts`
+  without `--strict` or `--release`.
+- Because nightly live validation is non-strict, missing live credentials are
+  represented by the V4.2 runner as expected provider-check skips and
+  redacted provider capability reports instead of failed workflow prerequisites.
+- Nightly `latency` uses the same protected non-PR gate and `live-validation`
+  environment, scopes `OPENAI_API_KEY` only to the latency validation step,
+  masks it before use, and runs
+  `easycat validate latency --require-samples`.
+- `.github/workflows/release-validation.yml` is manual `workflow_dispatch`,
+  uses the `release-validation` environment, maps live provider credential
+  names explicitly from GitHub secrets, masks them with `::add-mask::`, and
+  runs installed-wheel live validation with
+  `"$RELEASE_VENV/bin/easycat" validate live --release --provider openai --surface stt --surface tts`.
+- Release validation also verifies installed-package execution outside the
+  workspace, runs quick and stress validation from the wheel environment,
+  verifies release reports for unexpected skips, and uploads
+  `VALIDATION_ARTIFACTS_DIR` plus `dist/**`.
+- `tests/test_ci_workflow.py` parses the nightly and release workflows and
+  verifies protected non-PR gates, `live-validation` / `release-validation`
+  environments, explicit secret env-var mapping, `::add-mask::` masking,
+  `actions/upload-artifact@v4` artifact upload with bounded retention, release
+  `--release` live validation, and absence of placeholder jobs.
+
 Files:
 
 - `.github/workflows/nightly-validation.yml`
