@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import easycat
 from easycat import EasyConfig, SessionConfig, require_env, run
 from easycat.config import _resolve_easycat_log_level
 from easycat.config.easy import _EASYCAT_LOG_LEVELS
@@ -105,6 +106,19 @@ def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
     assert "`easycat inspect`" not in example
     assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in example
     assert "docs/teaching/00-hello-audio/" in example
+
+
+def test_package_docstring_leads_with_canonical_quickstart() -> None:
+    doc = easycat.__doc__ or ""
+
+    assert doc.startswith("EasyCat — a voice bot in three lines.")
+    assert "uv add 'easycat[quickstart]'" in doc
+    assert "from agents import Agent" in doc
+    assert "from easycat import EasyConfig, run" in doc
+    assert "run(EasyConfig.mic(agent=Agent(" in doc
+    assert "SessionConfig" in doc
+    assert "hand-build provider instances" in doc
+    assert "create_session" not in doc.split("Start here", 1)[1].split("SessionConfig", 1)[0]
 
 
 def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
