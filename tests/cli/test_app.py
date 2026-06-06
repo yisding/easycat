@@ -92,6 +92,11 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "plan/validation/reference.md" in result.stdout
     assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
     assert "https://github.com/yisding/easycat/tree/main/docs/teaching" in result.stdout
+    assert (
+        "https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md"
+        in result.stdout
+    )
+    assert "DURABILITY.\nmd" not in result.stdout
 
 
 def test_docs_command_json(cli: CliRunner) -> None:

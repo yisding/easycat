@@ -186,7 +186,7 @@ def docs_command(
     if json_output:
         emit_json(json_envelope("docs", entries=_docs_entries(), source_url=_DOCS_SOURCE_URL))
         return
-    stdout_console.print(_format_docs_menu())
+    stdout_console.print(_format_docs_menu(), soft_wrap=True)
 
 
 @app.callback(invoke_without_command=True)
