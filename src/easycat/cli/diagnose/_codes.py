@@ -62,7 +62,8 @@ _INIT_SCHEMA_BODY = """\
 
     {
       "schema_version": 1,
-      "template": "openai-agents" | "pydantic-ai" | "text-chat" | "webrtc-browser",
+      "template": "openai-agents" | "pydantic-ai" |
+                  "pydantic-ai-workflow" | "text-chat" | "webrtc-browser",
       "stt": "<provider>/<model>",            // optional
       "tts": "<provider>/<model>",            // optional
       "transport": "local" | "webrtc",        // optional; must match template

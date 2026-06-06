@@ -19,10 +19,10 @@ with the codebase. Counts below come from tracked files and exclude
   socket validation runs on Python 3.12.
 - CLI support includes `init`, `doctor`, `explain`, `bundles list/show`,
   `inspect`, and `replay`; `init` ships `openai-agents`, `pydantic-ai`,
-  `text-chat`, and `webrtc-browser` templates. `easycat validate` exposes
-  `quick`, `socket`, `stress`, `contracts`, `latency`, `live`, `release`,
-  and `report`; `python -m easycat` is wired through
-  `src/easycat/__main__.py`.
+  `pydantic-ai-workflow`, `text-chat`, and `webrtc-browser` templates.
+  `easycat validate` exposes `quick`, `socket`, `stress`, `contracts`,
+  `latency`, `live`, `release`, and `report`; `python -m easycat` is wired
+  through `src/easycat/__main__.py`.
 
 ## Implemented Or Mostly Implemented
 

@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 25,
     "pydantic-ai": 22,
+    "pydantic-ai-workflow": 40,
     "text-chat": 18,
     "webrtc-browser": 23,
 }
@@ -56,6 +57,7 @@ _README_SECTIONS: tuple[str, ...] = (
 _VOICE_TEMPLATE_PRESETS: dict[str, str] = {
     "openai-agents": "mic",
     "pydantic-ai": "mic",
+    "pydantic-ai-workflow": "mic",
     "webrtc-browser": "browser",
 }
 _GITIGNORE_PATTERNS: tuple[str, ...] = (
@@ -76,8 +78,14 @@ def templates() -> list[str]:
 
 
 def test_catalog_is_nonempty(templates: list[str]) -> None:
-    assert len(templates) >= 4
-    for required in ("openai-agents", "pydantic-ai", "text-chat", "webrtc-browser"):
+    assert len(templates) >= 5
+    for required in (
+        "openai-agents",
+        "pydantic-ai",
+        "pydantic-ai-workflow",
+        "text-chat",
+        "webrtc-browser",
+    ):
         assert required in templates, f"missing template: {required}"
 
 
@@ -171,7 +179,10 @@ def test_agent_py_escapes_string_literal_substitutions(name: str) -> None:
     ast.parse(rendered)
 
 
-@pytest.mark.parametrize("name", ["openai-agents", "pydantic-ai", "webrtc-browser"])
+@pytest.mark.parametrize(
+    "name",
+    ["openai-agents", "pydantic-ai", "pydantic-ai-workflow", "webrtc-browser"],
+)
 def test_agent_py_escapes_provider_shortcut_substitutions(name: str) -> None:
     cfg = InitConfig(
         template=name,
@@ -271,9 +282,10 @@ def test_env_example_mentions_openai(name: str) -> None:
     assert "OPENAI_API_KEY" in env_example
 
 
-def test_pydantic_ai_readme_does_not_reference_missing_workflow_template() -> None:
+def test_pydantic_ai_readme_points_to_workflow_template() -> None:
     readme = (_template_dir("pydantic-ai") / "README.md").read_text(encoding="utf-8")
-    assert "pydantic-ai-workflow" not in readme
+    assert "pydantic-ai-workflow" in readme
+    assert "uv run easycat init my-workflow --template pydantic-ai-workflow" in readme
 
 
 def test_pydantic_ai_template_beta_pin_matches_project_extra() -> None:

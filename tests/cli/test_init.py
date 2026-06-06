@@ -26,6 +26,7 @@ def test_list_templates(cli: CliRunner) -> None:
     names = result.stdout.strip().splitlines()
     assert "openai-agents" in names
     assert "pydantic-ai" in names
+    assert "pydantic-ai-workflow" in names
     assert "text-chat" in names
     assert "webrtc-browser" in names
 
@@ -188,6 +189,31 @@ def test_init_webrtc_browser_template(
     assert "openai-agents,webrtc" in pyproject
     readme = (project / "README.md").read_text()
     assert "http://localhost:8080" in readme
+
+
+def test_init_pydantic_ai_workflow_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "pydantic-ai-workflow",
+            "agent_instructions": "Keep handoffs crisp.",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    agent_py = (project / "agent.py").read_text()
+    assert "class SupportWorkflow" in agent_py
+    assert "async def on_user_turn" in agent_py
+    assert "Keep handoffs crisp." in agent_py
+    assert "EasyConfig.mic(" in agent_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "pydantic-ai,local" in pyproject
 
 
 def test_init_omits_cache_artifacts(

@@ -74,6 +74,7 @@ _PROVIDER_TO_ENV_VAR: dict[str, str] = {
 _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "openai-agents": ("openai-agents", "local"),
     "pydantic-ai": ("pydantic-ai", "local"),
+    "pydantic-ai-workflow": ("pydantic-ai", "local"),
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
 }
@@ -81,11 +82,14 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
-_VOICE_TEMPLATES: frozenset[str] = frozenset({"openai-agents", "pydantic-ai", "webrtc-browser"})
+_VOICE_TEMPLATES: frozenset[str] = frozenset(
+    {"openai-agents", "pydantic-ai", "pydantic-ai-workflow", "webrtc-browser"}
+)
 
 _TEMPLATE_TRANSPORTS: dict[str, str] = {
     "openai-agents": "local",
     "pydantic-ai": "local",
+    "pydantic-ai-workflow": "local",
     "webrtc-browser": "webrtc",
 }
 

@@ -52,8 +52,10 @@ uv run python -m py_compile agent.py
   that provider is not part of the default PydanticAI install. For example:
   `uv add "pydantic-ai[groq]<2"` for stable v1, or
   `uv add "pydantic-ai[groq]==2.0.0b3"` to opt into the v2 beta.
-- **Need multiple agents?** Extend `agent.py` with PydanticAI's graph or
-  handoff patterns; this template keeps the first run intentionally small.
+- **Need multiple agents?** Scaffold the workflow template:
+  `uv run easycat init my-workflow --template pydantic-ai-workflow`.
+  It shows a two-specialist `on_user_turn(...)` workflow that EasyCat
+  adapts directly.
 - **Debug a session:** pass `debug="full"` to `EasyConfig.mic(...)`. EasyCat
   writes a SQLite journal under `.easycat/journals/`; inspect it with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
