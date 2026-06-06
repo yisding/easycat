@@ -189,7 +189,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "docs/teaching/": "uv run pytest tests/teaching/test_ladder_index.py",
         "README.md#cli": "easycat init --list-templates",
         "docs/README.md": "easycat docs --json",
-        "examples/README.md": "easycat validate quick",
+        "examples/README.md": "uv run easycat validate quick",
         "CLAUDE.md": "uv run pytest tests/test_install_guidance.py",
         "docs/public-api.md": "uv run pytest tests/test_public_api.py",
         "docs/deployment/docker.md": "docker compose -f docker/compose.yaml up --build",
@@ -207,6 +207,24 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
+
+
+def test_examples_docs_route_matches_examples_fast_path() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    fast_path = examples_readme.split("For the fastest local mic/speaker path:", 1)[1]
+    route_commands = entries["examples/README.md"].get("commands", ())
+
+    for command in (
+        "uv run easycat doctor",
+        "uv run python examples/openai_agents_voice.py",
+        "uv run easycat validate quick",
+    ):
+        assert command in fast_path
+        assert command in route_commands
+
+    assert "easycat doctor" not in route_commands
+    assert "easycat validate quick" not in route_commands
 
 
 def test_cli_docs_command_hints_are_locally_valid() -> None:

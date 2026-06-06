@@ -190,7 +190,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "examples/README.md",
         "audience": "app builders",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
-        "commands": ("easycat doctor", "easycat validate quick"),
+        "commands": (
+            "uv run easycat doctor",
+            "uv run python examples/openai_agents_voice.py",
+            "uv run easycat validate quick",
+        ),
     },
     {
         "label": "Architecture",
