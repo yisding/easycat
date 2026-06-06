@@ -433,6 +433,102 @@ def test_metric_attributes_reject_span_only_genai_keys() -> None:
         )
 
 
+def test_validation_tasks_v61_current_state_tracks_noop_safe_otel_spans() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V6.1 Add No-Op-Safe OTel Spans", 1)[1].split(
+        "### V6.2 Add Low-Cardinality Metrics",
+        1,
+    )[0]
+    observability_source = (REPO_ROOT / "src/easycat/_observability.py").read_text(
+        encoding="utf-8"
+    )
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    docs = (REPO_ROOT / "docs/observability.md").read_text(encoding="utf-8")
+    test_source = Path(__file__).read_text(encoding="utf-8")
+    span_wiring = {
+        "src/easycat/session/_session.py": ("easycat.session",),
+        "src/easycat/session/_audio_router.py": ("easycat.transport.receive",),
+        "src/easycat/session/_turn_runner.py": (
+            "easycat.turn.commit",
+            "easycat.agent.tool",
+        ),
+        "src/easycat/stages/vad.py": ("easycat.vad.detect",),
+        "src/easycat/stages/stt.py": ("easycat.stt.stream",),
+        "src/easycat/stages/agent.py": ("easycat.agent.invoke",),
+        "src/easycat/stages/tts.py": ("easycat.tts.synthesize",),
+        "src/easycat/stages/transport.py": ("easycat.transport.send",),
+    }
+
+    assert "Current verified state:" in section
+    assert "opentelemetry-api" not in pyproject
+    for token in (
+        "def span(",
+        "SPAN_NAMES",
+        "SPAN_ATTRIBUTE_KEYS",
+        "LOW_CARDINALITY_ATTRIBUTE_KEYS",
+        "FORBIDDEN_ATTRIBUTE_KEYS",
+        "_FORBIDDEN_SUBSTRINGS",
+        "gen_ai.operation.name",
+        "gen_ai.request.model",
+        "gen_ai.system",
+        "except ImportError",
+        "return None",
+        "tracer.start_as_current_span",
+    ):
+        assert token in observability_source
+    for span_name in observability.SPAN_NAMES:
+        assert span_name in observability_source
+        assert f"`{span_name}`" in section
+    for path, span_names in span_wiring.items():
+        source = (REPO_ROOT / path).read_text(encoding="utf-8")
+        assert f"`{path}`" in section
+        for span_name in span_names:
+            assert span_name in source
+    for test_name in (
+        "test_observability_is_noop_without_otel",
+        "test_span_uses_configured_tracer_with_sanitized_attributes",
+        "test_text_turn_emits_session_and_agent_spans",
+        "test_transport_send_span_and_audio_counters_emit",
+        "test_vad_detect_span_emits",
+        "test_transport_receive_span_and_audio_counters_emit",
+        "test_audio_router_source_has_transport_receive_wiring",
+        "test_turn_commit_span_emits_on_text_turn",
+        "test_agent_tool_span_emits_on_tool_call",
+        "test_forbidden_observability_attributes_fail",
+        "test_substring_forbidden_attributes_fail",
+    ):
+        assert test_name in test_source
+    for doc_token in (
+        "no-op without an SDK",
+        "PII-safe and low-cardinality",
+        "gen_ai.operation.name",
+        "gen_ai.request.model",
+        "gen_ai.system",
+    ):
+        assert doc_token in docs
+    for token in (
+        "src/easycat/_observability.py",
+        "pyproject.toml",
+        "opentelemetry-api",
+        "_get_tracer()",
+        "_get_meter()",
+        "ImportError",
+        "span(...)",
+        "SPAN_NAMES",
+        "SPAN_ATTRIBUTE_KEYS",
+        "LOW_CARDINALITY_ATTRIBUTE_KEYS",
+        "FORBIDDEN_ATTRIBUTE_KEYS",
+        "_FORBIDDEN_SUBSTRINGS",
+        "gen_ai.operation.name",
+        "gen_ai.request.model",
+        "gen_ai.system",
+        "easycat.journal.append.latency",
+        "tests/test_observability.py",
+        "docs/observability.md",
+    ):
+        assert f"`{token}`" in section
+
+
 # ──────────────────────────────────────────────────────────────────
 # N4+N5: spans/counters wired into the pipeline stages.
 # ──────────────────────────────────────────────────────────────────

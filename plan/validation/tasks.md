@@ -1500,6 +1500,36 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
+Current verified state:
+
+- `src/easycat/_observability.py` is the OpenTelemetry facade. Core
+  `pyproject.toml` has no hard `opentelemetry-api` dependency; `_get_tracer()`
+  and `_get_meter()` import OTel opportunistically and return `None` on
+  `ImportError`, so `span(...)` and metric helpers are no-ops without a host
+  SDK/exporter.
+- `SPAN_NAMES` allow-lists `easycat.session`,
+  `easycat.transport.receive`, `easycat.vad.detect`, `easycat.stt.stream`,
+  `easycat.turn.commit`, `easycat.agent.invoke`, `easycat.agent.tool`,
+  `easycat.tts.synthesize`, `easycat.transport.send`, and the reserved
+  `easycat.journal.append` span name. Journal append currently emits the
+  `easycat.journal.append.latency` metric under V6.2 rather than a runtime span.
+- Runtime span wiring is present in `src/easycat/session/_session.py`,
+  `src/easycat/session/_audio_router.py`, `src/easycat/session/_turn_runner.py`,
+  `src/easycat/stages/vad.py`, `src/easycat/stages/stt.py`,
+  `src/easycat/stages/agent.py`, `src/easycat/stages/tts.py`, and
+  `src/easycat/stages/transport.py`.
+- Span attributes are sanitized through `SPAN_ATTRIBUTE_KEYS`,
+  `LOW_CARDINALITY_ATTRIBUTE_KEYS`, `FORBIDDEN_ATTRIBUTE_KEYS`, and
+  `_FORBIDDEN_SUBSTRINGS`; the span-only GenAI keys are
+  `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system`.
+- `tests/test_observability.py` verifies no-op behavior without OTel, fake
+  tracer span creation, sanitized span attributes, a text-turn trace containing
+  `easycat.session`, `easycat.agent.invoke`, and `easycat.turn.commit`, and
+  representative voice-path spans for transport receive/send, VAD, agent tool,
+  and turn commit.
+- `docs/observability.md` documents the OpenTelemetry facade as optional,
+  no-op without an SDK, PII-scrubbed, and low-cardinality.
+
 Files:
 
 - session/stage/provider modules around session, STT, agent, TTS, transport,
