@@ -226,7 +226,20 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
 
     assert "uv run easycat --help" in cli_section
     assert "drop the `uv run` prefix" in cli_section
-    assert "docs      show documentation entry points" in cli_section
+    expected_help_lines = (
+        "init      Scaffold a new project from a template",
+        "doctor    Check API keys, optional extras, and provider reachability",
+        "docs      Show quickstart, examples, teaching, and operations docs",
+        "explain   Look up errors and CLI schema topics",
+        "inspect   Inspect a debug bundle or SQLite journal",
+        "replay    Replay a debug bundle or SQLite journal",
+        "bundles   Inspect captured debug bundles and crash dumps",
+        "validate  Run validation checks and inspect validation reports",
+    )
+    for line in expected_help_lines:
+        assert line in cli_section
+    assert "doctor    check environment + provider reachability" not in cli_section
+    assert "docs      show documentation entry points" not in cli_section
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
     assert "copyable create commands" in re.sub(r"\s+", " ", cli_section)

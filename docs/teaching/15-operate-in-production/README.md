@@ -421,14 +421,14 @@ environment, drop the `uv run` prefix.
 
 ```bash
 $ uv run easycat --help
-  init      scaffold a new project
-  doctor    check environment + provider reachability
-  docs      show documentation entry points
-  explain   look up an EasyCat error code
-  inspect   summarize a debug bundle or SQLite journal
-  replay    replay a debug bundle or SQLite journal
-  bundles   list and show captured debug bundles and crash dumps
-  validate  run validation checks and inspect reports
+  init      Scaffold a new project from a template
+  doctor    Check API keys, optional extras, and provider reachability
+  docs      Show quickstart, examples, teaching, and operations docs
+  explain   Look up errors and CLI schema topics
+  inspect   Inspect a debug bundle or SQLite journal
+  replay    Replay a debug bundle or SQLite journal
+  bundles   Inspect captured debug bundles and crash dumps
+  validate  Run validation checks and inspect validation reports
 ```
 
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template
