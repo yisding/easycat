@@ -82,6 +82,17 @@ def _render_recipe_command(command: str, args_text: str | None) -> str:
     return rendered
 
 
+def test_contributing_quick_start_points_to_docs_command() -> None:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    quick_start = contributing.split("## Quick start", 1)[1].split(
+        "## The development loop",
+        1,
+    )[0]
+
+    assert "uv run easycat docs" in quick_start
+    assert "maintained reader-facing map" in quick_start
+
+
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
     recipes = just_recipe_commands(REPO_ROOT)
     missing: list[str] = []

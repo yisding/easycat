@@ -67,7 +67,7 @@ _DOCS_MENU = """[bold]EasyCat documentation[/]
   [cyan]Contributing[/]     CONTRIBUTING.md
   [cyan]Validation[/]       README.md#validation-workflow
 
-Online source: [cyan]https://github.com/yisding/easycat[/]
+Online source: https://github.com/yisding/easycat
 """
 
 

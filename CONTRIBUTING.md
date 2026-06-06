@@ -12,6 +12,9 @@ just                       # list every task (or read the justfile)
 just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 ```
 
+Run `uv run easycat docs` for the maintained reader-facing map, including
+quickstart, examples, teaching chapters, public API, validation, and operations.
+
 Don't have [`just`](https://github.com/casey/just)? Every recipe is a one-liner
 you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 `brew install just`, `cargo install just`, or your distro's package manager.
