@@ -1,20 +1,22 @@
-"""Config and environment safety defaults.
+"""Config, environment, and journal safety defaults.
 
 Hard-coded allowlists keep obvious credentials out of generated config and
-environment metadata. They are not a full journal redaction policy:
-``apply_write_filter`` currently preserves records unchanged, so transcripts,
-tool arguments, and provider payload records remain sensitive.
+environment metadata. The journal write filter also scrubs secret-looking
+fields and sensitive substrings, but it deliberately preserves normal
+transcript, agent-output, and tool-result text so replay remains useful.
+Journal records and exported bundles therefore remain sensitive.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import fields as dc_fields
-from dataclasses import is_dataclass
+from dataclasses import is_dataclass, replace
 from typing import Any
 from urllib.parse import urlparse
 
-from easycat.runtime.records import JournalRecord
+from easycat.runtime.records import ErrorInfo, JournalRecord
+from easycat.validation.redaction import redact_text, redact_value
 
 # ── Config field allowlist ────────────────────────────────────────
 
@@ -186,10 +188,29 @@ def safe_env_snapshot() -> dict[str, str]:
 def apply_write_filter(record: JournalRecord) -> JournalRecord:
     """Journal write-filter hook.
 
-    Currently returns the original record unchanged; callers must treat journal
-    records and exported bundles as sensitive unless they have scrubbed them.
+    Scrubs secret-looking keyed values plus obvious sensitive substrings from
+    record data and error payloads. Normal ``data["text"]`` stays intact for
+    replay/debuggability, so this is not a full privacy redaction boundary.
     """
-    return record
+    redacted_data = redact_value(record.data)
+    if not isinstance(redacted_data, dict):
+        redacted_data = {}
+    redacted_error = _redact_error(record.error)
+    if redacted_data == record.data and redacted_error is record.error:
+        return record
+    return replace(record, data=redacted_data, error=redacted_error)
+
+
+def _redact_error(error: ErrorInfo | None) -> ErrorInfo | None:
+    if error is None:
+        return None
+    redacted = ErrorInfo(
+        type=redact_text(error.type),
+        message=redact_text(error.message),
+        traceback=redact_text(error.traceback) if error.traceback is not None else None,
+        notes=redact_text(error.notes) if error.notes is not None else None,
+    )
+    return error if redacted == error else redacted
 
 
 # ── Dev-only banner ──────────────────────────────────────────────

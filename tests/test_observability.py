@@ -309,8 +309,8 @@ def test_observability_doc_explains_journal_redaction_boundary() -> None:
 
     assert "safe config/environment snapshots" in caveats
     assert "selected agent-bridge metadata" in caveats
-    assert "transcripts, agent output, and tool arguments verbatim" in caveats
-    assert "`apply_write_filter` returns records unchanged" in caveats
+    assert "obvious secret-like journal fields through `apply_write_filter`" in caveats
+    assert "transcript text, agent output, and tool-result text for replay" in caveats
 
 
 def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:

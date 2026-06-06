@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from easycat.runtime.records import JournalRecord
+from easycat.runtime.records import ErrorInfo, JournalRecord
 from easycat.runtime.safe_defaults import (
     SAFE_CONFIG_FIELDS,
     SAFE_ENV_VARS,
@@ -14,6 +14,7 @@ from easycat.runtime.safe_defaults import (
     safe_config_snapshot,
     safe_env_snapshot,
 )
+from easycat.validation.redaction import REDACTED_PHONE, REDACTED_REQUEST_ID, REDACTED_SECRET
 
 
 @dataclass
@@ -155,6 +156,37 @@ class TestApplyWriteFilter:
     def test_noop_returns_record_unchanged(self):
         rec = JournalRecord(sequence=1, session_id="s1")
         assert apply_write_filter(rec) is rec
+
+    def test_redacts_secret_like_data_without_dropping_replay_text(self):
+        rec = JournalRecord(
+            sequence=1,
+            session_id="s1",
+            data={
+                "text": "please call +1 415 555 1212",
+                "api_key": "short",
+                "headers": {"Authorization": "Bearer short-token"},
+                "nested": [{"request_id": "req_abcdef123456"}],
+            },
+            error=ErrorInfo(
+                type="RuntimeError",
+                message="Authorization: Bearer sk-testsecret123456",
+                traceback="/Users/alice/project failed with tok-secret123456",
+                notes="provider id req_abcdef123456",
+            ),
+        )
+
+        filtered = apply_write_filter(rec)
+
+        assert filtered is not rec
+        assert filtered.data["text"] == f"please call {REDACTED_PHONE}"
+        assert filtered.data["api_key"] == REDACTED_SECRET
+        assert filtered.data["headers"]["Authorization"] == REDACTED_SECRET
+        assert filtered.data["nested"] == [{"request_id": REDACTED_REQUEST_ID}]
+        assert filtered.error is not None
+        assert filtered.error.message == f"Authorization: {REDACTED_SECRET}"
+        assert "/Users/alice" not in (filtered.error.traceback or "")
+        assert "tok-secret123456" not in (filtered.error.traceback or "")
+        assert filtered.error.notes == f"provider id {REDACTED_REQUEST_ID}"
 
 
 class TestAllowlistCompleteness:

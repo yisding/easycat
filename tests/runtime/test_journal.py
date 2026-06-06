@@ -7,7 +7,8 @@ import logging
 import threading
 
 from easycat.runtime.journal import InMemoryRingBuffer, JournalView, create_journal
-from easycat.runtime.records import JournalRecordKind
+from easycat.runtime.records import ErrorInfo, JournalRecordKind
+from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
 
 class TestInMemoryRingBuffer:
@@ -25,6 +26,30 @@ class TestInMemoryRingBuffer:
         assert records[0].sequence == 1
         assert records[0].name == "STTFinal"
         assert records[0].data["text"] == "hello"
+
+    def test_append_applies_write_filter(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="sensitive",
+            session_id="s1",
+            data={
+                "text": "phone +1 415 555 1212",
+                "api_key": "short",
+            },
+            error=ErrorInfo(
+                type="RuntimeError",
+                message="Authorization: Bearer sk-testsecret123456",
+            ),
+        )
+
+        record = j.read()[0]
+        assert record.data == {
+            "api_key": REDACTED_SECRET,
+            "text": f"phone {REDACTED_PHONE}",
+        }
+        assert record.error is not None
+        assert record.error.message == f"Authorization: {REDACTED_SECRET}"
 
     def test_monotonic_sequence(self):
         j = InMemoryRingBuffer(capacity=1000)

@@ -27,6 +27,7 @@ from easycat.runtime.records import (
     RecoveredSessionMarker,
     TimingInfo,
 )
+from easycat.runtime.safe_defaults import apply_write_filter
 
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import InMemoryArtifactStore
@@ -552,7 +553,7 @@ class InMemoryRingBuffer:
 
             self._seq += 1
             seq = self._seq
-            record = JournalRecord(
+            record = _journal_record_for_append(
                 sequence=seq,
                 session_id=session_id,
                 kind=kind,
@@ -732,6 +733,37 @@ def _encode_journal_row(
         input_ref,
         output_ref,
         ",".join(sorted(tags)) if tags else "",
+    )
+
+
+def _journal_record_for_append(
+    *,
+    sequence: int,
+    session_id: str,
+    kind: JournalRecordKind,
+    name: str,
+    timing: TimingInfo,
+    turn_id: str | None,
+    data: dict[str, Any] | None,
+    error: ErrorInfo | None,
+    tags: frozenset[str],
+    input_ref: str | None,
+    output_ref: str | None,
+) -> JournalRecord:
+    return apply_write_filter(
+        JournalRecord(
+            sequence=sequence,
+            session_id=session_id,
+            kind=kind,
+            name=name,
+            timing=timing,
+            turn_id=turn_id,
+            data=data or {},
+            error=error,
+            input_ref=input_ref,
+            output_ref=output_ref,
+            tags=tags,
+        )
     )
 
 
@@ -1295,22 +1327,35 @@ class SqliteJournal(_SqlJournalBase):
                     self._clear_clean_close_marker_before_write()
                 self._seq += 1
                 seq = self._seq
+                record = _journal_record_for_append(
+                    sequence=seq,
+                    session_id=session_id,
+                    kind=kind,
+                    name=name,
+                    timing=TimingInfo(wall_ns=now_wall, mono_ns=now_mono, cpu_ns=now_cpu),
+                    turn_id=turn_id,
+                    data=data,
+                    error=error,
+                    tags=tags,
+                    input_ref=input_ref,
+                    output_ref=output_ref,
+                )
                 self._conn.execute(
                     _JOURNAL_INSERT_SQL,
                     _encode_journal_row(
-                        sequence=seq,
-                        session_id=session_id,
-                        kind=kind,
-                        name=name,
-                        wall_ns=now_wall,
-                        mono_ns=now_mono,
-                        cpu_ns=now_cpu,
-                        turn_id=turn_id,
-                        data=data,
-                        error=error,
-                        tags=tags,
-                        input_ref=input_ref,
-                        output_ref=output_ref,
+                        sequence=record.sequence,
+                        session_id=record.session_id,
+                        kind=record.kind,
+                        name=record.name,
+                        wall_ns=record.timing.wall_ns,
+                        mono_ns=record.timing.mono_ns,
+                        cpu_ns=record.timing.cpu_ns,
+                        turn_id=record.turn_id,
+                        data=record.data,
+                        error=record.error,
+                        tags=record.tags,
+                        input_ref=record.input_ref,
+                        output_ref=record.output_ref,
                     ),
                 )
             except Exception:
@@ -1721,22 +1766,35 @@ class LibsqlJournal(_SqlJournalBase):
         with self._lock:
             self._seq += 1
             seq = self._seq
+            record = _journal_record_for_append(
+                sequence=seq,
+                session_id=session_id,
+                kind=kind,
+                name=name,
+                timing=TimingInfo(wall_ns=now_wall, mono_ns=now_mono, cpu_ns=now_cpu),
+                turn_id=turn_id,
+                data=data,
+                error=error,
+                tags=tags,
+                input_ref=input_ref,
+                output_ref=output_ref,
+            )
             self._conn.execute(
                 _JOURNAL_INSERT_SQL,
                 _encode_journal_row(
-                    sequence=seq,
-                    session_id=session_id,
-                    kind=kind,
-                    name=name,
-                    wall_ns=now_wall,
-                    mono_ns=now_mono,
-                    cpu_ns=now_cpu,
-                    turn_id=turn_id,
-                    data=data,
-                    error=error,
-                    tags=tags,
-                    input_ref=input_ref,
-                    output_ref=output_ref,
+                    sequence=record.sequence,
+                    session_id=record.session_id,
+                    kind=record.kind,
+                    name=record.name,
+                    wall_ns=record.timing.wall_ns,
+                    mono_ns=record.timing.mono_ns,
+                    cpu_ns=record.timing.cpu_ns,
+                    turn_id=record.turn_id,
+                    data=record.data,
+                    error=record.error,
+                    tags=record.tags,
+                    input_ref=record.input_ref,
+                    output_ref=record.output_ref,
                 ),
             )
             self._conn.commit()

@@ -98,8 +98,10 @@ with the codebase. Counts below come from tracked files and exclude
   failure/slow-callback accounting, and configurable handler-error policy now
   exist for the current inline dispatch model.
 - Report-boundary and cassette redaction policy now has a shared module and
-  tests, but full journal redaction plus OTel/cost exports remain planned
-  rather than implemented.
+  tests. Journal writes now pass through a shared filter that scrubs
+  secret-like keys, request ids, URLs, phone numbers, home paths, and error
+  payloads while preserving replay-critical transcript/agent text; full
+  pluggable privacy redaction plus OTel/cost exports remain planned.
 - Telephony-native TTS output is not fully implemented. Provider
   output-format plumbing exists and `config.py` has a hook for transport
   preferences, but no current transport advertises `preferred_tts_output_format`;

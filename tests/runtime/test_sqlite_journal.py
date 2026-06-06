@@ -27,6 +27,7 @@ from easycat.runtime.records import (
     RecoveredSessionMarker,
 )
 from easycat.runtime.safe_defaults import safe_env_snapshot
+from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
 
 def _libsql_available() -> bool:
@@ -52,14 +53,37 @@ class TestSqliteJournalBasics:
             kind=JournalRecordKind.EVENT,
             name="test_event",
             session_id="test-session",
-            data={"key": "value"},
+            data={"label": "value"},
         )
         assert seq == 1
         records = journal.read()
         assert len(records) == 1
         assert records[0].sequence == 1
         assert records[0].name == "test_event"
-        assert records[0].data == {"key": "value"}
+        assert records[0].data == {"label": "value"}
+
+    def test_append_applies_write_filter(self, journal):
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="sensitive",
+            session_id="test-session",
+            data={
+                "text": "phone +1 415 555 1212",
+                "api_key": "short",
+            },
+            error=ErrorInfo(
+                type="RuntimeError",
+                message="Authorization: Bearer sk-testsecret123456",
+            ),
+        )
+
+        record = journal.read()[0]
+        assert record.data == {
+            "api_key": REDACTED_SECRET,
+            "text": f"phone {REDACTED_PHONE}",
+        }
+        assert record.error is not None
+        assert record.error.message == f"Authorization: {REDACTED_SECRET}"
 
     def test_monotonic_sequence(self, journal):
         seqs = []
