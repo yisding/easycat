@@ -457,6 +457,10 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "After changing an example or using one as a starting point" in fast_path
     assert "uv run easycat validate quick" in fast_path
     assert "uv run easycat validate report .easycat/validation/latest.json" in fast_path
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in fast_path
+    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
+        re.sub(r"\s+", " ", fast_path)
+    )
 
 
 def test_examples_readme_rows_are_command_map_entries() -> None:

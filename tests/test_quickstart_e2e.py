@@ -410,6 +410,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat init --list-templates --json # emit the machine-readable template catalog",
         "easycat doctor           # check API keys, optional extras, provider reachability",
         "easycat doctor --json    # emit machine-readable environment checks",
+        "easycat doctor --env-file .env --json # emit checks with project .env loaded",
         "easycat docs             # show docs for learning, validation, operations",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
         "easycat explain E102     # look up errors and CLI schema topics",
