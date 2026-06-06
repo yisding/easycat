@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
     _TEMPLATE_CATALOG,
@@ -121,6 +122,15 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
 
 def _template_dir(name: str) -> Path:
     return _templates_root() / name
+
+
+def _render_env_example(name: str, cfg: InitConfig) -> str:
+    mapping = _substitutions(cfg, project_name="demo")
+    source = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
+    rendered = _render_text(source, mapping)
+    for placeholder in mapping:
+        assert f"${placeholder}" not in rendered
+    return rendered
 
 
 def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
@@ -334,6 +344,36 @@ def test_env_example_mentions_openai(name: str) -> None:
     """Every template today needs at least ``OPENAI_API_KEY`` by default."""
     env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
     assert "OPENAI_API_KEY" in env_example
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_env_example_renders_for_doctor_env_file(name: str, tmp_path: Path) -> None:
+    """Generated env examples must stay parseable by ``easycat doctor --env-file``."""
+    rendered = _render_env_example(name, InitConfig(template=name))
+    env_file = tmp_path / f"{name}.env"
+    env_file.write_text(rendered, encoding="utf-8")
+
+    parsed = _parse_env_file(env_file)
+
+    assert parsed["OPENAI_API_KEY"] == "sk-your-key-here"
+
+
+@pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
+def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: Path) -> None:
+    cfg = InitConfig(
+        template=name,
+        stt="deepgram/flux",
+        tts="elevenlabs/eleven_flash_v2_5",
+    )
+    rendered = _render_env_example(name, cfg)
+    env_file = tmp_path / f"{name}.env"
+    env_file.write_text(rendered, encoding="utf-8")
+
+    parsed = _parse_env_file(env_file)
+
+    assert parsed["OPENAI_API_KEY"] == "sk-your-key-here"
+    assert parsed["DEEPGRAM_API_KEY"] == ""
+    assert parsed["ELEVENLABS_API_KEY"] == ""
 
 
 def test_pydantic_ai_readme_points_to_workflow_template() -> None:
