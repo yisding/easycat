@@ -152,8 +152,10 @@ runs, but new docs and local workflows should use
 
 `--json` emits the standard machine-readable stdout envelope, `--report PATH`
 writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
-(available on the `quick`, `socket`, `stress`, and `contracts` lanes). For
-the lower-level marker/direct entry points, see
+(available on the `quick`, `socket`, `stress`, and `contracts` lanes).
+`uv run easycat validate report PATH --json` re-emits a saved validation report
+inside the same envelope for coding-agent consumers. For the lower-level
+marker/direct entry points, see
 [`plan/validation/README.md`](plan/validation/README.md).
 
 Flaky quarantine is explicit debt. Use

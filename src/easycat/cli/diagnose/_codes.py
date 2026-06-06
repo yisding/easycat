@@ -94,7 +94,7 @@ documented before accepting a newer version.
 """
 
 _JSON_SCHEMA_BODY = """\
-Every command accepts `--json` and emits a versioned envelope:
+Commands that expose `--json` emit a versioned envelope:
 
     {
       "schema_version": 1,
@@ -103,9 +103,11 @@ Every command accepts `--json` and emits a versioned envelope:
       ...
     }
 
-On error, the envelope includes `code` (EASYCAT_Exxx), `message`,
-`fix`, `context`, and `exit_code`.  Stdout carries the envelope; stderr
-carries logs and diagnostics so `2>/dev/null` remains safe.
+On EasyCat errors, the envelope includes `code` (EASYCAT_Exxx),
+`message`, `fix`, `context`, and `exit_code`.  Other command-specific
+errors still include `message` and `exit_code`.  Stdout carries the
+envelope; stderr carries logs and diagnostics so `2>/dev/null` remains
+safe.
 
 `schema_version` bumps on breaking changes; keep older envelope schemas
 documented before accepting a newer version.

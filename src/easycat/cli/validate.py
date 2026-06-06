@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
@@ -403,11 +403,27 @@ def release(
 @validate_app.command(name="report")
 def report_command(
     path: Annotated[Path, typer.Argument(help="Validation report JSON path.")],
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the standard machine-readable stdout envelope."),
+    ] = False,
 ) -> None:
     """Render a concise validation report summary."""
-    payload = _load_report_payload(path)
+    payload = _load_report_payload(path, json_output=json_output)
     status = str(payload.get("status", "unknown"))
     exit_code = int(payload.get("exit_code", 1) or 0)
+
+    if json_output:
+        emit_json(
+            json_envelope(
+                "validate report",
+                status="ok" if status == "pass" else "error",
+                report_path=str(path),
+                exit_code=exit_code,
+                validation=payload,
+            )
+        )
+        raise typer.Exit(0 if status == "pass" else 1)
 
     stdout_console.print(f"{payload['kind']} {payload['run_id']}: {status}")
     stdout_console.print(f"command: {_format_command(payload.get('command'))}")
@@ -483,33 +499,65 @@ def _format_percentile_value(value: object) -> str:
     return str(value)
 
 
-def _load_report_payload(path: Path) -> dict[str, object]:
+def _report_load_error(path: Path, message: str, *, json_output: bool) -> NoReturn:
+    if json_output:
+        emit_json(
+            json_envelope(
+                "validate report",
+                status="error",
+                report_path=str(path),
+                message=message,
+                exit_code=2,
+            )
+        )
+    else:
+        stdout_console.print(message)
+    raise typer.Exit(2)
+
+
+def _load_report_payload(path: Path, *, json_output: bool = False) -> dict[str, object]:
     try:
         raw = path.read_text()
     except OSError as exc:
-        stdout_console.print(f"validation report not found: {path} ({exc})")
-        raise typer.Exit(2) from exc
+        _report_load_error(
+            path,
+            f"validation report not found: {path} ({exc})",
+            json_output=json_output,
+        )
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        stdout_console.print(f"invalid validation report JSON: {path} ({exc})")
-        raise typer.Exit(2) from exc
+        _report_load_error(
+            path,
+            f"invalid validation report JSON: {path} ({exc})",
+            json_output=json_output,
+        )
 
     if not isinstance(payload, dict):
-        stdout_console.print("invalid validation report JSON: expected object")
-        raise typer.Exit(2)
-    if payload.get("schema_version") != 1:
-        stdout_console.print(
-            f"unsupported validation report schema_version: {payload.get('schema_version')}"
+        _report_load_error(
+            path,
+            "invalid validation report JSON: expected object",
+            json_output=json_output,
         )
-        raise typer.Exit(2)
+    if payload.get("schema_version") != 1:
+        _report_load_error(
+            path,
+            f"unsupported validation report schema_version: {payload.get('schema_version')}",
+            json_output=json_output,
+        )
     if payload.get("kind") != "validation_run":
-        stdout_console.print(f"unknown validation report kind: {payload.get('kind')}")
-        raise typer.Exit(2)
+        _report_load_error(
+            path,
+            f"unknown validation report kind: {payload.get('kind')}",
+            json_output=json_output,
+        )
     if not payload.get("run_id"):
-        stdout_console.print("invalid validation report JSON: missing run_id")
-        raise typer.Exit(2)
+        _report_load_error(
+            path,
+            "invalid validation report JSON: missing run_id",
+            json_output=json_output,
+        )
     return payload
 
 

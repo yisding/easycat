@@ -285,7 +285,8 @@ stdout and corrupting `jq` consumers.
 
 **Checks.**
 - `--json` output from `init`, `doctor`, `docs`, `explain` (both
-  single-code and `--list`), and `validate quick` all include
+  single-code and `--list`), `validate quick`, and `validate report`
+  all include
   `schema_version: 1`, a `command` field matching the command name,
   and a `status` in {ok, error}.
 - The JSON payload appears on stdout; stderr is either empty or
@@ -322,6 +323,8 @@ called out; `--json` output diverging from the standard envelope.
 - `easycat validate report PATH` renders run status, checks, git dirty
   state, expected skips, failures, artifact paths, and missing artifact
   warnings.
+- `easycat validate report PATH --json` re-emits the saved validation
+  run inside the standard envelope and keeps failed reports parseable.
 - Missing, invalid, unsupported-schema, and unknown-kind report files
   fail explicitly.
 

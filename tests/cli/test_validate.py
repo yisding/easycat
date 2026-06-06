@@ -1038,6 +1038,28 @@ def test_validate_report_cli_renders_summary(cli: CliRunner, tmp_path: Path) -> 
     assert f"artifact missing: {tmp_path / 'missing.log'} [missing]" in result.stdout
 
 
+def test_validate_report_cli_json_uses_standard_stdout_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    run = _validation_run()
+    report_path.write_text(run.to_json())
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "ok"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 0
+    assert payload["validation"]["kind"] == "validation_run"
+    assert payload["validation"]["run_id"] == run.run_id
+    assert "validation_run" not in result.stderr
+
+
 def test_validate_report_cli_rejects_invalid_json(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     report_path.write_text("{no")
@@ -1046,6 +1068,25 @@ def test_validate_report_cli_rejects_invalid_json(cli: CliRunner, tmp_path: Path
 
     assert result.exit_code == 2
     assert "invalid validation report JSON" in result.stdout
+
+
+def test_validate_report_cli_json_rejects_invalid_json_with_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text("{no")
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "invalid validation report JSON" in payload["message"]
 
 
 def test_validate_report_cli_rejects_missing_report(cli: CliRunner, tmp_path: Path) -> None:
@@ -1154,6 +1195,37 @@ def test_validate_report_cli_renders_failed_run_details(cli: CliRunner, tmp_path
 
     assert result.exit_code == 1
     assert "failure: pytest.quick easycat_regression 1 test failed" in result.stdout
+
+
+def test_validate_report_cli_json_renders_failed_run_details(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(
+        _validation_run(
+            status="fail",
+            exit_code=1,
+            tool_exit_codes={"pytest": 1},
+            failures=[
+                ValidationFailure(
+                    name="pytest.quick",
+                    message="1 test failed",
+                    failure_class="easycat_regression",
+                )
+            ],
+        ).to_json()
+    )
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 1
+    assert payload["validation"]["status"] == "fail"
+    assert payload["validation"]["failures"][0]["failure_class"] == "easycat_regression"
 
 
 def test_journey_menu_lists_validate_after_registration(cli: CliRunner) -> None:

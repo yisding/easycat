@@ -346,10 +346,12 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
 def test_readme_cli_validate_examples_are_copyable() -> None:
     """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
     cli_section = _readme_cli_section()
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
     assert "easycat validate report PATH" in cli_section
+    assert "uv run easycat validate report PATH --json" in readme
 
 
 def test_readme_cli_doctor_documents_env_file_option() -> None:

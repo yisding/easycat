@@ -240,6 +240,20 @@ def test_validate_quick_envelope(
     assert payload["validation"]["kind"] == "validation_run"
 
 
+def test_validate_report_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(_validation_run().to_json())
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "validate report")
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 0
+    assert payload["validation"]["kind"] == "validation_run"
+
+
 def test_stdout_is_parseable_json_even_with_stderr_noise(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
