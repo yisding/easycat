@@ -95,15 +95,15 @@ def test_render_survives_braced_fix_missing_context() -> None:
 def test_optional_extra_errors_show_package_and_repo_install_commands() -> None:
     missing_extra = str(EASYCAT_E202(extra="openai-agents"))
     assert "uv add 'easycat[openai-agents]'" in missing_extra
-    assert "uv sync --extra openai-agents" in missing_extra
+    assert "uv sync --extra openai-agents --group dev" in missing_extra
 
     smart_turn = str(EASYCAT_E205())
     assert "uv add 'easycat[smart-turn]'" in smart_turn
-    assert "uv sync --extra smart-turn" in smart_turn
+    assert "uv sync --extra smart-turn --group dev" in smart_turn
 
     unknown_provider = str(EASYCAT_E104(provider="depgarm", available="deepgram", hint=""))
     assert "uv add 'easycat[deepgram]'" in unknown_provider
-    assert "uv sync --extra deepgram" in unknown_provider
+    assert "uv sync --extra deepgram --group dev" in unknown_provider
 
 
 def test_factory_allows_context_key_named_code() -> None:
