@@ -370,7 +370,8 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "`base_requirement`, `create_command`, `repo_create_command`" in normalized_readme
     assert "`next_step_commands`" in normalized_readme
     assert "`pyproject_name`, `run_command`" in normalized_readme
-    assert "`run_command`, and `check_command`" in normalized_readme
+    assert "`run_command`, `check_command`, `validation`" in normalized_readme
+    assert "`source_path`, and `fidelity_effective`" in normalized_readme
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
 
 

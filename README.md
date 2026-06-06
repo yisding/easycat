@@ -121,9 +121,10 @@ with audience labels and command hints, and `easycat explain json-schema`
 documents the standard `--json` envelope, including command-specific success
 fields such as `entries`, `commands`, `catalog`, `audience`, `command_note`,
 `base_requirement`, `create_command`, `repo_create_command`,
-`next_step_commands`, `pyproject_name`, `run_command`, and `check_command`, and
-error fields such as `report_path`, `path`, and `output_path`. Replace uppercase
-placeholders in command hints, such as `PATH`, before running them.
+`next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
+`validation`, `source_path`, and `fidelity_effective`, and error fields such as
+`report_path`, `path`, and `output_path`. Replace uppercase placeholders in
+command hints, such as `PATH`, before running them.
 
 ## Validation Workflow
 
