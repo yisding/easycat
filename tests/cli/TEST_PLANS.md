@@ -45,8 +45,8 @@ producing an empty line.
 - `--version` prints a version containing `easycat`, exit 0.
 - `-V` short form works identically.
 - `--help` renders, exit 0, contains `init`, `doctor`, `explain`.
-- Bare `easycat` prints the journey menu (both groups: Scaffold,
-  Debug with the journal).
+- Bare `easycat` prints the journey menu and includes every registered
+  top-level command/group.
 - E2E: `uvx easycat --version` works on a clean machine (covered by
   the wheel test at the bottom).
 

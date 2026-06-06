@@ -48,8 +48,13 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
     assert "easycat explain json-schema" in result.stdout
-    for cmd in ("init", "doctor", "docs", "explain", "bundles", "inspect", "replay"):
-        assert cmd in result.stdout
+    command_names = {command.name for command in app.registered_commands}
+    command_names.update(group.name for group in app.registered_groups)
+    command_names.discard(None)
+    missing = sorted(
+        command_name for command_name in command_names if command_name not in result.stdout
+    )
+    assert not missing, "Journey menu missing registered commands: " + ", ".join(missing)
     # Don't advertise unshipped commands until they're implemented.
     assert "demo" not in result.stdout
 
