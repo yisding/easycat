@@ -39,7 +39,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
 
   [cyan]Scaffold[/]
     [green]init[/]        Scaffold a new project from a template
-    [green]doctor[/]      Check environment and provider reachability
+    [green]doctor[/]      Check API keys, extras, and provider reachability
     [green]explain[/]     Look up errors and CLI schema topics
 
   [cyan]Debug with the journal[/]
@@ -234,7 +234,10 @@ def _register_commands() -> None:
     from easycat.cli.validate import validate_app
 
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
-    app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
+    app.command(
+        name="doctor",
+        help="Check API keys, optional extras, and provider reachability.",
+    )(doctor_cmd)
     app.command(name="docs", help="Show quickstart, examples, teaching, and operations docs.")(
         docs_command
     )

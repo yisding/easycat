@@ -41,6 +41,16 @@ def test_doctor_all_skips_when_no_keys(cli: CliRunner, empty_env: None, no_netwo
     assert "easycat doctor" in result.stderr
 
 
+def test_doctor_help_names_first_run_checks(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["doctor", "--help"])
+    help_text = " ".join(result.stdout.split())
+
+    assert result.exit_code == 0
+    assert "Check API keys, optional extras, and provider reachability" in help_text
+    assert "--env-file" in result.stdout
+    assert "--provider" in result.stdout
+
+
 def test_doctor_passes_with_one_key(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,

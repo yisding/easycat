@@ -557,7 +557,7 @@ def doctor(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Check environment, credentials, reachability, and ONNX availability."""
+    """Check API keys, optional extras, provider reachability, and ONNX availability."""
     if environment not in {"dev", "production"}:
         _doctor_usage_error(
             f"Unknown --environment {environment!r}. Use 'dev' or 'production'.",

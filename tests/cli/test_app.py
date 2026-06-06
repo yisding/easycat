@@ -42,6 +42,7 @@ def test_help_renders(cli: CliRunner) -> None:
     result = cli.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
+    assert "Check API keys, optional extras, and provider reachability" in result.stdout
     assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
     missing = sorted(
@@ -59,6 +60,8 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
     assert "Learn" in result.stdout
+    assert "Check API keys, extras, and provider reachability" in result.stdout
+    assert "Check environment and provider reachability" not in result.stdout
     assert "Show quickstart, examples, and teaching routes" in result.stdout
     assert "Show documentation entry points" not in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
