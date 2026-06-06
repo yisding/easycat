@@ -49,14 +49,34 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
   [cyan]Validation[/]
     [green]validate[/]    Run validation checks and inspect reports
 
+  [cyan]Learn[/]
+    [green]docs[/]        Show documentation entry points
+
 Run [cyan]easycat <command> --help[/] for command-specific options.
 Run [cyan]easycat explain <code>[/] to understand an error.
+"""
+
+
+_DOCS_MENU = """[bold]EasyCat documentation[/]
+
+  [cyan]Quickstart[/]       README.md#install
+  [cyan]Docs map[/]         docs/README.md
+  [cyan]Teaching ladder[/]  docs/teaching/
+  [cyan]Public API[/]       docs/public-api.md
+  [cyan]Validation[/]       README.md#validation-workflow
+
+Online source: [cyan]https://github.com/yisding/easycat[/]
 """
 
 
 def _print_journey_menu() -> None:
     """Render the top-level menu on bare ``easycat`` invocation."""
     stdout_console.print(_JOURNEY_MENU)
+
+
+def docs_command() -> None:
+    """Show documentation entry points."""
+    stdout_console.print(_DOCS_MENU)
 
 
 @app.callback(invoke_without_command=True)
@@ -101,6 +121,7 @@ def _register_commands() -> None:
 
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
+    app.command(name="docs", help="Show documentation entry points.")(docs_command)
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
     app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
     app.command(name="replay", help="Replay a debug bundle or SQLite journal.")(replay_bundle)

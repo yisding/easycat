@@ -31,6 +31,7 @@ def test_help_renders(cli: CliRunner) -> None:
     assert "EasyCat" in result.stdout
     assert "init" in result.stdout
     assert "doctor" in result.stdout
+    assert "docs" in result.stdout
     assert "explain" in result.stdout
     assert "inspect" in result.stdout
 
@@ -41,12 +42,24 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
+    assert "Learn" in result.stdout
+    assert "Show documentation entry points" in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
-    for cmd in ("init", "doctor", "explain", "bundles", "inspect", "replay"):
+    for cmd in ("init", "doctor", "docs", "explain", "bundles", "inspect", "replay"):
         assert cmd in result.stdout
     # Don't advertise unshipped commands until they're implemented.
     assert "demo" not in result.stdout
+
+
+def test_docs_command(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs"])
+    assert result.exit_code == 0
+    assert "EasyCat documentation" in result.stdout
+    assert "docs/README.md" in result.stdout
+    assert "docs/teaching" in result.stdout
+    assert "docs/public-api.md" in result.stdout
+    assert "#validation-workflow" in result.stdout
 
 
 # ── Fast-path guard ──────────────────────────────────────────────
