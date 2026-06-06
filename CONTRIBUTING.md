@@ -44,6 +44,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Validate (contracts) | `just validate-contracts` | `uv run easycat validate contracts` |
 | Validate (latency smoke) | `just validate-latency-smoke` | `uv run easycat validate latency --smoke` |
 | Validate (live OpenAI) | `just validate-live-openai` | `uv run easycat validate live --provider openai` |
+| Validate (release) | `just validate-release` | `uv run easycat validate release` |
 | Validate report | `just validate-report .easycat/validation/latest.json` | `uv run easycat validate report .easycat/validation/latest.json` |
 | Pre-PR gauntlet | `just check` | `uv run ruff format --check . && uv run ruff check . && uv run pytest` |
 | Pre-commit hooks | `just pre-commit` | `uv run pre-commit run --all-files` |
@@ -90,6 +91,7 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 | `contracts` | `uv run easycat validate contracts` | contract, not live, not flaky |
 | `latency` | `uv run easycat validate latency --smoke` | latency probes (live) |
 | `live` | `uv run easycat validate live --provider openai` | integration_live + provider/surface |
+| `release` | `uv run easycat validate release` | installed-wheel aggregate gate |
 
 `uv run easycat validate report <path>` renders a saved report.
 

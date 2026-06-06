@@ -93,6 +93,10 @@ validate-latency-smoke:
 validate-live-openai:
     uv run easycat validate live --provider openai
 
+# Strict installed-wheel release gate.
+validate-release:
+    uv run easycat validate release
+
 # Render a saved validation report. Usage: just validate-report .easycat/validation/latest.json
 validate-report REPORT=".easycat/validation/latest.json":
     uv run easycat validate report "{{ REPORT }}"

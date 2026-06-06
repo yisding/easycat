@@ -138,6 +138,20 @@ def test_contributing_development_loop_lists_validation_just_recipes() -> None:
     assert not missing, "CONTRIBUTING.md missing validation recipes: " + ", ".join(missing)
 
 
+def test_contributing_validation_slices_track_public_validate_lanes() -> None:
+    from easycat.cli.validate import validate_app
+
+    documented_slices = {row["slice"] for row in _validation_slice_rows()}
+    public_lanes = {
+        command.name
+        for command in validate_app.registered_commands
+        if command.name not in {None, "report"}
+    }
+    missing = sorted(public_lanes - documented_slices)
+
+    assert not missing, "CONTRIBUTING.md missing validation lanes: " + ", ".join(missing)
+
+
 def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
     stale = [
         f"{row['slice']}: {row['command']}"
