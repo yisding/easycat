@@ -227,6 +227,27 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
     assert "easycat validate quick" not in route_commands
 
 
+def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    observability = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    cli_section = observability.split("- CLI entry points:", 1)[1].split("Add `--json`", 1)[0]
+    route_commands = entries["docs/observability.md"].get("commands", ())
+
+    for command in (
+        "easycat bundles list",
+        "easycat bundles show PATH",
+        "easycat inspect PATH",
+        "easycat replay PATH",
+        "easycat bundles export PATH",
+    ):
+        documented_command = command.replace("PATH", "<path>")
+        assert f"`{documented_command}`" in cli_section
+        assert command in route_commands
+
+    assert "easycat bundles show <path>" not in route_commands
+    assert "easycat bundles export <path>" not in route_commands
+
+
 def test_cli_docs_command_hints_are_locally_valid() -> None:
     _register_commands()
     registered_commands = {

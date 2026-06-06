@@ -232,7 +232,13 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/observability.md",
         "audience": "operators",
         "description": "Inspect journals, debug bundles, metrics, and traces.",
-        "commands": ("easycat bundles list", "easycat inspect PATH", "easycat replay PATH"),
+        "commands": (
+            "easycat bundles list",
+            "easycat bundles show PATH",
+            "easycat inspect PATH",
+            "easycat replay PATH",
+            "easycat bundles export PATH",
+        ),
     },
     {
         "label": "Journal durability",
