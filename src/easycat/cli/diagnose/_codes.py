@@ -119,7 +119,7 @@ entry points include:
                             `description`, `url`, and optional `commands`
                             in onboarding order; `command_note` explains
                             installed vs repo-local `uv run` for EasyCat CLI
-                            hints
+                            hints and uppercase placeholders such as PATH
   `templates`, `catalog` - `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
                          `check_command`

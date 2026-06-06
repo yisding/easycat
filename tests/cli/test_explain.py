@@ -123,6 +123,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "optional `commands`" in result.stdout
     assert "in onboarding order" in result.stdout
     assert "installed vs repo-local `uv run` for EasyCat CLI" in result.stdout
+    assert "uppercase placeholders such as PATH" in result.stdout
     assert "`templates`, `catalog`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
@@ -155,6 +156,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "optional `commands`" in payload["body"]
     assert "in onboarding order" in payload["body"]
     assert "installed vs repo-local `uv run` for EasyCat CLI" in payload["body"]
+    assert "uppercase placeholders such as PATH" in payload["body"]
     assert "`templates`, `catalog`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
     assert "`report_path`" in payload["body"]

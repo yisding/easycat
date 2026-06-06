@@ -5,7 +5,13 @@ import shlex
 from pathlib import Path
 from urllib.parse import unquote
 
-from easycat.cli._app import _DOCS_LINKS, _docs_entries, _register_commands, app
+from easycat.cli._app import (
+    _DOCS_COMMAND_NOTE,
+    _DOCS_LINKS,
+    _docs_entries,
+    _register_commands,
+    app,
+)
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -221,6 +227,25 @@ def test_cli_docs_command_hints_are_locally_valid() -> None:
                     problems.append(f"{entry['label']}: unsupported command hint {command!r}")
 
     assert not problems, "easycat docs command hints are stale:\n" + "\n".join(problems)
+
+
+def test_cli_docs_command_placeholders_are_explained() -> None:
+    placeholders = sorted(
+        {
+            token
+            for entry in _docs_entries()
+            for command in entry.get("commands", ())
+            for token in shlex.split(command)
+            if token.isupper()
+        }
+    )
+
+    missing = [
+        placeholder for placeholder in placeholders if placeholder not in _DOCS_COMMAND_NOTE
+    ]
+
+    assert not missing, "command_note missing placeholders: " + ", ".join(missing)
+    assert "placeholder" in _DOCS_COMMAND_NOTE.lower()
 
 
 def test_cli_docs_routes_have_online_urls() -> None:

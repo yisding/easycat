@@ -222,7 +222,7 @@ _DOCS_LINKS: list[_DocsLink] = [
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 _DOCS_COMMAND_NOTE = (
     "EasyCat CLI hints use installed form; from this repo, prefix non-uv EasyCat hints "
-    "with uv run."
+    "with uv run. Replace uppercase placeholders such as PATH before running."
 )
 
 
