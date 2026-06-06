@@ -81,8 +81,10 @@ def test_docs_index_points_to_docs_command() -> None:
     normalized = re.sub(r"\s+", " ", text)
 
     assert "uv run easycat docs" in text
+    assert "uv run easycat docs --json" in text
     assert "installed app environment" in text
     assert "prints the same map" in text
+    assert "docs route map" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
     assert "copyable create commands" in normalized

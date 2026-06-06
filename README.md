@@ -93,6 +93,7 @@ easycat init my-agent    # scaffold a new project from a template
 easycat init --list-templates # compare templates and copyable create commands
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat docs             # show quickstart, examples, and teaching routes
+easycat docs --json      # emit the docs route map for scripts and agents
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic
@@ -113,10 +114,10 @@ scaffolds with their transport, framework, and copyable create commands.
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
-For coding agents and scripts, `easycat explain json-schema` documents the
-standard `--json` envelope, including command-specific success fields such as
-`entries` and `catalog` and error fields such as `report_path`, `path`, and
-`output_path`.
+For coding agents and scripts, `easycat docs --json` emits the docs route map,
+and `easycat explain json-schema` documents the standard `--json` envelope,
+including command-specific success fields such as `entries` and `catalog` and
+error fields such as `report_path`, `path`, and `output_path`.
 
 ## Validation Workflow
 

@@ -404,6 +404,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat init --list-templates # compare templates and copyable create commands",
         "easycat doctor           # check API keys, optional extras, provider reachability",
         "easycat docs             # show quickstart, examples, and teaching routes",
+        "easycat docs --json      # emit the docs route map for scripts and agents",
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
@@ -421,6 +422,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     )
     for line in stale_cli_lines:
         assert line not in cli_section
+    assert "easycat docs --json" in cli_section
 
     missing = sorted(
         command_name
