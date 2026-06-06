@@ -6,6 +6,11 @@ Start here (requires ``uv add 'easycat[quickstart]'``)::
     from easycat import EasyConfig, run
     run(EasyConfig.mic(agent=Agent(name="assistant", instructions="Be helpful.")))
 
+Before the first run, set ``OPENAI_API_KEY`` and verify the environment with
+``uv run easycat doctor``. If keys live in ``.env``, use
+``uv run easycat doctor --env-file .env`` and
+``uv run --env-file .env ...``.
+
 ``EasyConfig`` + ``run`` is the entry path. Drop to ``SessionConfig`` + ``Session``
 only when you need to hand-build provider instances.
 

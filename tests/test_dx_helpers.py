@@ -116,6 +116,9 @@ def test_package_docstring_leads_with_canonical_quickstart() -> None:
     assert "from agents import Agent" in doc
     assert "from easycat import EasyConfig, run" in doc
     assert "run(EasyConfig.mic(agent=Agent(" in doc
+    assert "uv run easycat doctor" in doc
+    assert "uv run easycat doctor --env-file .env" in doc
+    assert "uv run --env-file .env ..." in doc
     assert "SessionConfig" in doc
     assert "hand-build provider instances" in doc
     assert "create_session" not in doc.split("Start here", 1)[1].split("SessionConfig", 1)[0]
