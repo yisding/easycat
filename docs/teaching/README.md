@@ -10,6 +10,11 @@ of scripts). Chapter `N+1` copies chapter `N`'s code as its starting
 point and evolves from there — so every chapter folder is a frozen,
 runnable artifact you can visit independently.
 
+From this repository, `uv run easycat docs` prints the maintained
+docs map that links back to this ladder. Use
+`uv run easycat docs --json` when a script or coding agent needs the
+same route map.
+
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 
 ## The ladder
@@ -73,7 +78,8 @@ runnable artifact you can visit independently.
 - After setting the keys for a chapter, run `uv run easycat doctor`
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug
-  chapter code.
+  chapter code. If the keys live in a project `.env`, run
+  `uv run easycat doctor --env-file .env`.
 
 Each chapter's README lists its own prerequisites up front.
 

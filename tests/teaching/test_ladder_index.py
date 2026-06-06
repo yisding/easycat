@@ -94,6 +94,18 @@ def test_public_teaching_ladder_entrypoints_advertise_actual_chapter_count() -> 
     )
 
 
+def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
+    readme = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", readme)
+
+    assert "uv run easycat docs" in readme
+    assert "uv run easycat docs --json" in readme
+    assert "maintained docs map" in normalized
+    assert "script or coding agent needs the same route map" in normalized
+    assert "uv run easycat doctor" in readme
+    assert "uv run easycat doctor --env-file .env" in readme
+
+
 def test_teaching_chapters_have_reader_entrypoints() -> None:
     missing: list[str] = []
 
