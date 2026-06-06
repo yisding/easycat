@@ -30,15 +30,14 @@ M1 (scaffolding) is effectively done:
   `pydantic-ai-workflow`, `text-chat`, `twilio-phone`,
   `webrtc-browser`.
 
-M2 gaps:
+M2 status:
 
 - Template `agent.py` line budgets are now enforced at the planned caps:
   `openai-agents` ≤16 lines, `pydantic-ai` ≤17,
   `pydantic-ai-workflow` ≤20, `text-chat` ≤17, `twilio-phone` ≤15, and
-  `webrtc-browser` ≤14. Templates currently wire simple Python
-  tools/workflows instead of the plan's `calculator` + `filesystem` MCP; the
-  tools are working, but the plan text should be updated to match the shipped
-  content or vice-versa.
+  `webrtc-browser` ≤14. Template content now matches the shipped starters:
+  simple Python tools/workflows are built in, and optional MCP wiring is
+  generated only when requested.
 
 M3 (journal debugging) — partial:
 
@@ -177,9 +176,9 @@ Templates are not "hello world" placeholders you throw away. Each
 template is a real agent with a personality, a tool, and a README
 that explains what to change first. Three consequences:
 
-- Template `agent.py` ≤ 15 lines and readable end-to-end in 30
-  seconds.
-- Every template has a working tool/MCP wire-up — no blank slates.
+- Template `agent.py` stays within its per-template line budget and is
+  readable end-to-end in 30 seconds.
+- Every template has a working tool or workflow — no blank slates.
 - The scaffolded code uses the library exactly as experienced
   developers use it. No CLI-private magic, no `# TODO: replace this`
   comments. The upgrade path is "modify what you see."
@@ -287,8 +286,9 @@ Options:
 - Writes `agent.py`, `.env.example`, `pyproject.toml` with
   `easycat[<extras>]` pinned, `README.md`, `.gitignore`.
 - Runs `git init` by default; `--no-git` skips.
-- Prints next-step commands: `cd <name> && uv sync && uvx easycat
-  doctor`.
+- Prints next-step commands: `cd <name>`, `cp .env.example .env`,
+  `uv sync`, `uv run easycat doctor --env-file .env`, then the
+  template-specific run command.
 
 ### Non-interactive `--config` JSON schema
 
@@ -689,7 +689,9 @@ replay failed or side effects were blocked.
 
 Explicit non-goals, with reasoning.
 
-- **`easycat run`** — call `uv run python agent.py`. Adding a
+- **`easycat run`** — generated projects already call
+  `uv run --env-file .env python agent.py` or the template-specific
+  server command. Adding a
   wrapper doesn't save meaningful keystrokes, and `run` without the
   broader set (logs, signal handling, flag pass-through) is strictly
   worse than a plain Python invocation. Defer; revisit if user
@@ -914,8 +916,8 @@ agent.py` end-to-end in under 60 seconds.
 
 Finishes the scaffolding surface.
 
-- Planned scaffold templates and line budgets shipped; remaining work is
-  MCP/tool-content reconciliation and run-matrix cleanup.
+- Planned scaffold templates, line budgets, and tool/workflow content shipped;
+  remaining work is run-matrix cleanup.
 - `easycat doctor` checks 6–8 (microphone, journal, disk)
 - `easycat doctor --fix` for safe auto-fixes
 - E2E scaffold matrix: init → sync → run per template against stub

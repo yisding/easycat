@@ -345,8 +345,17 @@ def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     assert "uv run --env-file .env python agent.py" in golden_path
     assert "uvx easycat doctor" not in golden_path
     assert "uv run python agent.py" not in golden_path
+    assert "uvx easycat doctor" not in plan
+    assert "uv run python agent.py" not in plan
     assert "agent.py              # per-template line budget" in plan
     assert "agent.py              # ≤ 15 lines" not in plan
+    assert "Template `agent.py` ≤ 15 lines" not in plan
+    assert "the plan's `calculator` + `filesystem` MCP" not in plan
+    assert "plan text should be updated" not in plan
+    assert "MCP/tool-content reconciliation" not in plan
+    assert "working tool or workflow" in plan
+    assert "generated only when requested" in plan
+    assert "template-specific run command" in plan
 
 
 def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
