@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `src/easycat/`: core library code.
-- Key subpackages: `session/`, `stages/`, `stt/`, `tts/`, `transports/`, `telephony/`, `integrations/agents/`, `runtime/`, `debug/`, `debugger/`, `cli/`.
+- Key subpackages: `session/`, `stages/`, `stt/`, `tts/`, `vad/`, `transports/`, `telephony/`, `integrations/agents/`, `runtime/`, `validation/`, `debug/`, `debugger/`, `cli/`.
 - Core orchestrators/utilities live alongside: `config/`, `events.py`, `turn_manager.py`, `smart_turn.py`, `timeouts.py`.
 - Provider interfaces are centralized in `providers.py`; STT/TTS factory registries live in `stt/factory.py` and `tts/factory.py`.
 - Agent framework bridges live in `src/easycat/integrations/agents/` (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, `LangGraphBridge`, plus `AgentRunner`).

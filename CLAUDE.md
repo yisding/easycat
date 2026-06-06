@@ -56,12 +56,13 @@ uv run python examples/ws_server.py  # Run an example
 - `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`, `EchoCanceller`). Providers use duck typing, not inheritance.
 - `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.
 - `runtime/` — Journal-based debug-first runtime. `ExecutionJournal` records events, spans, and metrics. `JournalView` provides query access. The journal is the single source of truth for all observability.
+- `validation/` — Validation report models, redaction, and runner helpers behind the `easycat validate` lanes.
 - `stages/` — Pipeline stages wrapping providers with a uniform `execute` / `snapshot_state` / `handle_upstream` surface and optional journal recording. `Stage` protocol defined in `stages/base.py`.
 - `debug/` — `RunBundle` for serializing/loading complete session recordings. `load_bundle()` for test fixtures.
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
 - `_turn_context.py` (package root) — `TurnContext` per-turn state (timing, playback tracking, cancel token; created fresh each turn) and the `TurnHandle` protocol. Lives at the root as a leaf (depends only on `cancel.py`) so both `session/` and the lower `stages/` layer import it downward — preserving the `Session → Stages → Providers` direction without an import cycle.
 
-**Provider subpackages** (`stt/`, `tts/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
+**Provider subpackages** (`stt/`, `tts/`, `vad/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
 
 **Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol (single contract between Session and agents) with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, and `LangGraphBridge`. `AgentRunner` (in `integrations/agents/_agent_runner.py`) implements `ExternalAgentBridge` by wrapping a simple `async run(text) -> str` object — used for basic agents that need timeout/cancellation/history. `auto_adapt_agent()` in `_factory.py` detects known framework objects and returns the right bridge.
 
