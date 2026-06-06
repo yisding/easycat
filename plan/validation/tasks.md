@@ -896,6 +896,33 @@ Dependencies:
 
 - V3.1
 
+Current verified state:
+
+- `tests/contracts/test_agent_bridge_contracts.py` is marked `contract`,
+  `agent_bridge`, `surface_agent`, and provider `offline-fake`.
+- `tests/contracts/provider_surface_matrix.py` maps `openai-agents`,
+  `pydantic-ai`, `generic-workflow`, `remote-responses-api`, `langchain`,
+  `langgraph`, and `llama-agents` agent bridge rows to
+  `tests/contracts/test_agent_bridge_contracts.py`.
+- Agent bridge rows record adapter, protocol, mode, `model_api_version`,
+  `required_extra`, `credential_env_var`, cassette path/status, live-canary
+  status, and `expected_skip_reason`; the importability contract treats a
+  missing optional adapter import as an expected skip only when
+  `required_extra` and `expected_skip_reason` are set.
+- The offline bridge grammar contract asserts that the stream contains
+  `text_delta`, `tool_started`, `tool_result`, and `done`, while cursor enter /
+  exit, tool `start` / `result`, framework handoff, and state snapshot records
+  are written through `AgentRecorder`.
+- Interruption contracts assert `CancellationMode.IMMEDIATE_STOP`,
+  `record_cancellation_boundary`, pre/post `record_state_snapshot`,
+  `record_state_committed`, swallowed post-commit journal failure, skipped
+  mutation when commit journaling fails, and JSON-safe `FrameworkStateSnapshot`
+  plus `reset()` behavior.
+- Current bridge contracts cover recorder writes, handoff records, snapshot
+  safety, interruption journal failure modes, and optional-extra metadata; live
+  framework behavior and normalized framework error taxonomies remain outside
+  this offline fake bridge contract.
+
 Files:
 
 - `tests/contracts/test_agent_bridge_contracts.py`
