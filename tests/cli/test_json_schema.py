@@ -193,6 +193,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "base_extras",
         "required_env",
         "optional_env",
+        "files",
         "description",
         "create_command",
         "repo_create_command",
@@ -214,6 +215,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert isinstance(entry["required_env"], list)
         assert entry["required_env"]
         assert isinstance(entry["optional_env"], list)
+        assert isinstance(entry["files"], list)
+        assert "README.md" in entry["files"]
 
 
 def test_init_error_envelope(
@@ -328,6 +331,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "base extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
+    assert "generated files" in descriptions["README.md#cli"]
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"

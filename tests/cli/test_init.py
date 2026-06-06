@@ -65,6 +65,9 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "openai-agents, local" in result.stdout
     assert "telephony" in result.stdout
     assert "webrtc" in result.stdout
+    assert "Files:" in result.stdout
+    assert ".env.example" in result.stdout
+    assert "server.py" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
     assert "Command note:" in result.stdout
@@ -90,6 +93,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "transport": "local[dev]",
             "framework": "OpenAI Agents",
             "base_extras": ("sdk[beta]",),
+            "files": ("agent[beta].py", ".env.example"),
             "best_for": "Teams using SDK[beta].",
             "required_env": ("OPENAI_API_KEY", "SDK[KEY]"),
             "optional_env": ("SDK[OPTIONAL]",),
@@ -106,6 +110,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "easycat[openai-agents]" in rendered
     assert "local[dev]" in rendered
     assert "sdk[beta]" in rendered
+    assert "agent[beta].py" in rendered
     assert "Teams using SDK[beta]." in rendered
     assert "SDK[KEY]" in rendered
     assert "SDK[OPTIONAL]" in rendered
@@ -125,6 +130,13 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert set(catalog) == set(available_templates())
     assert catalog["openai-agents"]["transport"] == "local mic"
     assert catalog["openai-agents"]["base_extras"] == ["openai-agents", "local"]
+    assert catalog["openai-agents"]["files"] == [
+        ".env.example",
+        ".gitignore",
+        "README.md",
+        "agent.py",
+        "pyproject.toml",
+    ]
     assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
     assert catalog["openai-agents"]["optional_env"] == []
@@ -132,6 +144,7 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["text-chat"]["base_extras"] == ["openai-agents"]
     assert "without microphone" in catalog["text-chat"]["best_for"]
     assert catalog["twilio-phone"]["base_extras"] == ["openai-agents", "telephony"]
+    assert "server.py" in catalog["twilio-phone"]["files"]
     assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
     assert catalog["twilio-phone"]["optional_env"] == ["TWILIO_WS_PORT"]
     assert catalog["webrtc-browser"]["optional_env"] == [

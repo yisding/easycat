@@ -33,6 +33,7 @@ from easycat.cli.scaffold.init import (
     _available_template_catalog,
     _render_text,
     _substitutions,
+    _template_file_names,
     _templates_root,
 )
 
@@ -157,6 +158,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     assert all(entry["name"] == name for name, entry in emitted.items())
     for name, entry in emitted.items():
         assert entry["base_extras"] == _TEMPLATE_BASE_EXTRAS[name]
+        assert entry["files"] == _template_file_names(name)
         assert entry["run_command"]
         assert entry["check_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]

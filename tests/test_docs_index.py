@@ -82,6 +82,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "base `easycat[...]` extras" in normalized
     assert "required environment variables" in normalized
     assert "optional environment knobs" in normalized
+    assert "generated files" in normalized
     assert "copyable create/check/run commands" in normalized
     assert "architecture map" in normalized
     assert "provider registries" in normalized

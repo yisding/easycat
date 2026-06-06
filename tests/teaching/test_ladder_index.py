@@ -263,6 +263,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "base `easycat[...]` extras" in normalized_cli_section
     assert "required environment variables" in normalized_cli_section
     assert "optional environment knobs" in normalized_cli_section
+    assert "generated files" in normalized_cli_section
     assert "copyable create/check/run commands" in normalized_cli_section
     assert "same route map with command hints" in normalized_cli_section
     assert "audience labels" in normalized_cli_section

@@ -161,6 +161,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "base extras" in result.stdout
     assert "env requirements" in result.stdout
     assert "optional env knobs" in result.stdout
+    assert "generated files" in result.stdout
     assert "copyable create/check/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
     assert "Commands:" in result.stdout
@@ -274,6 +275,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "base extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
+    assert "generated files" in descriptions["README.md#cli"]
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"

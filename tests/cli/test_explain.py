@@ -132,6 +132,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "`base_extras`" in result.stdout
     assert "`required_env`" in result.stdout
     assert "`optional_env`" in result.stdout
+    assert "`files`" in result.stdout
     assert "top-level `command_note`" in result.stdout
     assert "repository root" in stdout
     assert "post-scaffold check/run context" in stdout
@@ -173,6 +174,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`base_extras`" in stdout
     assert "`required_env`" in stdout
     assert "`optional_env`" in stdout
+    assert "`files`" in stdout
     assert "repo-root creation" in stdout
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
@@ -215,6 +217,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`base_extras`" in payload["body"]
     assert "`required_env`" in payload["body"]
     assert "`optional_env`" in payload["body"]
+    assert "`files`" in payload["body"]
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
