@@ -291,7 +291,7 @@ stdout and corrupting `jq` consumers.
 - The JSON payload appears on stdout; stderr is either empty or
   strictly logs/progress (never JSON fragments).
 - When a command errors, the envelope includes `code`, `message`,
-  `context`, `exit_code`.
+  `fix`, `context`, `exit_code`.
 
 **Backed by.** New `test_json_schema.py`.
 

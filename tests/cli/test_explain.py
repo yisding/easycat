@@ -86,6 +86,12 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "filesystem" in result.stdout
 
 
+def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "json-schema"])
+    assert result.exit_code == 0
+    assert "`fix`, `context`, and `exit_code`" in result.stdout
+
+
 def test_explain_no_arg_is_error(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain"])
     assert result.exit_code == 2

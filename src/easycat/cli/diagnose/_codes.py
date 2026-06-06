@@ -97,7 +97,7 @@ Every command accepts `--json` and emits a versioned envelope:
     }
 
 On error, the envelope includes `code` (EASYCAT_Exxx), `message`,
-`context`, and `exit_code`.  Stdout carries the envelope; stderr
+`fix`, `context`, and `exit_code`.  Stdout carries the envelope; stderr
 carries logs and diagnostics so `2>/dev/null` remains safe.
 
 `schema_version` bumps on breaking changes; old versions stay
