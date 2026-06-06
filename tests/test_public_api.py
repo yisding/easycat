@@ -120,6 +120,14 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     assert "PUBLIC_API_SNAPSHOT" in doc
 
 
+def test_public_api_contract_doc_has_unique_allowlist_entries() -> None:
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    documented = _documented_top_level_allowlist_entries(doc)
+    duplicates = sorted({name for name in documented if documented.count(name) > 1})
+
+    assert not duplicates, "docs/public-api.md duplicates exports: " + ", ".join(duplicates)
+
+
 def test_curated_public_api_lazy_imports() -> None:
     from easycat import (
         EasyConfig,
@@ -265,17 +273,21 @@ def _easycat_imports_from_markdown(path: Path) -> Iterable[tuple[int, str]]:
 
 
 def _documented_top_level_allowlist(doc: str) -> set[str]:
+    return set(_documented_top_level_allowlist_entries(doc))
+
+
+def _documented_top_level_allowlist_entries(doc: str) -> list[str]:
     try:
         section = doc.split("## Top-Level Allowlist", maxsplit=1)[1]
     except IndexError as exc:
         raise AssertionError("docs/public-api.md is missing the Top-Level Allowlist") from exc
 
-    names: set[str] = set()
+    names: list[str] = []
     for line in section.splitlines():
         stripped = line.strip()
         if not stripped.startswith("- `") or not stripped.endswith("`"):
             continue
-        names.add(stripped.removeprefix("- `").removesuffix("`"))
+        names.append(stripped.removeprefix("- `").removesuffix("`"))
     return names
 
 
