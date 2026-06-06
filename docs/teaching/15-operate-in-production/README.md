@@ -437,7 +437,9 @@ $ uv run easycat --help
   you need to compare transports and agent frameworks; the list includes
   base `easycat[...]` package requirements and extras, required environment
   variables, optional environment knobs, generated files, and copyable
-  create/check/run commands for each template.
+  create/check/run commands for each template. Use
+  `uv run easycat init --list-templates --json` when a script or coding agent
+  needs the same template catalog and post-scaffold command previews.
 - **`uv run easycat doctor`** — checks API keys, Python version, optional
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
