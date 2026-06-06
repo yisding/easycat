@@ -362,6 +362,7 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         _next_step_check_command(template),
         "uv run easycat docs",
         "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
         _next_step_run_command(template),
     ]
 
@@ -799,6 +800,9 @@ def init(
     stderr_console.print("  uv run easycat docs [dim]# find examples and guides[/]")
     stderr_console.print(
         "  uv run easycat docs --json [dim]# route map with command hints and audience labels[/]"
+    )
+    stderr_console.print(
+        "  uv run easycat explain json-schema [dim]# JSON envelope and field contract[/]"
     )
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
 

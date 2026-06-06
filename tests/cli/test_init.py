@@ -853,6 +853,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
     assert "audience labels" in result.stderr
+    assert "uv run easycat explain json-schema" in result.stderr
+    assert "JSON envelope and field contract" in result.stderr
     assert "uvx easycat doctor" not in result.stderr
 
 
@@ -938,6 +940,7 @@ def test_init_json_next_step_commands_match_template_readme(
         _template_readme_check_command(template),
         "uv run easycat docs",
         "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
         _template_readme_run_command(template),
     ]
     assert payload["run_command"] == _template_readme_run_command(template)

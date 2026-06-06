@@ -61,4 +61,6 @@ uv run python -m py_compile agent.py
 - **Explore docs and examples:** run `uv run easycat docs`; use
   `uv run easycat docs --json` when a script or coding agent needs the route
   map with command hints and audience labels. Replace uppercase placeholders
-  such as `PATH` before running those hints.
+  such as `PATH` before running those hints. Run
+  `uv run easycat explain json-schema` for the JSON envelope and field
+  contract.

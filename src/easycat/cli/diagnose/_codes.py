@@ -97,7 +97,7 @@ context. Each `catalog` row includes:
 (repo-local `uv run` form from the repository root), `next_step_commands`
 (a `my-agent` preview sequence), `run_command`, and `check_command`.
 Successful `easycat init NAME --json` also includes
-`next_step_commands`, an ordered copy/sync/doctor/check/docs/run
+`next_step_commands`, an ordered copy/sync/doctor/check/docs/json-schema/run
 sequence matching the human success footer.
 Bump `schema_version` when the accepted `--config` input shape changes;
 keep older input schemas documented before accepting a newer version.

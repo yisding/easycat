@@ -249,7 +249,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "repository root" in stdout
     assert "post-scaffold check/run context" in stdout
     assert "`next_step_commands`" in result.stdout
-    assert "copy/sync/doctor/check/docs/run" in stdout
+    assert "copy/sync/doctor/check/docs/json-schema/run" in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "accepted `--config` input shape" in stdout

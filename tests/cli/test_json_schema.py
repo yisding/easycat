@@ -170,6 +170,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
         "uv run python -m py_compile agent.py",
         "uv run easycat docs",
         "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
         "uv run --env-file .env python agent.py",
     ]
     assert "after cd into the scaffolded project" in payload["command_note"]
@@ -217,6 +218,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
             entry["check_command"],
             "uv run easycat docs",
             "uv run easycat docs --json",
+            "uv run easycat explain json-schema",
             entry["run_command"],
         ]
         assert entry["run_command"].startswith("uv run ")
