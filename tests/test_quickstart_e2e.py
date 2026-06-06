@@ -222,6 +222,8 @@ def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:
     assert "uv sync --extra quickstart --group dev" in readme
     assert "uv run easycat doctor" in readme
     assert "uv run python examples/openai_agents_voice.py" in readme
+    assert "uv run easycat doctor --env-file .env" in readme
+    assert "uv run --env-file .env python examples/openai_agents_voice.py" in readme
 
     repo_block = readme.split("For this repository:", 1)[1]
     repo_commands = repo_block.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()

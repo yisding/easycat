@@ -14,6 +14,13 @@ uv run easycat doctor
 uv run python examples/openai_agents_voice.py
 ```
 
+If you keep keys in `.env`, load that file on both the doctor and run commands:
+
+```bash
+uv run easycat doctor --env-file .env
+uv run --env-file .env python examples/openai_agents_voice.py
+```
+
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
 RNNoise, NumPy, and ONNX Runtime. It does not install every framework/provider
 variant. Install cells are repo-local commands that start with EasyCat extras,

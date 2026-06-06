@@ -430,6 +430,8 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
         "uv run easycat doctor",
         "uv run python examples/openai_agents_voice.py",
     ]
+    assert "uv run easycat doctor --env-file .env" in fast_path
+    assert "uv run --env-file .env python examples/openai_agents_voice.py" in fast_path
 
 
 def test_examples_readme_rows_are_command_map_entries() -> None:

@@ -36,6 +36,14 @@ uv run easycat doctor
 uv run python examples/openai_agents_voice.py
 ```
 
+If you keep provider keys in a project `.env` instead of exporting them in the
+shell, load that file explicitly:
+
+```bash
+uv run easycat doctor --env-file .env
+uv run --env-file .env python examples/openai_agents_voice.py
+```
+
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
 SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
 install that optional extra separately only if you accept its non-permissive
