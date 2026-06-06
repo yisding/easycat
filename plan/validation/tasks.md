@@ -772,6 +772,34 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
+Current verified state:
+
+- `tests/integration/test_provider_contract_matrix.py` is the
+  `factory/session wiring seam`, not a protocol cassette suite; its docstring
+  explicitly excludes protocol cassette scope.
+- The wiring matrix builds `_STT_CONFIG_CLASSES` from
+  `easycat.stt.factory._PROVIDER_TO_CONFIG` and `_TTS_CONFIG_CLASSES` from
+  `easycat.tts.factory._PROVIDERS`, so newly registered STT/TTS providers are
+  auto-parametrized across every STT x TTS session pair.
+- Each provider pair runs two phases: real
+  `create_stt_provider_from_config` / `create_tts_provider_from_config`
+  dispatch plus EventBus injection checks against `_CONFIG_TO_PROVIDER`, then a
+  scripted `create_session()` lifecycle smoke with fake STT/TTS/VAD providers.
+- `test_registry_covers_every_known_config` guards the known STT configs
+  `OpenAISTTConfig`, `OpenAIRealtimeSTTConfig`, `DeepgramSTTConfig`,
+  `ElevenLabsSTTConfig`, and `CartesiaSTTConfig`, and the known TTS configs
+  `OpenAITTSConfig`, `DeepgramTTSConfig`, `ElevenLabsTTSConfig`, and
+  `CartesiaTTSConfig`, so OpenAI realtime and Cartesia cannot silently fall out
+  of wiring coverage.
+- `tests/contracts/test_provider_surface_matrix.py` keeps protocol coverage
+  separate by requiring every registered STT/TTS/VAD/transport surface to have
+  a contract row or explicit exclusion through
+  `missing_registered_provider_surfaces()`.
+- `tests/contracts/README.md` documents the split: the integration matrix
+  proves factory/session wiring, while `tests/contracts/` owns provider
+  protocol contracts, cassette replay, schema drift fingerprints, and bridge
+  event grammar.
+
 Files:
 
 - `tests/integration/test_provider_contract_matrix.py`

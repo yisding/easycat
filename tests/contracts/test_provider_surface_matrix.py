@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from importlib import import_module
 from pathlib import Path
 
 import pytest
 
+from easycat.stt.factory import _PROVIDER_TO_CONFIG as _STT_REGISTRY
+from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
 from tests.contracts.provider_surface_matrix import (
     EXPLICIT_PROVIDER_SURFACE_EXCLUSIONS,
     PROVIDER_SURFACE_CONTRACTS,
@@ -114,5 +117,80 @@ def test_validation_tasks_v31_current_state_tracks_contract_matrix_layout() -> N
         "existing contract paths",
         "cassette_status=required",
         "no missing registered STT/TTS/VAD/transport provider surfaces",
+    ):
+        assert phrase in normalized_section
+
+
+def test_validation_tasks_v32_current_state_tracks_provider_matrix_scope() -> None:
+    wiring_matrix = import_module("tests.integration.test_provider_contract_matrix")
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V3.2 Preserve Existing Provider Matrix Scope", 1)[1].split(
+        "### V3.3 Add STT/TTS/VAD/Transport Contract Tests", 1
+    )[0]
+    normalized_section = " ".join(section.split())
+    wiring_source = (REPO_ROOT / "tests/integration/test_provider_contract_matrix.py").read_text(
+        encoding="utf-8"
+    )
+    contract_readme = (REPO_ROOT / "tests/contracts/README.md").read_text(encoding="utf-8")
+
+    registered_stt_configs = {config_cls for _provider_cls, config_cls in _STT_REGISTRY.values()}
+    registered_tts_configs = {config_cls for _provider_cls, config_cls in _TTS_REGISTRY.values()}
+
+    assert set(wiring_matrix._STT_CONFIG_CLASSES) == registered_stt_configs
+    assert set(wiring_matrix._TTS_CONFIG_CLASSES) == registered_tts_configs
+    assert wiring_matrix._EXPECTED_STT_CONFIGS <= registered_stt_configs
+    assert wiring_matrix._EXPECTED_TTS_CONFIGS <= registered_tts_configs
+    assert "OpenAIRealtimeSTTConfig" in {config.__name__ for config in registered_stt_configs}
+    assert "CartesiaSTTConfig" in {config.__name__ for config in registered_stt_configs}
+    assert "CartesiaTTSConfig" in {config.__name__ for config in registered_tts_configs}
+    assert "factory/session wiring seam" in wiring_source
+    assert "protocol cassette" not in wiring_source.lower()
+    assert "create_stt_provider_from_config" in wiring_source
+    assert "create_tts_provider_from_config" in wiring_source
+    assert "_CONFIG_TO_PROVIDER" in wiring_source
+    assert "create_session" in wiring_source
+    assert "ScriptedSTT" in wiring_source
+    assert "ScriptedVAD" in wiring_source
+    assert "RecordingTTS" in wiring_source
+    assert "factory/session wiring" in contract_readme
+    assert "protocol contracts" in contract_readme
+    assert not missing_registered_provider_surfaces()
+
+    assert "Current verified state:" in section
+    for token in (
+        "tests/integration/test_provider_contract_matrix.py",
+        "factory/session wiring seam",
+        "_STT_CONFIG_CLASSES",
+        "easycat.stt.factory._PROVIDER_TO_CONFIG",
+        "_TTS_CONFIG_CLASSES",
+        "easycat.tts.factory._PROVIDERS",
+        "create_stt_provider_from_config",
+        "create_tts_provider_from_config",
+        "_CONFIG_TO_PROVIDER",
+        "create_session()",
+        "test_registry_covers_every_known_config",
+        "OpenAISTTConfig",
+        "OpenAIRealtimeSTTConfig",
+        "DeepgramSTTConfig",
+        "ElevenLabsSTTConfig",
+        "CartesiaSTTConfig",
+        "OpenAITTSConfig",
+        "DeepgramTTSConfig",
+        "ElevenLabsTTSConfig",
+        "CartesiaTTSConfig",
+        "tests/contracts/test_provider_surface_matrix.py",
+        "missing_registered_provider_surfaces()",
+        "tests/contracts/README.md",
+        "tests/contracts/",
+    ):
+        assert f"`{token}`" in section
+    for phrase in (
+        "not a protocol cassette suite",
+        "auto-parametrized across every STT x TTS session pair",
+        "EventBus injection checks",
+        "scripted",
+        "OpenAI realtime and Cartesia cannot silently fall out",
+        "contract row or explicit exclusion",
+        "cassette replay, schema drift fingerprints, and bridge event grammar",
     ):
         assert phrase in normalized_section
