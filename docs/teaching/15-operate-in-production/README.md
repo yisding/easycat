@@ -444,6 +444,8 @@ $ uv run easycat --help
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, deployment, observability, and validation reference material.
+  Use `uv run easycat docs --json` when a coding agent or script needs the
+  same route map.
 - **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
