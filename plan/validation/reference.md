@@ -127,6 +127,7 @@ easycat validate latency --smoke
 easycat validate latency --sweep
 easycat validate stress
 easycat validate report .easycat/validation/latest.json
+easycat validate report .easycat/validation/latest.json --json
 ```
 
 `scripts/validate.py` remains available as a compatibility shim for slice runs:
@@ -168,6 +169,7 @@ JSON envelope smoke check:
 
 ```bash
 easycat validate quick --json
+easycat validate report .easycat/validation/latest.json --json
 ```
 
 ## Validation Tiers

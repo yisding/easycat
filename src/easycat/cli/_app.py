@@ -271,7 +271,10 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "plan/validation/reference.md",
         "audience": "release maintainers",
         "description": "Read provider and report vocabulary used by validation.",
-        "commands": ("easycat validate quick --json",),
+        "commands": (
+            "easycat validate quick --json",
+            "easycat validate report .easycat/validation/latest.json --json",
+        ),
     },
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"

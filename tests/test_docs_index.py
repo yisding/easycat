@@ -321,6 +321,21 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     assert "easycat validate report .easycat/validation/latest.json --json" not in route_commands
 
 
+def test_validation_reference_docs_route_matches_json_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
+    route_commands = entries["plan/validation/reference.md"].get("commands", ())
+
+    for command in (
+        "easycat validate quick --json",
+        "easycat validate report .easycat/validation/latest.json --json",
+    ):
+        assert command in reference
+        assert command in route_commands
+
+    assert "uv run easycat validate quick --json" not in route_commands
+
+
 def test_cli_docs_command_hints_are_locally_valid() -> None:
     _register_commands()
     registered_commands = {

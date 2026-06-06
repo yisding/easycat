@@ -363,6 +363,11 @@ def test_docs_envelope(cli: CliRunner) -> None:
         "uv run easycat validate report .easycat/validation/latest.json --json"
         in commands["README.md#validation-workflow"]
     )
+    assert "easycat validate quick --json" in commands["plan/validation/reference.md"]
+    assert (
+        "easycat validate report .easycat/validation/latest.json --json"
+        in commands["plan/validation/reference.md"]
+    )
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
 

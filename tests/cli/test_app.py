@@ -186,6 +186,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "#validation-workflow" in result.stdout
     assert ".easycat/validation/latest.json" in result.stdout
     assert "plan/validation/reference.md" in result.stdout
+    assert "easycat validate report .easycat/validation/latest.json --json" in result.stdout
     assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
     assert "https://github.com/yisding/easycat/tree/main/docs/teaching" in result.stdout
     assert (
