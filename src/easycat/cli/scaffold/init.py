@@ -647,6 +647,7 @@ def init(
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
     stderr_console.print("  uv run easycat docs [dim]# find examples and guides[/]")
+    stderr_console.print("  uv run easycat docs --json [dim]# route map for scripts and agents[/]")
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
 
 

@@ -58,4 +58,5 @@ uv run python -m py_compile agent.py server.py
 - **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat writes
   a SQLite journal under `.easycat/journals/`; inspect it with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
-- **Explore docs and examples:** run `uv run easycat docs`.
+- **Explore docs and examples:** run `uv run easycat docs`; use
+  `uv run easycat docs --json` when a script or coding agent needs the route map.

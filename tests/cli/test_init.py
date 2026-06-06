@@ -698,6 +698,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert result.exit_code == 0, result.stderr
     assert "uv run easycat doctor --env-file .env" in result.stderr
     assert "uv run easycat docs" in result.stderr
+    assert "uv run easycat docs --json" in result.stderr
+    assert "route map for scripts and agents" in result.stderr
     assert "uvx easycat doctor" not in result.stderr
 
 

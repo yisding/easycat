@@ -326,6 +326,8 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     next_steps = readme.split("## Next steps", 1)[1]
 
     assert "uv run easycat docs" in next_steps
+    assert "uv run easycat docs --json" in next_steps
+    assert "script or coding agent needs the route map" in next_steps
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
