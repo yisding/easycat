@@ -129,7 +129,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_init_list_templates_envelope(cli: CliRunner) -> None:
-    result = cli.invoke(app, ["init", "_", "--list-templates", "--json"])
+    result = cli.invoke(app, ["init", "--list-templates", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "init")
