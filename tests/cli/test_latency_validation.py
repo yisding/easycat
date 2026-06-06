@@ -30,6 +30,8 @@ from easycat.validation.runner import (
     run_latency_validation,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_latency_pytest_args_smoke_selects_single_probe() -> None:
     assert latency_pytest_args(LatencyMode.SMOKE) == [
@@ -41,6 +43,40 @@ def test_latency_pytest_args_sweep_selects_matrix_probe() -> None:
     assert latency_pytest_args(LatencyMode.SWEEP) == [
         "tests/e2e/test_plan_7_latency_benchmark.py::test_latency_benchmark_by_pipeline_flags"
     ]
+
+
+def test_validation_tasks_v21_current_state_tracks_latency_markers_and_selectors() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V2.1 Mark And Factor Latency Tests", 1)[1].split(
+        "### V2.2 Add Canonical Latency Sample JSON", 1
+    )[0]
+    benchmark = (REPO_ROOT / "tests/e2e/test_plan_7_latency_benchmark.py").read_text(
+        encoding="utf-8"
+    )
+    expected_markers = {
+        "integration_socket",
+        "integration_live",
+        "latency",
+        "provider_openai",
+        "slow",
+        "surface_agent",
+        "surface_stt",
+        "surface_transport",
+        "surface_tts",
+    }
+
+    assert "Current verified state:" in section
+    for marker_name in expected_markers:
+        assert f"`{marker_name}`" in section
+        assert f"pytest.mark.{marker_name}" in benchmark
+    for selector in (
+        latency_pytest_args(LatencyMode.SMOKE)[0],
+        latency_pytest_args(LatencyMode.SWEEP)[0],
+    ):
+        assert selector in section
+    assert "EASYCAT_LATENCY_SAMPLES_PATH" in section
+    assert "structured latency artifacts" in section
+    assert "does not emit a stable validation artifact" not in section
 
 
 def test_latency_sample_serializes_canonical_fields() -> None:

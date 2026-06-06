@@ -494,12 +494,21 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
-Current state:
+Current verified state:
 
 - `tests/e2e/test_plan_7_latency_benchmark.py` is marked
-  `integration_socket`, `integration_live`, and `slow`.
-- It logs stage timings and enforces SLO assertions, but does not emit a
-  stable validation artifact.
+  `integration_socket`, `integration_live`, `latency`, `provider_openai`,
+  `slow`, `surface_agent`, `surface_stt`, `surface_transport`, and
+  `surface_tts`.
+- `easycat.validation.latency.latency_pytest_args` factors the CLI into a
+  smoke selector
+  `tests/e2e/test_plan_7_latency_benchmark.py::test_single_full_stack_latency_probe`
+  and a sweep selector
+  `tests/e2e/test_plan_7_latency_benchmark.py::test_latency_benchmark_by_pipeline_flags`.
+- The benchmark appends canonical `LatencySample` JSON when
+  `EASYCAT_LATENCY_SAMPLES_PATH` is set; `easycat validate latency` turns
+  those samples into structured latency artifacts under the isolated
+  validation run directory.
 
 Files:
 
