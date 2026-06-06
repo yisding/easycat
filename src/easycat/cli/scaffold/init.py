@@ -334,7 +334,9 @@ def _render_text(text: str, mapping: dict[str, str]) -> str:
         )
     rendered = rendered.replace("**__EASYCAT_CONFIG_EXTRA__", extra_kwargs)
     rendered = rendered.replace("  # noqa: F821", "")
-    return rendered.replace("agent=voice_agent, )", "agent=voice_agent)")
+    for agent_expr in ("agent", "voice_agent", "SupportWorkflow()"):
+        rendered = rendered.replace(f"agent={agent_expr}, )", f"agent={agent_expr})")
+    return rendered
 
 
 def _render_file(source: Path, dest: Path, mapping: dict[str, str]) -> None:

@@ -32,15 +32,13 @@ M1 (scaffolding) is effectively done:
 
 M2 gaps:
 
-- Template `agent.py` line budgets overshoot: `openai-agents` 24 lines
-  (target ≤15), `pydantic-ai` 21 lines (target ≤12),
-  `pydantic-ai-workflow` 40 lines (target ≤15), `text-chat` 18 lines
-  (target ≤8), and `webrtc-browser` 23 lines (target ≤12). The
-  `twilio-phone` `agent.py` is under its ≤15-line target. Templates
-  currently wire simple
-  Python tools/workflows instead of the plan's `calculator` + `filesystem`
-  MCP; the tools are working, but the plan text should be updated to match
-  the shipped content or vice-versa.
+- Template `agent.py` line budgets are now enforced at the planned caps:
+  `openai-agents` ≤15 lines, `pydantic-ai` ≤12,
+  `pydantic-ai-workflow` ≤15, `text-chat` ≤8, `twilio-phone` ≤15, and
+  `webrtc-browser` ≤12. Templates currently wire simple Python
+  tools/workflows instead of the plan's `calculator` + `filesystem` MCP; the
+  tools are working, but the plan text should be updated to match the shipped
+  content or vice-versa.
 
 M3 (journal debugging) — partial:
 
@@ -417,38 +415,28 @@ CI enforces for every template:
 **`openai-agents`** (default)
 
 OpenAI Agents SDK, local mic transport. The agent is a support bot
-with one `calculator` tool and the `filesystem` MCP server wired up.
-Shows: Agent definition, tool usage, MCP wire-up, `easycat.run()`.
+with one `current_time` Python tool wired up. Shows: Agent definition,
+tool usage, `EasyConfig.mic(...)`, and `easycat.run()`.
 
-`agent.py` (target ≤ 12 lines):
+`agent.py` target ≤ 15 lines is met:
 
 ```python
-from agents import Agent
-from easycat import EasyCatConfig, run
-
-run(EasyCatConfig(
-    agent=Agent(
-        name="Support",
-        instructions="Help the user with billing questions.",
-        tools=[...],
-    ),
-    stt="deepgram/flux",
-    mcp_servers=["filesystem"],
-))
+agent = Agent(name="Support", instructions="Help with billing.", tools=[current_time])
+run(EasyConfig.mic(agent=agent))
 ```
 
 **`pydantic-ai`**
 
-PydanticAI single-agent, local mic. One tool wired in. Shows:
-PydanticAI agent construction, structured output, tool wiring.
-Target ≤ 12 lines.
+PydanticAI single-agent, local mic. One `current_time` tool wired in.
+Shows: PydanticAI agent construction, tool wiring, and `EasyConfig.mic(...)`.
+Target ≤ 12 lines is met.
 
 **`pydantic-ai-workflow`**
 
 Shipped as a local-mic workflow object with billing and technical
 PydanticAI specialists plus an `on_user_turn(...)` router. Shows:
-multi-agent handoff state and the bridge's workflow pass-through.
-Target ≤ 15 lines remains open.
+multi-agent routing and the bridge's workflow pass-through. Target ≤ 15
+lines is met.
 
 **`twilio-phone`**
 
@@ -463,14 +451,13 @@ production webhook hardening at `examples/twilio_app.py`. Target
 Shipped as a localhost browser voice template using
 `run(EasyConfig.browser(...))` and EasyCat's bundled WebRTC client.
 The separate `examples/webrtc_server.py` remains the path for custom
-TURN/HTTPS deployment settings. Target `agent.py` ≤ 12 lines remains
-open.
+TURN/HTTPS deployment settings. Target `agent.py` ≤ 12 lines is met.
 
 **`text-chat`**
 
 Text-mode session for REPL-style testing of agent changes without
 audio infrastructure. The single best template for iterating on
-prompts. Target ≤ 8 lines.
+prompts. Target ≤ 8 lines is met.
 
 ### Templates we are NOT shipping
 
@@ -912,8 +899,8 @@ agent.py` end-to-end in under 60 seconds.
 
 Finishes the scaffolding surface.
 
-- Planned scaffold templates shipped; remaining work is line-budget,
-  MCP/tool content, and run-matrix cleanup.
+- Planned scaffold templates and line budgets shipped; remaining work is
+  MCP/tool-content reconciliation and run-matrix cleanup.
 - `easycat doctor` checks 6–8 (microphone, journal, disk)
 - `easycat doctor --fix` for safe auto-fixes
 - E2E scaffold matrix: init → sync → run per template against stub

@@ -32,12 +32,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
-    "openai-agents": 25,
-    "pydantic-ai": 22,
-    "pydantic-ai-workflow": 40,
-    "text-chat": 18,
+    "openai-agents": 15,
+    "pydantic-ai": 12,
+    "pydantic-ai-workflow": 15,
+    "text-chat": 8,
     "twilio-phone": 15,
-    "webrtc-browser": 23,
+    "webrtc-browser": 12,
 }
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
