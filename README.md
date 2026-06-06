@@ -105,7 +105,7 @@ easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation
 easycat validate contracts   # run offline provider/protocol contract validation
 easycat validate release     # run the strict installed-wheel release gate
-easycat validate report PATH # render a saved validation report
+easycat validate report .easycat/validation/latest.json # render latest validation report
 ```
 
 From an empty directory, `easycat init --list-templates` shows the available
@@ -152,7 +152,7 @@ uv run easycat validate contracts  # offline provider/protocol/bridge contracts
 uv run easycat validate latency --smoke # low-cost live latency validation
 uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
 uv run easycat validate release    # build, install, and run release validation
-uv run easycat validate report PATH # render a concise summary of a saved report JSON
+uv run easycat validate report .easycat/validation/latest.json # render latest report summary
 ```
 
 `easycat validate release` builds the sdist and wheel, installs the wheel into
@@ -168,9 +168,9 @@ runs, but new docs and local workflows should use
 `--json` emits the standard machine-readable stdout envelope, `--report PATH`
 writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
 (available on the `quick`, `socket`, `stress`, and `contracts` lanes).
-`uv run easycat validate report PATH --json` re-emits a saved validation report
-inside the same envelope for coding-agent consumers. For the lower-level
-marker/direct entry points, see
+`uv run easycat validate report .easycat/validation/latest.json --json`
+re-emits the latest saved validation report inside the same envelope for
+coding-agent consumers. For the lower-level marker/direct entry points, see
 [`plan/validation/README.md`](plan/validation/README.md).
 
 Flaky quarantine is explicit debt. Use

@@ -374,8 +374,9 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
-    assert "easycat validate report PATH" in cli_section
-    assert "uv run easycat validate report PATH --json" in readme
+    assert "easycat validate report .easycat/validation/latest.json" in cli_section
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
+    assert "easycat validate report PATH" not in readme
 
 
 def test_readme_cli_doctor_documents_env_file_option() -> None:

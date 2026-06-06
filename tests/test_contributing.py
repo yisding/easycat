@@ -99,6 +99,16 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "before debugging tests or examples" in quick_start
 
 
+def test_contributing_validation_report_points_to_latest_artifact() -> None:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", contributing)
+
+    assert "uv run easycat validate report .easycat/validation/latest.json" in contributing
+    assert "renders the latest saved report" in normalized
+    assert ".easycat/validation/runs/<run_id>/report.json" in contributing
+    assert "uv run easycat validate report <path>" not in contributing
+
+
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
     recipes = just_recipe_commands(REPO_ROOT)
     missing: list[str] = []

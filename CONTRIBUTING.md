@@ -95,7 +95,9 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 | `live` | `uv run easycat validate live --provider openai` | integration_live + provider/surface |
 | `release` | `uv run easycat validate release` | installed-wheel aggregate gate |
 
-`uv run easycat validate report <path>` renders a saved report.
+`uv run easycat validate report .easycat/validation/latest.json` renders the
+latest saved report. Use `.easycat/validation/runs/<run_id>/report.json` when
+you need a specific older run.
 
 ## Marker taxonomy
 
