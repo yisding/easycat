@@ -137,6 +137,10 @@ def _render_env_example(name: str, cfg: InitConfig) -> str:
     return rendered
 
 
+def _template_python_filenames(name: str) -> list[str]:
+    return sorted(path.name for path in _template_dir(name).glob("*.py"))
+
+
 def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
     tree = ast.parse(source)
 
@@ -276,7 +280,10 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_has_local_syntax_check(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
-    assert "uv run python -m py_compile agent.py" in readme
+    check_section = readme.split("## Check", 1)[1].split("## Next steps", 1)[0]
+    expected_command = "uv run python -m py_compile " + " ".join(_template_python_filenames(name))
+
+    assert expected_command in check_section
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

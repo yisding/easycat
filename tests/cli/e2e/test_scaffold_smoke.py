@@ -2,7 +2,7 @@
 
 For each template:
 * Scaffold into a tmpdir via the CLI.
-* Assert the generated ``agent.py`` passes ``py_compile`` AND ``ruff``.
+* Assert the generated Python files pass ``py_compile`` AND ``ruff``.
 
 Full ``uv sync`` round-trip is intentionally skipped (requires the
 template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §16).
@@ -33,32 +33,7 @@ def cli() -> CliRunner:
     return CliRunner()
 
 
-@pytest.mark.parametrize("template", sorted(available_templates()))
-def test_scaffold_agent_py_compiles(cli: CliRunner, tmp_path: Path, template: str) -> None:
-    """The rendered agent.py must compile with py_compile (catches
-    placeholder-substitution bugs that leave ``$AGENT_NAME`` literals
-    inside the source).
-    """
-    config = json.dumps(
-        {
-            "schema_version": 1,
-            "template": template,
-            "agent_name": "SmokeBot",
-            "agent_instructions": "Answer smoke-test questions.",
-        }
-    )
-    project = tmp_path / f"demo-{template}"
-    result = cli.invoke(
-        app,
-        ["init", str(project), "--config", config, "--no-git"],
-    )
-    assert result.exit_code == 0, result.stderr
-    agent_py = project / "agent.py"
-    py_compile.compile(str(agent_py), doraise=True)
-
-
-@pytest.mark.parametrize("template", sorted(available_templates()))
-def test_scaffold_agent_py_passes_ruff(cli: CliRunner, tmp_path: Path, template: str) -> None:
+def _scaffold_project(cli: CliRunner, tmp_path: Path, template: str) -> Path:
     config = json.dumps(
         {
             "schema_version": 1,
@@ -70,12 +45,38 @@ def test_scaffold_agent_py_passes_ruff(cli: CliRunner, tmp_path: Path, template:
     project = tmp_path / f"demo-{template}"
     result = cli.invoke(app, ["init", str(project), "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
-    agent_py = project / "agent.py"
+    return project
+
+
+def _generated_python_files(project: Path) -> list[Path]:
+    files = sorted(project.glob("*.py"))
+    assert files, f"{project} did not generate any top-level Python files"
+    return files
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_scaffold_python_files_compile(cli: CliRunner, tmp_path: Path, template: str) -> None:
+    """Rendered Python files must compile with py_compile.
+
+    This catches placeholder-substitution bugs that leave invalid source in
+    any generated entry point or support module.
+    """
+    project = _scaffold_project(cli, tmp_path, template)
+
+    for py_file in _generated_python_files(project):
+        py_compile.compile(str(py_file), doraise=True)
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, template: str) -> None:
+    project = _scaffold_project(cli, tmp_path, template)
+    python_files = _generated_python_files(project)
+
     proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", str(agent_py)],
+        [sys.executable, "-m", "ruff", "check", *(str(path) for path in python_files)],
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, (
-        f"ruff check failed on scaffolded {template}/agent.py:\n{proc.stdout}\n{proc.stderr}"
+        f"ruff check failed on scaffolded {template} Python files:\n{proc.stdout}\n{proc.stderr}"
     )

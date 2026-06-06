@@ -436,15 +436,15 @@ type `cd my-agent && uv sync && uv run --env-file .env python agent.py` —
 if any link is broken, the whole onboarding promise evaporates.
 
 **Risks.** `uv sync` failing because the template pins an
-unpublished `easycat` version; the scaffolded `agent.py` failing at
-import time; env var not loading from `.env`.
+unpublished `easycat` version; a scaffolded Python entry point or
+support module failing at import time; env var not loading from `.env`.
 
 **Checks.**
 - Scaffold each template into a tmpdir.
-- The scaffolded `agent.py` passes `py_compile` without actually
-  running the agent.
-- The scaffolded `agent.py` passes `ruff check` with the project's
-  own ruff config.
+- Every top-level scaffolded Python file passes `py_compile` without
+  actually running the agent.
+- Every top-level scaffolded Python file passes `ruff check` with the
+  project's own ruff config.
 - Optional (gated on PyPI availability or a local index): full
   `uv sync` round-trip. This is marked `integration_local` and
   skipped when `EASYCAT_LOCAL_INDEX` isn't set — we don't publish
