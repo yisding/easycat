@@ -1,11 +1,11 @@
 """Guards for the top-level documentation map."""
 
 import re
-import string
 from pathlib import Path
 from urllib.parse import unquote
 
 from easycat.cli._app import _DOCS_LINKS, _docs_entries
+from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
@@ -29,29 +29,11 @@ def _root_relative_doc_links() -> set[str]:
     return links
 
 
-def _heading_anchors(path: Path) -> set[str]:
-    anchors: set[str] = set()
-    counts: dict[str, int] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
-        if match is None:
-            continue
-        title = re.sub(r"\s+#+$", "", match.group("title").strip())
-        slug = title.lower()
-        slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
-        slug = re.sub(r"\s+", "-", slug).strip("-")
-        if slug:
-            duplicate_index = counts.get(slug, 0)
-            counts[slug] = duplicate_index + 1
-            anchors.add(slug if duplicate_index == 0 else f"{slug}-{duplicate_index}")
-    return anchors
-
-
 def test_docs_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:
     page = tmp_path / "page.md"
     page.write_text("# Root\n## Route\n## Route\n## Route!\n", encoding="utf-8")
 
-    assert _heading_anchors(page) == {"root", "route", "route-1", "route-2"}
+    assert github_markdown_heading_anchors(page) == {"root", "route", "route-1", "route-2"}
 
 
 def test_docs_index_routes_primary_reader_paths() -> None:
@@ -147,7 +129,7 @@ def test_cli_docs_routes_resolve_locally() -> None:
             broken.append(f"{entry['label']}: missing {entry['path']}")
             continue
         if fragment and destination.suffix == ".md":
-            anchors = _heading_anchors(destination)
+            anchors = github_markdown_heading_anchors(destination)
             if unquote(fragment) not in anchors:
                 broken.append(f"{entry['label']}: missing #{fragment} in {route}")
 
