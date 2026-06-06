@@ -471,8 +471,12 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
 def test_readme_cli_doctor_documents_env_file_option() -> None:
     """``easycat doctor`` should show the direct .env path for scaffold users."""
     cli_section = _readme_cli_section()
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = re.sub(r"\s+", " ", readme)
 
     assert "easycat doctor --env-file .env" in cli_section
+    assert "easycat doctor --json" in cli_section
+    assert "environment/check rows without Rich formatting" in normalized_readme
 
 
 def test_cli_init_examples_name_target_directory() -> None:

@@ -169,6 +169,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "uv run python examples/openai_agents_voice.py" in result.stdout
     assert "easycat init --list-templates" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
+    assert "easycat doctor --json" in result.stdout
     assert "docker compose -f docker/compose.yaml up --build" in result.stdout
     assert "easycat validate report .easycat/validation/latest.json" in result.stdout
     assert "docs/README.md" in result.stdout
@@ -267,6 +268,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat init --list-templates",
         "easycat init --list-templates --json",
         "easycat init my-agent",
+        "easycat doctor --json",
         "easycat explain json-schema",
     ]
     assert commands["README.md#validation-workflow"] == [

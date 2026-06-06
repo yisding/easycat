@@ -162,6 +162,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat init --list-templates",
             "easycat init --list-templates --json",
             "easycat init my-agent",
+            "easycat doctor --json",
             "easycat explain json-schema",
         ),
     },

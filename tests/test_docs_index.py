@@ -96,6 +96,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "route map with command hints and audience labels" in normalized
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
     assert "uv run easycat doctor --env-file .env" in text
+    assert "easycat doctor --json" in text
+    assert "environment/check rows without Rich formatting" in normalized
     assert "uv run easycat init --list-templates" in text
     assert "uv run easycat init --list-templates --json" in text
     assert "base `easycat[...]` package requirements and extras" in normalized
@@ -228,6 +230,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
+    assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
 
 
 def test_cli_docs_command_hints_are_visible_on_target_pages() -> None:
