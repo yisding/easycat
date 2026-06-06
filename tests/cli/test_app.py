@@ -47,6 +47,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Show documentation entry points" in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
+    assert "easycat explain json-schema" in result.stdout
     for cmd in ("init", "doctor", "docs", "explain", "bundles", "inspect", "replay"):
         assert cmd in result.stdout
     # Don't advertise unshipped commands until they're implemented.

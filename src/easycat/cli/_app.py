@@ -54,7 +54,8 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]docs[/]        Show documentation entry points
 
 Run [cyan]easycat <command> --help[/] for command-specific options.
-Run [cyan]easycat explain <code>[/] to understand an error.
+Run [cyan]easycat explain <code>[/] for errors.
+Run [cyan]easycat explain json-schema[/] for CLI JSON.
 """
 
 
