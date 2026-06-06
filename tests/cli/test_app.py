@@ -13,7 +13,7 @@ import sys
 
 from typer.testing import CliRunner
 
-from easycat.cli._app import _COMMAND_TEXT, _register_commands, app
+from easycat.cli._app import _COMMAND_TEXT, _JOURNEY_SECTIONS, _register_commands, app
 
 
 def _registered_top_level_command_names() -> set[str]:
@@ -71,6 +71,23 @@ def test_registered_help_uses_command_text_table() -> None:
 
     expected_help = {name: text.help for name, text in _COMMAND_TEXT.items()}
     assert _registered_top_level_command_help() == expected_help
+
+
+def test_journey_sections_cover_command_text_table_once() -> None:
+    command_names = [
+        command_name
+        for _, section_command_names in _JOURNEY_SECTIONS
+        for command_name in section_command_names
+    ]
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for command_name in command_names:
+        if command_name in seen:
+            duplicates.add(command_name)
+        seen.add(command_name)
+
+    assert not duplicates, "Journey menu has duplicate commands: " + ", ".join(sorted(duplicates))
+    assert set(command_names) == set(_COMMAND_TEXT)
 
 
 def test_journey_menu(cli: CliRunner) -> None:
