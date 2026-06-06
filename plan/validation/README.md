@@ -15,7 +15,7 @@ commands unless the current-state section says they exist.
 
 ## Current State
 
-Snapshot: maintenance update on 2026-06-05.
+Snapshot: maintenance update on 2026-06-06.
 
 Implemented:
 
@@ -26,7 +26,8 @@ Implemented:
   declare either side, and enforces flaky quarantine metadata:
   `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`.
 - The public CLI registers `easycat validate` with `quick`, `socket`,
-  `stress`, `contracts`, `latency`, `live`, and `report` subcommands.
+  `stress`, `contracts`, `latency`, `live`, `release`, and `report`
+  subcommands.
 - `scripts/validate.py` remains as a compatibility shim over
   `easycat.validation.runner` for slice runs.
 - Validation runs write isolated artifacts under `.easycat/validation/runs/`
@@ -67,8 +68,9 @@ Implemented:
 
 Remaining backlog:
 
-- HTTP/WebSocket provider cassettes and schema drift fingerprints are still not
-  standardized.
+- Checked-in HTTP/SSE/WebSocket proof cassettes and the schema fingerprint
+  helper exist; full generated provider cassette/schema registry coverage for
+  every provider surface remains open.
 - Browser-driven WebRTC validation is not automated yet; the stats endpoint and
   artifact path exist, but socket validation only reports the artifact when a
   browser/client posts snapshots during the run.
@@ -115,14 +117,13 @@ These names are the validation vocabulary.
 
 ## Historical First Implementation PR
 
-V0 in [tasks.md](tasks.md) now covers:
+V0 in [tasks.md](tasks.md) now documents the historical first PR scope:
 
-1. Register planned markers and enable strict marker validation once
+1. Register validation markers and enable strict marker validation once
    collection is clean.
 2. Add a validation report model.
 3. Create `scripts/validate.py quick` and `scripts/validate.py socket`.
-4. Document the contributor workflow without implying the public CLI already
-   exists.
+4. Document the contributor workflow before V1.1's public CLI shipped.
 
 Keep cassettes, live-provider reports, latency rewrites, OpenTelemetry, and
 CI reshaping out of the first PR unless implementation forces a small adjacent
