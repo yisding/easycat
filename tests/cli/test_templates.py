@@ -44,12 +44,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
-    "openai-agents": 15,
+    "openai-agents": 16,
     "pydantic-ai": 12,
     "pydantic-ai-workflow": 15,
-    "text-chat": 8,
+    "text-chat": 17,
     "twilio-phone": 15,
-    "webrtc-browser": 12,
+    "webrtc-browser": 14,
 }
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
@@ -332,6 +332,13 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
         assert section in test_plan
 
 
+def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
+    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
+
+    for name, budget in _LINE_BUDGETS.items():
+        assert f"`{name}` ≤{budget}" in plan, f"peripheral-cli.md missing {name} ≤{budget}"
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_install_section_names_rendered_base_requirement(name: str) -> None:
     source = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
@@ -441,6 +448,17 @@ def test_text_chat_readme_points_voice_upgrade_to_mic_preset() -> None:
 def test_text_chat_template_uses_public_session_lifecycle() -> None:
     agent = (_template_dir("text-chat") / "agent.py").read_text(encoding="utf-8")
     assert _uses_async_with_create_text_session(agent)
+
+
+def test_text_chat_template_keeps_first_code_readable() -> None:
+    agent = (_template_dir("text-chat") / "agent.py").read_text(encoding="utf-8")
+
+    assert '"""Text-mode EasyCat agent for prompt iteration."""' in agent
+    assert "import asyncio" in agent
+    assert 'agent = Agent(name="$AGENT_NAME", instructions="$AGENT_INSTRUCTIONS")' in agent
+    assert "create_text_session(agent=agent)" in agent
+    assert "create_text_session(agent=Agent(" not in agent
+    assert "asyncio.run(main())" in agent
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

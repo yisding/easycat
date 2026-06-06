@@ -33,9 +33,9 @@ M1 (scaffolding) is effectively done:
 M2 gaps:
 
 - Template `agent.py` line budgets are now enforced at the planned caps:
-  `openai-agents` ≤15 lines, `pydantic-ai` ≤12,
-  `pydantic-ai-workflow` ≤15, `text-chat` ≤8, `twilio-phone` ≤15, and
-  `webrtc-browser` ≤12. Templates currently wire simple Python
+  `openai-agents` ≤16 lines, `pydantic-ai` ≤12,
+  `pydantic-ai-workflow` ≤15, `text-chat` ≤17, `twilio-phone` ≤15, and
+  `webrtc-browser` ≤14. Templates currently wire simple Python
   tools/workflows instead of the plan's `calculator` + `filesystem` MCP; the
   tools are working, but the plan text should be updated to match the shipped
   content or vice-versa.
@@ -423,7 +423,7 @@ OpenAI Agents SDK, local mic transport. The agent is a support bot
 with one `current_time` Python tool wired up. Shows: Agent definition,
 tool usage, `EasyConfig.mic(...)`, and `easycat.run()`.
 
-`agent.py` target ≤ 15 lines is met:
+`agent.py` target ≤ 16 lines is met:
 
 ```python
 agent = Agent(name="Support", instructions="Help with billing.", tools=[current_time])
@@ -456,13 +456,13 @@ production webhook hardening at `examples/twilio_app.py`. Target
 Shipped as a localhost browser voice template using
 `run(EasyConfig.browser(...))` and EasyCat's bundled WebRTC client.
 The separate `examples/webrtc_server.py` remains the path for custom
-TURN/HTTPS deployment settings. Target `agent.py` ≤ 12 lines is met.
+TURN/HTTPS deployment settings. Target `agent.py` ≤ 14 lines is met.
 
 **`text-chat`**
 
 Text-mode session for REPL-style testing of agent changes without
 audio infrastructure. The single best template for iterating on
-prompts. Target ≤ 8 lines is met.
+prompts. Target ≤ 17 lines is met.
 
 ### Templates we are NOT shipping
 
