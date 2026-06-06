@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 import easycat
+from easycat._public_api import LAZY_EXPORTS
 
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
@@ -99,6 +100,10 @@ PUBLIC_API_SNAPSHOT = (
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
     assert len(easycat.__all__) <= 85
+
+
+def test_public_api_registry_tracks_snapshot() -> None:
+    assert tuple(sorted(LAZY_EXPORTS)) == PUBLIC_API_SNAPSHOT
 
 
 def test_public_api_contract_doc_tracks_top_level_exports() -> None:

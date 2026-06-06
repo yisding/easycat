@@ -10,7 +10,7 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 171 tracked Python files.
+- `src/easycat/` contains 172 tracked Python files.
 - `tests/` contains 187 tracked `test_*.py` files.
 - `docs/teaching/` now contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
@@ -74,10 +74,10 @@ with the codebase. Counts below come from tracked files and exclude
   path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
   1,356 lines.
-- `src/easycat/__init__.py` is smaller than the older cleanup note but still a
-  broad public surface at 280 lines and 85 lazy top-level exports. The surface
-  is now pinned by a golden snapshot and documented in
-  `docs/public-api.md`.
+- `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
+  151 lines, with the lazy-export registry isolated in `easycat._public_api`.
+  The public surface is still broad at 85 lazy top-level exports, but it is
+  pinned by a golden snapshot and documented in `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now
   includes author, keywords, classifiers, and project URLs, and wheel packaging
   tests guard against cache/workspace artifacts leaking into release wheels.
