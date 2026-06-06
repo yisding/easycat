@@ -128,7 +128,10 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 status="fail",
                 detail=f"{var} is not set",
                 code="EASYCAT_E203",
-                fix=f"Set {var}: `export {var}=...`.",
+                fix=(
+                    f"Set {var}: `export {var}=...`, or load a project `.env` "
+                    "with `uv run --env-file .env easycat doctor`."
+                ),
             )
         ]
 
@@ -158,7 +161,8 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 code="EASYCAT_E203",
                 fix=(
                     "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, "
-                    "ELEVENLABS_API_KEY, or CARTESIA_API_KEY."
+                    "ELEVENLABS_API_KEY, or CARTESIA_API_KEY. If your keys are "
+                    "in `.env`, run `uv run --env-file .env easycat doctor`."
                 ),
             )
         )

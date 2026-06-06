@@ -17,10 +17,10 @@ cp .env.example .env
 ```
 
 Edit `.env`, set `OPENAI_API_KEY`, and set `TWILIO_STREAM_URL` to the public
-`wss://...` URL Twilio should connect to. Run `uv run easycat doctor` to verify:
+`wss://...` URL Twilio should connect to. Run doctor with that file loaded:
 
 ```bash
-uv run easycat doctor
+uv run --env-file .env easycat doctor
 ```
 
 For local testing, expose the WebSocket port with a tunnel such as ngrok and

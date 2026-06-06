@@ -123,8 +123,8 @@ first run.
 - `agent.py` stays within its per-template line budget.
 - README contains all five required sections: Install, Configure, Run,
   Check, Next steps.
-- README tells every OpenAI-key template to run `uv run easycat doctor`
-  during setup.
+- README tells every OpenAI-key template to run
+  `uv run --env-file .env easycat doctor` during setup.
 - `easycat init --list-templates` includes per-template metadata
   (mode, transport, framework, and description), and `--json` exposes
   the same catalog for tooling.

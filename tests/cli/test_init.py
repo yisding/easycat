@@ -652,13 +652,13 @@ def test_init_rejects_non_uri_mcp_server(
 # ── Doctor next-step uses the project env, not uvx ────────────────────
 
 
-def test_init_next_steps_use_uv_run_easycat_doctor(
+def test_init_next_steps_load_env_for_doctor(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
     config = json.dumps({"schema_version": 1, "template": "text-chat"})
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
-    assert "uv run easycat doctor" in result.stderr
+    assert "uv run --env-file .env easycat doctor" in result.stderr
     assert "uv run easycat docs" in result.stderr
     assert "uvx easycat doctor" not in result.stderr

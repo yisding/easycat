@@ -32,6 +32,9 @@ def test_doctor_all_skips_when_no_keys(cli: CliRunner, empty_env: None, no_netwo
     assert result.exit_code == 1
     assert "EasyCat doctor" in result.stderr
     assert "EASYCAT_E203" in result.stderr
+    assert "--env-file" in result.stderr
+    assert ".env" in result.stderr
+    assert "easycat doctor" in result.stderr
 
 
 def test_doctor_passes_with_one_key(
@@ -86,6 +89,8 @@ def test_doctor_json_envelope(cli: CliRunner, empty_env: None, no_network: None)
     # Every check has name/status/detail keys.
     for check in payload["checks"]:
         assert "name" in check and "status" in check and "detail" in check
+    env_any = next(check for check in payload["checks"] if check["name"] == "env_any")
+    assert "uv run --env-file .env easycat doctor" in env_any["fix"]
 
 
 def test_doctor_unknown_environment(cli: CliRunner, empty_env: None) -> None:
@@ -161,6 +166,9 @@ def test_doctor_only_provider_fails_when_its_key_missing(
     assert result.exit_code == 1
     assert "EASYCAT_E203" in result.stderr
     assert "OPENAI_API_KEY" in result.stderr
+    assert "--env-file" in result.stderr
+    assert ".env" in result.stderr
+    assert "easycat doctor" in result.stderr
 
 
 def test_doctor_unknown_provider_is_usage_error(

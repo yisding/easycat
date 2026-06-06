@@ -16,10 +16,10 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` and set `OPENAI_API_KEY`. Run `uv run easycat doctor` to verify:
+Edit `.env` and set `OPENAI_API_KEY`. Run doctor with that file loaded:
 
 ```bash
-uv run easycat doctor
+uv run --env-file .env easycat doctor
 ```
 
 ## Run
