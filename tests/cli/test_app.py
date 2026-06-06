@@ -7,6 +7,7 @@ that short-circuits before importing Typer/Rich.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 
@@ -20,6 +21,10 @@ def _registered_top_level_command_names() -> set[str]:
     command_names.update(group.name for group in app.registered_groups)
     command_names.discard(None)
     return command_names
+
+
+def _journey_menu_command_names(output: str) -> set[str]:
+    return set(re.findall(r"\[green\]([a-z][a-z0-9-]*)\[/\]", output))
 
 
 def test_version(cli: CliRunner) -> None:
@@ -62,8 +67,10 @@ def test_journey_menu(cli: CliRunner) -> None:
         if command_name not in result.stdout
     )
     assert not missing, "Journey menu missing registered commands: " + ", ".join(missing)
-    # Don't advertise unshipped commands until they're implemented.
-    assert "demo" not in result.stdout
+    stale = sorted(
+        _journey_menu_command_names(result.stdout) - _registered_top_level_command_names()
+    )
+    assert not stale, "Journey menu advertises unregistered commands: " + ", ".join(stale)
 
 
 def test_docs_command(cli: CliRunner) -> None:
