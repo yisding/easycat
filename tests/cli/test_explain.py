@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from typer.testing import CliRunner
 from easycat.cli._app import app
 from easycat.cli.diagnose._codes import META_ENTRIES
 from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
+from easycat.debug.bundle import FORMAT_VERSION
 from easycat.errors import REGISTRY, register
 from easycat.validation.report import (
     GitMetadata,
@@ -67,6 +69,59 @@ def _validate_report_keys_from_cli(cli: CliRunner, tmp_path: Path) -> set[str]:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     return set(payload) - {"schema_version", "command", "status"}
+
+
+def _make_bundle(path: Path) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format_version": FORMAT_VERSION,
+                    "provider_versions": {"stt": "openai-realtime-1.0"},
+                    "replay_entry_points": [{"sequence": 1, "stage": "stt", "unit_id": "u1"}],
+                }
+            ),
+        )
+        records = [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stage_start",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "stage_end",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+        ]
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(record) for record in records))
+
+
+def _debug_command_success_keys_from_cli(cli: CliRunner, tmp_path: Path) -> set[str]:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(bundle)
+    commands = (
+        ["bundles", "list", "--path", str(tmp_path), "--json"],
+        ["bundles", "show", str(bundle), "--json"],
+        ["bundles", "export", str(bundle), "--output", str(tmp_path / "pack"), "--json"],
+        ["replay", str(bundle), "--json"],
+    )
+    keys: set[str] = set()
+
+    for args in commands:
+        result = cli.invoke(app, args)
+        assert result.exit_code == 0, result.stderr
+        payload = json.loads(result.stdout)
+        keys.update(set(payload) - {"schema_version", "command", "status"})
+
+    return keys
 
 
 def test_explain_help_names_meta_topics(cli: CliRunner) -> None:
@@ -251,9 +306,16 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner, tmp_path: 
     assert "`next_step_commands`" in result.stdout
     for key in _validate_report_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in result.stdout
+    for key in _debug_command_success_keys_from_cli(cli, tmp_path):
+        assert f"`{key}`" in result.stdout
     assert "easycat validate quick --json" in result.stdout
     assert "easycat validate report PATH --json" in result.stdout
     assert "redacted validation report object" in stdout
+    assert "easycat bundles list --json" in result.stdout
+    assert "easycat bundles show PATH --json" in result.stdout
+    assert "easycat inspect PATH --json" in result.stdout
+    assert "easycat bundles export PATH --output DIR --json" in result.stdout
+    assert "easycat replay PATH --json" in result.stdout
     assert "post-scaffold check/run context" in stdout
     assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
@@ -311,9 +373,16 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`next_step_commands`" in payload["body"]
     for key in _validate_report_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in payload["body"]
+    for key in _debug_command_success_keys_from_cli(cli, tmp_path):
+        assert f"`{key}`" in payload["body"]
     assert "easycat validate quick --json" in payload["body"]
     assert "easycat validate report PATH --json" in payload["body"]
     assert "redacted validation report object" in normalized_body
+    assert "easycat bundles list --json" in payload["body"]
+    assert "easycat bundles show PATH --json" in payload["body"]
+    assert "easycat inspect PATH --json" in payload["body"]
+    assert "easycat bundles export PATH --output DIR --json" in payload["body"]
+    assert "easycat replay PATH --json" in payload["body"]
     assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
     assert "`report_path`" in payload["body"]
     assert "validate report .easycat/validation/latest.json --json" in payload["body"]

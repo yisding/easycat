@@ -146,6 +146,20 @@ entry points include:
                          `easycat validate quick --json` and
                          `easycat validate report PATH --json`; `validation`
                          contains the redacted validation report object
+  `bundles`, `scanned` - `easycat bundles list --json`
+  `path`, `session_id`, `turns`, `errors`, `tool_calls`, `records`,
+  `duration_ms`, `provider_versions`, `artifact_count`,
+  `replay_entry_points`, `format_version` -
+                         `easycat bundles show PATH --json` and
+                         `easycat inspect PATH --json`
+  `source_path`, `output_path`, `target`, `files`, `records`, `artifacts`,
+  `format_version`, `summary`, `redaction` -
+                         `easycat bundles export PATH --output DIR --json`
+  `path`, `fidelity_requested`, `fidelity_effective`, `frames`, `stages`,
+  `side_effecting`, `tool_policy`, `allowed_tool_calls`,
+  `blocked_tool_calls`, `stubbed_tool_calls`, `from_sequence`,
+  `to_sequence`, `stage_filter`, `force`, `timing` -
+                         `easycat replay PATH --json`
 
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:
