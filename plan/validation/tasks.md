@@ -601,6 +601,31 @@ Dependencies:
 
 - V2.2
 
+Current verified state:
+
+- `compare_latency_baseline(...)` returns `schema_version`, `kind` value
+  `latency_baseline_comparison`, aggregate `status`, serialized
+  `thresholds`, and per-condition `conditions` built from non-warmup,
+  successful `samples`.
+- Per-condition comparison requires matching `provider`, `model`, `transport`,
+  and `debug` signatures plus a versioned
+  `baseline.conditions[<condition_id>].version`; mismatches return
+  `provider_api_drift` with reasons `condition_mismatch`,
+  `mixed_condition_signature`, or `baseline_version_missing`, and
+  `refresh_required=True`.
+- Regression failure requires both `relative_regression` and
+  `absolute_regression_ms` on the configured `regression_percentile`, plus at
+  least `min_samples` current and baseline values. Low sample counts stay
+  informational with reason `ineligible_sample_count`.
+- Eligible regressions return `easycat_latency_regression` and per-condition
+  fields `condition_id`, `baseline_version`, `current_count`,
+  `baseline_count`, `percentile`, `current_<percentile>_ms`,
+  `baseline_<percentile>_ms`, `delta_ms`, and `relative_delta`.
+- `run_latency_validation(..., baseline_path=...)` embeds the comparison in
+  the latency artifact, records a separate `latency.baseline` check, and sets
+  `latency_baseline` or `latency_baseline_regression` tool exit codes only for
+  load failures or failing eligible regressions.
+
 Files:
 
 - validation CLI/helper module
