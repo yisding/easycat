@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-import string
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +15,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from easycat.cli._app import _COMMAND_TEXT, _DOCS_LINKS, _JOURNEY_SECTIONS, _register_commands, app
+from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,26 +41,6 @@ def _registered_top_level_command_help() -> dict[str, str]:
 
 def _journey_menu_command_names(output: str) -> set[str]:
     return set(re.findall(r"\[green\]([a-z][a-z0-9-]*)\[/\]", output))
-
-
-def _markdown_heading_anchors(path: Path) -> set[str]:
-    anchors: set[str] = set()
-    counts: dict[str, int] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
-        if match is None:
-            continue
-        title = re.sub(r"\s+#+$", "", match.group("title").strip())
-        slug = title.lower()
-        slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
-        slug = re.sub(r"\s+", "-", slug).strip("-")
-        if not slug:
-            continue
-
-        duplicate_index = counts.get(slug, 0)
-        counts[slug] = duplicate_index + 1
-        anchors.add(slug if duplicate_index == 0 else f"{slug}-{duplicate_index}")
-    return anchors
 
 
 def test_version(cli: CliRunner) -> None:
@@ -249,7 +229,7 @@ def test_docs_route_paths_resolve_to_local_sources() -> None:
                     f"{label}: anchor #{fragment} targets non-Markdown route {route!r}"
                 )
                 continue
-            if fragment not in _markdown_heading_anchors(destination):
+            if fragment not in github_markdown_heading_anchors(destination):
                 problems.append(f"{label}: missing anchor #{fragment} in {route!r}")
 
     assert not problems, "Broken docs routes:\n" + "\n".join(problems)

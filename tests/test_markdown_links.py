@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-import string
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import unquote
+
+from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"!?\[(?:\\.|[^\]\\])+\]\((?P<target>[^)\n]+)\)")
@@ -95,25 +96,6 @@ def _resolve_local_path(source: Path, target: str) -> Path:
     return (base / path.lstrip("/")).resolve()
 
 
-def _heading_anchors(path: Path) -> set[str]:
-    anchors: set[str] = set()
-    counts: dict[str, int] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
-        if not match:
-            continue
-        title = match.group("title").strip()
-        title = re.sub(r"\s+#+$", "", title)
-        slug = title.lower()
-        slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
-        slug = re.sub(r"\s+", "-", slug).strip("-")
-        if slug:
-            duplicate_index = counts.get(slug, 0)
-            counts[slug] = duplicate_index + 1
-            anchors.add(slug if duplicate_index == 0 else f"{slug}-{duplicate_index}")
-    return anchors
-
-
 def _line_anchor_error(path: Path, fragment: str) -> str | None:
     match = LINE_ANCHOR_RE.match(fragment)
     if match is None:
@@ -156,7 +138,7 @@ def test_maintained_markdown_local_links_resolve() -> None:
 
             fragment = target.split("#", 1)[1] if "#" in target else ""
             if fragment and destination.suffix == ".md":
-                anchors = _heading_anchors(destination)
+                anchors = github_markdown_heading_anchors(destination)
                 if unquote(fragment) not in anchors:
                     rel_destination = destination.relative_to(REPO_ROOT)
                     broken.append(
@@ -187,7 +169,7 @@ def test_markdown_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path
         encoding="utf-8",
     )
 
-    assert _heading_anchors(page) == {
+    assert github_markdown_heading_anchors(page) == {
         "root",
         "repeated",
         "repeated-1",
