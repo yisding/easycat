@@ -20,6 +20,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ── --list-templates and basic flows ─────────────────────────────────
 
 
+def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["init", "--help"])
+    help_text = " ".join(result.stdout.split())
+
+    assert result.exit_code == 0
+    assert "--list-templates" in result.stdout
+    assert "templates and create commands" in help_text
+
+
 def test_list_templates(cli: CliRunner) -> None:
     result = cli.invoke(app, ["init", "--list-templates"])
     assert result.exit_code == 0

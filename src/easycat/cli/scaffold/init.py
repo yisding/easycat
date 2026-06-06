@@ -555,7 +555,9 @@ def init(
         help="JSON payload for non-interactive scaffolding.",
     ),
     list_templates: bool = typer.Option(
-        False, "--list-templates", help="Print available templates and exit."
+        False,
+        "--list-templates",
+        help="Show templates and create commands.",
     ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."
