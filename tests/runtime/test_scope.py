@@ -87,6 +87,50 @@ async def test_runtime_scope_cancel_and_drain_cancels_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_scope_discard_detaches_without_cancelling_task() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def wait_for_release() -> str:
+        started.set()
+        await release.wait()
+        completed.set()
+        return "done"
+
+    task = scope.create_task("worker", wait_for_release())
+    await started.wait()
+
+    scope.discard(task)
+
+    assert scope.empty
+    assert not task.cancelled()
+    assert not task.done()
+
+    release.set()
+    assert await task == "done"
+    assert completed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_discard_allows_current_task_to_detach_itself() -> None:
+    scope = RuntimeScope()
+
+    async def self_detach() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        scope.add_task("self", task)
+        assert scope.tasks("self") == (task,)
+
+        scope.discard(task)
+
+        assert scope.empty
+
+    await self_detach()
+
+
+@pytest.mark.asyncio
 async def test_runtime_scope_drain_propagates_task_exceptions() -> None:
     scope = RuntimeScope()
 

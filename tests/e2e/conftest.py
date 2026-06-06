@@ -51,6 +51,10 @@ _FIXTURE_UTTERANCES: dict[str, str] = {
     "numbers": "One two three four five six seven eight nine ten.",
 }
 
+_VOICE_FIXTURE_RENDER_TIMEOUT_S = float(
+    os.environ.get("EASYCAT_E2E_VOICE_FIXTURE_TIMEOUT_S", "45")
+)
+
 
 @pytest.fixture(scope="session")
 def voice_fixtures_dir(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
@@ -79,7 +83,18 @@ def voice_fixtures(voice_fixtures_dir: pathlib.Path) -> dict[str, pathlib.Path]:
             out[name] = cache_path
         return out
 
-    return asyncio.run(_render_all())
+    try:
+        return asyncio.run(
+            asyncio.wait_for(
+                _render_all(),
+                timeout=_VOICE_FIXTURE_RENDER_TIMEOUT_S,
+            )
+        )
+    except TimeoutError:
+        pytest.skip(
+            "OpenAI TTS voice fixture rendering timed out after "
+            f"{_VOICE_FIXTURE_RENDER_TIMEOUT_S:.0f}s"
+        )
 
 
 # ---------------------------------------------------------------------------
