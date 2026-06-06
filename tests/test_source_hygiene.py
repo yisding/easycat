@@ -13,6 +13,11 @@ STALE_ASYNC_CONTEXT_TEARDOWN_RE = re.compile(
 TEST_PLAN_TEST_REF_RE = re.compile(
     r"`(?P<ref>(?:tests/)?[A-Za-z0-9_./-]*test_[A-Za-z0-9_./-]+\.py(?:::[A-Za-z0-9_]+)?)`"
 )
+TEST_PLAN_TABLE_ROW_RE = re.compile(
+    r"^\| (?P<number>\d+) \| (?P<title>.+?) \| (?P<backing>.+?) \|$",
+    re.MULTILINE,
+)
+TEST_PLAN_HEADING_RE = re.compile(r"^## Plan (?P<number>\d+) — (?P<title>.+)$", re.MULTILINE)
 STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
 
@@ -72,6 +77,38 @@ def test_cli_test_plan_references_existing_test_files() -> None:
             missing.append(ref)
 
     assert not missing, "CLI test plan references missing test files: " + ", ".join(missing)
+
+
+def test_cli_test_plan_table_matches_plan_sections() -> None:
+    """Keep the summary table and detailed CLI plan sections in lockstep."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    table = {
+        int(match.group("number")): match.group("title")
+        for match in TEST_PLAN_TABLE_ROW_RE.finditer(plan)
+    }
+    headings = {
+        int(match.group("number")): match.group("title")
+        for match in TEST_PLAN_HEADING_RE.finditer(plan)
+    }
+    expected_numbers = list(range(1, len(table) + 1))
+
+    assert list(table) == expected_numbers
+    assert table == headings
+
+    missing_backing: list[str] = []
+    heading_matches = list(TEST_PLAN_HEADING_RE.finditer(plan))
+    for index, match in enumerate(heading_matches):
+        if index + 1 < len(heading_matches):
+            next_start = heading_matches[index + 1].start()
+        else:
+            next_start = len(plan)
+        section = plan[match.start() : next_start]
+        if "**Backed by.**" not in section:
+            missing_backing.append(f"Plan {match.group('number')} — {match.group('title')}")
+
+    assert not missing_backing, "CLI test plan sections missing backing tests: " + ", ".join(
+        missing_backing
+    )
 
 
 def test_cli_test_plan_avoids_brittle_test_count_claims() -> None:

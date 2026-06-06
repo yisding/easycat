@@ -23,7 +23,7 @@ first, debug second, safety net third, and infrastructure last.
 | 13 | `validate` command and report rendering | `test_validate.py` |
 | 14 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 15 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
-| 16 | Packaging — wheel ships dotfiles and metadata | `test_packaging.py` (integration) |
+| 16 | Packaging — wheel ships template dotfiles and metadata | `test_packaging.py` (integration) |
 | 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
 
 Plans 1-10 are fast unit tests. Plans 11-15 add coverage for cross-
