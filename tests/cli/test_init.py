@@ -759,6 +759,19 @@ def test_init_next_steps_quote_project_name_for_shell(
     assert "cd demo project" not in result.stderr
 
 
+def test_init_escapes_project_name_markup_in_status_output(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo[red]", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "Creating demo[red]/" in result.stderr
+    assert "cd 'demo[red]'" in result.stderr
+    assert (tmp_path / "demo[red]").exists()
+
+
 @pytest.mark.parametrize("template", sorted(available_templates()))
 def test_init_next_steps_match_template_readme_run_command(
     cli: CliRunner,

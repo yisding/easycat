@@ -18,6 +18,7 @@ from string import Template
 from typing import TypedDict
 
 import typer
+from rich.markup import escape
 from rich.prompt import Prompt
 
 from easycat.cli._errors import cli_command
@@ -696,7 +697,7 @@ def init(
         )
         return
 
-    stderr_console.print(f"Creating [cyan]{name}/[/]")
+    stderr_console.print(f"Creating [cyan]{escape(name)}/[/]")
     for p in written:
         rel = p.relative_to(target)
         extra = f" ({agent_lines} lines)" if rel.name == "agent.py" else ""
@@ -707,7 +708,7 @@ def init(
         info("git init skipped (git not available)")
     stderr_console.print()
     stderr_console.print("[bold]Next steps:[/]")
-    stderr_console.print(f"  cd {shlex.quote(name)}")
+    stderr_console.print(f"  cd {escape(shlex.quote(name))}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
