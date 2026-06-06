@@ -8,7 +8,8 @@ installed app environment, use `easycat docs`.
 ## Choose Your Path
 
 - New to EasyCat: start with the [repository quickstart](../README.md#install),
-  then run `uv run easycat doctor`.
+  then run `uv run easycat doctor`. If provider keys are in a project `.env`,
+  run `uv run easycat doctor --env-file .env`.
 - Learning voice pipelines from scratch: follow the
   [teaching ladder](teaching/), starting at
   [00-hello-audio](teaching/00-hello-audio/).

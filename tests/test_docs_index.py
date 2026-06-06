@@ -1,7 +1,9 @@
 """Guards for the top-level documentation map."""
 
 import re
+import string
 from pathlib import Path
+from urllib.parse import unquote
 
 from easycat.cli._app import _DOCS_LINKS, _docs_entries
 
@@ -25,6 +27,21 @@ def _root_relative_doc_links() -> set[str]:
             rel = f"{rel}#{fragment}"
         links.add(rel)
     return links
+
+
+def _heading_anchors(path: Path) -> set[str]:
+    anchors: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
+        if match is None:
+            continue
+        title = re.sub(r"\s+#+$", "", match.group("title").strip())
+        slug = title.lower()
+        slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
+        slug = re.sub(r"\s+", "-", slug).strip("-")
+        if slug:
+            anchors.add(slug)
+    return anchors
 
 
 def test_docs_index_routes_primary_reader_paths() -> None:
@@ -54,6 +71,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat docs" in text
     assert "installed app environment" in text
     assert "prints the same map" in text
+    assert "uv run easycat doctor --env-file .env" in text
 
 
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:
@@ -65,6 +83,23 @@ def test_cli_docs_routes_are_represented_in_docs_index() -> None:
     ]
 
     assert not missing, "easycat docs routes missing from docs/README.md: " + ", ".join(missing)
+
+
+def test_cli_docs_routes_resolve_locally() -> None:
+    broken: list[str] = []
+
+    for entry in _DOCS_LINKS:
+        route, _, fragment = entry["path"].partition("#")
+        destination = REPO_ROOT / route.rstrip("/")
+        if not destination.exists():
+            broken.append(f"{entry['label']}: missing {entry['path']}")
+            continue
+        if fragment and destination.suffix == ".md":
+            anchors = _heading_anchors(destination)
+            if unquote(fragment) not in anchors:
+                broken.append(f"{entry['label']}: missing #{fragment} in {route}")
+
+    assert not broken, "easycat docs routes are stale:\n" + "\n".join(broken)
 
 
 def test_cli_docs_routes_have_descriptions() -> None:
