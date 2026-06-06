@@ -120,6 +120,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     assert entries["README.md#install"]["url"].endswith("/blob/main/README.md#install")
     assert entries["docs/README.md"]["url"].endswith("/blob/main/docs/README.md")
     assert entries["docs/teaching/"]["url"].endswith("/tree/main/docs/teaching")
+    assert entries["docs/teaching/00-hello-audio/"]["url"].endswith(
+        "/tree/main/docs/teaching/00-hello-audio"
+    )
     assert all(
         entry["url"].startswith("https://github.com/yisding/easycat/")
         for entry in entries.values()

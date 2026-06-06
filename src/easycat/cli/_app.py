@@ -91,6 +91,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Learn voice pipelines chapter by chapter.",
     },
     {
+        "label": "First lesson",
+        "path": "docs/teaching/00-hello-audio/",
+        "description": "Start with audio chunks before agents or providers.",
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",

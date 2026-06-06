@@ -81,6 +81,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "learn CLI JSON envelopes" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout
+    assert "docs/teaching/00-hello-audio" in result.stdout
     assert "examples/README.md" in result.stdout
     assert "docs/public-api.md" in result.stdout
     assert "CONTRIBUTING.md" in result.stdout
@@ -103,6 +104,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
+    assert "docs/teaching/00-hello-audio/" in paths
     assert "examples/README.md" in paths
     assert "CONTRIBUTING.md" in paths
     assert "docs/deployment/docker.md" in paths
@@ -120,6 +122,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "https://github.com/yisding/easycat/blob/main/README.md#install"
     )
     assert urls["docs/teaching/"] == "https://github.com/yisding/easycat/tree/main/docs/teaching"
+    assert urls["docs/teaching/00-hello-audio/"] == (
+        "https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio"
+    )
     assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 
