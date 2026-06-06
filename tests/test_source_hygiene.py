@@ -136,3 +136,15 @@ def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     assert "`audience`, `commands`, `command_note`, or online" in docs_plan
     assert "test_app.py" in docs_plan
     assert "tests/test_docs_index.py" in docs_plan
+
+
+def test_peripheral_cli_package_layout_lists_top_level_cli_modules() -> None:
+    """Keep the maintainer-facing CLI layout aligned with the package tree."""
+    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
+    layout = plan.split("## Package Layout", 1)[1].split("### Entry point", 1)[0]
+    actual = sorted(path.name for path in (REPO_ROOT / "src" / "easycat" / "cli").glob("*.py"))
+
+    missing = [filename for filename in actual if f"    {filename}" not in layout]
+
+    assert not missing, "peripheral-cli.md package layout omits CLI modules: " + ", ".join(missing)
+    assert "replay.py" not in layout
