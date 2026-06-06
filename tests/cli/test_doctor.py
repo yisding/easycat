@@ -134,10 +134,46 @@ def test_doctor_env_file_rejects_invalid_lines(
     assert "KEY=VALUE" in result.stderr
 
 
+def test_doctor_env_file_rejects_invalid_lines_json_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY sk-from-file\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 2
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "doctor"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Invalid --env-file" in payload["message"]
+    assert "expected" in payload["message"]
+    assert "KEY=VALUE" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_doctor_unknown_environment(cli: CliRunner, empty_env: None) -> None:
     result = cli.invoke(app, ["doctor", "--environment", "bogus"])
     assert result.exit_code == 2
     assert "Unknown --environment" in result.stderr
+
+
+def test_doctor_unknown_environment_json_envelope(cli: CliRunner, empty_env: None) -> None:
+    result = cli.invoke(app, ["doctor", "--environment", "bogus", "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "doctor"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Unknown --environment" in payload["message"]
 
 
 def test_doctor_production_drops_microphone_check(
@@ -223,6 +259,26 @@ def test_doctor_unknown_provider_is_usage_error(
     result = cli.invoke(app, ["doctor", "--provider", "OpenAI"])
     assert result.exit_code == 2
     assert "Unknown --provider" in result.stderr
+
+
+def test_doctor_unknown_provider_json_envelope(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    no_network: None,
+) -> None:
+    """Scoped provider typos still emit parseable stdout in JSON mode."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    monkeypatch.setenv("NO_COLOR", "1")
+    result = cli.invoke(app, ["doctor", "--provider", "OpenAI", "--json"])
+    assert result.exit_code == 2
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "doctor"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Unknown --provider" in payload["message"]
+    assert "openai" in payload["message"]
 
 
 def test_doctor_reports_httpx_failure(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,7 +23,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from rich.table import Table
@@ -482,6 +482,14 @@ def _run_all_checks(only_provider: str | None, environment: str = "dev") -> list
     return results
 
 
+def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
+    if json_output:
+        emit_json(json_envelope("doctor", status="error", message=message, exit_code=2))
+    else:
+        stderr_console.print(f"  [red]✗[/] {message}")
+    raise typer.Exit(2)
+
+
 _STATUS_GLYPH = {"ok": "[green]✓[/]", "fail": "[red]✗[/]", "skip": "[dim]~[/]"}
 
 
@@ -553,10 +561,10 @@ def doctor(
 ) -> None:
     """Check environment, credentials, reachability, and ONNX availability."""
     if environment not in {"dev", "production"}:
-        stderr_console.print(
-            f"  [red]✗[/] Unknown --environment {environment!r}. Use 'dev' or 'production'."
+        _doctor_usage_error(
+            f"Unknown --environment {environment!r}. Use 'dev' or 'production'.",
+            json_output=json_output,
         )
-        raise typer.Exit(2)
 
     if only_provider is not None and only_provider not in _PROVIDER_ENV:
         # A typo or mis-cased provider must fail loudly rather than fall
@@ -564,16 +572,15 @@ def doctor(
         # scopes doctor to one provider would otherwise treat the typo as
         # a green run.
         supported = ", ".join(sorted(_PROVIDER_ENV))
-        stderr_console.print(
-            f"  [red]✗[/] Unknown --provider {only_provider!r}. Supported: {supported}."
+        _doctor_usage_error(
+            f"Unknown --provider {only_provider!r}. Supported: {supported}.",
+            json_output=json_output,
         )
-        raise typer.Exit(2)
 
     try:
         env_values = _parse_env_file(env_file) if env_file is not None else {}
     except ValueError as exc:
-        stderr_console.print(f"  [red]✗[/] Invalid --env-file: {exc}")
-        raise typer.Exit(2) from exc
+        _doctor_usage_error(f"Invalid --env-file: {exc}", json_output=json_output)
 
     with _temporary_env(env_values):
         results = _run_all_checks(only_provider=only_provider, environment=environment)

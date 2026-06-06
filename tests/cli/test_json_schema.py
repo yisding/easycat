@@ -210,6 +210,22 @@ def test_doctor_error_envelope(
     _assert_envelope(payload, "doctor", status="error")
 
 
+def test_doctor_usage_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY sk-stub\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "doctor", status="error")
+    assert payload["exit_code"] == 2
+    assert "Invalid --env-file" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_docs_envelope(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs", "--json"])
     assert result.exit_code == 0

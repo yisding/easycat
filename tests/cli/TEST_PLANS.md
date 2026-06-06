@@ -295,6 +295,8 @@ stdout and corrupting `jq` consumers.
 - EasyCat registry errors include `code`, `message`, `fix`, `context`,
   and `exit_code`; command-specific errors still include `message` and
   `exit_code` without inventing a fake `EASYCAT_Exxx` code.
+- Early command-specific usage errors, such as `doctor --env-file`
+  parse failures, still emit the envelope in `--json` mode.
 
 **Backed by.** `test_json_schema.py` for the shared envelope shape, plus
 command-specific CLI suites for deeper payload details.
