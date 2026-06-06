@@ -147,6 +147,7 @@ def test_docs_command(cli: CliRunner) -> None:
         "https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md"
         in result.stdout
     )
+    assert "Machine-readable routes: easycat docs --json" in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
 
 

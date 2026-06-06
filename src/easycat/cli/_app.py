@@ -223,6 +223,7 @@ def _format_docs_menu() -> str:
 {routes}
 
 Online source: {_DOCS_SOURCE_URL}
+Machine-readable routes: easycat docs --json
 """
 
 
