@@ -435,9 +435,9 @@ $ uv run easycat --help
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session. Run `uv run easycat init --list-templates` first when
   you need to compare transports and agent frameworks; the list includes
-  base `easycat[...]` extras, required environment variables, optional
-  environment knobs, generated files, and copyable create/check/run commands
-  for each template.
+  base `easycat[...]` package requirements and extras, required environment
+  variables, optional environment knobs, generated files, and copyable
+  create/check/run commands for each template.
 - **`uv run easycat doctor`** — checks API keys, Python version, optional
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when

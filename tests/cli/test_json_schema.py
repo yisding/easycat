@@ -191,6 +191,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "framework",
         "best_for",
         "base_extras",
+        "base_requirement",
         "required_env",
         "optional_env",
         "files",
@@ -212,6 +213,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert entry["best_for"]
         assert isinstance(entry["base_extras"], list)
         assert entry["base_extras"]
+        assert entry["base_requirement"].startswith("easycat[")
+        assert entry["base_requirement"].endswith("]>=0.1.0")
         assert isinstance(entry["required_env"], list)
         assert entry["required_env"]
         assert isinstance(entry["optional_env"], list)
@@ -328,7 +331,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
-    assert "base extras" in descriptions["README.md#cli"]
+    assert "base package requirements" in descriptions["README.md#cli"]
+    assert "extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]

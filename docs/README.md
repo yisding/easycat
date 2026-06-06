@@ -19,9 +19,9 @@ command hints, such as `PATH`, before running them.
 - Building an application: scaffold with
   `uv run easycat init my-agent`, or run
   `uv run easycat init --list-templates` to compare templates with best-fit
-  guidance, base `easycat[...]` extras, required environment variables,
-  optional environment knobs, generated files, and copyable create/check/run
-  commands, then use the CLI commands documented in the
+  guidance, base `easycat[...]` package requirements and extras, required
+  environment variables, optional environment knobs, generated files, and
+  copyable create/check/run commands, then use the CLI commands documented in the
   [root README](../README.md#cli).
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use

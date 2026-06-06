@@ -99,6 +99,7 @@ class _TemplateCatalogMetadata(TypedDict):
 class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     name: str
     base_extras: tuple[str, ...]
+    base_requirement: str
     files: tuple[str, ...]
     create_command: str
     repo_create_command: str
@@ -246,6 +247,12 @@ def _template_file_names(template_name: str) -> tuple[str, ...]:
     )
 
 
+def _base_requirement(template_name: str) -> str:
+    """Return the EasyCat package requirement generated for template defaults."""
+    extras = ",".join(_TEMPLATE_BASE_EXTRAS.get(template_name, ()))
+    return f"easycat[{extras}]>=0.1.0" if extras else "easycat>=0.1.0"
+
+
 def _available_template_catalog() -> list[_TemplateCatalogEntry]:
     """Return template metadata in the same order as ``available_templates()``."""
     catalog: list[_TemplateCatalogEntry] = []
@@ -266,6 +273,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
             {
                 "name": name,
                 "base_extras": _TEMPLATE_BASE_EXTRAS.get(name, ()),
+                "base_requirement": _base_requirement(name),
                 "files": _template_file_names(name),
                 "create_command": _create_template_command(name),
                 "repo_create_command": _create_template_command(name, repo_local=True),
@@ -303,6 +311,7 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Required env:[/] {escape(', '.join(entry['required_env']) or 'none')}\n"
             f"{optional_env_line}"
             f"  [dim]Base extras:[/] {escape(base_extras)}\n"
+            f"  [dim]Base package:[/] {escape(entry['base_requirement'])}\n"
             f"  [dim]Files:[/] {escape(generated_files)}\n"
             f"  [dim]{escape(metadata)}[/]\n"
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
@@ -667,7 +676,7 @@ def init(
     list_templates: bool = typer.Option(
         False,
         "--list-templates",
-        help="Show templates with create, check, and run commands.",
+        help="Show template guidance, extras, env vars, files, and commands.",
     ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."

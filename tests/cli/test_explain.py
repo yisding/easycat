@@ -130,6 +130,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "`repo_create_command`" in result.stdout
     assert "`best_for`" in result.stdout
     assert "`base_extras`" in result.stdout
+    assert "`base_requirement`" in result.stdout
     assert "`required_env`" in result.stdout
     assert "`optional_env`" in result.stdout
     assert "`files`" in result.stdout
@@ -140,6 +141,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "copy/sync/doctor/check/docs/run" in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
+    assert "accepted `--config` input shape" in stdout
     assert "EASYCAT_E102" in result.stdout
     assert "agent.py" in result.stdout
 
@@ -172,6 +174,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "catalog entries include" in result.stdout
     assert "`best_for`" in stdout
     assert "`base_extras`" in stdout
+    assert "`base_requirement`" in stdout
     assert "`required_env`" in stdout
     assert "`optional_env`" in stdout
     assert "`files`" in stdout
@@ -215,6 +218,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     assert "`best_for`" in payload["body"]
     assert "`base_extras`" in payload["body"]
+    assert "`base_requirement`" in payload["body"]
     assert "`required_env`" in payload["body"]
     assert "`optional_env`" in payload["body"]
     assert "`files`" in payload["body"]
