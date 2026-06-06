@@ -33,6 +33,15 @@ GUIDANCE_TARGETS = (
     REPO_ROOT / "AGENTS.md",
     REPO_ROOT / "CLAUDE.md",
 )
+READER_GUIDANCE_TARGETS = (
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "docs",
+    REPO_ROOT / "examples",
+    REPO_ROOT / "CONTRIBUTING.md",
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "CLAUDE.md",
+    REPO_ROOT / "src" / "easycat" / "cli" / "scaffold" / "templates",
+)
 STALE_INSTALL_PATTERNS = (
     (
         "pip install easycat extra",
@@ -101,6 +110,17 @@ BRIDGE_DISPLAY_NAMES = {
 def _iter_guidance_files() -> list[Path]:
     files: list[Path] = []
     for target in GUIDANCE_TARGETS:
+        if target.is_file():
+            files.append(target)
+            continue
+        if target.is_dir():
+            files.extend(path for path in target.rglob("*") if path.suffix in TEXT_SUFFIXES)
+    return sorted(files)
+
+
+def _iter_reader_guidance_files() -> list[Path]:
+    files: list[Path] = []
+    for target in READER_GUIDANCE_TARGETS:
         if target.is_file():
             files.append(target)
             continue
@@ -351,6 +371,23 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
     assert not redundant, (
         "Guidance should not re-add extras that `quickstart` already bundles: "
         + "; ".join(redundant)
+    )
+
+
+def test_docs_json_guidance_points_to_schema_contract() -> None:
+    """Automation route-map hints should also teach the JSON envelope contract."""
+    missing: list[str] = []
+
+    for path in _iter_reader_guidance_files():
+        text = path.read_text(encoding="utf-8")
+        if "easycat docs --json" not in text:
+            continue
+        if "easycat explain json-schema" not in text:
+            missing.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not missing, (
+        "`easycat docs --json` guidance should also point scripts/coding agents "
+        "to `easycat explain json-schema`:\n" + "\n".join(missing)
     )
 
 
