@@ -8,6 +8,7 @@ coding-agent scaffolding).
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from difflib import get_close_matches
@@ -469,10 +470,17 @@ def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
             cfg.agent_instructions or _SCAFFOLD_DEFAULTS["AGENT_INSTRUCTIONS"]
         ),
         "PROJECT_NAME": project_name,
+        "PYPROJECT_NAME": _pyproject_name(project_name),
         "EASYCAT_CONFIG_EXTRA": _config_extra_kwargs(cfg),
         "EXTRAS": _extras_for(cfg),
         "EXTRA_ENV_VARS": _extra_env_vars(cfg),
     }
+
+
+def _pyproject_name(project_name: str) -> str:
+    """Return a valid, stable project metadata name for pyproject.toml."""
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", project_name).strip("-").lower()
+    return normalized or "easycat-agent"
 
 
 def _should_template(source: Path) -> bool:

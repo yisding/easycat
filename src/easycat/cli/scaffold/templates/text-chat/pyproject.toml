@@ -1,5 +1,5 @@
 [project]
-name = "$PROJECT_NAME"
+name = "$PYPROJECT_NAME"
 version = "0.1.0"
 description = "EasyCat text-mode agent (REPL)."
 requires-python = ">=3.11"

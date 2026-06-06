@@ -1,5 +1,5 @@
 [project]
-name = "$PROJECT_NAME"
+name = "$PYPROJECT_NAME"
 version = "0.1.0"
 description = "EasyCat voice agent (OpenAI Agents SDK)."
 requires-python = ">=3.11"

@@ -378,10 +378,10 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     """Every template's pyproject.toml declares an easycat extras dep."""
     pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
-    # The generated pyproject uses $PROJECT_NAME — assert the literal is
-    # present pre-substitution so rendering is the only path that sets
-    # the project name.
-    assert "$PROJECT_NAME" in pyproject
+    # The generated pyproject uses a normalized metadata name; README files keep
+    # the display project name.
+    assert "$PYPROJECT_NAME" in pyproject
+    assert "$PROJECT_NAME" not in pyproject
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

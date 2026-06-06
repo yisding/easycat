@@ -137,6 +137,19 @@ def test_init_text_chat_non_interactive(
     assert 'name = "demo"' in pyproject
 
 
+def test_init_normalizes_pyproject_name_without_changing_readme_title(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "EasyCat Demo Project", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "EasyCat Demo Project"
+    assert 'name = "easycat-demo-project"' in (project / "pyproject.toml").read_text()
+    assert "# EasyCat Demo Project" in (project / "README.md").read_text()
+
+
 def test_init_json_envelope(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
