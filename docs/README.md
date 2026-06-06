@@ -13,6 +13,9 @@ Use this page as the map for the maintained docs. Planning notes live under
 - Building an application: scaffold with
   `uv run easycat init my-agent`, then use the CLI commands documented in the
   [root README](../README.md#cli).
+- Looking for runnable reference apps: use the
+  [examples command matrix](../examples/README.md) for local mic, WebSocket,
+  WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
 - Maintaining public imports: review the
   [public API contract](public-api.md) before changing `easycat.__all__`.
 - Contributing code or tests: use the

@@ -12,6 +12,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "teaching/",
         "teaching/00-hello-audio/",
         "../README.md#cli",
+        "../examples/README.md",
         "public-api.md",
         "../CONTRIBUTING.md",
         "deployment/docker.md",

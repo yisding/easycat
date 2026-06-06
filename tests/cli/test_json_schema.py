@@ -154,6 +154,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     _assert_envelope(payload, "docs")
     assert isinstance(payload["entries"], list)
     assert {"label": "Docs map", "path": "docs/README.md"} in payload["entries"]
+    assert {"label": "Examples", "path": "examples/README.md"} in payload["entries"]
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in payload["entries"]
 
 

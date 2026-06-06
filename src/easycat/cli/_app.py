@@ -62,6 +62,7 @@ _DOCS_MENU = """[bold]EasyCat documentation[/]
   [cyan]Quickstart[/]       README.md#install
   [cyan]Docs map[/]         docs/README.md
   [cyan]Teaching ladder[/]  docs/teaching/
+  [cyan]Examples[/]         examples/README.md
   [cyan]Public API[/]       docs/public-api.md
   [cyan]Contributing[/]     CONTRIBUTING.md
   [cyan]Validation[/]       README.md#validation-workflow
@@ -74,6 +75,7 @@ _DOCS_LINKS = [
     {"label": "Quickstart", "path": "README.md#install"},
     {"label": "Docs map", "path": "docs/README.md"},
     {"label": "Teaching ladder", "path": "docs/teaching/"},
+    {"label": "Examples", "path": "examples/README.md"},
     {"label": "Public API", "path": "docs/public-api.md"},
     {"label": "Contributing", "path": "CONTRIBUTING.md"},
     {"label": "Validation", "path": "README.md#validation-workflow"},
