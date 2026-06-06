@@ -1,0 +1,33 @@
+# EasyCat Documentation
+
+Use this page as the map for the maintained docs. Planning notes live under
+`plan/`; the files below are the current reader-facing documentation.
+
+## Choose Your Path
+
+- New to EasyCat: start with the [repository quickstart](../README.md#install),
+  then run `uv run easycat doctor`.
+- Learning voice pipelines from scratch: follow the
+  [teaching ladder](teaching/), starting at
+  [00-hello-audio](teaching/00-hello-audio/).
+- Building an application: scaffold with
+  `uv run easycat init my-agent`, then use the CLI commands documented in the
+  [root README](../README.md#cli).
+- Maintaining public imports: review the
+  [public API contract](public-api.md) before changing `easycat.__all__`.
+- Operating sessions in production: read
+  [deployment with Docker](deployment/docker.md) and
+  [observability](observability.md).
+- Validating a change: use the validation workflow in the
+  [root README](../README.md#validation-workflow), then consult the
+  [validation reference](../plan/validation/reference.md) for provider and
+  report vocabulary.
+
+## Maintainer Notes
+
+- Keep this index limited to current docs. Historical plans and workstream
+  acceptance notes belong in `plan/`.
+- Add a link here when a new top-level docs page becomes the maintained source
+  for a user workflow.
+- Prefer commands that work from the repository root, using `uv run ...` for
+  local development.

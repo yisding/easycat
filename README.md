@@ -15,6 +15,8 @@ one stage per chapter (echo → transcribe → VAD → blocking agent →
 streaming agent → tools → smart-turn → interruption → noise/AEC →
 journal → evals → swap providers → BYO agent → operate in production).
 
+For the maintained docs map, see [`docs/README.md`](docs/README.md).
+
 ## Install
 
 Python 3.11+ is required.
