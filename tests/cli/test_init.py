@@ -847,6 +847,8 @@ def test_init_next_steps_load_env_for_doctor(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
     assert "uv run easycat doctor --env-file .env" in result.stderr
+    assert "uv run easycat doctor --env-file .env --json" in result.stderr
+    assert "parseable setup checks" in result.stderr
     assert "uv run python -m py_compile agent.py" in result.stderr
     assert "quick syntax check" in result.stderr
     assert "uv run easycat docs" in result.stderr
@@ -937,6 +939,7 @@ def test_init_json_next_step_commands_match_template_readme(
         "cp .env.example .env",
         "uv sync",
         "uv run easycat doctor --env-file .env",
+        "uv run easycat doctor --env-file .env --json",
         _template_readme_check_command(template),
         "uv run easycat docs",
         "uv run easycat docs --json",

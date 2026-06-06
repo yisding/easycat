@@ -359,6 +359,7 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         "cp .env.example .env",
         "uv sync",
         "uv run easycat doctor --env-file .env",
+        "uv run easycat doctor --env-file .env --json",
         _next_step_check_command(template),
         "uv run easycat docs",
         "uv run easycat docs --json",
@@ -794,6 +795,9 @@ def init(
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
+    stderr_console.print(
+        "  uv run easycat doctor --env-file .env --json [dim]# parseable setup checks[/]"
+    )
     stderr_console.print(
         f"  {_next_step_check_command(cfg.template)} [dim]# quick syntax check[/]"
     )
