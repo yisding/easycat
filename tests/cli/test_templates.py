@@ -116,8 +116,21 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     for name in templates:
         entry = _TEMPLATE_CATALOG[name]
         assert "name" not in entry
-        for key in ("mode", "transport", "framework", "best_for", "description"):
+        for key in (
+            "mode",
+            "transport",
+            "framework",
+            "best_for",
+            "required_env",
+            "description",
+        ):
             assert entry[key], f"{name} catalog entry missing {key}"
+        env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
+        for env_var in entry["required_env"]:
+            assert env_var.isupper(), f"{name} catalog env var is not uppercase: {env_var}"
+            assert f"{env_var}=" in env_example, (
+                f"{name} catalog required_env {env_var} missing from .env.example"
+            )
 
     emitted = {entry["name"]: entry for entry in _available_template_catalog()}
     assert set(emitted) == set(templates)
@@ -125,6 +138,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     for name, entry in emitted.items():
         assert entry["run_command"]
         assert entry["check_command"]
+        assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
 
 
 def _template_dir(name: str) -> Path:

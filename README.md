@@ -90,7 +90,7 @@ them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
 easycat init my-agent    # scaffold a new project from a template
-easycat init --list-templates # compare templates with create/check/run commands
+easycat init --list-templates # compare templates, env vars, create/check/run commands
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat docs             # show docs for learning, validation, operations
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
@@ -109,8 +109,8 @@ easycat validate report .easycat/validation/latest.json # render latest validati
 ```
 
 From an empty directory, `easycat init --list-templates` shows the available
-scaffolds with best-fit guidance, transport, framework, and copyable
-create/check/run commands.
+scaffolds with best-fit guidance, required environment variables, transport,
+framework, and copyable create/check/run commands.
 `easycat init my-agent` scaffolds the same one shown below: the canonical
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
