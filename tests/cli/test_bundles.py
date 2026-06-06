@@ -319,6 +319,18 @@ def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
     assert "raw caller text" not in pack_text
 
 
+def test_bundles_export_renders_output_path_literally(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack[red]"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", str(output)])
+
+    assert result.exit_code == 0, result.stderr
+    assert str(output) in result.stdout
+    assert (output / "summary.json").exists()
+
+
 def test_bundles_export_json(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     output = tmp_path / "pack"
