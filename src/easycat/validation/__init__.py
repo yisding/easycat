@@ -14,6 +14,14 @@ from easycat.validation.provider_capabilities import (
     ProviderCapabilityReport,
     ProviderIdentifier,
 )
+from easycat.validation.redaction import (
+    REDACTION_VERSION,
+    contains_unredacted_sensitive_text,
+    redact_command,
+    redact_runtime_secrets,
+    redact_text,
+    redact_value,
+)
 from easycat.validation.reliability import (
     EventLoopLagSampler,
     MemoryGrowthSampler,
@@ -45,6 +53,7 @@ __all__ = [
     "ProviderCheck",
     "ProviderCheckState",
     "ProviderIdentifier",
+    "REDACTION_VERSION",
     "ReliabilitySample",
     "ReliabilitySignals",
     "ValidationCheck",
@@ -53,5 +62,10 @@ __all__ = [
     "ValidationRun",
     "ValidationSkip",
     "capture_reliability_sample",
+    "contains_unredacted_sensitive_text",
     "evaluate_budgets",
+    "redact_command",
+    "redact_runtime_secrets",
+    "redact_text",
+    "redact_value",
 ]

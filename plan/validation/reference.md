@@ -44,8 +44,9 @@ Implemented strengths:
 - `scripts/validate.py` remains as a compatibility shim over
   `easycat.validation.runner` for slice runs.
 - `src/easycat/validation/report.py` defines the validation JSON envelope,
-  provider credential states, artifact references, and report-boundary
-  redaction.
+  provider credential states, and artifact references.
+- `src/easycat/validation/redaction.py` is the shared report/cassette
+  redaction policy used by validation reports and contract cassette tests.
 - Validation artifacts are written under isolated
   `.easycat/validation/runs/<run_id>/` directories, with
   `.easycat/validation/latest.json` updated after a complete report exists.
@@ -603,6 +604,8 @@ Rules:
 - Filter `Authorization`, `xi-api-key`, `OpenAI-Organization`,
   `OpenAI-Project`, API keys, tokens, access tokens, signed URLs, request IDs
   when sensitive, and credential-bearing query/body fields.
+- Extend `easycat.validation.redaction` when a new redaction rule is needed so
+  reports, provider capability artifacts, and cassette tests stay aligned.
 - Normalize timestamps and volatile IDs when they are not contract-relevant.
 - Keep cassettes small and scenario-focused.
 - Define cassette scope per provider surface as required, deferred with

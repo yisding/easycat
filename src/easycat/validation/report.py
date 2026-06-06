@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
+
+from easycat.validation.redaction import (
+    REDACTION_VERSION,
+    redact_value,
+    should_redact_key,
+)
+from easycat.validation.redaction import (
+    redact_runtime_secrets as _redact_runtime_secrets,
+)
+from easycat.validation.redaction import (
+    redact_text as _redact_text,
+)
 
 ValidationStatus = Literal["pass", "fail", "skip", "error"]
 
@@ -98,7 +109,7 @@ class ValidationRun:
     extras: Sequence[str] = field(default_factory=list)
     artifacts: Mapping[str, ArtifactRef] = field(default_factory=dict)
     schema_version: int = 1
-    redaction_version: int = 1
+    redaction_version: int = REDACTION_VERSION
     kind: str = "validation_run"
 
     def to_dict(self) -> dict[str, Any]:
@@ -109,39 +120,11 @@ class ValidationRun:
 
 
 def redact_text(value: str) -> str:
-    return _redact_string(value)
+    return _redact_text(value)
 
 
 def redact_runtime_secrets(value: str, secrets: Sequence[str] | None = None) -> str:
-    redacted = _redact_string(value)
-    for secret in sorted({secret for secret in secrets or () if secret}, key=len, reverse=True):
-        redacted = redacted.replace(secret, "[REDACTED_SECRET]")
-    return redacted
-
-
-_URL_RE = re.compile(r"https?://[^\s\"')\]}]+")
-_SECRET_RE = re.compile(r"\b(?:sk|sess|key|tok)-[A-Za-z0-9_-]{12,}\b")
-_BEARER_RE = re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s;,]+")
-_KEY_VALUE_SECRET_RE = re.compile(
-    r"(?i)((?:--(?:api[-_]?key|token|secret|password)\s+)|"
-    r"(?:(?:--)?(?:api[-_]?key|token|secret|password)=)|"
-    r"(?:(?:api[-_]?key|token|secret|password):\s*))[^\s;,]+"
-)
-_REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp)_[A-Za-z0-9_-]{6,}\b")
-_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
-_HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:])(?:/home|/Users)/[^/\s:]+")
-
-_UNSAFE_TEXT_FIELDS = {
-    "generated_provider_text": "[REDACTED_PROVIDER_TEXT]",
-    "generated_text": "[REDACTED_PROVIDER_TEXT]",
-    "phone_number": "[REDACTED_PHONE]",
-    "prompt": "[REDACTED_PROMPT]",
-    "provider_output": "[REDACTED_PROVIDER_TEXT]",
-    "provider_request_id": "[REDACTED_REQUEST_ID]",
-    "provider_text": "[REDACTED_PROVIDER_TEXT]",
-    "request_id": "[REDACTED_REQUEST_ID]",
-    "transcript": "[REDACTED_TRANSCRIPT]",
-}
+    return _redact_runtime_secrets(value, secrets)
 
 
 def _serialize_datetime(value: datetime) -> str:
@@ -163,15 +146,17 @@ def _serialize_dataclass(value: Any, include_none: set[str] | None = None) -> di
 
 
 def _serialize_value(value: Any, key: str | None = None) -> Any:
-    if key in _UNSAFE_TEXT_FIELDS and value:
-        return _UNSAFE_TEXT_FIELDS[key]
+    if key == "command":
+        return redact_value(value, key)
+    if should_redact_key(key) and not is_dataclass(value):
+        return redact_value(value, key)
 
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, datetime):
         return _serialize_datetime(value)
     if isinstance(value, str):
-        return _redact_string(value)
+        return redact_value(value, key)
     if isinstance(value, bool | int | float) or value is None:
         return value
     if is_dataclass(value):
@@ -183,11 +168,12 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
             if not _is_empty_optional(field_value)
         }
     if isinstance(value, Mapping):
-        return {
+        redacted = {
             str(item_key): _serialize_value(item_value, str(item_key))
             for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
             if not _is_empty_optional(item_value)
         }
+        return redact_value(redacted, key)
     if isinstance(value, Sequence):
         return [_serialize_value(item, key) for item in value]
     return value
@@ -195,8 +181,8 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
 
 def _serialize_environment(value: ValidationEnvironment) -> dict[str, Any]:
     return {
-        "python": _redact_string(value.python),
-        "platform": _redact_string(value.platform),
+        "python": redact_text(value.python),
+        "platform": redact_text(value.platform),
         "ci": value.ci,
         "env_vars": {
             str(name): bool(present)
@@ -207,14 +193,3 @@ def _serialize_environment(value: ValidationEnvironment) -> dict[str, Any]:
 
 def _is_empty_optional(value: Any) -> bool:
     return value is None or value == {} or value == ()
-
-
-def _redact_string(value: str) -> str:
-    redacted = _URL_RE.sub("[REDACTED_URL]", value)
-    redacted = _BEARER_RE.sub(r"\1[REDACTED_SECRET]", redacted)
-    redacted = _KEY_VALUE_SECRET_RE.sub(r"\1[REDACTED_SECRET]", redacted)
-    redacted = _SECRET_RE.sub("[REDACTED_SECRET]", redacted)
-    redacted = _REQUEST_ID_RE.sub("[REDACTED_REQUEST_ID]", redacted)
-    redacted = _PHONE_RE.sub("[REDACTED_PHONE]", redacted)
-    redacted = _HOME_PATH_RE.sub(lambda match: f"{match.group('prefix')}~", redacted)
-    return redacted

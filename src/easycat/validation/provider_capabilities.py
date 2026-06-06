@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from easycat.tts.input import TTSInputPolicy
-from easycat.validation.report import redact_text
+from easycat.validation.redaction import REDACTION_VERSION, redact_text, redact_value
 
 ProviderCapabilityStatus = Literal[
     "pass",
@@ -62,8 +62,8 @@ class ProviderCapabilities:
 
     def to_dict(self, *, api_version_header_behavior: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "input_audio_formats": _redact_value(list(self.input_audio_formats)),
-            "output_audio_formats": _redact_value(list(self.output_audio_formats)),
+            "input_audio_formats": redact_value(list(self.input_audio_formats)),
+            "output_audio_formats": redact_value(list(self.output_audio_formats)),
         }
 
         optional_fields: dict[str, Any] = {
@@ -78,10 +78,10 @@ class ProviderCapabilities:
         }
         for key, value in optional_fields.items():
             if value is not None:
-                payload[key] = _redact_value(value)
+                payload[key] = redact_value(value, key)
 
         if self.provider_options:
-            payload["provider_options"] = _redact_value(self.provider_options)
+            payload["provider_options"] = redact_value(self.provider_options, "provider_options")
 
         return payload
 
@@ -109,7 +109,7 @@ class ProviderCapabilityReport:
     latency: Mapping[str, Any] | None = None
     failure_class: str | None = None
     schema_version: int = 1
-    redaction_version: int = 1
+    redaction_version: int = REDACTION_VERSION
     kind: str = "provider_capability_report"
 
     def to_dict(self) -> dict[str, Any]:
@@ -137,7 +137,7 @@ class ProviderCapabilityReport:
             "voices": [voice.to_json_value() for voice in self.voices],
             "contract_status": redact_text(str(self.contract_status)),
             "schema_status": redact_text(str(self.schema_status)),
-            "latency": _redact_value(self.latency) if self.latency is not None else None,
+            "latency": redact_value(self.latency, "latency") if self.latency is not None else None,
             "failure_class": redact_text(self.failure_class) if self.failure_class else None,
             "status": redact_text(str(self.status)),
         }
@@ -160,19 +160,4 @@ def _serialize_datetime_or_none(value: datetime | str | None) -> str | None:
 def _serialize_tts_input_policy(value: TTSInputPolicy | Mapping[str, Any] | None) -> Any:
     if isinstance(value, TTSInputPolicy):
         return value.to_dict()
-    return value
-
-
-def _redact_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return redact_text(value)
-    if isinstance(value, bool | int | float) or value is None:
-        return value
-    if isinstance(value, Mapping):
-        return {
-            str(key): _redact_value(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
-    if isinstance(value, Sequence):
-        return [_redact_value(item) for item in value]
     return value

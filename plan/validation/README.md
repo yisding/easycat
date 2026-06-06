@@ -31,8 +31,9 @@ Implemented:
   `easycat.validation.runner` for slice runs.
 - Validation runs write isolated artifacts under `.easycat/validation/runs/`
   and update `.easycat/validation/latest.json` after a complete report exists.
-- `src/easycat/validation/report.py` defines the validation JSON envelope,
-  provider credential states, artifact references, and report-boundary redaction.
+- `src/easycat/validation/report.py` defines the validation JSON envelope and
+  provider credential states; `src/easycat/validation/redaction.py` is the
+  shared report/cassette redaction policy.
 - `easycat validate latency` writes structured latency artifacts with samples,
   percentiles, budget checks, reliability signals, and optional baseline
   comparison.

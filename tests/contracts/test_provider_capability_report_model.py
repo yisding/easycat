@@ -117,7 +117,7 @@ def test_provider_capability_report_redacts_secret_like_values_inside_capabiliti
             alignment=True,
             ssml=False,
             tts_input_policy=TTSInputPolicy.plain_text(
-                provider_options={"endpoint": "https://api.test"}
+                provider_options={"endpoint": "https://api.test", "api_key": "short"}
             ),
             provider_options={"request_id": "req_abc123456789", "endpoint": "https://api.test"},
         ),
@@ -135,6 +135,7 @@ def test_provider_capability_report_redacts_secret_like_values_inside_capabiliti
         "request_id": "[REDACTED_REQUEST_ID]",
     }
     assert payload["capabilities"]["tts_input_policy"]["provider_options"] == {
+        "api_key": "[REDACTED_SECRET]",
         "endpoint": "[REDACTED_URL]",
     }
     assert payload["voices"] == ["[REDACTED_PROVIDER_IDENTIFIER]"]

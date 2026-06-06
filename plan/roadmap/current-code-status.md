@@ -10,8 +10,8 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 172 tracked Python files.
-- `tests/` contains 187 tracked `test_*.py` files.
+- `src/easycat/` contains 175 tracked Python files.
+- `tests/` contains 197 tracked `test_*.py` files.
 - `docs/teaching/` now contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
   validation, coverage, socket validation, build smoke, and manual
@@ -53,7 +53,8 @@ with the codebase. Counts below come from tracked files and exclude
   WebSocket STT base now exist.
 - Validation has landed as a public CLI and reusable runner:
   `scripts/validate.py` is a compatibility shim, validation reports live in
-  `easycat.validation.report`, and CI/nightly/release workflows upload
+  `easycat.validation.report`, report/cassette redaction policy is centralized
+  in `easycat.validation.redaction`, and CI/nightly/release workflows upload
   validation artifacts.
 - The E2E debug-first plans are backed by concrete tests under `tests/e2e/`.
 - The WebRTC peer-replacement queue issue called out in older cleanup notes
@@ -92,8 +93,9 @@ with the codebase. Counts below come from tracked files and exclude
   marker/alignment event support. EventBus subscription tokens, handler
   failure/slow-callback accounting, and configurable handler-error policy now
   exist for the current inline dispatch model.
-- Full redaction policy and OTel/cost exports remain planned rather than
-  implemented.
+- Report-boundary and cassette redaction policy now has a shared module and
+  tests, but full journal redaction plus OTel/cost exports remain planned
+  rather than implemented.
 - Telephony-native TTS output is not fully implemented. Provider
   output-format plumbing exists and `config.py` has a hook for transport
   preferences, but no current transport advertises `preferred_tts_output_format`;
