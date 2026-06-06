@@ -714,15 +714,37 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
-Current state:
+Current verified state:
 
-- `tests/contracts/` exists with offline provider, protocol, bridge, cassette,
-  and provider capability report contract tests.
+- `tests/contracts/` exists with offline STT, TTS, VAD, transport, agent
+  bridge, HTTP/SSE/WebSocket cassette, provider capability report, provider
+  report, and provider-surface matrix contract tests.
+- Current contract test files are `test_agent_bridge_contracts.py`,
+  `test_http_cassette_redaction.py`,
+  `test_provider_capability_report_model.py`,
+  `test_provider_capability_reports.py`, `test_provider_reports.py`,
+  `test_provider_surface_matrix.py`, `test_sse_cassette_replay.py`,
+  `test_stt_provider_contracts.py`, `test_transport_contracts.py`,
+  `test_tts_provider_contracts.py`, `test_vad_provider_contracts.py`, and
+  `test_ws_cassette_replay.py`.
 - The original provider contract matrix remains under `tests/integration/` and
   is intentionally focused on factory/session wiring, not protocol cassettes.
-- `tests/contracts/provider_surface_matrix.py` records provider, surface,
-  adapter, protocol, mode/model, extra, credential, contract path, cassette
-  status, and live-canary status dimensions.
+- `tests/contracts/provider_surface_matrix.py` defines
+  `ProviderSurfaceContract`, `PROVIDER_SURFACE_CONTRACTS`,
+  `EXPLICIT_PROVIDER_SURFACE_EXCLUSIONS`, and
+  `missing_registered_provider_surfaces()`.
+- Each provider-surface row records `provider`, `surface`, `adapter`,
+  `protocol`, `mode`, `model_api_version`, `required_extra`,
+  `credential_env_var`, `contract_path`, `cassette_path`, `cassette_status`,
+  `live_canary_status`, and `expected_skip_reason`.
+- `tests/contracts/test_provider_surface_matrix.py` enforces that rows have
+  the required report dimensions, no duplicate keys, existing contract paths,
+  required cassette files when `cassette_status=required`, and no missing
+  registered STT/TTS/VAD/transport provider surfaces unless explicitly
+  excluded.
+- `tests/contracts/README.md` documents that protocol contracts live under
+  `tests/contracts/`, while `tests/integration/test_provider_contract_matrix.py`
+  stays scoped to the factory/session wiring seam.
 
 Files:
 
