@@ -552,7 +552,7 @@ def init(
         None,
         "--config",
         "-c",
-        help="JSON payload for non-interactive scaffolding.",
+        help="JSON payload for non-interactive scaffolding; see easycat explain init-schema.",
     ),
     list_templates: bool = typer.Option(
         False,

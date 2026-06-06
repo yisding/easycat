@@ -27,6 +27,8 @@ def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "--list-templates" in result.stdout
     assert "templates and create commands" in help_text
+    assert "explain" in help_text
+    assert "init-schema" in help_text
 
 
 def test_list_templates(cli: CliRunner) -> None:
