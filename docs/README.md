@@ -16,6 +16,8 @@ installed app environment, use `easycat docs`.
 - Building an application: scaffold with
   `uv run easycat init my-agent`, then use the CLI commands documented in the
   [root README](../README.md#cli).
+- Automating the CLI: use `uv run easycat explain json-schema` to inspect the
+  standard `--json` envelope, including command-specific error fields.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.

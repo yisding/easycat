@@ -72,6 +72,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "installed app environment" in text
     assert "prints the same map" in text
     assert "uv run easycat doctor --env-file .env" in text
+    assert "uv run easycat explain json-schema" in text
+    assert "standard `--json` envelope" in text
 
 
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:
