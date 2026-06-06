@@ -42,6 +42,7 @@ def test_help_renders(cli: CliRunner) -> None:
     result = cli.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
+    assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
     missing = sorted(
         command_name
         for command_name in _registered_top_level_command_names()
@@ -100,6 +101,14 @@ def test_docs_command(cli: CliRunner) -> None:
         in result.stdout
     )
     assert "DURABILITY.\nmd" not in result.stdout
+
+
+def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--help"])
+
+    assert result.exit_code == 0
+    assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
+    assert "--json" in result.stdout
 
 
 def test_docs_command_json(cli: CliRunner) -> None:

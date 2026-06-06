@@ -186,7 +186,7 @@ def _print_journey_menu() -> None:
 def docs_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Show documentation entry points."""
+    """Show quickstart, examples, teaching, and operations docs."""
     if json_output:
         emit_json(json_envelope("docs", entries=_docs_entries(), source_url=_DOCS_SOURCE_URL))
         return
@@ -235,7 +235,9 @@ def _register_commands() -> None:
 
     app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
     app.command(name="doctor", help="Check environment and provider reachability.")(doctor_cmd)
-    app.command(name="docs", help="Show documentation entry points.")(docs_command)
+    app.command(name="docs", help="Show quickstart, examples, teaching, and operations docs.")(
+        docs_command
+    )
     app.command(name="explain", help="Look up an error code.")(explain_cmd)
     app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
     app.command(name="replay", help="Replay a debug bundle or SQLite journal.")(replay_bundle)
