@@ -79,6 +79,54 @@ def test_validation_tasks_v21_current_state_tracks_latency_markers_and_selectors
     assert "does not emit a stable validation artifact" not in section
 
 
+def test_validation_tasks_v22_current_state_tracks_latency_artifact_contract() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V2.2 Add Canonical Latency Sample JSON", 1)[1].split(
+        "### V2.3 Add Baseline Comparison Helper", 1
+    )[0]
+    runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    sample = LatencySample(
+        sample_id="sample-1",
+        condition_id="baseline",
+        warmup=False,
+        timestamp_source="event_monotonic",
+        provider={"stt": "openai-realtime", "tts": "openai", "agent": "openai"},
+        model={"llm": "gpt-5.4", "tts": "gpt-4o-mini-tts"},
+        transport={"kind": "websocket"},
+        debug={"level": "full"},
+        stages=LatencyStageDurations(total_ms=750.0, stt_ms=120.0),
+        missing_stage_reason="tts_ttfb_missing",
+        failure_class="provider_timeout",
+    )
+    artifact = build_latency_artifact(
+        mode=LatencyMode.SMOKE,
+        samples=[sample],
+        generated_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    assert "Current verified state:" in section
+    for field in sample.to_dict():
+        assert f"`{field}`" in section
+    for field in artifact:
+        assert f"`{field}`" in section
+    assert artifact["kind"] == "latency_validation"
+    assert artifact["clock_source"] == "time.monotonic"
+    assert "`latency_validation`" in section
+    assert "`clock_source=time.monotonic`" in section
+    assert 'run_dir / "latency" / "samples.json"' in runner_source
+    assert 'run_dir / "latency" / f"{mode.value}.json"' in runner_source
+    assert 'artifacts_root / "latency" / f"{mode.value}-latest.json"' in runner_source
+    assert '"latency": ArtifactRef(kind="latency", path=str(latency_path))' in runner_source
+    assert "`runs/<run_id>/latency/samples.json`" in section
+    assert "`runs/<run_id>/latency/<mode>.json`" in section
+    assert "`latency/<mode>-latest.json`" in section
+    assert "sample-count eligibility is too low" in section
+    assert "eligible" in section
+    assert "summaries" in section
+    assert "budget checks" in section
+    assert "baseline comparison data" in section
+
+
 def test_latency_sample_serializes_canonical_fields() -> None:
     sample = LatencySample(
         sample_id="sample-1",

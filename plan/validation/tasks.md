@@ -540,6 +540,25 @@ Dependencies:
 
 - V2.1
 
+Current verified state:
+
+- `LatencySample.to_dict()` serializes `sample_id`, `condition_id`,
+  `warmup`, `timestamp_source`, `provider`, `model`, `transport`, `debug`,
+  `stages`, `missing_stage_reason`, and `failure_class`.
+- `build_latency_artifact(...)` emits `schema_version`, `kind` value
+  `latency_validation`, `mode`, `generated_at`, `baseline`, `environment`,
+  `clock_source` value `time.monotonic` (`clock_source=time.monotonic`),
+  `samples`, `reliability_samples`, `summary`, `percentiles`, and
+  `budget_violations`.
+- `run_latency_validation(...)` stores raw samples at
+  `runs/<run_id>/latency/samples.json`, writes the mode artifact at
+  `runs/<run_id>/latency/<mode>.json`, updates
+  `latency/<mode>-latest.json`, and attaches a `latency` artifact reference
+  to the validation report.
+- Smoke artifacts keep percentile and budget gates informational when
+  sample-count eligibility is too low; sweep artifacts can include eligible
+  summaries, budget checks, and baseline comparison data.
+
 Files:
 
 - validation CLI/helper module
