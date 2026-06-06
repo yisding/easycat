@@ -188,6 +188,136 @@ def test_release_validation_workflow_skeleton_exists() -> None:
     assert "retention-days:" in text
 
 
+def test_validation_tasks_v53_current_state_tracks_release_validation_workflow() -> None:
+    workflow_text = RELEASE_WORKFLOW.read_text()
+    workflow = yaml.safe_load(workflow_text)
+    runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    cli_source = (REPO_ROOT / "src/easycat/cli/validate.py").read_text(encoding="utf-8")
+    validate_tests_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
+    section = _validation_tasks_section(
+        "### V5.3 Add Release Validation Workflow",
+        "## V6: Optional Observability API",
+    )
+
+    assert "Current verified state:" in section
+    assert workflow["jobs"]["release-validation"]["environment"] == "release-validation"
+    for token in (
+        "workflow_dispatch:",
+        "Mask live provider secrets",
+        "::add-mask::",
+        "uv build --sdist --wheel",
+        'echo "RELEASE_VENV=$RUNNER_TEMP/easycat-release-venv" >> "$GITHUB_ENV"',
+        'uv venv "$RELEASE_VENV" --python 3.12',
+        '"easycat[openai,openai-agents] @ file://$WHEEL_PATH"',
+        "pytest pytest-asyncio hypothesis",
+        "working-directory: ${{ runner.temp }}",
+        'PYTHONPATH: ""',
+        "site-packages",
+        "not package_path.is_relative_to(workspace)",
+        '"$RELEASE_VENV/bin/easycat" doctor --json',
+        '"$RELEASE_VENV/bin/easycat" validate quick',
+        '"$RELEASE_VENV/bin/easycat" validate stress',
+        '"$RELEASE_VENV/bin/easycat" validate live --release',
+        '"$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples',
+        'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky',
+        "unexpected release validation skips",
+        "actions/upload-artifact@v4",
+        "if: always()",
+        "retention-days: 30",
+        "dist/**",
+    ):
+        assert token in workflow_text
+    for token in (
+        "def run_release_validation",
+        "release.build",
+        "release.venv",
+        "release.install",
+        "release.install-test-tools",
+        "release.import-smoke",
+        "release.doctor",
+        "release.cli-smoke",
+        'RELEASE_SLICES = ("quick", "stress", "contracts")',
+        'f"release.{slice_name}"',
+        "release.live",
+        "release.latency.",
+        "PYTHONPATH",
+        "outside_dir",
+        "EASYCAT_VALIDATION_PYTEST_COMMAND",
+        "run_validation_slice",
+        "run_live_validation",
+        "run_latency_validation",
+        "require_samples=True",
+    ):
+        assert token in runner_source
+    for token in (
+        "run_release_validation",
+        "validate release",
+        "--latency-smoke",
+        "--latency-sweep",
+        "--json",
+    ):
+        assert token in cli_source
+    for test_name in (
+        "test_release_validation_builds_installed_wheel_and_aggregates_reports",
+        "test_release_validation_fails_when_child_slice_fails",
+        "test_validate_release_cli_json_uses_standard_stdout_envelope",
+        "test_validate_release_cli_rejects_conflicting_latency_modes",
+        '"release.quick"',
+        '"release.stress"',
+        '"release.contracts"',
+    ):
+        assert test_name in validate_tests_source
+
+    for token in (
+        ".github/workflows/release-validation.yml",
+        "workflow_dispatch",
+        "release-validation",
+        "uv build --sdist --wheel",
+        "RELEASE_VENV",
+        "$RUNNER_TEMP/easycat-release-venv",
+        "easycat[openai,openai-agents]",
+        "pytest",
+        "pytest-asyncio",
+        "hypothesis",
+        "${{ runner.temp }}",
+        'PYTHONPATH: ""',
+        "easycat.__file__",
+        "site-packages",
+        "easycat doctor --json",
+        "tests/cli/test_app.py",
+        "validate quick",
+        "validate stress",
+        "-m flaky",
+        "validate live --release --provider openai --surface stt --surface tts",
+        "validate latency --sweep --require-samples",
+        "OPENAI_API_KEY",
+        "unexpected release validation skips",
+        "VALIDATION_ARTIFACTS_DIR",
+        "dist/**",
+        "actions/upload-artifact@v4",
+        "if: always()",
+        "retention-days: 30",
+        "run_release_validation(...)",
+        "easycat validate release",
+        "release.build",
+        "release.venv",
+        "release.install",
+        "release.install-test-tools",
+        "release.import-smoke",
+        "release.doctor",
+        "release.cli-smoke",
+        "release.quick",
+        "release.stress",
+        "release.contracts",
+        "release.live",
+        "release.latency.<mode>",
+        "EASYCAT_VALIDATION_PYTEST_COMMAND",
+        "tests/test_ci_workflow.py",
+        "tests/cli/test_validate.py",
+    ):
+        assert f"`{token}`" in section
+
+
 def test_validation_workflows_parse_as_yaml() -> None:
     yaml.safe_load(WORKFLOW.read_text())
     yaml.safe_load(NIGHTLY_WORKFLOW.read_text())

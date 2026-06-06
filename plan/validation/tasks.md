@@ -1425,6 +1425,44 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
+Current verified state:
+
+- `.github/workflows/release-validation.yml` is a manual `workflow_dispatch`
+  workflow using the `release-validation` environment, masking live provider
+  secrets before validation commands run.
+- The workflow builds release distributions with `uv build --sdist --wheel`,
+  creates `RELEASE_VENV` under `$RUNNER_TEMP/easycat-release-venv`, installs
+  `easycat[openai,openai-agents]`, and installs release test dependencies
+  `pytest`, `pytest-asyncio`, and `hypothesis`.
+- Installed-package checks run from `${{ runner.temp }}` with `PYTHONPATH: ""`;
+  they assert `easycat.__file__` resolves into `site-packages` and outside the
+  GitHub workspace, then run `easycat doctor --json` and
+  `tests/cli/test_app.py`.
+- The installed wheel runs `validate quick`, `validate stress`, flaky
+  collection with `-m flaky`, strict
+  `validate live --release --provider openai --surface stt --surface tts`, and
+  `validate latency --sweep --require-samples` when `OPENAI_API_KEY` is
+  present.
+- The workflow verifies generated reports for
+  `unexpected release validation skips` and uploads both
+  `VALIDATION_ARTIFACTS_DIR` and `dist/**` through
+  `actions/upload-artifact@v4` with `if: always()` and `retention-days: 30`.
+- `src/easycat/validation/runner.py` provides the local
+  `run_release_validation(...)` implementation used by
+  `easycat validate release`; it records `release.build`, `release.venv`,
+  `release.install`,
+  `release.install-test-tools`, `release.import-smoke`, `release.doctor`,
+  `release.cli-smoke`, `release.quick`, `release.stress`, `release.contracts`,
+  `release.live`, and `release.latency.<mode>` checks.
+- The release runner clears `PYTHONPATH`, executes child validation slices from
+  an out-of-source working directory, uses the installed wheel pytest command
+  through `EASYCAT_VALIDATION_PYTEST_COMMAND`, requires latency samples, and
+  fails the release run when any child validation result fails.
+- `tests/test_ci_workflow.py` guards the workflow shape, and
+  `tests/cli/test_validate.py` verifies the release runner, child-failure
+  aggregation, `validate release --json`, and conflicting latency-mode CLI
+  errors.
+
 Dependencies:
 
 - V1.2
