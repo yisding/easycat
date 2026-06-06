@@ -81,6 +81,10 @@ Support files:
   client for `webtransport_server.py`.
 - [ec2_webrtc/deploy.sh](ec2_webrtc/deploy.sh): EC2/coturn deployment helper
   for WebRTC deployments.
+- [ec2_webrtc/coturn.conf](ec2_webrtc/coturn.conf): coturn configuration
+  template installed by `ec2_webrtc/deploy.sh`.
+- [ec2_webrtc/easycat-webrtc.service](ec2_webrtc/easycat-webrtc.service):
+  systemd unit template installed by `ec2_webrtc/deploy.sh`.
 
 ## Turn-Taking, Audio, And Output Controls
 

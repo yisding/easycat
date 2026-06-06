@@ -25,7 +25,8 @@ _EXAMPLE_README_ROW_RE = re.compile(
     r"\| (?P<env>[^|]+) \|$"
 )
 _SUPPORT_FILE_LINK_RE = re.compile(
-    r"^- \[(?P<name>[^]]+\.(?:html|sh))\]\((?P<link>[^)]+\.(?:html|sh))\):"
+    r"^- \[(?P<name>[^]]+\.(?:conf|html|service|sh))\]"
+    r"\((?P<link>[^)]+\.(?:conf|html|service|sh))\):"
 )
 _EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
 _UV_PIP_INSTALL_RE = re.compile(r"uv pip install\s+(?P<args>[^\n`|]+)")
@@ -55,6 +56,8 @@ def _support_files_to_document() -> set[str]:
     examples_dir = REPO_ROOT / "examples"
     files = set(examples_dir.glob("*.html"))
     files.update((examples_dir / "webrtc_static").glob("*.html"))
+    files.update((examples_dir / "ec2_webrtc").glob("*.conf"))
+    files.update((examples_dir / "ec2_webrtc").glob("*.service"))
     files.add(examples_dir / "ec2_webrtc" / "deploy.sh")
     return {path.relative_to(examples_dir).as_posix() for path in files if path.exists()}
 
