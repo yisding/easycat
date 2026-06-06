@@ -67,23 +67,30 @@ _INIT_SCHEMA_BODY = """\
                   "twilio-phone" | "webrtc-browser",
       "stt": "<provider>/<model>",            // optional
       "tts": "<provider>/<model>",            // optional
-      "transport": "local" | "webrtc" | "twilio",
-                                                 // optional; must match template
+      "llm": "string",                        // reserved; currently rejected
+      "transport": "local" | "webrtc" | "twilio", // optional
       "agent_name": "string",                 // optional
       "agent_instructions": "string",         // optional
+      "tools": ["tool-name", ...],            // reserved; currently rejected
       "mcp_servers": ["stdio://...", ...]     // optional MCP URIs
     }
 
 Required keys: `schema_version`, `template`.  Unknown keys are
 rejected on purpose so coding agents get loud feedback on typos.
+`transport` must match the selected template when provided.
 This release scaffolds voice-provider shortcuts for the voice
 templates, local microphone, browser WebRTC, and Twilio phone transports
 through separate templates, and MCP server URIs starting with
 `stdio://`, `sse://`, `http://`, or `https://`. Plain MCP names such as
 `"filesystem"` are rejected.
-Bump `schema_version` when the shape changes; old versions stay
-documented via `easycat explain init-schema --version N` in future
-releases.
+Reserved keys `llm` and `tools` are accepted by schema_version 1 so
+callers get a stable EASYCAT_E102 explanation; this release does not
+wire them into templates yet. Add LLM or tool setup directly in the
+generated `agent.py` for now.
+Run `easycat init --list-templates --json` for the current
+machine-readable template catalog.
+Bump `schema_version` when the shape changes; keep older schemas
+documented before accepting a newer version.
 """
 
 _JSON_SCHEMA_BODY = """\
@@ -100,9 +107,8 @@ On error, the envelope includes `code` (EASYCAT_Exxx), `message`,
 `fix`, `context`, and `exit_code`.  Stdout carries the envelope; stderr
 carries logs and diagnostics so `2>/dev/null` remains safe.
 
-`schema_version` bumps on breaking changes; old versions stay
-documented under `easycat explain json-schema --version N` in future
-releases.
+`schema_version` bumps on breaking changes; keep older envelope schemas
+documented before accepting a newer version.
 """
 
 

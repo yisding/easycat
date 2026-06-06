@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.cli.diagnose._codes import META_ENTRIES
+from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
 from easycat.errors import REGISTRY
 
 
@@ -79,11 +82,19 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "schema_version" in result.stdout
     assert "template" in result.stdout
     assert '"transport": "local" | "webrtc" | "twilio"' in result.stdout
-    assert "pydantic-ai-workflow" in result.stdout
-    assert "twilio-phone" in result.stdout
-    assert "webrtc-browser" in result.stdout
     assert "stdio://" in result.stdout
     assert "filesystem" in result.stdout
+    assert "easycat init --list-templates --json" in result.stdout
+    assert "EASYCAT_E102" in result.stdout
+    assert "agent.py" in result.stdout
+
+    body = META_ENTRIES["init-schema"].body
+    template_block = body.split('"template": ', 1)[1].split('"stt"', 1)[0]
+    documented_templates = set(re.findall(r'"([a-z0-9-]+)"', template_block))
+    assert documented_templates == set(available_templates())
+
+    documented_keys = set(re.findall(r'^\s+"(?P<key>[a-z_]+)":', body, flags=re.MULTILINE))
+    assert documented_keys == SCHEMA_V1_KEYS
 
 
 def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
