@@ -488,9 +488,10 @@ $ uv run easycat --help
   wheel into a clean temporary venv, verify it outside the source tree, and
   run the release validation gates through the installed package.
 - **`uv run easycat validate report .easycat/validation/latest.json`** —
-  render a concise summary of the latest saved validation report. Add
-  `--json` when a coding agent or script needs the saved report re-emitted
-  inside the standard CLI envelope; use
+  render a concise summary of the latest saved validation report. Use
+  `uv run easycat validate report .easycat/validation/latest.json --json`
+  when a coding agent or script needs the saved report re-emitted inside the
+  standard CLI envelope; use
   `.easycat/validation/runs/<run_id>/report.json` for a specific older run.
 
 The debugger is intentionally *not* a CLI subcommand — it's imported

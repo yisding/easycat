@@ -287,9 +287,10 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "standard `--json` envelope" in cli_section
     assert "command-specific success and error fields" in normalized_cli_section
     assert "validate report .easycat/validation/latest.json" in cli_section
+    assert "validate report .easycat/validation/latest.json --json" in cli_section
     assert ".easycat/validation/runs/<run_id>/report.json" in cli_section
     assert "validate report <path>" not in cli_section
-    assert "Add `--json` when a coding agent or script" in normalized_cli_section
+    assert "Add `--json` when a coding agent or script" not in normalized_cli_section
 
     top_level_commands = {command.name for command in _app.app.registered_commands}
     top_level_commands.update(group.name for group in _app.app.registered_groups)
