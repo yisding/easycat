@@ -1,4 +1,4 @@
-"""Tests for ``easycat bundles list`` and ``easycat bundles show``."""
+"""Tests for bundle listing, inspection, export, and replay CLI flows."""
 
 from __future__ import annotations
 
