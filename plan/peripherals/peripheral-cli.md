@@ -916,12 +916,15 @@ agent.py` end-to-end in under 60 seconds.
 
 Finishes the scaffolding surface.
 
-- Planned scaffold templates, line budgets, and tool/workflow content shipped;
-  remaining work is run-matrix cleanup.
+- Planned scaffold templates, line budgets, and tool/workflow content shipped.
+- Current E2E scaffold matrix renders every template and verifies each
+  generated top-level Python file with `py_compile` and `ruff`.
+- Full `uv sync` plus runtime invocation remains a gated integration follow-up
+  because generated projects pin the published `easycat` version.
 - `easycat doctor` checks 6–8 (microphone, journal, disk)
 - `easycat doctor --fix` for safe auto-fixes
-- E2E scaffold matrix: init → sync → run per template against stub
-  transport
+- Gated runtime scaffold matrix: init → sync → run per template against stub
+  transport when a local package index or published test version is available.
 - `easycat doctor --environment=production` profile (depends on
   `peripheral-deployment.md` detection hooks)
 

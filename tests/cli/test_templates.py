@@ -353,9 +353,13 @@ def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     assert "the plan's `calculator` + `filesystem` MCP" not in plan
     assert "plan text should be updated" not in plan
     assert "MCP/tool-content reconciliation" not in plan
+    assert "remaining work is run-matrix cleanup" not in plan
     assert "working tool or workflow" in plan
     assert "generated only when requested" in plan
     assert "template-specific run command" in plan
+    assert "renders every template" in plan
+    assert "`py_compile` and `ruff`" in plan
+    assert "runtime invocation remains a gated integration follow-up" in plan
 
 
 def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
