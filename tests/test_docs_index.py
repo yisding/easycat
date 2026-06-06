@@ -116,6 +116,10 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "installed CLI hints from repo-local `uv run` hints" in normalized
     assert "uv run easycat validate quick" in text
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in text
+    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
+        normalized
+    )
 
 
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:

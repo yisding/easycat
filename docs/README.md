@@ -54,10 +54,13 @@ command hints, such as `PATH`, before running them.
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout.
 - Validating a change: run `uv run easycat validate quick`, inspect
-  `uv run easycat validate report .easycat/validation/latest.json`, then use
-  the validation workflow in the [root README](../README.md#validation-workflow)
-  and the [validation reference](../plan/validation/reference.md) for provider
-  and report vocabulary.
+  `uv run easycat validate report .easycat/validation/latest.json`, or use
+  `uv run easycat validate report .easycat/validation/latest.json --json` when
+  a script or coding agent needs the saved report inside the standard CLI
+  envelope. Then use the validation workflow in the
+  [root README](../README.md#validation-workflow) and the
+  [validation reference](../plan/validation/reference.md) for provider and
+  report vocabulary.
 
 ## Maintainer Notes
 
