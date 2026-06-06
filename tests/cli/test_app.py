@@ -43,6 +43,7 @@ def test_help_renders(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
     assert "Check API keys, optional extras, and provider reachability" in result.stdout
+    assert "Run validation checks and inspect validation reports" in result.stdout
     assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
     missing = sorted(
@@ -68,6 +69,8 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "cargo --explain" not in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
+    assert "Run validation checks and inspect validation reports" in result.stdout
+    assert "Run validation checks and inspect reports" not in result.stdout
     assert "easycat docs" in result.stdout
     assert "quickstart, examples, and teaching routes" in result.stdout
     assert "easycat explain json-schema" in result.stdout

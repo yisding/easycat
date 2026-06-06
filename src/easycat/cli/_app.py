@@ -48,7 +48,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]replay[/]      Replay a debug bundle or SQLite journal
 
   [cyan]Validation[/]
-    [green]validate[/]    Run validation checks and inspect reports
+    [green]validate[/]    Run validation checks and inspect validation reports
 
   [cyan]Learn[/]
     [green]docs[/]        Show quickstart, examples, and teaching routes
