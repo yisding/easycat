@@ -636,4 +636,5 @@ def test_init_next_steps_use_uv_run_easycat_doctor(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
     assert "uv run easycat doctor" in result.stderr
+    assert "uv run easycat docs" in result.stderr
     assert "uvx easycat doctor" not in result.stderr

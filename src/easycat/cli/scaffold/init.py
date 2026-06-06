@@ -524,6 +524,7 @@ def init(
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor [dim]# verify your setup[/]")
+    stderr_console.print("  uv run easycat docs [dim]# find examples and guides[/]")
     stderr_console.print("  uv run --env-file .env python agent.py")
 
 

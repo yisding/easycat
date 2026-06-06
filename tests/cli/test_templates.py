@@ -250,6 +250,14 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
     assert "Run `easycat doctor`" not in readme
 
 
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    next_steps = readme.split("## Next steps", 1)[1]
+
+    assert "uv run easycat docs" in next_steps
+
+
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
 def test_voice_templates_use_canonical_preset_shape(name: str) -> None:
     preset = _VOICE_TEMPLATE_PRESETS[name]

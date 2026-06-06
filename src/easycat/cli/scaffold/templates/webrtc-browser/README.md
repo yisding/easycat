@@ -55,3 +55,4 @@ uv run python -m py_compile agent.py
 - **Debug a session:** pass `debug="full"` to `EasyConfig.browser(...)`.
   EasyCat writes a SQLite journal under `.easycat/journals/`; inspect it with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+- **Explore docs and examples:** run `uv run easycat docs`.
