@@ -94,6 +94,9 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "init")
     assert isinstance(payload["templates"], list)
+    assert isinstance(payload["catalog"], list)
+    required_keys = {"name", "mode", "transport", "framework", "description"}
+    assert all(required_keys <= set(entry) for entry in payload["catalog"])
 
 
 def test_init_error_envelope(

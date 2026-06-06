@@ -13,6 +13,7 @@ from difflib import get_close_matches
 from importlib.resources import files
 from pathlib import Path
 from string import Template
+from typing import TypedDict
 
 import typer
 from rich.prompt import Prompt
@@ -80,6 +81,60 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "text-chat": ("openai-agents",),
 }
 
+
+class _TemplateCatalogEntry(TypedDict):
+    name: str
+    mode: str
+    transport: str
+    framework: str
+    description: str
+
+
+_TEMPLATE_CATALOG: dict[str, _TemplateCatalogEntry] = {
+    "openai-agents": {
+        "name": "openai-agents",
+        "mode": "voice",
+        "transport": "local mic",
+        "framework": "OpenAI Agents",
+        "description": "Local microphone/speaker voice agent; best first voice scaffold.",
+    },
+    "pydantic-ai": {
+        "name": "pydantic-ai",
+        "mode": "voice",
+        "transport": "local mic",
+        "framework": "Pydantic AI",
+        "description": "Local voice agent using Pydantic AI.",
+    },
+    "pydantic-ai-workflow": {
+        "name": "pydantic-ai-workflow",
+        "mode": "voice",
+        "transport": "local mic",
+        "framework": "Pydantic AI workflow",
+        "description": "Local voice agent with a small workflow object.",
+    },
+    "text-chat": {
+        "name": "text-chat",
+        "mode": "text",
+        "transport": "terminal",
+        "framework": "OpenAI Agents",
+        "description": "Text-only REPL for testing agent behavior without audio.",
+    },
+    "twilio-phone": {
+        "name": "twilio-phone",
+        "mode": "voice",
+        "transport": "Twilio",
+        "framework": "OpenAI Agents",
+        "description": "Phone-call voice agent with a Twilio WebSocket server.",
+    },
+    "webrtc-browser": {
+        "name": "webrtc-browser",
+        "mode": "voice",
+        "transport": "WebRTC",
+        "framework": "OpenAI Agents",
+        "description": "Browser voice agent using WebRTC audio.",
+    },
+}
+
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
@@ -120,6 +175,36 @@ _COPY_IGNORE: frozenset[str] = frozenset(
 def _templates_root() -> Path:
     """Filesystem path to the bundled templates directory."""
     return Path(str(files("easycat.cli.scaffold").joinpath("templates")))
+
+
+def _available_template_catalog() -> list[_TemplateCatalogEntry]:
+    """Return template metadata in the same order as ``available_templates()``."""
+    catalog: list[_TemplateCatalogEntry] = []
+    for name in available_templates():
+        catalog.append(
+            _TEMPLATE_CATALOG.get(
+                name,
+                {
+                    "name": name,
+                    "mode": "unknown",
+                    "transport": "unknown",
+                    "framework": "unknown",
+                    "description": "Template metadata has not been documented yet.",
+                },
+            )
+        )
+    return catalog
+
+
+def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
+    """Render template metadata for ``easycat init --list-templates``."""
+    if not catalog:
+        return ""
+    rows = []
+    for entry in catalog:
+        metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
+        rows.append(f"[cyan]{entry['name']}[/]\n  {entry['description']}\n  [dim]{metadata}[/]")
+    return "\n".join(rows)
 
 
 def _provider_name(spec: str) -> str:
@@ -453,11 +538,11 @@ def init(
     """Scaffold a new EasyCat project from a template."""
     if list_templates:
         templates = available_templates()
+        catalog = _available_template_catalog()
         if json_output:
-            emit_json(json_envelope("init", templates=templates))
+            emit_json(json_envelope("init", templates=templates, catalog=catalog))
         else:
-            for t in templates:
-                stdout_console.print(t)
+            stdout_console.print(_format_template_catalog(catalog))
         raise typer.Exit(0)
 
     if name is None:

@@ -23,13 +23,18 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_list_templates(cli: CliRunner) -> None:
     result = cli.invoke(app, ["init", "--list-templates"])
     assert result.exit_code == 0
-    names = result.stdout.strip().splitlines()
+    names = [
+        line.split()[0] for line in result.stdout.splitlines() if line and not line[0].isspace()
+    ]
     assert "openai-agents" in names
     assert "pydantic-ai" in names
     assert "pydantic-ai-workflow" in names
     assert "text-chat" in names
     assert "twilio-phone" in names
     assert "webrtc-browser" in names
+    assert "best first voice scaffold" in result.stdout
+    assert "Text-only REPL" in result.stdout
+    assert "WebRTC audio" in result.stdout
 
 
 def test_list_templates_json(cli: CliRunner) -> None:
@@ -37,6 +42,11 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert set(payload["templates"]) == set(available_templates())
+    catalog = {entry["name"]: entry for entry in payload["catalog"]}
+    assert set(catalog) == set(available_templates())
+    assert catalog["openai-agents"]["transport"] == "local mic"
+    assert catalog["text-chat"]["mode"] == "text"
+    assert "description" in catalog["webrtc-browser"]
 
 
 def test_missing_name_without_list_templates(cli: CliRunner) -> None:

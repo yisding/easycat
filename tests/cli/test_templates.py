@@ -26,7 +26,12 @@ from pathlib import Path
 import pytest
 
 from easycat.cli.scaffold._schema import InitConfig, available_templates
-from easycat.cli.scaffold.init import _render_text, _substitutions, _templates_root
+from easycat.cli.scaffold.init import (
+    _TEMPLATE_CATALOG,
+    _render_text,
+    _substitutions,
+    _templates_root,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -93,6 +98,20 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
         "webrtc-browser",
     ):
         assert required in templates, f"missing template: {required}"
+
+
+def test_template_catalog_metadata_covers_available_templates(templates: list[str]) -> None:
+    missing = sorted(set(templates) - set(_TEMPLATE_CATALOG))
+    stale = sorted(set(_TEMPLATE_CATALOG) - set(templates))
+
+    assert not missing, "Template catalog missing metadata for: " + ", ".join(missing)
+    assert not stale, "Template catalog references missing templates: " + ", ".join(stale)
+
+    for name in templates:
+        entry = _TEMPLATE_CATALOG[name]
+        assert entry["name"] == name
+        for key in ("mode", "transport", "framework", "description"):
+            assert entry[key], f"{name} catalog entry missing {key}"
 
 
 def _template_dir(name: str) -> Path:
