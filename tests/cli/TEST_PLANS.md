@@ -295,9 +295,9 @@ stdout and corrupting `jq` consumers.
 - EasyCat registry errors include `code`, `message`, `fix`, `context`,
   and `exit_code`; command-specific errors still include `message` and
   `exit_code` without inventing a fake `EASYCAT_Exxx` code.
-- Early command-specific usage errors, such as `init` missing `NAME`,
-  `doctor --env-file` parse failures, and mutually exclusive
-  `validate` flags, still emit the envelope in `--json` mode.
+- Early command-specific usage errors, such as `explain` missing `CODE`,
+  `init` missing `NAME`, `doctor --env-file` parse failures, and mutually
+  exclusive `validate` flags, still emit the envelope in `--json` mode.
 - Debug-bundle failures in `bundles show`, `bundles export`, and
   `replay` keep their documented exit codes while emitting parseable
   `--json` error envelopes.

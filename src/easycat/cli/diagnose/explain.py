@@ -14,7 +14,13 @@ from rich.panel import Panel
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
-from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
+from easycat.cli._output import (
+    emit_command_error,
+    emit_json,
+    json_envelope,
+    stderr_console,
+    stdout_console,
+)
 from easycat.cli.diagnose._codes import META_ENTRIES
 from easycat.errors import EASYCAT_E501, REGISTRY, all_codes, get_entry, suggest_codes
 
@@ -159,9 +165,11 @@ def explain(
         raise typer.Exit(0)
 
     if code is None:
-        stderr_console.print(
-            "[red]✗[/] Pass an error code (e.g., [cyan]easycat explain E102[/]) or "
-            "[cyan]--list[/] to see every registered code."
+        emit_command_error(
+            "explain",
+            "Pass an error code (e.g., easycat explain E102) or --list to see every "
+            "registered code.",
+            json_output=json_output,
         )
         raise typer.Exit(2)
 

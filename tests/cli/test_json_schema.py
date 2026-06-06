@@ -124,6 +124,19 @@ def test_explain_unknown_code_error_envelope(cli: CliRunner) -> None:
     assert payload["exit_code"] == 2
 
 
+def test_explain_usage_error_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "explain", status="error")
+    assert payload["exit_code"] == 2
+    assert "Pass an error code" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = cli.invoke(

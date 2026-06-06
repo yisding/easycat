@@ -133,6 +133,23 @@ def test_explain_no_arg_is_error(cli: CliRunner) -> None:
     assert "Pass an error code" in result.stderr
 
 
+def test_explain_no_arg_json_uses_standard_error_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "--json"])
+
+    assert result.exit_code == 2
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "explain"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Pass an error code" in payload["message"]
+    assert "easycat explain E102" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_every_registered_code_renders(cli: CliRunner) -> None:
     """Smoke test: every code in the registry renders without crashing.
 
