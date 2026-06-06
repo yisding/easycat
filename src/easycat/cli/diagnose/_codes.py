@@ -142,6 +142,9 @@ entry points include:
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
   `run_command`, `check_command`, `next_step_commands`, `command_note` -
                          `easycat init NAME --json`
+  `environment`, `checks` - `easycat doctor --json`; each check row has
+                         `name`, `status`, and `detail`, and may include
+                         `code` and `fix` when the check fails
   `validation`, `report_path`, `exit_code` -
                          `easycat validate quick --json` and
                          `easycat validate report PATH --json`; `validation`

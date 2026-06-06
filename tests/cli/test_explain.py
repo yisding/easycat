@@ -8,6 +8,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
@@ -68,6 +69,30 @@ def _validate_report_keys_from_cli(cli: CliRunner, tmp_path: Path) -> set[str]:
     result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    return set(payload) - {"schema_version", "command", "status"}
+
+
+def _doctor_keys_from_cli(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> set[str]:
+    doctor_cwd = tmp_path / "doctor-json-schema"
+    doctor_cwd.mkdir()
+
+    with monkeypatch.context() as patched:
+        patched.chdir(doctor_cwd)
+        for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+            patched.delenv(var, raising=False)
+        result = cli.invoke(app, ["doctor", "--provider", "deepgram", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "doctor"
+    assert payload["status"] == "error"
+    assert isinstance(payload["checks"], list)
+    assert payload["checks"]
+    assert {"name", "status", "detail"} <= set(payload["checks"][0])
     return set(payload) - {"schema_version", "command", "status"}
 
 
@@ -265,7 +290,11 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert documented_keys == SCHEMA_V1_KEYS
 
 
-def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner, tmp_path: Path) -> None:
+def test_explain_meta_json_schema_documents_error_fix(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = cli.invoke(app, ["explain", "json-schema"])
     stdout = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
@@ -304,6 +333,11 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner, tmp_path: 
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout
+    for key in _doctor_keys_from_cli(cli, tmp_path, monkeypatch):
+        assert f"`{key}`" in result.stdout
+    assert "easycat doctor --json" in result.stdout
+    assert "`name`, `status`, and `detail`" in stdout
+    assert "`code` and `fix` when the check fails" in stdout
     for key in _validate_report_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in result.stdout
     for key in _debug_command_success_keys_from_cli(cli, tmp_path):
@@ -333,6 +367,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner, tmp_path: 
 def test_explain_meta_json_schema_json_includes_command_specific_fields(
     cli: CliRunner,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     result = cli.invoke(app, ["explain", "json-schema", "--json"])
     assert result.exit_code == 0
@@ -371,6 +406,11 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`run_command`" in payload["body"]
     assert "`check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
+    for key in _doctor_keys_from_cli(cli, tmp_path, monkeypatch):
+        assert f"`{key}`" in payload["body"]
+    assert "easycat doctor --json" in payload["body"]
+    assert "`name`, `status`, and `detail`" in normalized_body
+    assert "`code` and `fix` when the check fails" in normalized_body
     for key in _validate_report_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in payload["body"]
     for key in _debug_command_success_keys_from_cli(cli, tmp_path):

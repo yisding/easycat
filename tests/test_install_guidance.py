@@ -418,13 +418,15 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     normalized_readme = re.sub(r"\s+", " ", readme)
     assert "standard `--json` envelope" in normalized_readme
-    assert "command-specific success fields" in normalized_readme
+    assert "command-specific fields" in normalized_readme
     assert "`entries`, `commands`, `catalog`" in normalized_readme
     assert "`command_note`" in normalized_readme
     assert "`base_requirement`, `create_command`, `repo_create_command`" in normalized_readme
     assert "`next_step_commands`" in normalized_readme
     assert "`pyproject_name`, `run_command`" in normalized_readme
-    assert "`run_command`, `check_command`, `validation`" in normalized_readme
+    assert "`run_command`, `check_command`, `environment`, `checks`, `validation`" in (
+        normalized_readme
+    )
     assert "`source_path`, and `fidelity_effective`" in normalized_readme
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
 
@@ -439,6 +441,7 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
         "easycat docs --json": "docs route map",
         "easycat init --list-templates --json": "template catalog",
         "easycat init NAME --json": "scaffold output",
+        "easycat doctor --json": "doctor environment/checks output",
         "easycat validate quick --json": "validation quick/report output",
         "easycat validate report PATH --json": "validation quick/report output",
         "easycat bundles list --json": "bundle list/show/export",
