@@ -955,6 +955,29 @@ Dependencies:
 
 - V3.1
 
+Current verified state:
+
+- V3.5 is an offline cassette replay/redaction proof built from checked-in
+  JSON cassettes; it does not use a live recording harness or
+  `pytest-recording`.
+- `tests/contracts/test_http_cassette_redaction.py` validates
+  `tests/cassettes/http/openai-stt.json` for schema version, redaction
+  version, `protocol=http`, redacted authorization headers, and absence of
+  unredacted sensitive text via `contains_unredacted_sensitive_text`.
+- `tests/contracts/test_sse_cassette_replay.py` validates
+  `tests/cassettes/sse/remote-responses-api.json` for schema version,
+  redaction version, `protocol=sse`, `provider_api_version=responses-api`,
+  redaction, and offline `translate_sse_event` replay of text delta plus
+  completion events.
+- Both cassette tests inject a fake `Authorization: Bearer sk-testsecret123456`
+  value and assert the redaction detector flags it.
+- `tests/contracts/provider_surface_matrix.py` is the cassette scope table:
+  every provider-surface row has `cassette_path` and `cassette_status`, and
+  the current required HTTP/SSE rows are
+  `tests/cassettes/http/openai-stt.json` and
+  `tests/cassettes/sse/remote-responses-api.json`; other rows are marked
+  `deferred` or `not_applicable` with explicit matrix metadata.
+
 Files:
 
 - `tests/contracts/test_http_cassette_redaction.py`
