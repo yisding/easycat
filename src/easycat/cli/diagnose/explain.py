@@ -156,7 +156,7 @@ def explain(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Look up an error code.  Example: ``easycat explain E102``."""
+    """Look up an error code or CLI schema topic."""
     if list_codes:
         if json_output:
             _emit_json_list()

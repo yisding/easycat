@@ -43,6 +43,7 @@ def test_help_renders(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
     assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
+    assert "Look up errors and CLI schema topics" in result.stdout
     missing = sorted(
         command_name
         for command_name in _registered_top_level_command_names()
@@ -60,6 +61,8 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Learn" in result.stdout
     assert "Show quickstart, examples, and teaching routes" in result.stdout
     assert "Show documentation entry points" not in result.stdout
+    assert "Look up errors and CLI schema topics" in result.stdout
+    assert "cargo --explain" not in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
     assert "easycat docs" in result.stdout

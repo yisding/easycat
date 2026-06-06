@@ -40,7 +40,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
   [cyan]Scaffold[/]
     [green]init[/]        Scaffold a new project from a template
     [green]doctor[/]      Check environment and provider reachability
-    [green]explain[/]     Look up an error code (like `cargo --explain`)
+    [green]explain[/]     Look up errors and CLI schema topics
 
   [cyan]Debug with the journal[/]
     [green]bundles[/]     List captured debug bundles and crash dumps
@@ -238,7 +238,7 @@ def _register_commands() -> None:
     app.command(name="docs", help="Show quickstart, examples, teaching, and operations docs.")(
         docs_command
     )
-    app.command(name="explain", help="Look up an error code.")(explain_cmd)
+    app.command(name="explain", help="Look up errors and CLI schema topics.")(explain_cmd)
     app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
     app.command(name="replay", help="Replay a debug bundle or SQLite journal.")(replay_bundle)
     app.add_typer(bundles_app, name="bundles")

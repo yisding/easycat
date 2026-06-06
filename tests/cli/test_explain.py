@@ -13,6 +13,16 @@ from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
 from easycat.errors import REGISTRY
 
 
+def test_explain_help_names_meta_topics(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "--help"])
+
+    assert result.exit_code == 0
+    assert "Look up errors and CLI schema topics" in result.stdout
+    assert "init-schema" in result.stdout
+    assert "json-schema" in result.stdout
+    assert "--list" in result.stdout
+
+
 def test_explain_known_code(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "E101"])
     assert result.exit_code == 0, result.stderr
