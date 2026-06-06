@@ -131,6 +131,7 @@ entry points include:
                          `check_command`; `command_note` explains
                          installed vs repo-local creation and post-scaffold
                          check/run context
+  `path`, `template`, `files`, `agent_lines`, `git`,
   `run_command`, `check_command`, `next_step_commands`, `command_note` -
                          `easycat init NAME --json`
 

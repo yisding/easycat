@@ -132,6 +132,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
+    assert "`path`, `template`, `files`, `agent_lines`, `git`" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout
     assert "post-scaffold check/run context" in stdout
@@ -165,6 +166,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "installed vs repo-local `uv run` for EasyCat CLI" in payload["body"]
     assert "uppercase placeholders such as PATH" in payload["body"]
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
+    assert "`path`, `template`, `files`, `agent_lines`, `git`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
     assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
