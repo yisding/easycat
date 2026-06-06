@@ -91,9 +91,9 @@ them with `uv run`, for example `uv run easycat doctor`.
 ```bash
 easycat init my-agent    # scaffold a new project from a template
 easycat init --list-templates # compare templates and copyable create commands
-easycat doctor           # check API keys, Python version, optional extras, provider reachability
-easycat docs             # show documentation entry points
-easycat explain E102     # look up an EasyCat error code
+easycat doctor           # check API keys, optional extras, provider reachability
+easycat docs             # show quickstart, examples, and teaching routes
+easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic
 easycat bundles list      # list captured debug bundles and crash dumps

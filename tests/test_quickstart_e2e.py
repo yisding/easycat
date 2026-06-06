@@ -402,6 +402,9 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (
         "easycat init --list-templates # compare templates and copyable create commands",
+        "easycat doctor           # check API keys, optional extras, provider reachability",
+        "easycat docs             # show quickstart, examples, and teaching routes",
+        "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
         "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
@@ -411,6 +414,13 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     )
     for line in expected_cli_lines:
         assert line in cli_section
+    stale_cli_lines = (
+        "easycat doctor           # check API keys, Python version, optional extras",
+        "easycat docs             # show documentation entry points",
+        "easycat explain E102     # look up an EasyCat error code",
+    )
+    for line in stale_cli_lines:
+        assert line not in cli_section
 
     missing = sorted(
         command_name
