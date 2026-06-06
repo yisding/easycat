@@ -285,8 +285,9 @@ stdout and corrupting `jq` consumers.
 
 **Checks.**
 - `--json` output from `init`, `doctor`, `docs`, `explain` (both
-  single-code and `--list`), `validate quick`, and `validate report`
-  all include
+  single-code and `--list`), `bundles list`, `bundles show`,
+  `bundles export`, `inspect`, `replay`, `validate quick`, and
+  `validate report` all include
   `schema_version: 1`, a `command` field matching the command name,
   and a `status` in {ok, error}.
 - The JSON payload appears on stdout; stderr is either empty or
@@ -294,7 +295,8 @@ stdout and corrupting `jq` consumers.
 - When a command errors, the envelope includes `code`, `message`,
   `fix`, `context`, `exit_code`.
 
-**Backed by.** New `test_json_schema.py`.
+**Backed by.** `test_json_schema.py` for the shared envelope shape, plus
+command-specific CLI suites for deeper payload details.
 
 ---
 

@@ -4,9 +4,10 @@ Every ``--json`` output shares a versioned envelope:
 
     {"schema_version": 1, "command": "...", "status": "ok"|"error", ...}
 
-These tests walk every CLI command that accepts ``--json`` and check
-the envelope shape against a single schema. Drift here is a breaking
-change for coding-agent consumers.
+These tests walk the primary CLI JSON command families and high-risk aliases,
+checking the envelope shape against a single schema. Command-specific suites
+cover deeper payload behavior for individual subcommands. Drift here is a
+breaking change for coding-agent consumers.
 
 See ``TEST_PLANS.md`` §11.
 """
@@ -14,6 +15,7 @@ See ``TEST_PLANS.md`` §11.
 from __future__ import annotations
 
 import json
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +23,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.debug.bundle import FORMAT_VERSION
 from easycat.validation.report import (
     GitMetadata,
     ValidationCheck,
@@ -62,6 +65,21 @@ def _validation_run() -> ValidationRun:
             )
         ],
     )
+
+
+def _make_bundle(path: Path, records: list[dict]) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format_version": FORMAT_VERSION,
+                    "provider_versions": {"stt": "openai-realtime-1.0"},
+                    "replay_entry_points": [{"sequence": 7, "stage": "stt", "unit_id": "u1"}],
+                }
+            ),
+        )
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(record) for record in records))
 
 
 def test_explain_single_code_envelope(cli: CliRunner) -> None:
@@ -252,6 +270,98 @@ def test_validate_report_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["report_path"] == str(report_path)
     assert payload["exit_code"] == 0
     assert payload["validation"]["kind"] == "validation_run"
+
+
+def test_bundles_list_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    _make_bundle(recordings / "one.zip", [{"sequence": 1, "name": "TurnStarted"}])
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "bundles_list")
+    assert payload["scanned"] == str(tmp_path)
+    assert len(payload["bundles"]) == 1
+
+
+def test_bundles_show_and_inspect_envelopes(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "name": "TurnStarted",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+            }
+        ],
+    )
+
+    show = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    inspect = cli.invoke(app, ["inspect", str(bundle), "--json"])
+
+    assert show.exit_code == 0
+    show_payload = json.loads(show.stdout)
+    _assert_envelope(show_payload, "bundles_show")
+    assert show_payload["path"] == str(bundle)
+    assert show_payload["session_id"] == "sess-xyz"
+
+    assert inspect.exit_code == 0
+    inspect_payload = json.loads(inspect.stdout)
+    _assert_envelope(inspect_payload, "bundles_show")
+    assert inspect_payload == show_payload
+
+
+def test_bundles_export_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", str(output), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "bundles_export")
+    assert payload["output_path"] == str(output)
+    assert payload["target"] == "claude-code"
+    assert set(payload["files"]) == {"README.md", "summary.json", "timeline.md", "timeline.jsonl"}
+
+
+def test_replay_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stage_start",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+            {
+                "sequence": 2,
+                "kind": "event",
+                "name": "stage_end",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "stt"},
+            },
+        ],
+    )
+
+    result = cli.invoke(app, ["replay", str(bundle), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "replay")
+    assert payload["fidelity_requested"] == "artifact"
+    assert payload["frames"] == 2
+    assert payload["stages"] == ["stt"]
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(
