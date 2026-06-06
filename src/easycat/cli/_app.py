@@ -39,7 +39,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
 
   [cyan]Scaffold[/]
     [green]init[/]        Scaffold a new project from a template
-    [green]doctor[/]      Check API keys, extras, and provider reachability
+    [green]doctor[/]      Check API keys, optional extras, and provider reachability
     [green]explain[/]     Look up errors and CLI schema topics
 
   [cyan]Debug with the journal[/]
