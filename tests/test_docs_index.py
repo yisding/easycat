@@ -152,6 +152,7 @@ def test_cli_docs_routes_have_descriptions() -> None:
 def test_cli_docs_routes_have_useful_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     required_commands = {
+        "README.md#install": "uv run python examples/openai_agents_voice.py",
         "docs/teaching/": "uv run pytest tests/teaching/test_ladder_index.py",
         "README.md#cli": "easycat init --list-templates",
         "docs/README.md": "easycat docs --json",

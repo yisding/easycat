@@ -125,7 +125,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Quickstart",
         "path": "README.md#install",
         "description": "Install EasyCat and run your first voice agent.",
-        "commands": ("easycat doctor",),
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run python examples/openai_agents_voice.py",
+        ),
     },
     {
         "label": "CLI and scaffolds",
