@@ -157,6 +157,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Show quickstart, examples, teaching, and operations docs" in result.stdout
     assert "--json" in result.stdout
+    assert "Emit the machine-readable docs route map" in result.stdout
 
 
 def test_docs_command_json(cli: CliRunner) -> None:

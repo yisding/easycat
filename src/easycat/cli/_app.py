@@ -233,7 +233,11 @@ def _print_journey_menu() -> None:
 
 
 def docs_command(
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the machine-readable docs route map.",
+    ),
 ) -> None:
     """Show quickstart, examples, teaching, and operations docs."""
     if json_output:
