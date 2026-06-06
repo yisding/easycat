@@ -270,10 +270,11 @@ def test_optional_extra_guidance_references_known_extras() -> None:
 def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
     """The teaching overview should send readers through the first-run preflight."""
     readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
+    prerequisites = readme.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0]
 
-    sync_index = readme.index("uv sync --extra quickstart --group dev")
-    key_index = readme.index("OPENAI_API_KEY")
-    doctor_index = readme.index("uv run easycat doctor")
+    sync_index = prerequisites.index("uv sync --extra quickstart --group dev")
+    key_index = prerequisites.index("OPENAI_API_KEY")
+    doctor_index = prerequisites.index("uv run easycat doctor")
 
     assert sync_index < key_index < doctor_index
 
@@ -385,6 +386,23 @@ def test_docs_json_guidance_points_to_schema_contract() -> None:
     assert not missing, (
         "`easycat docs --json` guidance should also point scripts/coding agents "
         "to `easycat explain json-schema`:\n" + "\n".join(missing)
+    )
+
+
+def test_env_file_doctor_guidance_points_to_json_variant() -> None:
+    """Docs that mention ``.env`` doctor checks should also show the parseable form."""
+    missing: list[str] = []
+
+    for path in _iter_reader_guidance_files():
+        text = path.read_text(encoding="utf-8")
+        if "easycat doctor --env-file .env" not in text:
+            continue
+        if "easycat doctor --env-file .env --json" not in text:
+            missing.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not missing, (
+        "`.env` doctor guidance should also expose the machine-readable variant:\n"
+        + "\n".join(missing)
     )
 
 

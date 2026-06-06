@@ -146,6 +146,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
+            "uv run easycat doctor --env-file .env",
             "uv run python examples/openai_agents_voice.py",
         ),
     },
@@ -163,6 +164,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat init --list-templates --json",
             "easycat init my-agent",
             "easycat doctor --json",
+            "easycat doctor --env-file .env --json",
             "easycat explain json-schema",
         ),
     },
@@ -198,6 +200,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
         "commands": (
             "uv run easycat doctor",
+            "uv run easycat doctor --env-file .env",
             "uv run python examples/openai_agents_voice.py",
             "uv run easycat validate quick",
         ),

@@ -30,11 +30,13 @@ command hints, such as `PATH`, before running them.
   `uv run easycat explain json-schema` for the standard `--json` envelope,
   including command-specific success and error fields. Use
   `uv run easycat doctor --json` when automation needs first-run
-  environment/check rows without Rich formatting. Replace uppercase
-  placeholders in command hints, such as `PATH`, before running them. Each docs
-  route entry includes an `audience` label for choosing the right starting point
-  without scraping descriptions, and the top-level `command_note` distinguishes
-  installed CLI hints from repo-local `uv run` hints.
+  environment/check rows without Rich formatting; use
+  `uv run easycat doctor --env-file .env --json` when those checks should load
+  a project `.env`. Replace uppercase placeholders in command hints, such as
+  `PATH`, before running them. Each docs route entry includes an `audience`
+  label for choosing the right starting point without scraping descriptions,
+  and the top-level `command_note` distinguishes installed CLI hints from
+  repo-local `uv run` hints.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.

@@ -10,7 +10,9 @@ map with command hints and audience labels. Replace uppercase placeholders such
 as `PATH` before running those hints. Use
 `uv run easycat explain json-schema` for the JSON envelope and field contract.
 Use `uv run easycat doctor --json` when a script or coding agent needs
-parseable first-run environment checks.
+parseable first-run environment checks; use
+`uv run easycat doctor --env-file .env --json` when those checks should load
+your `.env`.
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
 copyable create/check/run commands for local mic, browser WebRTC, Twilio, and

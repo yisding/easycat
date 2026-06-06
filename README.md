@@ -94,6 +94,7 @@ easycat init --list-templates # compare templates, extras, env vars, files, comm
 easycat init --list-templates --json # emit the machine-readable template catalog
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat doctor --json    # emit machine-readable environment checks
+easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat docs             # show docs for learning, validation, operations
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat explain E102     # look up errors and CLI schema topics
@@ -119,7 +120,8 @@ generated files, transport, framework, and copyable create/check/run commands.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
 Add `--json` when a script or coding agent needs the same environment/check
-rows without Rich formatting.
+rows without Rich formatting; use `easycat doctor --env-file .env --json`
+when both apply.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints, and `easycat explain json-schema`
 documents the standard `--json` envelope. It covers the docs route map,
