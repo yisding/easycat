@@ -87,6 +87,21 @@ def test_cli_docs_routes_are_represented_in_docs_index() -> None:
     assert not missing, "easycat docs routes missing from docs/README.md: " + ", ".join(missing)
 
 
+def test_cli_docs_routes_are_unique() -> None:
+    labels = [entry["label"] for entry in _DOCS_LINKS]
+    paths = [entry["path"] for entry in _DOCS_LINKS]
+
+    duplicate_labels = sorted({label for label in labels if labels.count(label) > 1})
+    duplicate_paths = sorted({path for path in paths if paths.count(path) > 1})
+
+    assert not duplicate_labels, "easycat docs route labels are duplicated: " + ", ".join(
+        duplicate_labels
+    )
+    assert not duplicate_paths, "easycat docs route paths are duplicated: " + ", ".join(
+        duplicate_paths
+    )
+
+
 def test_cli_docs_routes_resolve_locally() -> None:
     broken: list[str] = []
 
