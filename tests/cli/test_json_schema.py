@@ -108,6 +108,8 @@ def test_init_error_envelope(
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "init", status="error")
     assert payload["code"] == "EASYCAT_E102"
+    assert payload["fix"]
+    assert "easycat explain init-schema" in payload["fix"]
     assert payload["exit_code"] == 4
 
 

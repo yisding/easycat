@@ -370,6 +370,18 @@ def test_init_unknown_template(
     assert "easycat init --list-templates" in result.stderr
 
 
+def test_init_unknown_template_json_includes_fix(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "openai_agents"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["code"] == "EASYCAT_E103"
+    assert "easycat init --list-templates" in payload["fix"]
+
+
 def test_init_missing_schema_version(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

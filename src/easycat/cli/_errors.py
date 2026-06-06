@@ -56,6 +56,7 @@ def handle_easycat_error(
     after the formatted error; otherwise only the headline is shown.
     """
     code_exit = exit_code_for(err.code)
+    fix = err.rendered_fix()
     if json_mode:
         emit_json(
             json_envelope(
@@ -63,12 +64,13 @@ def handle_easycat_error(
                 status="error",
                 code=err.code,
                 message=err.message,
+                fix=fix,
                 context=err.context,
                 exit_code=code_exit,
             )
         )
     else:
-        error(err.code, err.message, fix=err.rendered_fix())
+        error(err.code, err.message, fix=fix)
     if os.getenv("EASYCAT_DEBUG") == "1":
         stderr_console.print_exception(show_locals=False)
     return code_exit
