@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import tomllib
 from pathlib import Path
 
 import yaml
@@ -8,6 +10,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
+
+
+def _advertised_python_versions() -> list[str]:
+    pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    classifiers = pyproject["project"]["classifiers"]
+    versions = []
+    for classifier in classifiers:
+        match = re.fullmatch(r"Programming Language :: Python :: (3\.\d+)", classifier)
+        if match is not None:
+            versions.append(match.group(1))
+    return sorted(versions, key=lambda version: tuple(map(int, version.split("."))))
 
 
 def _workflow_text() -> str:
@@ -16,8 +30,10 @@ def _workflow_text() -> str:
 
 def test_quick_validation_ci_runs_declared_python_versions_without_fail_fast() -> None:
     text = _workflow_text()
+    workflow = yaml.safe_load(text)
+    matrix_versions = workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"]
 
-    assert 'python-version: ["3.11", "3.12", "3.14"]' in text
+    assert matrix_versions == _advertised_python_versions()
     assert "fail-fast: false" in text
     assert "uv run --python ${{ matrix.python-version }} easycat validate quick" in text
     assert "pytest -x" not in text

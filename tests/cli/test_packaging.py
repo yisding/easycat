@@ -136,6 +136,7 @@ def test_wheel_metadata_is_useful_for_package_indexes(built_wheel: Path) -> None
         "Programming Language :: Python :: 3 :: Only",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3.14",
         "Topic :: Multimedia :: Sound/Audio :: Speech",
         "Typing :: Typed",
