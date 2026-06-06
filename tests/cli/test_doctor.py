@@ -48,6 +48,7 @@ def test_doctor_help_names_first_run_checks(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Check API keys, optional extras, and provider reachability" in help_text
     assert "--env-file" in result.stdout
+    assert "for example, .env" in help_text
     assert "--provider" in result.stdout
 
 

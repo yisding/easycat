@@ -553,7 +553,7 @@ def doctor(
     env_file: Path | None = typer.Option(
         None,
         "--env-file",
-        help="Load environment variables from a .env file before checks.",
+        help="Load environment variables from a .env file before checks (for example, .env).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
