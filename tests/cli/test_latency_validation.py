@@ -348,6 +348,70 @@ def test_validation_tasks_v24_current_state_tracks_reliability_sampling_contract
     assert "eligible=False" in stress_source
 
 
+def test_validation_tasks_v52_current_state_tracks_stress_saturation_signals() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V5.2 Add Stress Saturation Signals", 1)[1].split(
+        "### V5.3 Add Release Validation Workflow", 1
+    )[0]
+    runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    stress_source = (REPO_ROOT / "tests/e2e/test_plan_2_sustained_stress.py").read_text(
+        encoding="utf-8"
+    )
+    sampler_guard_source = (
+        REPO_ROOT / "tests/validation/test_stress_uses_public_sampler.py"
+    ).read_text(encoding="utf-8")
+    validate_tests_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
+
+    assert "Current verified state:" in section
+    assert '"stress": "stress and not integration_live and not flaky"' in runner_source
+    assert "EASYCAT_RELIABILITY_SAMPLES_PATH" in runner_source
+    assert "test_validation_runner_embeds_reliability_samples_for_stress_slices" in (
+        validate_tests_source
+    )
+    assert "test_stress_test_imports_public_event_loop_lag_sampler" in sampler_guard_source
+    assert "from easycat.validation.reliability import EventLoopLagSampler" in stress_source
+    assert stress_source.count("@pytest.mark.stress") >= 4
+    for token in (
+        "ReliabilitySample",
+        "ReliabilitySignals",
+        "append_reliability_sample",
+        "informational=True",
+        "eligible=False",
+        "fifty_turns_single_session_scripted",
+        "concurrent_sessions_journal_isolation",
+        "ten_turns_live_openai",
+        "event_loop_lag_ms",
+        "queue_depth",
+        "dropped_frames",
+        "journal_degraded",
+        "active_sessions",
+        "memory_growth_kib",
+    ):
+        assert token in stress_source
+        assert f"`{token}`" in section
+    for token in (
+        "easycat validate stress",
+        "stress and not integration_live and not flaky",
+        "ReliabilitySample",
+        "EASYCAT_RELIABILITY_SAMPLES_PATH",
+        "ReliabilitySignals",
+        "event_loop_lag_ms",
+        "queue_depth",
+        "dropped_frames",
+        "journal_degraded",
+        "active_sessions",
+        "memory_growth_kib",
+        "informational=True",
+        "eligible=False",
+        "capture_reliability_sample(...)",
+        "evaluate_reliability_budgets(...)",
+        "reliability.budget",
+        "reliability",
+        "tests/validation/test_stress_uses_public_sampler.py",
+    ):
+        assert f"`{token}`" in section
+
+
 def test_latency_sample_serializes_canonical_fields() -> None:
     sample = LatencySample(
         sample_id="sample-1",

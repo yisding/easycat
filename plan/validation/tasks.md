@@ -1370,12 +1370,34 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
-Current state:
+Current verified state:
 
-- Stress-like E2E tests exist under `tests/e2e/`, mostly gated by existing
-  `integration_socket`, `integration_live`, and `slow` markers.
-- The `stress` marker is registered, but existing stress-like tests are not
-  consistently marked with it yet.
+- `src/easycat/validation/runner.py` routes `easycat validate stress` through
+  marker expression `stress and not integration_live and not flaky`, so local
+  stress coverage is separated from live provider soak tests.
+- `tests/e2e/test_plan_2_sustained_stress.py` marks the ring-buffer,
+  scripted 50-turn, concurrent-session, and live OpenAI stress cases with
+  `pytest.mark.stress`.
+- The same stress module imports the public `EventLoopLagSampler`, uses
+  `append_reliability_sample` to write `ReliabilitySample` records to
+  `EASYCAT_RELIABILITY_SAMPLES_PATH`, and emits condition IDs such as
+  `fifty_turns_single_session_scripted`,
+  `concurrent_sessions_journal_isolation`, and `ten_turns_live_openai`.
+- Current stress samples capture available `ReliabilitySignals` values for
+  `event_loop_lag_ms`, `queue_depth`, `dropped_frames`, `journal_degraded`,
+  `active_sessions`, and `memory_growth_kib` where practical.
+- Current E2E stress samples are `informational=True` and `eligible=False`,
+  so saturation signals are embedded for diagnosis without newly gating the
+  legacy stress tests.
+- Public `capture_reliability_sample(...)` treats `stress` mode as eligible,
+  and `evaluate_reliability_budgets(...)` reports saturation-threshold
+  failures through `reliability.budget` when eligible reliability samples
+  exceed budgets.
+- `tests/cli/test_validate.py` verifies stress-slice reliability samples are
+  loaded from `EASYCAT_RELIABILITY_SAMPLES_PATH`, embedded under top-level
+  `reliability`, and linked from the validation check artifact.
+- `tests/validation/test_stress_uses_public_sampler.py` guards against
+  reintroducing a private event-loop-lag sampler in the stress E2E module.
 
 Files:
 
