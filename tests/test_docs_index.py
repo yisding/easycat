@@ -31,6 +31,7 @@ def _root_relative_doc_links() -> set[str]:
 
 def _heading_anchors(path: Path) -> set[str]:
     anchors: set[str] = set()
+    counts: dict[str, int] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
         if match is None:
@@ -40,8 +41,17 @@ def _heading_anchors(path: Path) -> set[str]:
         slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
         slug = re.sub(r"\s+", "-", slug).strip("-")
         if slug:
-            anchors.add(slug)
+            duplicate_index = counts.get(slug, 0)
+            counts[slug] = duplicate_index + 1
+            anchors.add(slug if duplicate_index == 0 else f"{slug}-{duplicate_index}")
     return anchors
+
+
+def test_docs_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:
+    page = tmp_path / "page.md"
+    page.write_text("# Root\n## Route\n## Route\n## Route!\n", encoding="utf-8")
+
+    assert _heading_anchors(page) == {"root", "route", "route-1", "route-2"}
 
 
 def test_docs_index_routes_primary_reader_paths() -> None:
