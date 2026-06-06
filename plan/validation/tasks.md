@@ -1071,6 +1071,31 @@ Dependencies:
 - V3.5
 - V3.6
 
+Current verified state:
+
+- `tests/contracts/schema_fingerprints.py` provides the schema-drift helper:
+  `SchemaDriftStatus`, `DirectionalSchemaRule`, `SchemaFingerprintRule`, and
+  `compare_schema_fingerprint` for comparing observed payload dictionaries
+  against explicit rules.
+- `DirectionalSchemaRule` separates `required_fields`, `optional_fields`,
+  `enum_fields`, and `object_required_fields`; `SchemaFingerprintRule` keeps
+  `inbound` and `outbound` rules independent.
+- The helper reports `unchanged`, `additive_warning`, `breaking_failure`, or
+  `unknown`. Missing selected rules or unknown directions return `unknown`;
+  additive unknown fields return `additive_warning`.
+- Breaking drift reports include `missing_required_fields`, `enum_failures`,
+  and `object_shape_failures`, covering missing top-level required fields,
+  provider enum changes, `content_type` enum changes, and nested error-object
+  shape changes.
+- `tests/contracts/test_provider_capability_reports.py` pins the OpenAI
+  realtime inbound event enum, including
+  `conversation.item.input_audio_transcription.delta`,
+  `conversation.item.input_audio_transcription.completed`, `error`,
+  `session.created`, `session.updated`, and `transcription_session.updated`.
+- The current V3.7 proof is a contract helper plus representative tests over
+  observed payload dictionaries; it is not a generated provider schema registry
+  for every provider-surface row.
+
 Files:
 
 - `tests/contracts/test_provider_capability_reports.py`
