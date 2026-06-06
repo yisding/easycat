@@ -16,7 +16,7 @@ from rich.table import Table
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
 from easycat.cli.diagnose._codes import META_ENTRIES
-from easycat.errors import REGISTRY, all_codes, get_entry, suggest_codes
+from easycat.errors import EASYCAT_E501, REGISTRY, all_codes, get_entry, suggest_codes
 
 
 def _normalize(code: str) -> str:
@@ -186,11 +186,15 @@ def explain(
     matches = suggest_codes(normalized)
     matches += [slug for slug in META_ENTRIES if slug.startswith(raw.lower())]
     if json_output:
+        err = EASYCAT_E501(code=raw)
         emit_json(
             json_envelope(
                 "explain",
                 status="error",
-                code="EASYCAT_E501",
+                code=err.code,
+                message=err.message,
+                fix=err.rendered_fix(),
+                context=err.context,
                 query=raw,
                 suggestions=matches,
                 exit_code=2,

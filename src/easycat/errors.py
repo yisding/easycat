@@ -34,8 +34,8 @@ class EasyCatError(Exception):
     module produce instances of this class.
     """
 
-    def __init__(self, code: str, message: str, **context: Any) -> None:
-        self.code = code
+    def __init__(self, error_code: str, message: str, **context: Any) -> None:
+        self.code = error_code
         self.message = message
         self.context = context
         super().__init__(self._render())

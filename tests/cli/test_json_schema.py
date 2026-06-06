@@ -63,7 +63,11 @@ def test_explain_unknown_code_error_envelope(cli: CliRunner) -> None:
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "explain", status="error")
     assert payload["code"] == "EASYCAT_E501"
+    assert "Unknown error code" in payload["message"]
+    assert "easycat explain --list" in payload["fix"]
+    assert payload["context"] == {"code": "E999"}
     assert payload["query"] == "E999"
+    assert payload["exit_code"] == 2
 
 
 def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

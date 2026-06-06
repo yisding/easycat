@@ -10,6 +10,7 @@ from easycat.errors import (
     EASYCAT_E104,
     EASYCAT_E202,
     EASYCAT_E205,
+    EASYCAT_E501,
     REGISTRY,
     EasyCatError,
     register,
@@ -103,6 +104,14 @@ def test_optional_extra_errors_show_package_and_repo_install_commands() -> None:
     unknown_provider = str(EASYCAT_E104(provider="depgarm", available="deepgram", hint=""))
     assert "uv add 'easycat[deepgram]'" in unknown_provider
     assert "uv sync --extra deepgram" in unknown_provider
+
+
+def test_factory_allows_context_key_named_code() -> None:
+    """E501's headline has ``{code}``; that context key must not collide."""
+    err = EASYCAT_E501(code="E999")
+    assert err.code == "EASYCAT_E501"
+    assert err.context == {"code": "E999"}
+    assert "Unknown error code 'E999'" in err.message
 
 
 def test_suggest_codes_returns_close_matches() -> None:
