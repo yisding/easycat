@@ -72,8 +72,13 @@ def test_short_version_flag(cli: CliRunner) -> None:
 
 def test_help_renders(cli: CliRunner) -> None:
     result = cli.invoke(app, ["--help"])
+    normalized = re.sub(r"\s+", " ", result.stdout)
+
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
+    assert "Run easycat docs for learning, validation, and operations routes" in normalized
+    assert "Run easycat docs --json for machine-readable docs routes" in normalized
+    assert "Run easycat explain json-schema for CLI JSON" in normalized
     assert "Check API keys, optional extras, and provider reachability" in result.stdout
     assert "Run validation checks and inspect validation reports" in result.stdout
     assert "Show docs for learning, validation, and operations" in result.stdout
