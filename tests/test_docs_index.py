@@ -78,11 +78,14 @@ def test_docs_index_routes_primary_reader_paths() -> None:
 
 def test_docs_index_points_to_docs_command() -> None:
     text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    normalized = re.sub(r"\s+", " ", text)
 
     assert "uv run easycat docs" in text
     assert "installed app environment" in text
     assert "prints the same map" in text
     assert "uv run easycat doctor --env-file .env" in text
+    assert "uv run easycat init --list-templates" in text
+    assert "copyable create commands" in normalized
     assert "uv run easycat explain json-schema" in text
     assert "standard `--json` envelope" in text
 

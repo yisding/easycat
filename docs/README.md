@@ -14,7 +14,9 @@ installed app environment, use `easycat docs`.
   [teaching ladder](teaching/), starting at
   [00-hello-audio](teaching/00-hello-audio/).
 - Building an application: scaffold with
-  `uv run easycat init my-agent`, then use the CLI commands documented in the
+  `uv run easycat init my-agent`, or run
+  `uv run easycat init --list-templates` to compare templates with copyable
+  create commands, then use the CLI commands documented in the
   [root README](../README.md#cli).
 - Automating the CLI: use `uv run easycat explain json-schema` to inspect the
   standard `--json` envelope, including command-specific error fields.

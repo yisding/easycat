@@ -229,6 +229,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "docs      show documentation entry points" in cli_section
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
+    assert "copyable create commands" in re.sub(r"\s+", " ", cli_section)
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
