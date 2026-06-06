@@ -25,6 +25,9 @@ Edit `.env` and set `OPENAI_API_KEY`. Run doctor with that file loaded:
 uv run easycat doctor --env-file .env
 ```
 
+Use `uv run easycat doctor --env-file .env --json` when a script or coding
+agent needs parseable environment/check rows.
+
 ## Run
 
 ```bash

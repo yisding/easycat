@@ -360,7 +360,10 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
         pytest.skip(f"{name} does not require an OpenAI key")
 
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
     assert "uv run easycat doctor --env-file .env" in readme
+    assert "uv run easycat doctor --env-file .env --json" in readme
+    assert "script or coding agent needs parseable environment/check rows" in normalized_readme
     assert "uv run --env-file .env easycat doctor" not in readme
     assert "\nuv run easycat doctor\n" not in readme
     assert "Run `easycat doctor`" not in readme

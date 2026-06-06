@@ -25,6 +25,9 @@ Edit `.env` and set `OPENAI_API_KEY`. Run doctor with that file loaded:
 uv run easycat doctor --env-file .env
 ```
 
+Use `uv run easycat doctor --env-file .env --json` when a script or coding
+agent needs parseable environment/check rows.
+
 For browser sessions beyond localhost, set `TURN_SERVER_URL`, `TURN_USERNAME`,
 and `TURN_CREDENTIAL` so WebRTC can relay audio when direct peer connections
 are blocked.
