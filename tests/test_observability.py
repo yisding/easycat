@@ -313,6 +313,24 @@ def test_observability_doc_explains_journal_redaction_boundary() -> None:
     assert "transcript text, agent output, and tool-result text for replay" in caveats
 
 
+def test_observability_doc_lists_journal_cli_entry_points() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for command in (
+        "easycat bundles list",
+        "easycat inspect <path>",
+        "easycat replay <path>",
+        "easycat bundles export <path>",
+    ):
+        assert command in journal
+    assert "--json" in journal
+    assert "parseable summary" in journal
+
+
 def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     from easycat._logging import _JsonFormatter
     from easycat.config.easy import _EASYCAT_LOG_LEVELS, _VALID_DEBUG

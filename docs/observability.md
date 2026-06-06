@@ -71,6 +71,12 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   arguments so a session can be faithfully replayed and debugged.
 - It is gated by `debug=` (see orthogonality below): `debug="off"` does not
   journal; `debug="light"`/`debug="full"` do.
+- CLI entry points:
+  `easycat bundles list`,
+  `easycat inspect <path>`,
+  `easycat replay <path>`, and
+  `easycat bundles export <path>`.
+  Add `--json` when a script or coding agent needs a parseable summary.
 
 ### D — OpenTelemetry facade
 
