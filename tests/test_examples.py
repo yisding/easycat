@@ -285,6 +285,29 @@ def test_canonical_local_voice_examples_keep_visible_code_budget(
     assert _visible_code_line_count(path) <= budget
 
 
+def test_top_level_examples_do_not_alias_easycat_imports() -> None:
+    aliased: list[str] = []
+
+    for example_name in sorted(_top_level_example_names()):
+        path = REPO_ROOT / "examples" / example_name
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(module):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname and alias.name.startswith("easycat"):
+                        aliased.append(f"{example_name}:{node.lineno}: import {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module == "easycat":
+                for alias in node.names:
+                    if alias.asname:
+                        aliased.append(
+                            f"{example_name}:{node.lineno}: from easycat import {alias.name}"
+                        )
+
+    assert not aliased, "Top-level examples should teach EasyCat names without aliases: " + (
+        "; ".join(aliased)
+    )
+
+
 def test_examples_readme_lists_every_top_level_python_example() -> None:
     row_names = {row["link"] for row in _example_readme_rows()}
     missing = sorted(_top_level_example_names() - row_names)

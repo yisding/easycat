@@ -13,10 +13,8 @@ For non-local deployments, set EASYCAT_WS_TOKEN and send it as:
 
 import asyncio
 
-import easycat.transports as t
-from easycat import EasyConfig as C
-from easycat import create_session as S
-from easycat import require_env
+import easycat.transports
+from easycat import EasyConfig, create_session, require_env
 
 
 def main() -> None:
@@ -26,10 +24,11 @@ def main() -> None:
         from agents import Agent  # type: ignore[import-untyped]
 
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-        wst = t.WebSocketConnectionTransport(ws)
-        return S(C(openai_api_key=api_key, transport=wst, agent=agent))
+        transport = easycat.transports.WebSocketConnectionTransport(ws)
+        return create_session(EasyConfig(openai_api_key=api_key, transport=transport, agent=agent))
 
-    asyncio.run(t.serve_websocket_sessions(session, t.websocket_session_server_config_from_env()))
+    config = easycat.transports.websocket_session_server_config_from_env()
+    asyncio.run(easycat.transports.serve_websocket_sessions(session, config))
 
 
 if __name__ == "__main__":
