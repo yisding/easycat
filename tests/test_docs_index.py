@@ -1,10 +1,11 @@
 """Guards for the top-level documentation map."""
 
 import re
+import shlex
 from pathlib import Path
 from urllib.parse import unquote
 
-from easycat.cli._app import _DOCS_LINKS, _docs_entries
+from easycat.cli._app import _DOCS_LINKS, _docs_entries, _register_commands, app
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -173,6 +174,53 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
+
+
+def test_cli_docs_command_hints_are_locally_valid() -> None:
+    _register_commands()
+    registered_commands = {
+        command.name for command in app.registered_commands if command.name is not None
+    }
+    registered_commands.update(
+        group.name for group in app.registered_groups if group.name is not None
+    )
+    problems: list[str] = []
+
+    for entry in _docs_entries():
+        for command in entry.get("commands", ()):
+            tokens = shlex.split(command)
+            if not tokens:
+                problems.append(f"{entry['label']}: empty command hint")
+                continue
+            match tokens:
+                case ["easycat", subcommand, *_]:
+                    if subcommand not in registered_commands:
+                        problems.append(f"{entry['label']}: unknown easycat command {subcommand}")
+                case ["uv", "run", "easycat", subcommand, *_]:
+                    if subcommand not in registered_commands:
+                        problems.append(f"{entry['label']}: unknown easycat command {subcommand}")
+                case ["uv", "run", "python", script, *_]:
+                    if not (REPO_ROOT / script).exists():
+                        problems.append(f"{entry['label']}: missing python script {script}")
+                case ["uv", "run", "pytest", *paths]:
+                    for path in paths:
+                        if not path.startswith("-") and not (REPO_ROOT / path).exists():
+                            problems.append(f"{entry['label']}: missing pytest target {path}")
+                case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
+                    continue
+                case ["docker", "compose", *args]:
+                    if "-f" in args:
+                        compose_file = args[args.index("-f") + 1]
+                        if not (REPO_ROOT / compose_file).exists():
+                            problems.append(
+                                f"{entry['label']}: missing compose file {compose_file}"
+                            )
+                    else:
+                        problems.append(f"{entry['label']}: docker compose hint missing -f")
+                case _:
+                    problems.append(f"{entry['label']}: unsupported command hint {command!r}")
+
+    assert not problems, "easycat docs command hints are stale:\n" + "\n".join(problems)
 
 
 def test_cli_docs_routes_have_online_urls() -> None:
