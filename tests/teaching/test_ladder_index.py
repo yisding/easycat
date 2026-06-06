@@ -224,6 +224,8 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
 
     assert "uv run easycat --help" in cli_section
     assert "drop the `uv run` prefix" in cli_section
+    assert "docs      show documentation entry points" in cli_section
+    assert "`uv run easycat docs`" in cli_section
 
     top_level_commands = {command.name for command in _app.app.registered_commands}
     top_level_commands.update(group.name for group in _app.app.registered_groups)

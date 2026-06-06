@@ -423,6 +423,7 @@ environment, drop the `uv run` prefix.
 $ uv run easycat --help
   init      scaffold a new project
   doctor    check environment + provider reachability
+  docs      show documentation entry points
   explain   look up an EasyCat error code
   inspect   summarize a debug bundle or SQLite journal
   replay    replay a debug bundle or SQLite journal
@@ -437,6 +438,9 @@ $ uv run easycat --help
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
   something's not working.
+- **`uv run easycat docs`** — prints the maintained docs map and route
+  descriptions so installed users can jump to quickstart, examples, teaching
+  chapters, deployment, observability, and validation reference material.
 - **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
