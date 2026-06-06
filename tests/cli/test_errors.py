@@ -8,6 +8,7 @@ from easycat.cli._errors import exit_code_for
 from easycat.errors import (
     EASYCAT_E101,
     EASYCAT_E104,
+    EASYCAT_E201,
     EASYCAT_E202,
     EASYCAT_E205,
     EASYCAT_E501,
@@ -104,6 +105,14 @@ def test_optional_extra_errors_show_package_and_repo_install_commands() -> None:
     unknown_provider = str(EASYCAT_E104(provider="depgarm", available="deepgram", hint=""))
     assert "uv add 'easycat[deepgram]'" in unknown_provider
     assert "uv sync --extra deepgram --group dev" in unknown_provider
+
+
+def test_python_version_error_shows_repo_dev_sync_command() -> None:
+    message = str(EASYCAT_E201(found="3.10"))
+
+    assert "uv python install 3.12" in message
+    assert "uv sync --python 3.12 --group dev" in message
+    assert "uv sync --python 3.12`" not in message
 
 
 def test_factory_allows_context_key_named_code() -> None:

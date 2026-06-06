@@ -223,9 +223,10 @@ EASYCAT_E201 = register(
         "exception notes, TaskGroup)."
     ),
     fix=(
-        "Install Python 3.11 or newer. With uv: `uv python install 3.12 && uv sync --python 3.12`."
+        "Install Python 3.11 or newer. With uv: `uv python install 3.12`. "
+        "From the EasyCat repo, use `uv sync --python 3.12 --group dev`."
     ),
-    example="uv python install 3.12",
+    example="uv python install 3.12  # repo: uv sync --python 3.12 --group dev",
     related=[],
 )
 

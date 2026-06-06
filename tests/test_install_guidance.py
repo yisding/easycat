@@ -53,6 +53,7 @@ STALE_INSTALL_PATTERNS = (
 UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
 REPO_UV_SYNC_EXTRA_COMMAND_RE = re.compile(r"\buv sync\b(?P<args>[^\n`|;)]*--extra[^\n`|;)]*)")
+REPO_UV_SYNC_PYTHON_COMMAND_RE = re.compile(r"\buv sync\b(?P<args>[^\n`|;)]*--python[^\n`|;)]*)")
 MARKDOWN_PREREQS_RE = re.compile(
     r"^## Prerequisites\n(?P<body>.*?)(?=^## |\Z)",
     re.MULTILINE | re.DOTALL,
@@ -200,6 +201,24 @@ def test_repo_local_uv_sync_extra_guidance_keeps_dev_group() -> None:
                 stale.append(f"{rel}:{line}: {command}")
 
     assert not stale, "Repo-local uv sync extra commands missing --group dev:\n" + "\n".join(stale)
+
+
+def test_repo_local_uv_sync_python_guidance_keeps_dev_group() -> None:
+    """Repo-local Python-version sync hints should still install dev tools."""
+    stale: list[str] = []
+
+    for path in _iter_guidance_files():
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for match in REPO_UV_SYNC_PYTHON_COMMAND_RE.finditer(text):
+            command = match.group(0).strip().rstrip(".,")
+            if "--group dev" not in command:
+                line = text.count("\n", 0, match.start()) + 1
+                stale.append(f"{rel}:{line}: {command}")
+
+    assert not stale, "Repo-local uv sync --python commands missing --group dev:\n" + "\n".join(
+        stale
+    )
 
 
 def test_optional_extra_guidance_references_known_extras() -> None:
