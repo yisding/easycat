@@ -107,6 +107,11 @@ def _readme_quickstart_code() -> str:
     return match.group("code")
 
 
+def _readme_section(start: str, end: str) -> str:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    return readme.split(start, 1)[1].split(end, 1)[0]
+
+
 @pytest.mark.integration_local
 async def test_quickstart_happy_path_one_turn_with_bundle(
     monkeypatch: pytest.MonkeyPatch,
@@ -207,6 +212,49 @@ def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "the same one shown above" not in readme
     assert "the same one shown below" in readme
+
+
+def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
+    section = _readme_section("## Choose Your Path", "## Learn the pipeline from scratch")
+    normalized = re.sub(r"\s+", " ", section)
+    expected_rows = {
+        "Run a local mic/speaker voice bot": ("[Install](#install)", "uv run easycat doctor"),
+        "Learn the pipeline step by step": (
+            "[Teaching ladder](docs/teaching/)",
+            "starting-point table",
+        ),
+        "Choose a runnable example": (
+            "[Examples matrix](examples/README.md)",
+            "no-key, browser, provider, or debugging examples",
+        ),
+        "Scaffold a new app": (
+            "[CLI and scaffolds](#cli)",
+            "easycat init --list-templates",
+        ),
+        "Contribute or validate a change": (
+            "[Contributing](CONTRIBUTING.md)",
+            "uv run easycat validate quick",
+        ),
+        "Operate or debug sessions": (
+            "[Observability](docs/observability.md)",
+            "journals, bundles, metrics, and traces",
+        ),
+    }
+
+    for goal, (link, first_move) in expected_rows.items():
+        assert goal in section
+        assert link in section
+        assert first_move in normalized
+    for route in (
+        "docs/teaching/",
+        "examples/README.md",
+        "CONTRIBUTING.md",
+        "docs/observability.md",
+        "docs/deployment/docker.md",
+    ):
+        assert (REPO_ROOT / route.rstrip("/")).exists()
+    assert "uv sync --extra quickstart --group dev" in section
+    assert "easycat init my-agent" in section
 
 
 def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:

@@ -4,6 +4,17 @@ Slim, batteries-included voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow.
 
+## Choose Your Path
+
+| You want to | Start here | First move |
+|---|---|---|
+| Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor` |
+| Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
+| Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
+| Scaffold a new app | [CLI and scaffolds](#cli) | `easycat init --list-templates` before `easycat init my-agent` |
+| Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](#validation-workflow) | `uv run easycat validate quick` |
+| Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Inspect journals, bundles, metrics, and traces |
+
 ## Learn the pipeline from scratch
 
 The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
