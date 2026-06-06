@@ -475,6 +475,32 @@ def test_journal_error_guidance_matches_runtime_data_dir_contract() -> None:
     assert "XDG_CACHE_HOME" not in text
 
 
+def test_peripheral_cli_plan_tracks_current_doctor_surface() -> None:
+    plan = (Path(__file__).resolve().parents[2] / "plan/peripherals/peripheral-cli.md").read_text(
+        encoding="utf-8"
+    )
+    doctor_section = plan.split("## Supporting: `easycat doctor`", 1)[1].split(
+        "## Supporting: `easycat explain`",
+        1,
+    )[0]
+    milestones = plan.split("## Suggested Sequencing", 1)[1].split("## Guardrails", 1)[0]
+
+    assert "--env-file PATH" in doctor_section
+    assert ".easycat/journals/" in doctor_section
+    assert "$EASYCAT_DATA_DIR/journals/" in doctor_section
+    assert "~/.cache/easycat/journals/" not in doctor_section
+    assert "creates the missing journal directory for `E207`" in doctor_section
+    assert "install missing extras" not in doctor_section
+    assert "interactive" not in doctor_section
+    assert "all eight first-run checks" in milestones
+    assert "checks 1–5" not in milestones
+    assert "checks 6–8" not in milestones
+    assert "provider filtering" in milestones
+    assert "dev/production profiles" in milestones
+    assert "safe auto-fix for E207" in milestones
+    assert "profile shipped" in milestones
+
+
 def test_doctor_fix_creates_journal_dir(
     cli: CliRunner,
     monkeypatch: pytest.MonkeyPatch,

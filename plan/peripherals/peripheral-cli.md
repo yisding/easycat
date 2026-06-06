@@ -494,7 +494,8 @@ Usage: easycat doctor [OPTIONS]
 Options:
       --environment [dev|production]  Profile to check [default: dev]
       --provider TEXT                 Only check this provider
-      --fix                           Offer auto-fixes where safe
+      --fix                           Apply safe auto-fixes where available
+      --env-file PATH                 Load environment variables from a .env file
       --json                          Emit machine-readable output
       --help                          Show this message and exit
 ```
@@ -511,13 +512,15 @@ Checks (each labeled with its `EASYCAT_Exxx` code on failure):
 5. `onnxruntime` importable when `smart-turn` extra is installed
    (`E205`)
 6. Default microphone device when transport is `local` (`E206`)
-7. Journal writable at `~/.cache/easycat/journals/` (`E207`)
+7. Journal writable at `.easycat/journals/` by default, or
+   `$EASYCAT_DATA_DIR/journals/` when configured (`E207`)
 8. Disk space > 500MB free (`E208`)
 
 Each row prints in a Rich table with color-coded status. Failures
-link to `easycat explain Exxx`. `--fix` offers interactive
-resolution for safe fixes (create missing dirs, install missing
-extras — never modify env vars). Exit 0 if all pass, 1 if any fail.
+link to `easycat explain Exxx`. `--fix` is intentionally narrow today:
+it creates the missing journal directory for `E207`, then re-runs the
+checks; API keys, microphone permissions, provider reachability, and
+missing extras stay manual. Exit 0 if all pass, 1 if any fail.
 
 ## Supporting: `easycat explain`
 
@@ -907,8 +910,8 @@ agent.py` end-to-end in under 60 seconds.
   `webrtc-browser`
 - `easycat init --config` non-interactive path with schema v1
   validator
-- `easycat doctor` with checks 1–5 (env, extras, provider
-  reachability)
+- `easycat doctor` with all eight first-run checks plus `--env-file`,
+  provider filtering, and dev/production profiles
 - Unit tests for all of the above
 - Template smoke tests in CI (lint + line budget + import)
 
@@ -921,12 +924,11 @@ Finishes the scaffolding surface.
   generated top-level Python file with `py_compile` and `ruff`.
 - Full `uv sync` plus runtime invocation remains a gated integration follow-up
   because generated projects pin the published `easycat` version.
-- `easycat doctor` checks 6–8 (microphone, journal, disk)
-- `easycat doctor --fix` for safe auto-fixes
+- `easycat doctor --fix` safe auto-fix for E207 journal-directory creation
 - Gated runtime scaffold matrix: init → sync → run per template against stub
   transport when a local package index or published test version is available.
-- `easycat doctor --environment=production` profile (depends on
-  `peripheral-deployment.md` detection hooks)
+- `easycat doctor --environment=production` profile shipped; it skips the
+  local microphone check for server deployments.
 
 ### M3 — Journal debugging (ships with essential Phase 4)
 
