@@ -807,6 +807,7 @@ def test_init_json_next_step_commands_match_template_readme(
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
+    assert payload["pyproject_name"] == init_module._pyproject_name(name)
     expected_commands = [
         f"cd {shlex.quote(str(tmp_path / name))}",
         "cp .env.example .env",
@@ -832,7 +833,21 @@ def test_init_json_next_step_commands_quote_project_path(
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
+    assert payload["pyproject_name"] == "demo-project"
     assert payload["next_step_commands"][0] == f"cd {shlex.quote(str(tmp_path / 'demo project'))}"
+
+
+def test_init_json_pyproject_name_falls_back_for_symbol_only_name(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "!!!", "--config", config, "--no-git", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["pyproject_name"] == "easycat-agent"
+    assert 'name = "easycat-agent"' in (tmp_path / "!!!" / "pyproject.toml").read_text()
 
 
 def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRunner) -> None:

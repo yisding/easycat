@@ -684,6 +684,7 @@ def init(
                 "init",
                 path=str(target),
                 template=cfg.template,
+                pyproject_name=_pyproject_name(target.name),
                 files=[str(p.relative_to(target)) for p in written],
                 agent_lines=agent_lines,
                 git=git_ok,

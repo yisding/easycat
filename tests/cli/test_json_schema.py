@@ -155,6 +155,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "init")
     assert payload["template"] == "text-chat"
+    assert payload["pyproject_name"] == "demo"
     assert isinstance(payload["files"], list)
     assert isinstance(payload["agent_lines"], int)
     assert isinstance(payload["git"], bool)
