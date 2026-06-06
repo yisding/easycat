@@ -427,6 +427,22 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     )
 
 
+def test_readme_cli_section_does_not_advertise_stale_top_level_commands() -> None:
+    from easycat.cli import _app
+
+    _app._register_commands()
+    command_names = {command.name for command in _app.app.registered_commands}
+    command_names.update(group.name for group in _app.app.registered_groups)
+    command_names.discard(None)
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    advertised = set(re.findall(r"(?m)^easycat (?P<command>[a-z][a-z0-9-]*)(?:\s|$)", cli_section))
+    stale = sorted(advertised - command_names)
+
+    assert not stale, "README.md CLI section advertises stale commands: " + ", ".join(stale)
+
+
 def test_readme_validation_workflow_lists_registered_validate_commands() -> None:
     from easycat.cli.validate import validate_app
 
