@@ -77,7 +77,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "CLI and scaffolds",
         "path": "README.md#cli",
-        "description": "Scaffold projects, compare templates, and learn CLI commands.",
+        "description": "Scaffold projects, compare templates, and learn CLI JSON envelopes.",
     },
     {
         "label": "Docs map",

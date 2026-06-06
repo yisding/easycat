@@ -58,6 +58,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
     assert "README.md#cli" in result.stdout
+    assert "learn CLI JSON envelopes" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout
     assert "examples/README.md" in result.stdout
@@ -90,6 +91,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert all(entry.get("description") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
+    assert "JSON envelopes" in descriptions["README.md#cli"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
     urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
