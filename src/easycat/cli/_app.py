@@ -209,7 +209,9 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
-_DOCS_COMMAND_NOTE = "Command hints use installed CLI form unless they start with uv run."
+_DOCS_COMMAND_NOTE = (
+    "Command hints use installed CLI form; from this repo, prefix non-uv hints with uv run."
+)
 
 
 def _docs_url_for(path: str) -> str:
