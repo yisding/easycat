@@ -156,6 +156,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Docs map", "path": "docs/README.md"} in payload["entries"]
     assert {"label": "Examples", "path": "examples/README.md"} in payload["entries"]
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in payload["entries"]
+    assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in payload["entries"]
+    assert {"label": "Observability", "path": "docs/observability.md"} in payload["entries"]
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(

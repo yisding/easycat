@@ -65,6 +65,8 @@ _DOCS_MENU = """[bold]EasyCat documentation[/]
   [cyan]Examples[/]         examples/README.md
   [cyan]Public API[/]       docs/public-api.md
   [cyan]Contributing[/]     CONTRIBUTING.md
+  [cyan]Deployment[/]       docs/deployment/docker.md
+  [cyan]Observability[/]    docs/observability.md
   [cyan]Validation[/]       README.md#validation-workflow
 
 Online source: https://github.com/yisding/easycat
@@ -78,6 +80,8 @@ _DOCS_LINKS = [
     {"label": "Examples", "path": "examples/README.md"},
     {"label": "Public API", "path": "docs/public-api.md"},
     {"label": "Contributing", "path": "CONTRIBUTING.md"},
+    {"label": "Deployment", "path": "docs/deployment/docker.md"},
+    {"label": "Observability", "path": "docs/observability.md"},
     {"label": "Validation", "path": "README.md#validation-workflow"},
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
