@@ -1014,6 +1014,34 @@ Dependencies:
 
 - V3.1
 
+Current verified state:
+
+- `tests/contracts/test_ws_cassette_replay.py` validates the checked-in
+  `tests/cassettes/ws/openai-realtime-stt.json` fixture for
+  `schema_version=1`, `redaction_version=1`, `protocol=websocket`, and
+  `provider_api_version=realtime`.
+- The fixture declares
+  `capabilities_ref=tests/contracts/provider_surface_matrix.py` and models
+  the `openai-realtime` STT happy-path frame order: client `session.update`,
+  server `session.updated`, client `input_audio_buffer.append`, client
+  `input_audio_buffer.commit`, then server
+  `conversation.item.input_audio_transcription.completed`.
+- The replay-order test checks that every frame has `direction`, `opcode`,
+  `kind`, and `payload_assertion`; opcodes are limited to `text` / `binary`,
+  the session audio input fields are `format`, `transcription`, and
+  `turn_detection`, append-before-commit is recorded through
+  `requires_prior_append=True`, and the completed frame maps to
+  `normalized_event_kind=final_transcript`.
+- The fixture stores no generated audio payload; the append frame declares
+  `redacted_fields=["audio"]`, and the raw cassette is scanned with
+  `contains_unredacted_sensitive_text`.
+- `tests/contracts/provider_surface_matrix.py` marks the `openai-realtime`
+  STT WebSocket cassette as `cassette_status=required`; other WebSocket
+  provider rows are currently `deferred`.
+- V3.7 schema fingerprint tests separately pin the inbound OpenAI realtime
+  event enum, including `error`; V3.6's checked-in cassette remains a
+  happy-path parser-compatibility smoke proof, not an error-frame cassette.
+
 Files:
 
 - `tests/contracts/test_ws_cassette_replay.py`
