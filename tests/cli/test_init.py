@@ -132,6 +132,10 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert set(payload["templates"]) == set(available_templates())
     assert "installed CLI form" in payload["command_note"]
     assert "repo_create_command runs from this repository root" in payload["command_note"]
+    assert (
+        "catalog next_step_commands preview the my-agent post-create sequence"
+        in payload["command_note"]
+    )
     assert "after cd into the scaffolded project" in payload["command_note"]
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
@@ -174,6 +178,9 @@ def test_list_templates_json(cli: CliRunner) -> None:
     for name, entry in catalog.items():
         assert entry["create_command"] == f"easycat init my-agent --template {name}"
         assert entry["repo_create_command"] == f"uv run easycat init my-agent --template {name}"
+        assert entry["next_step_commands"] == init_module._next_step_commands(
+            Path("my-agent"), name
+        )
 
 
 def test_missing_name_without_list_templates(cli: CliRunner) -> None:
@@ -969,5 +976,8 @@ def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRu
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
 
     for template in available_templates():
+        assert catalog[template]["next_step_commands"] == init_module._next_step_commands(
+            Path("my-agent"), template
+        )
         assert catalog[template]["run_command"] == _template_readme_run_command(template)
         assert catalog[template]["check_command"] == _template_readme_check_command(template)

@@ -199,6 +199,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "description",
         "create_command",
         "repo_create_command",
+        "next_step_commands",
         "run_command",
         "check_command",
     }
@@ -208,6 +209,16 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert entry["repo_create_command"] == (
             f"uv run easycat init my-agent --template {entry['name']}"
         )
+        assert entry["next_step_commands"] == [
+            "cd my-agent",
+            "cp .env.example .env",
+            "uv sync",
+            "uv run easycat doctor --env-file .env",
+            entry["check_command"],
+            "uv run easycat docs",
+            "uv run easycat docs --json",
+            entry["run_command"],
+        ]
         assert entry["run_command"].startswith("uv run ")
         assert entry["check_command"].startswith("uv run python -m py_compile ")
         assert isinstance(entry["best_for"], str)

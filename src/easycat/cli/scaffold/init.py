@@ -105,6 +105,7 @@ class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     files: tuple[str, ...]
     create_command: str
     repo_create_command: str
+    next_step_commands: list[str]
     run_command: str
     check_command: str
 
@@ -176,11 +177,13 @@ _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
 }
 _INIT_COMMAND_NOTE = (
     "create_command uses installed CLI form; repo_create_command runs from this repository "
-    "root; run_command and check_command run after cd into the scaffolded project."
+    "root; catalog next_step_commands preview the my-agent post-create sequence; "
+    "run_command and check_command run after cd into the scaffolded project."
 )
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
-    "Check after cd and Run after cd are run inside the scaffolded project."
+    "catalog next steps preview the my-agent post-create sequence; Check after cd and "
+    "Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"
@@ -288,6 +291,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "files": _template_file_names(name),
                 "create_command": _create_template_command(name),
                 "repo_create_command": _create_template_command(name, repo_local=True),
+                "next_step_commands": _next_step_commands(Path("my-agent"), name),
                 "run_command": _next_step_run_command(name),
                 "check_command": _next_step_check_command(name),
                 **metadata,

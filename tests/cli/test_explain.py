@@ -180,7 +180,8 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`files`" in stdout
     assert "repo-root creation" in stdout
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in result.stdout
-    assert "`run_command`, `check_command`" in result.stdout
+    assert "`run_command`" in result.stdout
+    assert "`check_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout
     assert "post-scaffold check/run context" in stdout
     assert "easycat init NAME --json" in result.stdout
@@ -223,7 +224,8 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`optional_env`" in payload["body"]
     assert "`files`" in payload["body"]
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in payload["body"]
-    assert "`run_command`, `check_command`" in payload["body"]
+    assert "`run_command`" in payload["body"]
+    assert "`check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
     assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
     assert "`report_path`" in payload["body"]
