@@ -66,6 +66,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "../CONTRIBUTING.md",
         "deployment/docker.md",
         "observability.md",
+        "../src/easycat/runtime/DURABILITY.md",
         "../README.md#validation-workflow",
         "../plan/validation/reference.md",
     ]

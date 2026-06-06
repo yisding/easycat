@@ -87,6 +87,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "CONTRIBUTING.md" in result.stdout
     assert "docs/deployment/docker.md" in result.stdout
     assert "docs/observability.md" in result.stdout
+    assert "src/easycat/runtime/DURABILITY.md" in result.stdout
     assert "#validation-workflow" in result.stdout
     assert "plan/validation/reference.md" in result.stdout
     assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
@@ -109,6 +110,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "CONTRIBUTING.md" in paths
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
+    assert "src/easycat/runtime/DURABILITY.md" in paths
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
@@ -116,6 +118,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "JSON envelopes" in descriptions["README.md#cli"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
+    assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]
     urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
     assert urls["README.md#cli"] == "https://github.com/yisding/easycat/blob/main/README.md#cli"
     assert urls["README.md#install"] == (

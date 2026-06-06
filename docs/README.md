@@ -28,7 +28,9 @@ installed app environment, use `easycat docs`.
   slices, marker taxonomy, cassettes, and provider-addition checklist.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
-  [observability](observability.md).
+  [observability](observability.md), then review the
+  [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
+  persistence, recovery, and storage layout.
 - Validating a change: use the validation workflow in the
   [root README](../README.md#validation-workflow), then consult the
   [validation reference](../plan/validation/reference.md) for provider and

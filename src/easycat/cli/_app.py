@@ -121,6 +121,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Inspect journals, debug bundles, metrics, and traces.",
     },
     {
+        "label": "Journal durability",
+        "path": "src/easycat/runtime/DURABILITY.md",
+        "description": "Understand SQLite journal persistence, recovery, and storage layout.",
+    },
+    {
         "label": "Validation",
         "path": "README.md#validation-workflow",
         "description": "Pick the right pytest and CLI checks for a change.",
