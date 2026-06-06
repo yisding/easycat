@@ -73,6 +73,21 @@ def _validation_run(**overrides) -> ValidationRun:  # noqa: ANN003
     return ValidationRun(**values)
 
 
+@pytest.mark.parametrize(
+    "lane",
+    ["quick", "socket", "stress", "contracts", "latency", "live", "release"],
+)
+def test_validate_lane_help_names_report_artifact_paths(cli: CliRunner, lane: str) -> None:
+    result = cli.invoke(app, ["validate", lane, "--help"])
+    help_text = " ".join(result.stdout.split())
+
+    assert result.exit_code == 0
+    assert "--artifacts-dir" in result.stdout
+    assert "runs/" in help_text
+    assert "report.json" in help_text
+    assert "latest.json" in help_text
+
+
 def test_validation_run_serializes_required_fields_deterministically() -> None:
     run = _validation_run()
 

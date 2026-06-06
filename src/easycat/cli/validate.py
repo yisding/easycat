@@ -23,6 +23,10 @@ validate_app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
+_ARTIFACTS_DIR_HELP = (
+    "Validation artifact root directory; writes runs/<id>/report.json and latest.json."
+)
+
 
 def _run_slice(
     slice_name: str,
@@ -76,7 +80,7 @@ def quick(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
     junit_prefix: Annotated[
         str | None,
@@ -110,7 +114,7 @@ def socket(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
     junit_prefix: Annotated[
         str | None,
@@ -144,7 +148,7 @@ def stress(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
     junit_prefix: Annotated[
         str | None,
@@ -178,7 +182,7 @@ def contracts(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
     junit_prefix: Annotated[
         str | None,
@@ -230,7 +234,7 @@ def latency(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
 ) -> None:
     """Run live latency validation and write structured latency artifacts."""
@@ -301,7 +305,7 @@ def live(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
 ) -> None:
     """Run live provider canaries and emit capability reports."""
@@ -367,7 +371,7 @@ def release(
     ] = None,
     artifacts_dir: Annotated[
         Path,
-        typer.Option("--artifacts-dir", help="Validation artifact root directory."),
+        typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
 ) -> None:
     """Build, install, and run the strict release validation gate."""
