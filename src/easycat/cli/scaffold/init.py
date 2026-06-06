@@ -698,7 +698,7 @@ def init(
         info("git init skipped (git not available)")
     stderr_console.print()
     stderr_console.print("[bold]Next steps:[/]")
-    stderr_console.print(f"  cd {name}")
+    stderr_console.print(f"  cd {shlex.quote(name)}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
