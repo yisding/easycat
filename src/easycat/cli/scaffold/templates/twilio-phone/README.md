@@ -26,6 +26,10 @@ Edit `.env`, set `OPENAI_API_KEY`, and set `TWILIO_STREAM_URL` to the public
 uv run easycat doctor --env-file .env
 ```
 
+`TWILIO_WS_PORT` defaults to `8766` and controls the local WebSocket listener.
+Change it when another process owns that port, and keep `TWILIO_STREAM_URL`
+pointing at the public tunnel for the same listener.
+
 For local testing, expose the WebSocket port with a tunnel such as ngrok and
 point `TWILIO_STREAM_URL` at the public `wss://` forwarding URL.
 

@@ -365,6 +365,15 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_documents_catalog_optional_env(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    optional_env = _TEMPLATE_CATALOG[name]["optional_env"]
+
+    for env_var in optional_env:
+        assert env_var in readme, f"{name}/README.md missing optional env {env_var}"
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_run_command_loads_env_file(name: str) -> None:
     """Readers who just filled ``.env`` should run with that file loaded."""
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
