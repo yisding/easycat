@@ -322,13 +322,17 @@ def test_observability_doc_lists_journal_cli_entry_points() -> None:
 
     for command in (
         "easycat bundles list",
+        "easycat bundles list --json",
         "easycat bundles show <path>",
+        "easycat bundles show <path> --json",
         "easycat inspect <path>",
+        "easycat inspect <path> --json",
         "easycat replay <path>",
+        "easycat replay <path> --json",
         "easycat bundles export <path>",
+        "easycat bundles export <path> --output DIR --json",
     ):
         assert command in journal
-    assert "--json" in journal
     assert "parseable summary" in journal
 
 

@@ -243,10 +243,15 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Inspect journals, debug bundles, metrics, and traces.",
         "commands": (
             "easycat bundles list",
+            "easycat bundles list --json",
             "easycat bundles show PATH",
+            "easycat bundles show PATH --json",
             "easycat inspect PATH",
+            "easycat inspect PATH --json",
             "easycat replay PATH",
+            "easycat replay PATH --json",
             "easycat bundles export PATH",
+            "easycat bundles export PATH --output DIR --json",
         ),
     },
     {
@@ -284,7 +289,7 @@ _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 _DOCS_COMMAND_NOTE = (
     "Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. "
     "Commands already starting with uv run are repo-local and should run from the repository "
-    "root. Replace uppercase placeholders such as PATH before running."
+    "root. Replace uppercase placeholders such as PATH and DIR before running."
 )
 
 

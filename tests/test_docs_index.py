@@ -285,15 +285,23 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
 def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     observability = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
-    cli_section = observability.split("- CLI entry points:", 1)[1].split("Add `--json`", 1)[0]
+    cli_section = observability.split("- CLI entry points:", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
     route_commands = entries["docs/observability.md"].get("commands", ())
 
     for command in (
         "easycat bundles list",
+        "easycat bundles list --json",
         "easycat bundles show PATH",
+        "easycat bundles show PATH --json",
         "easycat inspect PATH",
+        "easycat inspect PATH --json",
         "easycat replay PATH",
+        "easycat replay PATH --json",
         "easycat bundles export PATH",
+        "easycat bundles export PATH --output DIR --json",
     ):
         documented_command = command.replace("PATH", "<path>")
         assert f"`{documented_command}`" in cli_section

@@ -77,7 +77,10 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `easycat inspect <path>`,
   `easycat replay <path>`, and
   `easycat bundles export <path>`.
-  Add `--json` when a script or coding agent needs a parseable summary.
+  Use `easycat bundles list --json`, `easycat bundles show <path> --json`,
+  `easycat inspect <path> --json`, `easycat replay <path> --json`, or
+  `easycat bundles export <path> --output DIR --json` when a script or coding
+  agent needs a parseable summary.
 
 ### D — OpenTelemetry facade
 
