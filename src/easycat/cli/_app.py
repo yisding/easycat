@@ -176,7 +176,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/teaching/",
         "audience": "learners",
         "description": "Learn voice pipelines chapter by chapter.",
-        "commands": ("uv run pytest tests/teaching/test_ladder_index.py",),
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run python docs/teaching/00-hello-audio/main.py",
+        ),
     },
     {
         "label": "First lesson",

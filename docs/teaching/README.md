@@ -18,6 +18,13 @@ placeholders such as `PATH` before running those hints.
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 
+After syncing the prerequisites and running `uv run easycat doctor`, launch the
+first chapter from the repository root:
+
+```bash
+uv run python docs/teaching/00-hello-audio/main.py
+```
+
 ## The ladder
 
 ### Build — assemble the pipeline

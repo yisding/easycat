@@ -186,7 +186,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     required_commands = {
         "README.md#install": "uv run python examples/openai_agents_voice.py",
-        "docs/teaching/": "uv run pytest tests/teaching/test_ladder_index.py",
+        "docs/teaching/": "uv run python docs/teaching/00-hello-audio/main.py",
         "README.md#cli": "easycat init --list-templates",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
@@ -209,6 +209,22 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
+
+
+def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    teaching_readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/teaching/"].get("commands", ())
+
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run python docs/teaching/00-hello-audio/main.py",
+    ):
+        assert command in teaching_readme
+        assert command in route_commands
+
+    assert "uv run pytest tests/teaching/test_ladder_index.py" not in route_commands
 
 
 def test_examples_docs_route_matches_examples_fast_path() -> None:
