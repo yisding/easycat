@@ -15,6 +15,7 @@ from easycat.events import EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.runtime.context import RunContext
 from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._tts_scheduler import TTSScheduler
@@ -198,6 +199,7 @@ def _build_scheduler(
         turn_manager=turn_manager,
         event_bus=bus,
         journal_sink=journal_sink,
+        runtime_scope=RuntimeScope(),
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=None,

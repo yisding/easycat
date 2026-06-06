@@ -205,6 +205,16 @@ class RuntimeScope:
         """Cancel pending tasks, then wait for cancellation cleanup to finish."""
         await self.drain(name, cancel=True)
 
+    def discard(self, task: asyncio.Task[Any]) -> None:
+        """Stop tracking *task* without awaiting it.
+
+        Use this only when the current task is performing its own teardown
+        and cannot safely await itself. The task's own done callbacks still
+        run when it exits; this only removes the task from the scope's drain
+        bookkeeping.
+        """
+        self._discard_task(task)
+
     def _discard_task(self, task: asyncio.Task[Any]) -> None:
         for name, tasks in tuple(self._tasks.items()):
             if task in tasks:

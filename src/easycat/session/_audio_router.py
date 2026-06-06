@@ -43,6 +43,7 @@ from easycat.runtime.capabilities import (
     transport_reports_audio_delivery,
 )
 from easycat.runtime.context import RunContext
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.text import _chunk_has_speech_energy
 from easycat.stages.audio import AudioStage
@@ -103,6 +104,8 @@ class AudioRouter:
     # send failure) must not drop the call; a sustained run of failures
     # signals a genuinely broken backend.
     _MAX_CONSECUTIVE_CHUNK_ERRORS = 10
+    _INGRESS_TASK_NAME = "audio_ingress_pipeline"
+    _OUTBOUND_TASK_NAME = "audio_outbound_drain"
 
     def __init__(
         self,
@@ -116,6 +119,7 @@ class AudioRouter:
         turn_manager: TurnManager,
         event_bus: EventBus,
         journal_sink: SessionJournalSink,
+        runtime_scope: RuntimeScope,
         run_ctx: RunContext,
         no_turn: TurnContext,
         echo_canceller: Any,
@@ -132,6 +136,7 @@ class AudioRouter:
         self._turn_manager = turn_manager
         self._event_bus = event_bus
         self._journal_sink = journal_sink
+        self._runtime_scope = runtime_scope
         self._run_ctx = run_ctx
         self._no_turn = no_turn
         self._echo_canceller = echo_canceller
@@ -223,34 +228,40 @@ class AudioRouter:
 
     def start_ingress(self) -> asyncio.Task[None]:
         """Start the transport receive loop."""
-        self._pipeline_task = asyncio.create_task(self._run_pipeline())
+        self._pipeline_task = self._runtime_scope.create_journaled_task(
+            self._run_pipeline(),
+            name=self._INGRESS_TASK_NAME,
+            journal_sink=self._journal_sink,
+        )
+        self._pipeline_task.add_done_callback(self._runtime_scope.log_task_exception)
         return self._pipeline_task
 
     def start_outbound(self) -> asyncio.Task[None]:
         """Start the outbound audio drain task."""
-        self._outbound_task = asyncio.create_task(self._drain_outbound_audio())
+        self._outbound_task = self._runtime_scope.create_journaled_task(
+            self._drain_outbound_audio(),
+            name=self._OUTBOUND_TASK_NAME,
+            journal_sink=self._journal_sink,
+        )
+        self._outbound_task.add_done_callback(self._runtime_scope.log_task_exception)
         return self._outbound_task
 
     async def stop_ingress(self) -> None:
         """Cancel the ingress task and wait for it to exit."""
         task = self._pipeline_task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        if task is asyncio.current_task():
+            self._runtime_scope.discard(task)
+        else:
+            await self._runtime_scope.cancel_and_drain(self._INGRESS_TASK_NAME)
         self._pipeline_task = None
 
     async def stop_outbound(self) -> None:
         """Cancel the outbound drain task and wait for it to exit."""
         task = self._outbound_task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        if task is asyncio.current_task():
+            self._runtime_scope.discard(task)
+        else:
+            await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)
         self._outbound_task = None
 
     async def await_drain(self, timeout: float = 2.0) -> None:

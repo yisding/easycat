@@ -1015,9 +1015,10 @@ class Session:
                         pass
                 await self._stt_committer.cancel(turn)
                 # RuntimeScope-owned work currently covers heartbeat,
-                # greeting, and STT segment commit/pause tasks. These can
-                # outlive the pipeline/STT consumer handles above, so the
-                # force path drains the scope before provider teardown.
+                # greeting, audio-router loops, and STT segment commit/pause
+                # tasks. These can outlive the pipeline/STT consumer handles
+                # above, so the force path drains the scope before provider
+                # teardown.
                 await self._runtime_scope.cancel_and_drain()
                 self._stt_committer.clear_task_handles()
                 self._greeting.clear_task()
@@ -1047,6 +1048,7 @@ class Session:
                 await self._stt_committer.cancel(turn)
                 await self._tts_scheduler.cancel()
 
+            await self._audio_router.stop_ingress()
             for checker in self._health_checkers:
                 await checker.stop()
             self._health_checkers = []

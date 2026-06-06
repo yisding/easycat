@@ -21,6 +21,8 @@ from easycat.events import (
     TTSAudio,
 )
 from easycat.runtime.context import RunContext
+from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.stages.audio import AudioStage
@@ -143,10 +145,13 @@ def _make_router(
     outbound_queue: BoundedAudioQueue | None = None,
     turn_manager: TurnManager | None = None,
     stt: object | None = None,
+    journal: InMemoryRingBuffer | None = None,
 ) -> tuple[AudioRouter, dict]:
     transport = transport or _FakeTransport()
     bus = EventBus()
     emitted: list = []
+    journal = journal if journal is not None else InMemoryRingBuffer(capacity=64)
+    runtime_scope = RuntimeScope()
 
     async def _emit(event):
         emitted.append(event)
@@ -166,7 +171,7 @@ def _make_router(
     no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
     journal_sink = SessionJournalSink(
         event_bus=bus,
-        journal=None,
+        journal=journal,
         artifact_store=None,
         session_id="s",
         current_turn_id=lambda turn_id=None: turn_id,
@@ -188,6 +193,8 @@ def _make_router(
         "stt_stage": stt_stage,
         "tm": tm,
         "bus": bus,
+        "journal": journal,
+        "runtime_scope": runtime_scope,
     }
 
     wiring = make_wiring(
@@ -211,6 +218,7 @@ def _make_router(
         turn_manager=tm,
         event_bus=bus,
         journal_sink=journal_sink,
+        runtime_scope=runtime_scope,
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=aec,
@@ -434,13 +442,74 @@ async def test_start_and_stop_ingress_cancels_task():
             if False:
                 yield None
 
-    router, _ = _make_router(transport=_StalledTransport())
+    journal = InMemoryRingBuffer(capacity=64)
+    router, state = _make_router(transport=_StalledTransport(), journal=journal)
     task = router.start_ingress()
     assert router.pipeline_task is task
+    assert task in state["runtime_scope"].tasks(AudioRouter._INGRESS_TASK_NAME)
     await asyncio.sleep(0)  # yield to allow the task to start
     await router.stop_ingress()
     assert router.pipeline_task is None
     assert task.cancelled() or task.done()
+    assert not state["runtime_scope"].tasks(AudioRouter._INGRESS_TASK_NAME)
+    records = [
+        record
+        for record in journal.read()
+        if record.data.get("task_name") == AudioRouter._INGRESS_TASK_NAME
+    ]
+    assert [record.name for record in records] == ["task_scheduled", "task_completed"]
+
+
+@pytest.mark.asyncio
+async def test_stop_ingress_from_ingress_task_detaches_scope():
+    journal = InMemoryRingBuffer(capacity=64)
+    router, state = _make_router(
+        transport=_FakeTransport(chunks=[_make_chunk()]),
+        journal=journal,
+    )
+
+    async def _stop_from_audio_in(_event: AudioIn) -> None:
+        await router.stop_ingress()
+
+    state["bus"].subscribe(AudioIn, _stop_from_audio_in)
+
+    task = router.start_ingress()
+    await task
+
+    assert router.pipeline_task is None
+    assert not state["runtime_scope"].tasks(AudioRouter._INGRESS_TASK_NAME)
+    records = [
+        record
+        for record in journal.read()
+        if record.data.get("task_name") == AudioRouter._INGRESS_TASK_NAME
+    ]
+    assert [record.name for record in records] == ["task_scheduled", "task_completed"]
+
+
+@pytest.mark.asyncio
+async def test_start_outbound_tracks_and_drains_task():
+    journal = InMemoryRingBuffer(capacity=64)
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport, journal=journal)
+    state["running"] = False
+
+    await router.queue_outbound(_make_chunk(byte_value=5))
+    task = router.start_outbound()
+    assert router.outbound_task is task
+    assert task in state["runtime_scope"].tasks(AudioRouter._OUTBOUND_TASK_NAME)
+
+    await task
+    await router.stop_outbound()
+
+    assert transport.sent
+    assert router.outbound_task is None
+    assert not state["runtime_scope"].tasks(AudioRouter._OUTBOUND_TASK_NAME)
+    records = [
+        record
+        for record in journal.read()
+        if record.data.get("task_name") == AudioRouter._OUTBOUND_TASK_NAME
+    ]
+    assert [record.name for record in records] == ["task_scheduled", "task_completed"]
 
 
 @pytest.mark.asyncio

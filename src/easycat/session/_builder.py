@@ -180,6 +180,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         turn_manager=session._turn_manager,
         event_bus=event_bus,
         journal_sink=journal_sink,
+        runtime_scope=session._runtime_scope,
         run_ctx=run_ctx,
         no_turn=no_turn,
         echo_canceller=session.echo_canceller,
