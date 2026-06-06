@@ -468,6 +468,22 @@ def test_agent_guides_name_vad_and_validation_packages() -> None:
     assert not missing, "Agent guides missing major source packages: " + ", ".join(missing)
 
 
+def test_agent_guides_name_vad_and_validation_test_domains() -> None:
+    """Source-package maps should point contributors to matching tests."""
+    for package_name in ("vad", "validation"):
+        assert (REPO_ROOT / "tests" / package_name).is_dir()
+
+    missing: list[str] = []
+    for filename in ("AGENTS.md", "CLAUDE.md"):
+        text = (REPO_ROOT / filename).read_text(encoding="utf-8")
+        for package_name in ("vad", "validation"):
+            mention = f"`tests/{package_name}/`"
+            if mention not in text:
+                missing.append(f"{filename}: {mention}")
+
+    assert not missing, "Agent guides missing test-domain packages: " + ", ".join(missing)
+
+
 def test_agent_guide_source_path_mentions_exist() -> None:
     missing: list[str] = []
 

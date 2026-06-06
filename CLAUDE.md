@@ -96,4 +96,4 @@ uv run python examples/ws_server.py  # Run an example
 - pytest with pytest-asyncio (`asyncio_mode = auto`)
 - `@pytest.mark.integration_live` for live API tests (skipped without credentials);
   pair live/contract/latency tests with provider and surface markers
-- Tests mirror source structure: `tests/stt/`, `tests/tts/`, `tests/session/`, etc.
+- Tests mirror source structure: `tests/stt/`, `tests/tts/`, `tests/vad/`, `tests/session/`, `tests/transports/`, `tests/validation/`, etc.
