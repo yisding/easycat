@@ -66,7 +66,10 @@ def check_python_version() -> CheckResult:
             status="fail",
             detail=f"Python {found}",
             code="EASYCAT_E201",
-            fix="Install Python 3.11+ (e.g. `uv python install 3.12`).",
+            fix=(
+                "Install Python 3.11+ (e.g. `uv python install 3.12`). "
+                "From this repo, rerun setup with `uv sync --python 3.12 --group dev`."
+            ),
         )
     return CheckResult(name="python_version", status="ok", detail=f"Python {found}")
 

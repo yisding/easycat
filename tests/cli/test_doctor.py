@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import namedtuple
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -305,6 +306,23 @@ def test_doctor_check_functions_are_pure() -> None:
     py_check = doctor_module.check_python_version()
     assert py_check.status == "ok"
     assert "Python" in py_check.detail
+
+
+def test_doctor_python_version_failure_includes_repo_setup_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version_info = namedtuple(
+        "version_info", ["major", "minor", "micro", "releaselevel", "serial"]
+    )
+    monkeypatch.setattr(doctor_module.sys, "version_info", version_info(3, 10, 13, "final", 0))
+
+    result = doctor_module.check_python_version()
+
+    assert result.status == "fail"
+    assert result.code == "EASYCAT_E201"
+    assert "uv python install 3.12" in result.fix
+    assert "uv sync --python 3.12 --group dev" in result.fix
+    assert "uv sync --python 3.12`" not in result.fix
 
 
 # ── Checks 6–8 (microphone / journal writable / disk space) ──────────
