@@ -150,6 +150,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Teaching ladder",
         "path": "docs/teaching/",
         "description": "Learn voice pipelines chapter by chapter.",
+        "commands": ("uv run pytest tests/teaching/test_ladder_index.py",),
     },
     {
         "label": "First lesson",
@@ -167,6 +168,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Public API",
         "path": "docs/public-api.md",
         "description": "Review the stable import surface before changing exports.",
+        "commands": ("uv run pytest tests/test_public_api.py",),
     },
     {
         "label": "Contributing",
@@ -189,6 +191,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Journal durability",
         "path": "src/easycat/runtime/DURABILITY.md",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
+        "commands": ("uv run pytest tests/runtime/test_sqlite_journal.py",),
     },
     {
         "label": "Validation",

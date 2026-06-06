@@ -152,10 +152,15 @@ def test_cli_docs_routes_have_descriptions() -> None:
 def test_cli_docs_routes_have_useful_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     required_commands = {
+        "docs/teaching/": "uv run pytest tests/teaching/test_ladder_index.py",
         "README.md#cli": "easycat init --list-templates",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "easycat validate quick",
+        "docs/public-api.md": "uv run pytest tests/test_public_api.py",
         "docs/observability.md": "easycat bundles list",
+        "src/easycat/runtime/DURABILITY.md": (
+            "uv run pytest tests/runtime/test_sqlite_journal.py"
+        ),
         "README.md#validation-workflow": "easycat validate report .easycat/validation/latest.json",
     }
 
