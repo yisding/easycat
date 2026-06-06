@@ -137,6 +137,44 @@ def test_bundles_list_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["bundles"][0]["path"].endswith("one.zip")
 
 
+def test_peripheral_cli_plan_tracks_current_debug_commands() -> None:
+    plan = (Path(__file__).resolve().parents[2] / "plan/peripherals/peripheral-cli.md").read_text(
+        encoding="utf-8"
+    )
+    layout = plan.split("## Package Layout", 1)[1].split("## Primary: `easycat init`", 1)[0]
+    debug = plan.split("## Secondary: Journal Debugging", 1)[1].split(
+        "## Commands NOT in This Plan",
+        1,
+    )[0]
+    bundles_list = debug.split("### `easycat bundles list`", 1)[1].split(
+        "### `easycat bundles show`",
+        1,
+    )[0]
+    bundles_show = debug.split("### `easycat bundles show`", 1)[1].split(
+        "### `easycat bundles export`",
+        1,
+    )[0]
+
+    assert "replay.py" not in layout
+    assert "No command file exceeds 250 lines" not in layout
+    assert "debug/bundles.py" in layout
+    assert "`easycat bundles list|show|export`, `inspect`, `replay`" in layout
+
+    assert "[default: .easycat or EASYCAT_DATA_DIR]" in bundles_list
+    assert "~/.cache/easycat/bundles" not in bundles_list
+    assert "--since" not in bundles_list
+    assert "--has-error" not in bundles_list
+    assert "path, size, and modified timestamp" in bundles_list
+    assert "`recordings/` and `crash-dumps/`" in bundles_list
+    assert "standard JSON envelope" in bundles_list
+
+    assert "--turn" not in bundles_show
+    assert "--records" not in bundles_show
+    assert "record count, turns, duration, tool calls" in bundles_show
+    assert "easycat inspect <path>" in bundles_show
+    assert "SQLite crash dumps" in bundles_show
+
+
 def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     # Regression: drive the fixture through the real ``export_debug_bundle``
     # serialization so the journal records carry the production shape — the

@@ -221,12 +221,13 @@ src/easycat/cli/
         _codes.py         # error-code registry (canonical source)
     debug/
         __init__.py
-        bundles.py        # `easycat bundles list|show|export`
-        replay.py         # `easycat replay`
+        bundles.py        # `easycat bundles list|show|export`, `inspect`, `replay`
 ```
 
-One file per top-level command. No command file exceeds 250 lines —
-past that the command has grown too many flags and needs splitting.
+Command modules are grouped by domain. Shared debug loading, SQLite
+crash-dump handling, export, and replay helpers live together in
+`debug/bundles.py`; behavior stays maintainable through focused tests
+and small helper functions rather than a hard per-file line cap.
 
 ### Entry point
 
@@ -557,27 +558,25 @@ crash-durable; the commands below turn a journal into an answer.
 
 ### `easycat bundles list`
 
-Discover bundles written to the default cache dir or a given path.
+Discover exported debug bundles and crash-dump SQLite journals under the
+default EasyCat data directory or a given path.
 
 ```
 Usage: easycat bundles list [OPTIONS]
 
 Options:
-      --path PATH             Directory to scan [default: ~/.cache/easycat/bundles]
-      --since TEXT            e.g., "yesterday", "7d", "2026-04-01"
-      --has-error             Only bundles with an error
+      --path PATH             Directory to scan [default: .easycat or EASYCAT_DATA_DIR]
       --json                  Emit machine-readable output
       --help                  Show this message and exit
 ```
 
-Output is a Rich table: timestamp, session_id, turns, duration, cost
-(if `CostRecord` present), error (if any), path. `--json` emits a
-stable array.
+Output is a Rich table with path, size, and modified timestamp. `--json`
+emits the standard JSON envelope with `bundles` entries and the scanned
+directory.
 
-The default path is where the essential plan's crash-durable journal
-writes bundles. If a user says "my agent crashed last night,"
-`easycat bundles list --has-error --since yesterday` is the first
-command they run.
+The default path is `.easycat` unless `EASYCAT_DATA_DIR` is set. Discovery
+checks both `recordings/` and `crash-dumps/`, so the same command finds
+explicit bundle exports and crash-dump journals.
 
 ### `easycat bundles show`
 
@@ -587,17 +586,15 @@ Inspect one bundle without unpacking it in Python.
 Usage: easycat bundles show [OPTIONS] BUNDLE
 
 Options:
-      --turn INT              Show only this turn
-      --records               Include full journal records (verbose)
       --json                  Emit machine-readable output
       --help                  Show this message and exit
 ```
 
-Default output: session config, turn timeline (one line per turn
-with stage latencies), errors with frames, cost breakdown, budget
-violations. `--records` dumps the full journal. This is a read-only
-lens — users who want an interactive view use the debugger UI in
-`peripheral-eval-and-debugger-ui.md`.
+Default output is a read-only summary: session id, format version,
+record count, turns, duration, tool calls, errors, artifact count,
+replay entry points (`cp_<sequence>`), and provider versions. The
+top-level `easycat inspect <path>` command is a friendly alias for this
+same summary path and also accepts SQLite crash dumps.
 
 ### `easycat bundles export`
 
