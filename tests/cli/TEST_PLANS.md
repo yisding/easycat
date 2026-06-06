@@ -432,8 +432,8 @@ suite).
 ## Plan 16 — End-to-end scaffold-and-invoke
 
 **Concern.** The scaffolded project itself must be usable. Users
-type `cd my-agent && uv sync && uv run python agent.py` — if any
-link is broken, the whole onboarding promise evaporates.
+type `cd my-agent && uv sync && uv run --env-file .env python agent.py` —
+if any link is broken, the whole onboarding promise evaporates.
 
 **Risks.** `uv sync` failing because the template pins an
 unpublished `easycat` version; the scaffolded `agent.py` failing at

@@ -267,6 +267,8 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
     assert "four required sections" not in test_plan
     assert "five required sections" in test_plan
     assert "uv run easycat doctor --env-file .env" in test_plan
+    assert "uv run --env-file .env python agent.py" in test_plan
+    assert "uv run python agent.py" not in test_plan
     for section in section_names:
         assert section in test_plan
 
@@ -299,6 +301,16 @@ def test_readme_run_command_loads_env_file(name: str) -> None:
 
     assert "uv run --env-file .env" in primary_run
     assert "uv run python agent.py" not in primary_run
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_avoids_ad_hoc_env_export_recipes(name: str) -> None:
+    """Generated READMEs should keep dotenv loading on the uv command path."""
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+
+    assert "export $(" not in readme
+    assert "grep -v '^#' .env" not in readme
+    assert "source .env" not in readme
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

@@ -28,13 +28,6 @@ uv run easycat doctor --env-file .env
 uv run --env-file .env python agent.py
 ```
 
-Or export the keys and skip `--env-file`:
-
-```bash
-export $(grep -v '^#' .env | xargs)
-uv run python agent.py
-```
-
 You'll get a `you:` prompt. Type something, hit Enter, and the agent responds.
 Hit Enter on a blank line to exit.
 
