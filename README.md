@@ -82,6 +82,7 @@ them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
 easycat init my-agent    # scaffold a new project from a template
+easycat init --list-templates # compare scaffold templates
 easycat doctor           # check API keys, Python version, optional extras, provider reachability
 easycat docs             # show documentation entry points
 easycat explain E102     # look up an EasyCat error code
@@ -97,9 +98,10 @@ easycat validate release     # run the strict installed-wheel release gate
 easycat validate report PATH # render a saved validation report
 ```
 
-From an empty directory, `easycat init my-agent` scaffolds the canonical
-`run(EasyConfig.mic(agent=...))` shape (the same one shown below), then
-`easycat doctor` validates your environment before the first run.
+From an empty directory, `easycat init --list-templates` shows the available
+scaffolds with their transport and framework. `easycat init my-agent` scaffolds
+the same one shown below: the canonical `run(EasyConfig.mic(agent=...))` shape.
+Then `easycat doctor` validates your environment before the first run.
 
 ## Validation Workflow
 

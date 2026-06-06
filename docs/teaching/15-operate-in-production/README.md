@@ -433,7 +433,8 @@ $ uv run easycat --help
 
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
-  to a running session.
+  to a running session. Run `uv run easycat init --list-templates` first when
+  you need to compare transports and agent frameworks.
 - **`uv run easycat doctor`** — checks API keys, Python version, optional
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
