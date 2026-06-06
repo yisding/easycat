@@ -433,6 +433,8 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "Replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized_intro
     )
+    assert "uv run easycat explain json-schema" in intro
+    assert "JSON envelope and field contract" in normalized_intro
     assert "uv run easycat init --list-templates" in intro
     assert "copyable create/check/run commands" in intro
     assert "browser WebRTC" in intro

@@ -14,7 +14,8 @@ From this repository, `uv run easycat docs` prints the maintained
 docs map that links back to this ladder. Use
 `uv run easycat docs --json` when a script or coding agent needs the
 same route map with command hints and audience labels; replace uppercase
-placeholders such as `PATH` before running those hints.
+placeholders such as `PATH` before running those hints. Use
+`uv run easycat explain json-schema` for the JSON envelope and field contract.
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 

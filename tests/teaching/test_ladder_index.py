@@ -106,6 +106,8 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized
     )
+    assert "uv run easycat explain json-schema" in readme
+    assert "JSON envelope and field contract" in normalized
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
 
