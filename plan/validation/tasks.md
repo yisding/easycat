@@ -1192,6 +1192,43 @@ Dependencies:
 - V1.1
 - V4.1
 
+Current verified state:
+
+- `src/easycat/cli/validate.py` exposes `easycat validate live` with
+  repeatable `--provider` and `--surface`, plus `--strict`, `--release`,
+  `--json`, `--report`, and `--artifacts-dir`; the command calls
+  `run_live_validation` and wraps JSON output with `json_envelope`.
+- `src/easycat/validation/provider_reports.py` defines
+  `ProviderSurfaceSpec` and `LIVE_PROVIDER_SURFACES` for `stt`, `tts`, and
+  `agent_bridge`, with STT/TTS adapters and credential env-var names derived
+  from the runtime registries. `select_provider_surfaces`,
+  `known_live_providers`, and `known_live_surfaces` provide the selector
+  surface for `run_live_validation`.
+- `run_live_validation` creates `runs/<run_id>/providers/`, writes
+  `report.json`, `latest.json`, `stdout.log`, `stderr.log`, and per-provider
+  `provider_capability_report` artifacts keyed as `provider_<provider>_<surface>`.
+- Missing credentials in non-strict mode produce `skipped_missing_secret`,
+  an expected `ValidationSkip`, and provider report `status=expected_skip`;
+  missing credentials for an explicit provider under `--strict`, or any missing
+  required live prerequisite under `--release`, produce
+  `failed_missing_required_secret`, `failure_class=auth_or_quota`, and provider
+  report `status=auth_failure`.
+- Configured providers run `_live_pytest_command` with an `integration_live`
+  marker expression that includes provider/surface markers and `not flaky`;
+  provider commands receive secrets from `env={**os.environ}` rather than CLI
+  arguments.
+- Runtime output and reports are redacted with `redact_runtime_secrets` and
+  `_runtime_secret_values`; selector errors for unknown providers/surfaces are
+  classified as `environment`.
+- `classify_live_failure` currently emits the live failure classes
+  `auth_or_quota`, `provider_quota`, `network`, `provider_drift`,
+  `easycat_regression`, and `environment`.
+- `tests/cli/test_validate.py` verifies non-strict missing-secret skips,
+  strict and release missing-secret failures, configured-provider command
+  selection, provider report artifact creation, runtime secret redaction,
+  selector failures, quota classification, release command auditing, and the
+  standard JSON envelope for the CLI wrapper.
+
 Files:
 
 - `src/easycat/cli/validate.py`
