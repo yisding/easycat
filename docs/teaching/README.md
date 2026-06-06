@@ -30,6 +30,17 @@ repository root:
 uv run python docs/teaching/00-hello-audio/main.py
 ```
 
+## Choose a starting point
+
+| You have | Start with | Why |
+|---|---|---|
+| No mic or API keys | [`11-journal`](./11-journal/) or [`12-evals-and-latency`](./12-evals-and-latency/) | They use checked-in bundles; chapter 12's `llm_judge.py` is the only optional live-key script. |
+| A mic and speakers, but no API keys | [`00-hello-audio`](./00-hello-audio/) or [`01-echo`](./01-echo/) | They teach PCM and the `Transport` protocol without provider calls. |
+| `OPENAI_API_KEY` | [`02-transcribe`](./02-transcribe/) | It adds STT and writes the first `RunBundle`. |
+| `OPENAI_API_KEY` and `DEEPGRAM_API_KEY` | [`03-parrot-naive`](./03-parrot-naive/) through [`10-cleaning-signal`](./10-cleaning-signal/) | These chapters use streaming STT, VAD, TTS, agents, tools, smart-turn, interruption, and signal cleanup. |
+| Provider or transport comparison work | [`13-swap-providers-and-transports`](./13-swap-providers-and-transports/) | It compares provider mixes and Local/WebRTC/Twilio transports after the eval chapters. |
+| Production or custom-agent work | [`14-bring-your-own-agent`](./14-bring-your-own-agent/) or [`15-operate-in-production`](./15-operate-in-production/) | They focus on the bridge layer, `SessionManager`, lifecycle, debugger UI, and CLI. |
+
 ## The ladder
 
 ### Build — assemble the pipeline

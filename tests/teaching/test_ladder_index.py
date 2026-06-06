@@ -21,10 +21,11 @@ def _chapter_dirs() -> list[Path]:
 
 def _ladder_rows() -> list[dict[str, str]]:
     readme = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
+    ladder_section = readme.split("## The ladder", 1)[1]
     rows: list[dict[str, str]] = []
     malformed: list[str] = []
 
-    for line_number, line in enumerate(readme.splitlines(), start=1):
+    for line_number, line in enumerate(ladder_section.splitlines(), start=1):
         if not line.startswith("| ") or "](" not in line or "./" not in line:
             continue
         match = _CHAPTER_ROW_RE.match(line)
@@ -114,6 +115,69 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat doctor --env-file .env --json" in readme
     assert "script or coding agent needs parseable first-run environment checks" in normalized
     assert "script or coding agent needs the same environment/check rows" in normalized
+
+
+def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> None:
+    readme = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
+    table = readme.split("## Choose a starting point", 1)[1].split("## The ladder", 1)[0]
+    normalized_table = re.sub(r"\s+", " ", table)
+    chapters = {
+        chapter_dir.name: (chapter_dir / "README.md").read_text(encoding="utf-8")
+        for chapter_dir in _chapter_dirs()
+    }
+    normalized_chapters = {name: re.sub(r"\s+", " ", text) for name, text in chapters.items()}
+
+    for link in (
+        "./00-hello-audio/",
+        "./01-echo/",
+        "./02-transcribe/",
+        "./03-parrot-naive/",
+        "./10-cleaning-signal/",
+        "./11-journal/",
+        "./12-evals-and-latency/",
+        "./13-swap-providers-and-transports/",
+        "./14-bring-your-own-agent/",
+        "./15-operate-in-production/",
+    ):
+        assert f"]({link})" in table
+    for phrase in (
+        "No mic or API keys",
+        "A mic and speakers, but no API keys",
+        "`OPENAI_API_KEY`",
+        "`OPENAI_API_KEY` and `DEEPGRAM_API_KEY`",
+        "Provider or transport comparison work",
+        "Production or custom-agent work",
+        "checked-in bundles",
+        "only optional live-key script",
+        "without provider calls",
+        "first `RunBundle`",
+        "Local/WebRTC/Twilio transports",
+        "`SessionManager`",
+    ):
+        assert phrase in normalized_table
+
+    assert "No API keys needed" in chapters["11-journal"]
+    assert "without API keys, without a mic" in normalized_chapters["11-journal"]
+    assert "uv sync --extra quickstart --group dev" in chapters["00-hello-audio"]
+    assert "A working microphone and speakers" in chapters["00-hello-audio"]
+    assert "OPENAI_API_KEY" in chapters["02-transcribe"]
+    assert "or any other provider" in _chapter_prerequisites(chapters["02-transcribe"])
+    for chapter in (
+        "03-parrot-naive",
+        "04-vad-preroll",
+        "05-blocking-agent",
+        "06-streaming-agent",
+        "07-tools",
+        "08-smart-turn",
+        "09-interruption",
+        "10-cleaning-signal",
+    ):
+        prerequisites = _chapter_prerequisites(chapters[chapter])
+        assert "OPENAI_API_KEY" in prerequisites
+        assert "DEEPGRAM_API_KEY" in prerequisites
+    assert "WebRTC" in chapters["13-swap-providers-and-transports"]
+    assert "Twilio" in chapters["13-swap-providers-and-transports"]
+    assert "SessionManager" in chapters["15-operate-in-production"]
 
 
 def test_teaching_chapters_have_reader_entrypoints() -> None:
