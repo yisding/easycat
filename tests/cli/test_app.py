@@ -58,7 +58,8 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
     assert "Learn" in result.stdout
-    assert "Show documentation entry points" in result.stdout
+    assert "Show quickstart, examples, and teaching routes" in result.stdout
+    assert "Show documentation entry points" not in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
     assert "easycat docs" in result.stdout

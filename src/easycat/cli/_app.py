@@ -51,7 +51,7 @@ _JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
     [green]validate[/]    Run validation checks and inspect reports
 
   [cyan]Learn[/]
-    [green]docs[/]        Show documentation entry points
+    [green]docs[/]        Show quickstart, examples, and teaching routes
 
 Run [cyan]easycat <command> --help[/] for command-specific options.
 Run [cyan]easycat docs[/] for quickstart, examples, and teaching routes.
