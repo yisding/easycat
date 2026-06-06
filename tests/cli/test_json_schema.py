@@ -281,6 +281,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Validation reference", "path": "plan/validation/reference.md"} in entries
     assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
     assert all(isinstance(entry.get("url"), str) for entry in payload["entries"])
+    descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
+    assert "copyable create commands" in descriptions["README.md#cli"]
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
 
