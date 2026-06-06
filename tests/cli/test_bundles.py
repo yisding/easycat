@@ -325,6 +325,35 @@ def test_bundles_export_refuses_existing_output_without_force(
     assert (output / "summary.json").exists()
 
 
+def test_bundles_export_refuses_existing_output_json_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    output.mkdir()
+    (output / "old.txt").write_text("old")
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(
+        app,
+        ["bundles", "export", str(bundle), "--output", str(output), "--json"],
+    )
+
+    assert result.exit_code == 101
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "bundles_export"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 101
+    assert payload["output_path"] == str(output)
+    assert "already exists" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+    assert (output / "old.txt").exists()
+
+
 def test_bundles_export_rejects_unknown_target(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
@@ -333,6 +362,27 @@ def test_bundles_export_rejects_unknown_target(cli: CliRunner, tmp_path: Path) -
 
     assert result.exit_code == 2
     assert "claude-code, cursor, codex" in result.stderr
+
+
+def test_bundles_export_rejects_unknown_target_json_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--for", "raw", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "bundles_export"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "claude-code, cursor, codex" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_inspect_alias_matches_bundles_show(cli: CliRunner, tmp_path: Path) -> None:
@@ -424,6 +474,21 @@ def test_replay_bundle_blocks_tool_side_effects_by_default(
     assert "get_weather(c1)" in blocked.stderr
     assert "--tool-policy stub" in blocked.stderr
 
+    blocked_json = cli.invoke(app, ["replay", str(bundle), "--json"])
+    assert blocked_json.exit_code == 6
+    payload = json.loads(blocked_json.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "replay"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 6
+    assert payload["path"] == str(bundle)
+    assert "Replay blocked" in payload["message"]
+    assert "get_weather(c1)" in payload["message"]
+    assert "--tool-policy stub" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
     stubbed = cli.invoke(app, ["replay", str(bundle), "--tool-policy", "stub", "--json"])
     assert stubbed.exit_code == 0, stubbed.stderr
     payload = json.loads(stubbed.stdout)
@@ -491,6 +556,23 @@ def test_bundles_show_missing_path(cli: CliRunner, tmp_path: Path) -> None:
     result = cli.invoke(app, ["bundles", "show", str(missing)])
     assert result.exit_code == 5
     assert "not found" in result.stderr
+
+
+def test_bundles_show_missing_path_json_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "nope.zip"
+    result = cli.invoke(app, ["bundles", "show", str(missing), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "bundles_show"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 5
+    assert payload["path"] == str(missing)
+    assert "not found" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_bundles_show_corrupt(cli: CliRunner, tmp_path: Path) -> None:

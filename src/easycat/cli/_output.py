@@ -106,6 +106,7 @@ def emit_command_error(
     json_output: bool,
     exit_code: int = 2,
     human_console: Console = stderr_console,
+    **extra: Any,
 ) -> None:
     """Emit a command-specific error in human or JSON mode.
 
@@ -114,6 +115,8 @@ def emit_command_error(
     through ``handle_easycat_error`` so they retain ``code``/``fix``/``context``.
     """
     if json_output:
-        emit_json(json_envelope(command, status="error", message=message, exit_code=exit_code))
+        emit_json(
+            json_envelope(command, status="error", message=message, exit_code=exit_code, **extra)
+        )
         return
     human_console.print(f"  [red]✗[/] {message}")

@@ -48,6 +48,7 @@ from rich.table import Table
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
+    emit_command_error,
     emit_json,
     json_envelope,
     stderr_console,
@@ -426,17 +427,32 @@ def _artifact_manifest(
     return artifacts
 
 
-def _prepare_output_dir(output_path: Path, *, force: bool) -> None:
+def _prepare_output_dir(
+    output_path: Path,
+    *,
+    force: bool,
+    command: str,
+    json_output: bool,
+) -> None:
     resolved = output_path.resolve(strict=False)
     if resolved == Path(resolved.anchor) or resolved == Path.cwd().resolve():
-        stderr_console.print(f"  [red]✗[/] Refusing to export into [red]{output_path}[/].")
+        emit_command_error(
+            command,
+            f"Refusing to export into {output_path}.",
+            json_output=json_output,
+            exit_code=1,
+            output_path=str(output_path),
+        )
         raise typer.Exit(1)
 
     if output_path.exists():
         if not force:
-            stderr_console.print(
-                f"  [red]✗[/] Output path already exists: [red]{output_path}[/]. "
-                "Use --force to replace it."
+            emit_command_error(
+                command,
+                f"Output path already exists: {output_path}. Use --force to replace it.",
+                json_output=json_output,
+                exit_code=101,
+                output_path=str(output_path),
             )
             raise typer.Exit(101)
         if output_path.is_symlink() or not output_path.is_dir():
@@ -468,8 +484,10 @@ def _write_context_pack(
     redaction_requested: str,
     include_audio: bool,
     force: bool,
+    command: str,
+    json_output: bool,
 ) -> dict[str, Any]:
-    _prepare_output_dir(output_path, force=force)
+    _prepare_output_dir(output_path, force=force, command=command, json_output=json_output)
 
     summary = redact_value(_summarise_bundle(bundle))
     if not isinstance(summary, dict):
@@ -611,10 +629,21 @@ def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
     return artifact_root if artifact_root.is_dir() else None
 
 
-def _load_bundle_or_journal(bundle_path: Path) -> RunBundle:
+def _load_bundle_or_journal(
+    bundle_path: Path,
+    *,
+    command: str,
+    json_output: bool,
+) -> RunBundle:
     """Load a ZIP bundle or SQLite journal, mapping failures to CLI exits."""
     if not bundle_path.exists():
-        stderr_console.print(f"  [red]✗[/] Bundle not found: [red]{bundle_path}[/]")
+        emit_command_error(
+            command,
+            f"Bundle not found: {bundle_path}",
+            json_output=json_output,
+            exit_code=5,
+            path=str(bundle_path),
+        )
         raise typer.Exit(5)
 
     try:
@@ -627,22 +656,41 @@ def _load_bundle_or_journal(bundle_path: Path) -> RunBundle:
             )
         return RunBundle.load(bundle_path)
     except BundleVersionError as exc:
-        stderr_console.print(
-            f"  [red]✗[/] Bundle was written by a newer easycat ({exc}); "
-            "upgrade easycat to inspect it."
+        emit_command_error(
+            command,
+            f"Bundle was written by a newer easycat ({exc}); upgrade easycat to inspect it.",
+            json_output=json_output,
+            exit_code=6,
+            path=str(bundle_path),
         )
         raise typer.Exit(6) from None
     except BundleInUseError as exc:
-        stderr_console.print(f"  [red]✗[/] {exc}")
+        emit_command_error(
+            command,
+            str(exc),
+            json_output=json_output,
+            exit_code=5,
+            path=str(bundle_path),
+        )
         raise typer.Exit(5) from None
     except BundleError as exc:
-        stderr_console.print(f"  [red]✗[/] Bundle corrupt or unreadable: {exc}")
+        emit_command_error(
+            command,
+            f"Bundle corrupt or unreadable: {exc}",
+            json_output=json_output,
+            exit_code=5,
+            path=str(bundle_path),
+        )
         raise typer.Exit(5) from None
 
 
 def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     """Load and render the bundle or SQLite journal summary used by all aliases."""
-    bundle = _load_bundle_or_journal(bundle_path)
+    bundle = _load_bundle_or_journal(
+        bundle_path,
+        command="bundles_show",
+        json_output=json_output,
+    )
     summary = _summarise_bundle(bundle)
 
     if json_output:
@@ -762,19 +810,29 @@ def export_bundle(
     """Write a redacted context pack for a coding agent."""
     target = export_for.strip().lower()
     if target not in _EXPORT_TARGETS:
-        raise typer.BadParameter(
+        emit_command_error(
+            "bundles_export",
             "target must be one of: claude-code, cursor, codex",
-            param_hint="--for",
+            json_output=json_output,
+            exit_code=2,
         )
+        raise typer.Exit(2)
 
     redaction_requested = redaction.strip().lower()
     if redaction_requested not in _REDACTION_POLICIES:
-        raise typer.BadParameter(
+        emit_command_error(
+            "bundles_export",
             "redaction must be one of: development, production, regulated",
-            param_hint="--redaction",
+            json_output=json_output,
+            exit_code=2,
         )
+        raise typer.Exit(2)
 
-    bundle = _load_bundle_or_journal(bundle_path)
+    bundle = _load_bundle_or_journal(
+        bundle_path,
+        command="bundles_export",
+        json_output=json_output,
+    )
     destination = output_path or _default_export_path(bundle_path)
 
     if redaction_requested != "production" and not json_output:
@@ -794,11 +852,20 @@ def export_bundle(
             redaction_requested=redaction_requested,
             include_audio=include_audio,
             force=force,
+            command="bundles_export",
+            json_output=json_output,
         )
     except typer.Exit:
         raise
     except RuntimeError as exc:
-        stderr_console.print(f"  [red]✗[/] Export failed: {exc}")
+        emit_command_error(
+            "bundles_export",
+            f"Export failed: {exc}",
+            json_output=json_output,
+            exit_code=1,
+            path=str(bundle_path),
+            output_path=str(destination),
+        )
         raise typer.Exit(1) from None
 
     if json_output:
@@ -908,10 +975,16 @@ def replay_bundle(
 ) -> None:
     """Replay a debug bundle or SQLite journal without opening a Python REPL."""
     if timing not in ("fast", "wall"):
-        raise typer.BadParameter("timing must be 'fast' or 'wall'", param_hint="--timing")
+        emit_command_error(
+            "replay",
+            "timing must be 'fast' or 'wall'",
+            json_output=json_output,
+            exit_code=2,
+        )
+        raise typer.Exit(2)
     timing_value = cast(Literal["fast", "wall"], timing)
 
-    bundle = _load_bundle_or_journal(bundle_path)
+    bundle = _load_bundle_or_journal(bundle_path, command="replay", json_output=json_output)
     spec = ReplaySpec(
         fidelity=fidelity,
         from_sequence=from_sequence,
@@ -924,18 +997,39 @@ def replay_bundle(
     try:
         result = bundle.replay(spec)
     except ReplaySideEffectBlocked as exc:
-        stderr_console.print(f"  [red]✗[/] Replay blocked: {exc}")
-        stderr_console.print(
-            "[dim]Use [cyan]--tool-policy stub[/] to replace tool effects, "
-            "or [cyan]--tool-policy allow[/] only when side effects are safe.[/]"
+        message = (
+            f"Replay blocked: {exc}. Use --tool-policy stub to replace tool effects, "
+            "or --tool-policy allow only when side effects are safe."
+        )
+        emit_command_error(
+            "replay",
+            message,
+            json_output=json_output,
+            exit_code=6,
+            path=str(bundle_path),
         )
         raise typer.Exit(6) from None
     except ProviderVersionMismatchError as exc:
-        stderr_console.print(f"  [red]✗[/] Replay provider version check failed: {exc}")
-        stderr_console.print("[dim]Use [cyan]--force[/] to continue with downgraded fidelity.[/]")
+        message = (
+            f"Replay provider version check failed: {exc}. "
+            "Use --force to continue with downgraded fidelity."
+        )
+        emit_command_error(
+            "replay",
+            message,
+            json_output=json_output,
+            exit_code=6,
+            path=str(bundle_path),
+        )
         raise typer.Exit(6) from None
     except ReplayError as exc:
-        stderr_console.print(f"  [red]✗[/] Replay failed: {exc}")
+        emit_command_error(
+            "replay",
+            f"Replay failed: {exc}",
+            json_output=json_output,
+            exit_code=6,
+            path=str(bundle_path),
+        )
         raise typer.Exit(6) from None
 
     _render_replay_summary(

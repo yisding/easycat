@@ -373,6 +373,22 @@ def test_bundles_show_and_inspect_envelopes(cli: CliRunner, tmp_path: Path) -> N
     assert inspect_payload == show_payload
 
 
+def test_bundles_show_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "missing.zip"
+
+    result = cli.invoke(app, ["bundles", "show", str(missing), "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "bundles_show", status="error")
+    assert payload["path"] == str(missing)
+    assert payload["exit_code"] == 5
+    assert "Bundle not found" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_bundles_export_envelope(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     output = tmp_path / "pack"
@@ -386,6 +402,28 @@ def test_bundles_export_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["output_path"] == str(output)
     assert payload["target"] == "claude-code"
     assert set(payload["files"]) == {"README.md", "summary.json", "timeline.md", "timeline.jsonl"}
+
+
+def test_bundles_export_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "demo.zip"
+    output = tmp_path / "pack"
+    output.mkdir()
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+
+    result = cli.invoke(
+        app,
+        ["bundles", "export", str(bundle), "--output", str(output), "--json"],
+    )
+
+    assert result.exit_code == 101
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "bundles_export", status="error")
+    assert payload["output_path"] == str(output)
+    assert payload["exit_code"] == 101
+    assert "already exists" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_replay_envelope(cli: CliRunner, tmp_path: Path) -> None:
@@ -420,6 +458,35 @@ def test_replay_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["fidelity_requested"] == "artifact"
     assert payload["frames"] == 2
     assert payload["stages"] == ["stt"]
+
+
+def test_replay_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "tool.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "framework_transition",
+                "name": "tool_call_started",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"phase": "tool_call", "tool_name": "get_weather", "call_id": "c1"},
+            }
+        ],
+    )
+
+    result = cli.invoke(app, ["replay", str(bundle), "--json"])
+
+    assert result.exit_code == 6
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "replay", status="error")
+    assert payload["path"] == str(bundle)
+    assert payload["exit_code"] == 6
+    assert "Replay blocked" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(

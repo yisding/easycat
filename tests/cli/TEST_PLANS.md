@@ -298,6 +298,9 @@ stdout and corrupting `jq` consumers.
 - Early command-specific usage errors, such as `init` missing `NAME`,
   `doctor --env-file` parse failures, and mutually exclusive
   `validate` flags, still emit the envelope in `--json` mode.
+- Debug-bundle failures in `bundles show`, `bundles export`, and
+  `replay` keep their documented exit codes while emitting parseable
+  `--json` error envelopes.
 
 **Backed by.** `test_json_schema.py` for the shared envelope shape, plus
 command-specific CLI suites for deeper payload details.
