@@ -119,7 +119,8 @@ For coding agents and scripts, `easycat docs --json` emits the docs route map
 with command hints, and `easycat explain json-schema` documents the standard
 `--json` envelope, including command-specific success fields such as `entries`,
 `commands`, `catalog`, `run_command`, and `check_command`, and error fields
-such as `report_path`, `path`, and `output_path`.
+such as `report_path`, `path`, and `output_path`. Replace uppercase
+placeholders in command hints, such as `PATH`, before running them.
 
 ## Validation Workflow
 

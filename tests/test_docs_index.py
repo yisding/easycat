@@ -75,6 +75,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "prints the same map" in text
     assert "docs route map" in normalized
     assert "route map and command hints" in normalized
+    assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
     assert "copyable create/check/run commands" in normalized
