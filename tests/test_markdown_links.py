@@ -14,6 +14,7 @@ LINK_RE = re.compile(r"!?\[(?:\\.|[^\]\\])+\]\((?P<target>[^)\n]+)\)")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
 EASYCAT_EXTRA_RE = re.compile(r"easycat\[(?P<extras>[^\]]+)\]")
+LINE_ANCHOR_RE = re.compile(r"^L(?P<start>\d+)(?:-L(?P<end>\d+))?$")
 EXTERNAL_SCHEMES = ("http://", "https://", "mailto:", "tel:")
 
 
@@ -113,6 +114,22 @@ def _heading_anchors(path: Path) -> set[str]:
     return anchors
 
 
+def _line_anchor_error(path: Path, fragment: str) -> str | None:
+    match = LINE_ANCHOR_RE.match(fragment)
+    if match is None:
+        return None
+
+    start = int(match.group("start"))
+    end = int(match.group("end") or start)
+    if start < 1 or end < start:
+        return f"invalid line anchor #{fragment}"
+
+    line_count = len(path.read_text(encoding="utf-8").splitlines())
+    if end > line_count:
+        return f"line anchor #{fragment} exceeds {line_count} lines"
+    return None
+
+
 def _known_extras() -> set[str]:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     return set(pyproject["project"]["optional-dependencies"])
@@ -146,6 +163,11 @@ def test_maintained_markdown_local_links_resolve() -> None:
                         f"{rel_source}:{line_number}: missing anchor #{fragment} "
                         f"in {rel_destination}"
                     )
+            elif fragment:
+                rel_destination = destination.relative_to(REPO_ROOT)
+                error = _line_anchor_error(destination, unquote(fragment))
+                if error is not None:
+                    broken.append(f"{rel_source}:{line_number}: {error} in {rel_destination}")
 
     assert not broken, "Broken local Markdown links:\n" + "\n".join(broken)
 
@@ -172,6 +194,17 @@ def test_markdown_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path
         "repeated-2",
         "repeated-3",
     }
+
+
+def test_line_anchor_error_checks_github_line_ranges(tmp_path: Path) -> None:
+    source = tmp_path / "module.py"
+    source.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    assert _line_anchor_error(source, "L1") is None
+    assert _line_anchor_error(source, "L2-L3") is None
+    assert _line_anchor_error(source, "L4") == "line anchor #L4 exceeds 3 lines"
+    assert _line_anchor_error(source, "L3-L2") == "invalid line anchor #L3-L2"
+    assert _line_anchor_error(source, "not-a-line-anchor") is None
 
 
 def test_current_user_docs_reference_known_easycat_extras() -> None:
