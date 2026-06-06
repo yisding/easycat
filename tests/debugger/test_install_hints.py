@@ -31,7 +31,7 @@ def _block_aiohttp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _assert_debugger_hint(message: str) -> None:
     assert "uv add 'easycat[debugger]'" in message
-    assert "uv sync --extra debugger" in message
+    assert "uv sync --extra debugger --group dev" in message
     assert "pip install easycat[debugger]" not in message
 
 

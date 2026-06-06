@@ -218,7 +218,7 @@ def test_factory_auto_fallback_policy_error_raises():
             create_noise_reducer(NoiseReducerConfig(backend="auto", fallback_policy="error"))
     message = str(exc_info.value)
     assert "uv add 'easycat[rnnoise]'" in message
-    assert "uv sync --extra rnnoise" in message
+    assert "uv sync --extra rnnoise --group dev" in message
 
 
 def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptureFixture):
@@ -233,7 +233,9 @@ def test_factory_auto_fallback_policy_passthrough_warns(caplog: pytest.LogCaptur
     assert isinstance(reducer, PassthroughNoiseReducer)
     assert any("passthrough" in record.message.lower() for record in caplog.records)
     assert any("uv add 'easycat[rnnoise]'" in record.message for record in caplog.records)
-    assert any("uv sync --extra rnnoise" in record.message for record in caplog.records)
+    assert any(
+        "uv sync --extra rnnoise --group dev" in record.message for record in caplog.records
+    )
 
 
 def test_noise_reducer_config_rejects_unknown_fallback_policy():
