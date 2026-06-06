@@ -160,6 +160,8 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
     if isinstance(value, bool | int | float) or value is None:
         return value
     if is_dataclass(value):
+        if isinstance(value, ArtifactRef):
+            return {"kind": redact_text(value.kind), "path": value.path}
         if isinstance(value, ValidationEnvironment):
             return _serialize_environment(value)
         return {
@@ -173,7 +175,9 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
             for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
             if not _is_empty_optional(item_value)
         }
-        return redact_value(redacted, key)
+        if should_redact_key(key):
+            return redact_value(redacted, key)
+        return redacted
     if isinstance(value, Sequence):
         return [_serialize_value(item, key) for item in value]
     return value

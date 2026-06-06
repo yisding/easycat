@@ -272,6 +272,23 @@ def test_validate_report_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["validation"]["kind"] == "validation_run"
 
 
+def test_validate_report_command_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    report_path.write_text("{not-json")
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "validate report", status="error")
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "invalid validation report JSON" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_bundles_list_envelope(cli: CliRunner, tmp_path: Path) -> None:
     recordings = tmp_path / "recordings"
     recordings.mkdir()

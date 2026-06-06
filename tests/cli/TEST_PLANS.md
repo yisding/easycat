@@ -292,8 +292,9 @@ stdout and corrupting `jq` consumers.
   and a `status` in {ok, error}.
 - The JSON payload appears on stdout; stderr is either empty or
   strictly logs/progress (never JSON fragments).
-- When a command errors, the envelope includes `code`, `message`,
-  `fix`, `context`, `exit_code`.
+- EasyCat registry errors include `code`, `message`, `fix`, `context`,
+  and `exit_code`; command-specific errors still include `message` and
+  `exit_code` without inventing a fake `EASYCAT_Exxx` code.
 
 **Backed by.** `test_json_schema.py` for the shared envelope shape, plus
 command-specific CLI suites for deeper payload details.

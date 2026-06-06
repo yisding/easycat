@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 
 from easycat.validation.report import (
+    ArtifactRef,
     ProviderCheck,
     ValidationCheck,
     ValidationEnvironment,
@@ -103,3 +104,42 @@ def test_validation_run_serialization_redacts_keyed_secrets_and_unsafe_text() ->
     assert payload["providers"][0]["details"] == {
         "client_secret": "[REDACTED_SECRET]",
     }
+
+
+def test_validation_artifact_paths_remain_resolvable() -> None:
+    artifact_path = (
+        "/tmp/easycat/validation/runs/20260522T120000Z-socket-123456789/webrtc/stats.jsonl"
+    )
+    run = ValidationRun(
+        run_id="20260522T120000Z-socket-123456789",
+        command=["uv", "run", "easycat", "validate", "socket"],
+        started_at=datetime(2026, 6, 6, 12, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 6, 6, 12, 1, tzinfo=UTC),
+        duration_s=60.0,
+        status="fail",
+        exit_code=1,
+        checks=[
+            ValidationCheck(
+                name="pytest.socket",
+                status="fail",
+                duration_s=0.1,
+                artifacts={"webrtc_stats": ArtifactRef(kind="webrtc_stats", path=artifact_path)},
+            )
+        ],
+        artifacts={"webrtc_stats": ArtifactRef(kind="webrtc_stats", path=artifact_path)},
+        failures=[
+            ValidationFailure(
+                name="pytest.socket",
+                message="operator phone +1 (415) 555-2671; file /Users/alice/project/test.py",
+            )
+        ],
+    )
+
+    payload = run.to_dict()
+    raw_json = json.dumps(payload, sort_keys=True)
+
+    assert payload["checks"][0]["artifacts"]["webrtc_stats"]["path"] == artifact_path
+    assert payload["artifacts"]["webrtc_stats"]["path"] == artifact_path
+    assert "[REDACTED_PHONE]" not in artifact_path
+    assert "+1 (415) 555-2671" not in raw_json
+    assert "/Users/alice" not in raw_json
