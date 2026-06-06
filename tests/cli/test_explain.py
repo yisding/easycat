@@ -102,6 +102,11 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
 def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "json-schema"])
     assert result.exit_code == 0
+    assert "Successful commands may add command-specific fields" in result.stdout
+    assert "`entries`, `source_url`" in result.stdout
+    assert "easycat docs --json" in result.stdout
+    assert "`templates`, `catalog`" in result.stdout
+    assert "easycat init --list-templates --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
     assert "without inventing a fake" in result.stdout
     assert "`report_path`" in result.stdout
@@ -123,6 +128,8 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert payload["schema_version"] == 1
     assert payload["command"] == "explain"
     assert payload["slug"] == "json-schema"
+    assert "`entries`, `source_url`" in payload["body"]
+    assert "`templates`, `catalog`" in payload["body"]
     assert "`report_path`" in payload["body"]
     assert "`path`" in payload["body"]
     assert "`output_path`" in payload["body"]

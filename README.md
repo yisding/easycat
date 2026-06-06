@@ -114,8 +114,9 @@ scaffolds with their transport, framework, and copyable create commands.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
 For coding agents and scripts, `easycat explain json-schema` documents the
-standard `--json` envelope, including command-specific error fields such as
-`report_path`, `path`, and `output_path`.
+standard `--json` envelope, including command-specific success fields such as
+`entries` and `catalog` and error fields such as `report_path`, `path`, and
+`output_path`.
 
 ## Validation Workflow
 

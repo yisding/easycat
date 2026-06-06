@@ -111,6 +111,12 @@ On EasyCat errors, the envelope includes `code` (EASYCAT_Exxx),
 errors still include `message` and `exit_code` without inventing a fake
 EASYCAT_Exxx code.
 
+Successful commands may add command-specific fields. Common automation
+entry points include:
+
+  `entries`, `source_url` - `easycat docs --json`
+  `templates`, `catalog` - `easycat init --list-templates --json`
+
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:
 

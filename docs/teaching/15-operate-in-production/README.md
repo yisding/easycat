@@ -449,7 +449,8 @@ $ uv run easycat --help
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
   you find out what that means. Use
   `uv run easycat explain json-schema` when a script or coding agent
-  needs the standard `--json` envelope and command-specific error fields.
+  needs the standard `--json` envelope and command-specific success and error
+  fields.
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and crash dumps, then summarize a debug bundle or
   SQLite journal from the shell.
