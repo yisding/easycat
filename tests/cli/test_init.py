@@ -55,6 +55,8 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert set(payload["templates"]) == set(available_templates())
+    assert "installed CLI form" in payload["command_note"]
+    assert "after cd into the scaffolded project" in payload["command_note"]
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
     assert catalog["openai-agents"]["transport"] == "local mic"
@@ -771,6 +773,7 @@ def test_init_json_next_step_commands_match_template_readme(
     payload = json.loads(result.stdout)
     assert payload["run_command"] == _template_readme_run_command(template)
     assert payload["check_command"] == _template_readme_check_command(template)
+    assert "after cd into the scaffolded project" in payload["command_note"]
 
 
 def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRunner) -> None:

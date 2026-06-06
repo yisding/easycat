@@ -366,6 +366,7 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "standard `--json` envelope" in normalized_readme
     assert "command-specific success fields" in normalized_readme
     assert "`entries`, `commands`, `catalog`" in normalized_readme
+    assert "`command_note`, `run_command`" in normalized_readme
     assert "`run_command`, and `check_command`" in normalized_readme
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
 

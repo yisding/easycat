@@ -88,7 +88,9 @@ callers get a stable EASYCAT_E102 explanation; this release does not
 wire them into templates yet. Add LLM or tool setup directly in the
 generated `agent.py` for now.
 Run `easycat init --list-templates --json` for the current
-machine-readable template catalog.  Each `catalog` row includes:
+machine-readable template catalog.  The top-level `command_note`
+explains installed vs repo-local creation and post-scaffold check/run
+context. Each `catalog` row includes:
 `name`, `mode`, `transport`, `framework`, `description`,
 `create_command` (installed CLI form), `repo_create_command`
 (repo-local `uv run` form), `run_command`, and `check_command`.
@@ -120,10 +122,13 @@ entry points include:
                             in onboarding order; `command_note` explains
                             installed vs repo-local `uv run` for EasyCat CLI
                             hints and uppercase placeholders such as PATH
-  `templates`, `catalog` - `easycat init --list-templates --json`;
+  `templates`, `catalog`, `command_note` -
+                         `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
-                         `check_command`
-  `run_command`, `check_command` - `easycat init NAME --json`
+                         `check_command`; `command_note` explains
+                         installed vs repo-local creation and post-scaffold
+                         check/run context
+  `run_command`, `check_command`, `command_note` - `easycat init NAME --json`
 
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:

@@ -159,6 +159,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["git"], bool)
     assert payload["run_command"] == "uv run --env-file .env python agent.py"
     assert payload["check_command"] == "uv run python -m py_compile agent.py"
+    assert "after cd into the scaffolded project" in payload["command_note"]
 
 
 def test_init_list_templates_envelope(cli: CliRunner) -> None:
@@ -168,6 +169,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
     _assert_envelope(payload, "init")
     assert isinstance(payload["templates"], list)
     assert isinstance(payload["catalog"], list)
+    assert "installed CLI form" in payload["command_note"]
+    assert "after cd into the scaffolded project" in payload["command_note"]
     required_keys = {
         "name",
         "mode",

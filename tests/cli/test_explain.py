@@ -88,6 +88,7 @@ def test_explain_meta_exit_codes(cli: CliRunner) -> None:
 
 def test_explain_meta_init_schema(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "init-schema"])
+    stdout = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "schema_version" in result.stdout
     assert "template" in result.stdout
@@ -97,6 +98,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "easycat init --list-templates --json" in result.stdout
     assert "`create_command`" in result.stdout
     assert "`repo_create_command`" in result.stdout
+    assert "top-level `command_note`" in result.stdout
+    assert "post-scaffold check/run context" in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "EASYCAT_E102" in result.stdout
@@ -124,10 +127,11 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "in onboarding order" in result.stdout
     assert "installed vs repo-local `uv run` for EasyCat CLI" in result.stdout
     assert "uppercase placeholders such as PATH" in result.stdout
-    assert "`templates`, `catalog`" in result.stdout
+    assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
+    assert "post-scaffold check/run context" in stdout
     assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
     assert "without inventing a fake" in result.stdout
@@ -157,8 +161,9 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "in onboarding order" in payload["body"]
     assert "installed vs repo-local `uv run` for EasyCat CLI" in payload["body"]
     assert "uppercase placeholders such as PATH" in payload["body"]
-    assert "`templates`, `catalog`" in payload["body"]
+    assert "`templates`, `catalog`, `command_note`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
+    assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
     assert "`report_path`" in payload["body"]
     assert "validate report .easycat/validation/latest.json --json" in payload["body"]
     assert "`path`" in payload["body"]

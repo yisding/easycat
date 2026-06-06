@@ -145,6 +145,10 @@ _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
 _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
     "twilio-phone": ("agent.py", "server.py"),
 }
+_INIT_COMMAND_NOTE = (
+    "create_command uses installed CLI form; repo_create_command is for this repository; "
+    "run_command and check_command are run after cd into the scaffolded project."
+)
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -585,7 +589,14 @@ def init(
         templates = available_templates()
         catalog = _available_template_catalog()
         if json_output:
-            emit_json(json_envelope("init", templates=templates, catalog=catalog))
+            emit_json(
+                json_envelope(
+                    "init",
+                    templates=templates,
+                    catalog=catalog,
+                    command_note=_INIT_COMMAND_NOTE,
+                )
+            )
         else:
             stdout_console.print(_format_template_catalog(catalog), soft_wrap=True)
         raise typer.Exit(0)
@@ -644,6 +655,7 @@ def init(
                 git=git_ok,
                 run_command=_next_step_run_command(cfg.template),
                 check_command=_next_step_check_command(cfg.template),
+                command_note=_INIT_COMMAND_NOTE,
             )
         )
         return
