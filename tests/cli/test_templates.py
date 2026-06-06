@@ -122,6 +122,9 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     emitted = {entry["name"]: entry for entry in _available_template_catalog()}
     assert set(emitted) == set(templates)
     assert all(entry["name"] == name for name, entry in emitted.items())
+    for name, entry in emitted.items():
+        assert entry["run_command"]
+        assert entry["check_command"]
 
 
 def _template_dir(name: str) -> Path:

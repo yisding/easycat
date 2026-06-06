@@ -120,6 +120,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "in onboarding order" in result.stdout
     assert "`templates`, `catalog`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
+    assert "catalog entries include" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
     assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout

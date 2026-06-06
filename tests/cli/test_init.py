@@ -767,3 +767,14 @@ def test_init_json_next_step_commands_match_template_readme(
     payload = json.loads(result.stdout)
     assert payload["run_command"] == _template_readme_run_command(template)
     assert payload["check_command"] == _template_readme_check_command(template)
+
+
+def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["init", "--list-templates", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    catalog = {entry["name"]: entry for entry in payload["catalog"]}
+
+    for template in available_templates():
+        assert catalog[template]["run_command"] == _template_readme_run_command(template)
+        assert catalog[template]["check_command"] == _template_readme_check_command(template)

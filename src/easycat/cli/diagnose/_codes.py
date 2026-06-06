@@ -117,7 +117,9 @@ entry points include:
   `entries`, `source_url` - `easycat docs --json`; each docs entry has
                             `label`, `path`, `description`, and `url`
                             in onboarding order
-  `templates`, `catalog` - `easycat init --list-templates --json`
+  `templates`, `catalog` - `easycat init --list-templates --json`;
+                         catalog entries include `run_command` and
+                         `check_command`
   `run_command`, `check_command` - `easycat init NAME --json`
 
 When an error is about a file or directory, commands include the

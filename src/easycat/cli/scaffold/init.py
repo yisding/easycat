@@ -94,6 +94,8 @@ class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     name: str
     create_command: str
     repo_create_command: str
+    run_command: str
+    check_command: str
 
 
 _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
@@ -204,6 +206,8 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "name": name,
                 "create_command": _create_template_command(name),
                 "repo_create_command": _create_template_command(name, repo_local=True),
+                "run_command": _next_step_run_command(name),
+                "check_command": _next_step_check_command(name),
                 **metadata,
             }
         )

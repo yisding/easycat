@@ -176,6 +176,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "description",
         "create_command",
         "repo_create_command",
+        "run_command",
+        "check_command",
     }
     for entry in payload["catalog"]:
         assert required_keys <= set(entry)
@@ -183,6 +185,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert entry["repo_create_command"] == (
             f"uv run easycat init my-agent --template {entry['name']}"
         )
+        assert entry["run_command"].startswith("uv run ")
+        assert entry["check_command"].startswith("uv run python -m py_compile ")
 
 
 def test_init_error_envelope(
