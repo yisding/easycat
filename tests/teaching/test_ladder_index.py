@@ -241,7 +241,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     expected_help_lines = (
         "init      Scaffold a new project from a template",
         "doctor    Check API keys, optional extras, and provider reachability",
-        "docs      Show quickstart, examples, teaching, and operations docs",
+        "docs      Show docs for learning, validation, and operations",
         "explain   Look up errors and CLI schema topics",
         "inspect   Inspect a debug bundle or SQLite journal",
         "replay    Replay a debug bundle or SQLite journal",

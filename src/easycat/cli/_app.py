@@ -70,8 +70,8 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         journey="Run validation checks and inspect validation reports",
     ),
     "docs": _CommandText(
-        help="Show quickstart, examples, teaching, and operations docs.",
-        journey="Show quickstart, examples, and teaching routes",
+        help="Show docs for learning, validation, and operations.",
+        journey="Show docs for learning, validation, and operations",
     ),
 }
 
@@ -84,7 +84,7 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _JOURNEY_FOOTER = (
     "Run [cyan]easycat <command> --help[/] for command-specific options.",
-    "Run [cyan]easycat docs[/] for quickstart, examples, and teaching routes.",
+    "Run [cyan]easycat docs[/] for learning, validation, and operations routes.",
     "Run [cyan]easycat docs --json[/] for machine-readable docs routes.",
     "Run [cyan]easycat explain <code>[/] for errors.",
     "Run [cyan]easycat explain json-schema[/] for CLI JSON.",
@@ -242,7 +242,7 @@ def docs_command(
         help="Emit the machine-readable docs route map.",
     ),
 ) -> None:
-    """Show quickstart, examples, teaching, and operations docs."""
+    """Show docs for learning, validation, and operations."""
     if json_output:
         emit_json(json_envelope("docs", entries=_docs_entries(), source_url=_DOCS_SOURCE_URL))
         return

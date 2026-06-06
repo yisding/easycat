@@ -423,7 +423,7 @@ environment, drop the `uv run` prefix.
 $ uv run easycat --help
   init      Scaffold a new project from a template
   doctor    Check API keys, optional extras, and provider reachability
-  docs      Show quickstart, examples, teaching, and operations docs
+  docs      Show docs for learning, validation, and operations
   explain   Look up errors and CLI schema topics
   inspect   Inspect a debug bundle or SQLite journal
   replay    Replay a debug bundle or SQLite journal
