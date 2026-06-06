@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -781,8 +782,19 @@ def test_init_json_next_step_commands_match_template_readme(
 
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
+    expected_commands = [
+        f"cd {shlex.quote(str(tmp_path / name))}",
+        "cp .env.example .env",
+        "uv sync",
+        "uv run easycat doctor --env-file .env",
+        _template_readme_check_command(template),
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        _template_readme_run_command(template),
+    ]
     assert payload["run_command"] == _template_readme_run_command(template)
     assert payload["check_command"] == _template_readme_check_command(template)
+    assert payload["next_step_commands"] == expected_commands
     assert "after cd into the scaffolded project" in payload["command_note"]
 
 

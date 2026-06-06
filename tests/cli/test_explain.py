@@ -100,6 +100,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "`repo_create_command`" in result.stdout
     assert "top-level `command_note`" in result.stdout
     assert "post-scaffold check/run context" in stdout
+    assert "`next_step_commands`" in result.stdout
+    assert "copy/sync/doctor/check/docs/run" in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "EASYCAT_E102" in result.stdout
@@ -131,6 +133,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
+    assert "`next_step_commands`" in result.stdout
     assert "post-scaffold check/run context" in stdout
     assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
@@ -163,6 +166,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "uppercase placeholders such as PATH" in payload["body"]
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
+    assert "`next_step_commands`" in payload["body"]
     assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
     assert "`report_path`" in payload["body"]
     assert "validate report .easycat/validation/latest.json --json" in payload["body"]

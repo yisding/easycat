@@ -15,6 +15,7 @@ See ``TEST_PLANS.md`` §11.
 from __future__ import annotations
 
 import json
+import shlex
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -159,6 +160,16 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["git"], bool)
     assert payload["run_command"] == "uv run --env-file .env python agent.py"
     assert payload["check_command"] == "uv run python -m py_compile agent.py"
+    assert payload["next_step_commands"] == [
+        f"cd {shlex.quote(str(tmp_path / 'demo'))}",
+        "cp .env.example .env",
+        "uv sync",
+        "uv run easycat doctor --env-file .env",
+        "uv run python -m py_compile agent.py",
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        "uv run --env-file .env python agent.py",
+    ]
     assert "after cd into the scaffolded project" in payload["command_note"]
 
 

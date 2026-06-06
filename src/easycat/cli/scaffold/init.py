@@ -8,6 +8,7 @@ coding-agent scaffolding).
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from difflib import get_close_matches
 from importlib.resources import files
@@ -263,6 +264,20 @@ def _next_step_check_command(template: str) -> str:
     """Return the scaffold-local syntax check command for the success footer."""
     filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
     return "uv run python -m py_compile " + " ".join(filenames)
+
+
+def _next_step_commands(target: Path, template: str) -> list[str]:
+    """Return the ordered post-scaffold command sequence."""
+    return [
+        f"cd {shlex.quote(str(target))}",
+        "cp .env.example .env",
+        "uv sync",
+        "uv run easycat doctor --env-file .env",
+        _next_step_check_command(template),
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        _next_step_run_command(template),
+    ]
 
 
 def _provider_name(spec: str) -> str:
@@ -666,6 +681,7 @@ def init(
                 git=git_ok,
                 run_command=_next_step_run_command(cfg.template),
                 check_command=_next_step_check_command(cfg.template),
+                next_step_commands=_next_step_commands(target, cfg.template),
                 command_note=_INIT_COMMAND_NOTE,
             )
         )

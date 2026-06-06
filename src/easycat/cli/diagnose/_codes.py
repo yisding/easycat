@@ -94,6 +94,9 @@ context. Each `catalog` row includes:
 `name`, `mode`, `transport`, `framework`, `description`,
 `create_command` (installed CLI form), `repo_create_command`
 (repo-local `uv run` form), `run_command`, and `check_command`.
+Successful `easycat init NAME --json` also includes
+`next_step_commands`, an ordered copy/sync/doctor/check/docs/run
+sequence matching the human success footer.
 Bump `schema_version` when the shape changes; keep older schemas
 documented before accepting a newer version.
 """
@@ -128,7 +131,8 @@ entry points include:
                          `check_command`; `command_note` explains
                          installed vs repo-local creation and post-scaffold
                          check/run context
-  `run_command`, `check_command`, `command_note` - `easycat init NAME --json`
+  `run_command`, `check_command`, `next_step_commands`, `command_note` -
+                         `easycat init NAME --json`
 
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:
