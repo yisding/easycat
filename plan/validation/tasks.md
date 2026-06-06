@@ -1555,6 +1555,38 @@ Acceptance:
 
 Status: completed (verified by 2026-05-26 audit)
 
+Current verified state:
+
+- `src/easycat/_observability.py` defines `METRIC_DEFINITIONS` with histogram
+  metrics `easycat.turn.latency`, `easycat.stage.latency`,
+  `easycat.journal.append.latency`, and `easycat.event_loop.lag`; counter
+  metrics `easycat.turns.total`, `easycat.audio.bytes.total`,
+  `easycat.audio.frames.total`, `easycat.provider.errors.total`,
+  `easycat.session.errors.total`, `easycat.transport.disconnects.total`,
+  `easycat.validation.failures.total`, and `easycat.queue.dropped.total`; and
+  observable gauges `easycat.sessions.active`, `easycat.queue.depth`, and
+  `easycat.journal.degraded`. The stored kind values are `histogram`,
+  `counter`, and `observable_gauge`.
+- `record_histogram(...)`, `increment_counter(...)`, and `observe_gauge(...)`
+  route through `_record_metric(...)`, which enforces each metric kind and
+  sanitizes attributes against `LOW_CARDINALITY_ATTRIBUTE_KEYS`.
+- Runtime emissions currently cover active sessions, turn latency/counts,
+  stage latency, provider/session errors, audio bytes/frames, queue depth,
+  queue drops, event-loop lag, journal append latency, and journal degraded
+  state.
+- The current source tree defines but does not yet emit
+  `easycat.transport.disconnects.total` or `easycat.validation.failures.total`.
+- Metric wiring is present in `src/easycat/_bounded_queue.py`,
+  `src/easycat/session/_session.py`, `src/easycat/session/_turn_runner.py`,
+  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal.py`,
+  and the stage modules under `src/easycat/stages/`.
+- `tests/test_observability.py` verifies metric definitions, fake meter
+  counter/histogram/gauge behavior, observable-gauge callback behavior,
+  queue-depth refreshes, audio counters, provider/session error counters, and
+  rejection of span-only GenAI keys on metric attributes.
+- `plan/validation/reference.md` lists the same suggested metric names and the
+  allowed low-cardinality attribute vocabulary.
+
 Dependencies:
 
 - V6.1

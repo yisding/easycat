@@ -529,6 +529,130 @@ def test_validation_tasks_v61_current_state_tracks_noop_safe_otel_spans() -> Non
         assert f"`{token}`" in section
 
 
+def test_validation_tasks_v62_current_state_tracks_low_cardinality_metrics() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V6.2 Add Low-Cardinality Metrics", 1)[1].split(
+        "## Dependency Map",
+        1,
+    )[0]
+    observability_source = (REPO_ROOT / "src/easycat/_observability.py").read_text(
+        encoding="utf-8"
+    )
+    reference = (REPO_ROOT / "plan/validation/reference.md").read_text(encoding="utf-8")
+    test_source = Path(__file__).read_text(encoding="utf-8")
+    source_files = {
+        path.relative_to(REPO_ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "src/easycat").rglob("*.py")
+    }
+    metric_wiring = {
+        "src/easycat/_bounded_queue.py": (
+            "easycat.queue.dropped.total",
+            "easycat.queue.depth",
+        ),
+        "src/easycat/session/_session.py": (
+            "easycat.event_loop.lag",
+            "easycat.queue.depth",
+            "easycat.journal.degraded",
+            "session_started",
+            "session_ended",
+        ),
+        "src/easycat/session/_turn_runner.py": (
+            "easycat.turn.latency",
+            "easycat.turns.total",
+            "easycat.session.errors.total",
+        ),
+        "src/easycat/session/_audio_router.py": (
+            "easycat.audio.bytes.total",
+            "easycat.audio.frames.total",
+        ),
+        "src/easycat/runtime/journal.py": (
+            "easycat.journal.append.latency",
+            "easycat.journal.degraded",
+        ),
+        "src/easycat/stages/transport.py": (
+            "easycat.stage.latency",
+            "easycat.audio.bytes.total",
+            "easycat.audio.frames.total",
+            "easycat.provider.errors.total",
+        ),
+        "src/easycat/stages/stt.py": (
+            "easycat.stage.latency",
+            "easycat.provider.errors.total",
+        ),
+        "src/easycat/stages/vad.py": (
+            "easycat.stage.latency",
+            "easycat.provider.errors.total",
+        ),
+        "src/easycat/stages/agent.py": (
+            "easycat.stage.latency",
+            "easycat.provider.errors.total",
+        ),
+        "src/easycat/stages/tts.py": (
+            "easycat.stage.latency",
+            "easycat.provider.errors.total",
+        ),
+    }
+    reserved_metrics = (
+        "easycat.transport.disconnects.total",
+        "easycat.validation.failures.total",
+    )
+
+    assert "Current verified state:" in section
+    assert "METRIC_DEFINITIONS" in observability_source
+    for metric_name, metric_kind in observability.METRIC_DEFINITIONS.items():
+        assert metric_name in observability_source
+        assert metric_name in reference
+        assert f"`{metric_name}`" in section
+        assert metric_kind in section
+    for attr_name in observability.LOW_CARDINALITY_ATTRIBUTE_KEYS:
+        assert attr_name in reference
+        assert attr_name in observability_source
+    for helper in (
+        "record_histogram",
+        "increment_counter",
+        "observe_gauge",
+        "_record_metric",
+        "LOW_CARDINALITY_ATTRIBUTE_KEYS",
+    ):
+        assert helper in observability_source
+        assert f"`{helper}(...)`" in section or f"`{helper}`" in section
+    for path, metric_names in metric_wiring.items():
+        assert f"`{path}`" in section or "stage modules under `src/easycat/stages/`" in section
+        source = source_files[path]
+        for metric_name in metric_names:
+            assert metric_name in source
+    for metric_name in reserved_metrics:
+        emitters = [
+            path
+            for path, source in source_files.items()
+            if path != "src/easycat/_observability.py" and metric_name in source
+        ]
+        assert not emitters, f"{metric_name} unexpectedly emitted by {emitters}"
+        assert f"`{metric_name}`" in section
+    for test_name in (
+        "test_metric_definitions_match_validation_reference",
+        "test_metrics_use_configured_meter_with_low_cardinality_attributes",
+        "test_observable_gauge_uses_callback_contract",
+        "test_audio_queue_emits_drop_counter_and_depth_gauge",
+        "test_audio_queue_refreshes_depth_after_block_put_and_close",
+        "test_transport_send_span_and_audio_counters_emit",
+        "test_session_errors_counter_increments_on_dispatch_failure",
+        "test_metric_attributes_reject_span_only_genai_keys",
+    ):
+        assert test_name in test_source
+    for token in (
+        "METRIC_DEFINITIONS",
+        "record_histogram(...)",
+        "increment_counter(...)",
+        "observe_gauge(...)",
+        "_record_metric(...)",
+        "LOW_CARDINALITY_ATTRIBUTE_KEYS",
+        "plan/validation/reference.md",
+        "tests/test_observability.py",
+    ):
+        assert f"`{token}`" in section
+
+
 # ──────────────────────────────────────────────────────────────────
 # N4+N5: spans/counters wired into the pipeline stages.
 # ──────────────────────────────────────────────────────────────────
