@@ -341,9 +341,7 @@ def _journal_dir() -> Path:
     Mirrors the fallback order the runtime uses so the check reports on
     the path the runtime will actually try to write to.
     """
-    xdg = os.getenv("XDG_CACHE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".cache"
-    return base / "easycat" / "journals"
+    return Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat")) / "journals"
 
 
 def check_journal_writable() -> CheckResult:
@@ -413,7 +411,7 @@ def check_disk_space(min_free_mb: int = 500) -> CheckResult:
             status="fail",
             detail=f"{free_mb}MB free at {probe_path} (need >= {min_free_mb}MB)",
             code="EASYCAT_E208",
-            fix="Free up disk space or set XDG_CACHE_HOME to a larger filesystem.",
+            fix="Free up disk space or set EASYCAT_DATA_DIR to a larger filesystem.",
         )
     return CheckResult(
         name="disk_space",

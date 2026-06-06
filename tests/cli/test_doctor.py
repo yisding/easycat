@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 
 from easycat.cli._app import app
 from easycat.cli.diagnose import doctor as doctor_module
+from easycat.errors import REGISTRY
 
 
 @pytest.fixture
@@ -324,11 +325,28 @@ def test_check_microphone_skips_when_sounddevice_missing(
 def test_check_journal_writable_ok(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
-    """Pointing XDG_CACHE_HOME at a writable tmp dir yields ok."""
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    """Pointing EASYCAT_DATA_DIR at a writable tmp dir yields ok."""
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
     result = doctor_module.check_journal_writable()
     assert result.status == "ok", result.detail
     assert str(tmp_path) in result.detail
+
+
+def test_journal_dir_matches_runtime_data_dir_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    """Doctor must probe the same journal root that SqliteJournal uses."""
+    data_dir = tmp_path / "runtime-data"
+    xdg_cache = tmp_path / "xdg-cache"
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(xdg_cache))
+
+    result = doctor_module.check_journal_writable()
+
+    assert result.status == "ok", result.detail
+    assert result.detail == str(data_dir / "journals")
+    assert (data_dir / "journals").is_dir()
+    assert not (xdg_cache / "easycat" / "journals").exists()
 
 
 def test_check_journal_writable_fails_on_readonly(
@@ -338,7 +356,7 @@ def test_check_journal_writable_fails_on_readonly(
     # Point at a path that collides with a regular file, so mkdir() fails.
     blocker = tmp_path / "blocker"
     blocker.write_text("not a dir")
-    monkeypatch.setenv("XDG_CACHE_HOME", str(blocker))
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(blocker))
     result = doctor_module.check_journal_writable()
     assert result.status == "fail"
     assert result.code == "EASYCAT_E207"
@@ -347,7 +365,7 @@ def test_check_journal_writable_fails_on_readonly(
 def test_check_disk_space_reports_free_megabytes(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
     result = doctor_module.check_disk_space()
     assert result.status in {"ok", "fail"}
     assert "MB free" in result.detail
@@ -357,10 +375,26 @@ def test_check_disk_space_fails_under_threshold(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
     """Force the threshold higher than any realistic free space."""
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
     result = doctor_module.check_disk_space(min_free_mb=10**12)
     assert result.status == "fail"
     assert result.code == "EASYCAT_E208"
+    assert "EASYCAT_DATA_DIR" in result.fix
+
+
+def test_journal_error_guidance_matches_runtime_data_dir_contract() -> None:
+    text = "\n".join(
+        [
+            REGISTRY["EASYCAT_E207"].cause,
+            REGISTRY["EASYCAT_E207"].fix,
+            REGISTRY["EASYCAT_E208"].fix,
+        ]
+    )
+
+    assert ".easycat/journals" in text
+    assert "EASYCAT_DATA_DIR" in text
+    assert "~/.cache/easycat" not in text
+    assert "XDG_CACHE_HOME" not in text
 
 
 def test_doctor_fix_creates_journal_dir(
@@ -371,14 +405,14 @@ def test_doctor_fix_creates_journal_dir(
     empty_env: None,
 ) -> None:
     """``--fix`` mkdirs the journal directory when E207 is reported."""
-    # Stage 1: block the default mkdir by pointing XDG_CACHE_HOME at a
+    # Stage 1: block the default mkdir by pointing EASYCAT_DATA_DIR at a
     # non-existent nested path, then remove any previously-created dir.
-    cache = tmp_path / "never-created"
-    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    data_dir = tmp_path / "never-created"
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
 
     # Pre-condition: the dir doesn't exist yet.
-    journal_dir = cache / "easycat" / "journals"
+    journal_dir = data_dir / "journals"
     assert not journal_dir.exists()
 
     # Running doctor once with --fix should create it.

@@ -315,11 +315,12 @@ EASYCAT_E207 = register(
     "Journal directory is not writable: {path}",
     cause=(
         "EasyCat writes crash-durable session journals to "
-        "`~/.cache/easycat/journals/` by default. That directory is "
+        "`.easycat/journals/` by default. That directory is "
         "either missing, read-only, or on a filesystem that does not "
-        "support SQLite WAL mode."
+        "support SQLite WAL mode. Set `EASYCAT_DATA_DIR` to move the "
+        "journal root."
     ),
-    fix="mkdir -p ~/.cache/easycat/journals && chmod u+w ~/.cache/easycat/journals",
+    fix="mkdir -p .easycat/journals && chmod u+w .easycat/journals",
     example="",
     related=[],
 )
@@ -332,7 +333,7 @@ EASYCAT_E208 = register(
         "session; a machine running low on disk will silently fail to "
         "persist recordings."
     ),
-    fix="Free up disk space or point the cache elsewhere with XDG_CACHE_HOME.",
+    fix="Free up disk space or point EasyCat at a larger filesystem with EASYCAT_DATA_DIR.",
     example="",
     related=["EASYCAT_E207"],
 )
