@@ -1049,6 +1049,15 @@ def test_validate_release_cli_rejects_conflicting_latency_modes_json_envelope(
     assert "context" not in payload
 
 
+def test_validate_report_help_names_latest_report_path(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["validate", "report", "--help"])
+    help_text = " ".join(result.stdout.split())
+
+    assert result.exit_code == 0
+    assert "Validation report JSON path" in help_text
+    assert ".easycat/validation/latest.json" in help_text
+
+
 def test_validate_report_cli_renders_summary(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     junit_path = tmp_path / "junit.xml"

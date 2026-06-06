@@ -416,7 +416,12 @@ def release(
 
 @validate_app.command(name="report")
 def report_command(
-    path: Annotated[Path, typer.Argument(help="Validation report JSON path.")],
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help="Validation report JSON path, for example .easycat/validation/latest.json."
+        ),
+    ],
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit the standard machine-readable stdout envelope."),
