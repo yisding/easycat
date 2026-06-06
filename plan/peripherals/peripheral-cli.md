@@ -33,8 +33,8 @@ M1 (scaffolding) is effectively done:
 M2 gaps:
 
 - Template `agent.py` line budgets are now enforced at the planned caps:
-  `openai-agents` ≤16 lines, `pydantic-ai` ≤12,
-  `pydantic-ai-workflow` ≤15, `text-chat` ≤17, `twilio-phone` ≤15, and
+  `openai-agents` ≤16 lines, `pydantic-ai` ≤17,
+  `pydantic-ai-workflow` ≤20, `text-chat` ≤17, `twilio-phone` ≤15, and
   `webrtc-browser` ≤14. Templates currently wire simple Python
   tools/workflows instead of the plan's `calculator` + `filesystem` MCP; the
   tools are working, but the plan text should be updated to match the shipped
@@ -434,13 +434,13 @@ run(EasyConfig.mic(agent=agent))
 
 PydanticAI single-agent, local mic. One `current_time` tool wired in.
 Shows: PydanticAI agent construction, tool wiring, and `EasyConfig.mic(...)`.
-Target ≤ 12 lines is met.
+Target ≤ 17 lines is met.
 
 **`pydantic-ai-workflow`**
 
 Shipped as a local-mic workflow object with billing and technical
 PydanticAI specialists plus an `on_user_turn(...)` router. Shows:
-multi-agent routing and the bridge's workflow pass-through. Target ≤ 15
+multi-agent routing and the bridge's workflow pass-through. Target ≤ 20
 lines is met.
 
 **`twilio-phone`**

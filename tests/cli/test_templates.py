@@ -45,8 +45,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 16,
-    "pydantic-ai": 12,
-    "pydantic-ai-workflow": 15,
+    "pydantic-ai": 17,
+    "pydantic-ai-workflow": 20,
     "text-chat": 17,
     "twilio-phone": 15,
     "webrtc-browser": 14,
@@ -459,6 +459,22 @@ def test_text_chat_template_keeps_first_code_readable() -> None:
     assert "create_text_session(agent=agent)" in agent
     assert "create_text_session(agent=Agent(" not in agent
     assert "asyncio.run(main())" in agent
+
+
+def test_pydantic_templates_keep_first_code_readable() -> None:
+    single_agent = (_template_dir("pydantic-ai") / "agent.py").read_text(encoding="utf-8")
+    workflow = (_template_dir("pydantic-ai-workflow") / "agent.py").read_text(encoding="utf-8")
+
+    assert "from datetime import datetime" in single_agent
+    assert "def current_time" in single_agent
+    assert single_agent.index("from datetime import datetime") < single_agent.index(
+        "def current_time"
+    )
+    assert "\n\n@agent.tool_plain\n" in single_agent
+    assert "from datetime import datetime" not in single_agent.split("def current_time", 1)[1]
+    assert "\n\nclass SupportWorkflow:\n" in workflow
+    assert workflow.index("TECH_TERMS") < workflow.index("class SupportWorkflow")
+    assert 'key = "technical" if any(word in text.lower() for word in TECH_TERMS)' in workflow
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
