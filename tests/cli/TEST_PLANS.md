@@ -44,13 +44,14 @@ producing an empty line.
 **Checks.**
 - `--version` prints a version containing `easycat`, exit 0.
 - `-V` short form works identically.
-- `--help` renders, exit 0, contains `init`, `doctor`, `explain`.
+- `--help` renders, exit 0, and includes every registered top-level
+  command/group.
 - Bare `easycat` prints the journey menu and includes every registered
   top-level command/group.
 - E2E: `uvx easycat --version` works on a clean machine (covered by
   the wheel test at the bottom).
 
-**Backed by.** `tests/cli/test_app.py` (4 tests).
+**Backed by.** `tests/cli/test_app.py`.
 
 ---
 

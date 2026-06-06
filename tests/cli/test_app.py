@@ -15,6 +15,13 @@ from typer.testing import CliRunner
 from easycat.cli._app import app
 
 
+def _registered_top_level_command_names() -> set[str]:
+    command_names = {command.name for command in app.registered_commands}
+    command_names.update(group.name for group in app.registered_groups)
+    command_names.discard(None)
+    return command_names
+
+
 def test_version(cli: CliRunner) -> None:
     result = cli.invoke(app, ["--version"])
     assert result.exit_code == 0
@@ -30,11 +37,12 @@ def test_help_renders(cli: CliRunner) -> None:
     result = cli.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
-    assert "init" in result.stdout
-    assert "doctor" in result.stdout
-    assert "docs" in result.stdout
-    assert "explain" in result.stdout
-    assert "inspect" in result.stdout
+    missing = sorted(
+        command_name
+        for command_name in _registered_top_level_command_names()
+        if command_name not in result.stdout
+    )
+    assert not missing, "Help output missing registered commands: " + ", ".join(missing)
 
 
 def test_journey_menu(cli: CliRunner) -> None:
@@ -48,11 +56,10 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
     assert "easycat explain json-schema" in result.stdout
-    command_names = {command.name for command in app.registered_commands}
-    command_names.update(group.name for group in app.registered_groups)
-    command_names.discard(None)
     missing = sorted(
-        command_name for command_name in command_names if command_name not in result.stdout
+        command_name
+        for command_name in _registered_top_level_command_names()
+        if command_name not in result.stdout
     )
     assert not missing, "Journey menu missing registered commands: " + ", ".join(missing)
     # Don't advertise unshipped commands until they're implemented.
