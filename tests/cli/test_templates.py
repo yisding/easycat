@@ -313,11 +313,25 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
 
     assert "four required sections" not in test_plan
     assert "five required sections" in test_plan
+    assert "base `easycat[...]` package" in test_plan
+    assert "pyproject.toml" in test_plan
     assert "uv run easycat doctor --env-file .env" in test_plan
     assert "uv run --env-file .env python agent.py" in test_plan
     assert "uv run python agent.py" not in test_plan
     for section in section_names:
         assert section in test_plan
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_install_section_names_rendered_base_requirement(name: str) -> None:
+    source = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    rendered = _render_text(source, _substitutions(InitConfig(template=name), "demo"))
+    install_section = rendered.split("## Install", 1)[1].split("## Configure", 1)[0]
+
+    assert "uv sync" in install_section
+    assert _base_requirement(name) in install_section
+    assert "pyproject.toml" in install_section
+    assert "$EXTRAS" not in rendered
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

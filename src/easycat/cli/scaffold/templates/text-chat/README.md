@@ -8,6 +8,9 @@ Text-mode EasyCat agent — iterate on prompts without audio infrastructure.
 uv sync
 ```
 
+This installs `easycat[$EXTRAS]>=0.1.0` from `pyproject.toml`, including the
+agent framework extra this template needs.
+
 ## Configure
 
 Copy the example env file and fill in your API key:

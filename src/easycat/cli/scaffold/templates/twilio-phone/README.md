@@ -10,6 +10,9 @@ EasyCat session and the agent from `agent.py`.
 uv sync
 ```
 
+This installs `easycat[$EXTRAS]>=0.1.0` from `pyproject.toml`, including the
+framework and transport extras this template needs.
+
 ## Configure
 
 ```bash

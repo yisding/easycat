@@ -10,6 +10,9 @@ so you can see tool use in action on the very first run.
 uv sync
 ```
 
+This installs `easycat[$EXTRAS]>=0.1.0` from `pyproject.toml`, including the
+framework and transport extras this template needs.
+
 ## Configure
 
 ```bash
