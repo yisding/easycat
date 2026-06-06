@@ -322,6 +322,7 @@ def test_observability_doc_lists_journal_cli_entry_points() -> None:
 
     for command in (
         "easycat bundles list",
+        "easycat bundles show <path>",
         "easycat inspect <path>",
         "easycat replay <path>",
         "easycat bundles export <path>",

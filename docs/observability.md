@@ -73,6 +73,7 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   journal; `debug="light"`/`debug="full"` do.
 - CLI entry points:
   `easycat bundles list`,
+  `easycat bundles show <path>`,
   `easycat inspect <path>`,
   `easycat replay <path>`, and
   `easycat bundles export <path>`.
