@@ -73,6 +73,7 @@ def _resolve_local_path(source: Path, target: str) -> Path:
 
 def _heading_anchors(path: Path) -> set[str]:
     anchors: set[str] = set()
+    counts: dict[str, int] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         match = re.match(r"^#{1,6}\s+(?P<title>.+?)\s*$", line)
         if not match:
@@ -83,7 +84,9 @@ def _heading_anchors(path: Path) -> set[str]:
         slug = slug.translate(str.maketrans("", "", string.punctuation.replace("-", "")))
         slug = re.sub(r"\s+", "-", slug).strip("-")
         if slug:
-            anchors.add(slug)
+            duplicate_index = counts.get(slug, 0)
+            counts[slug] = duplicate_index + 1
+            anchors.add(slug if duplicate_index == 0 else f"{slug}-{duplicate_index}")
     return anchors
 
 
@@ -122,6 +125,30 @@ def test_maintained_markdown_local_links_resolve() -> None:
                     )
 
     assert not broken, "Broken local Markdown links:\n" + "\n".join(broken)
+
+
+def test_markdown_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:
+    page = tmp_path / "page.md"
+    page.write_text(
+        "\n".join(
+            (
+                "# Root",
+                "## Repeated",
+                "## Repeated",
+                "## Repeated!",
+                "## Repeated",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    assert _heading_anchors(page) == {
+        "root",
+        "repeated",
+        "repeated-1",
+        "repeated-2",
+        "repeated-3",
+    }
 
 
 def test_current_user_docs_reference_known_easycat_extras() -> None:
