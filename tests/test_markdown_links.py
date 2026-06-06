@@ -37,11 +37,28 @@ def _maintained_markdown_files() -> list[Path]:
 def _current_user_markdown_files() -> list[Path]:
     files: set[Path] = set(REPO_ROOT.glob("*.md"))
     files.update((REPO_ROOT / "docs").rglob("*.md"))
+    files.update(_docs_route_markdown_files())
     files.update(
         (REPO_ROOT / "src" / "easycat" / "cli" / "scaffold" / "templates").rglob("README.md")
     )
     files.add(REPO_ROOT / "examples" / "README.md")
     return sorted(path for path in files if path.exists())
+
+
+def _docs_route_markdown_files() -> set[Path]:
+    from easycat.cli._app import _DOCS_LINKS
+
+    files: set[Path] = set()
+    for entry in _DOCS_LINKS:
+        route = entry["path"].split("#", 1)[0]
+        if not route:
+            continue
+        path = REPO_ROOT / route
+        if path.is_dir():
+            files.update(path.rglob("*.md"))
+        elif path.suffix == ".md":
+            files.add(path)
+    return files
 
 
 def _links_in(path: Path) -> Iterable[tuple[int, str]]:
@@ -165,7 +182,9 @@ def test_current_user_docs_reference_known_easycat_extras() -> None:
         rel_path = path.relative_to(REPO_ROOT)
         text = path.read_text(encoding="utf-8")
         for match in UV_EXTRA_RE.finditer(text):
-            extra = match.group("extra")
+            extra = match.group("extra").strip().rstrip(".,;:")
+            if not extra or _looks_like_placeholder(extra):
+                continue
             if extra not in known:
                 unknown.append(f"{rel_path}: unknown --extra {extra!r}")
         for match in EASYCAT_EXTRA_RE.finditer(text):
