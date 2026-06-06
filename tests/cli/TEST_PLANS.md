@@ -281,9 +281,10 @@ bumping without a migration; stderr content leaking into the JSON on
 stdout and corrupting `jq` consumers.
 
 **Checks.**
-- `--json` output from `init`, `doctor`, `explain` (both single-code
-  and `--list`) all include `schema_version: 1`, a `command` field
-  matching the command name, and a `status` in {ok, error}.
+- `--json` output from `init`, `doctor`, `docs`, `explain` (both
+  single-code and `--list`) all include `schema_version: 1`, a
+  `command` field matching the command name, and a `status` in
+  {ok, error}.
 - The JSON payload appears on stdout; stderr is either empty or
   strictly logs/progress (never JSON fragments).
 - When a command errors, the envelope includes `code`, `message`,

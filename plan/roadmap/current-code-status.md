@@ -10,15 +10,17 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 175 tracked Python files.
-- `tests/` contains 197 tracked `test_*.py` files.
-- `docs/teaching/` now contains shipped chapters `00` through `15`.
+- `src/easycat/` contains 179 tracked Python files.
+- `tests/` contains 199 tracked `test_*.py` files.
+- `docs/README.md` is the maintained reader-facing docs map, and
+  `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
   validation, coverage, socket validation, build smoke, and manual
   live-provider tests. Quick validation runs on Python 3.11, 3.12, and 3.14;
   socket validation runs on Python 3.12.
-- CLI support includes `init`, `doctor`, `explain`, `bundles list/show/export`,
-  `inspect`, and `replay`; `init` ships `openai-agents`, `pydantic-ai`,
+- CLI support includes `init`, `doctor`, `docs`, `explain`,
+  `bundles list/show/export`, `inspect`, and `replay`; `init` ships
+  `openai-agents`, `pydantic-ai`,
   `pydantic-ai-workflow`, `text-chat`, `twilio-phone`, and `webrtc-browser`
   templates with enforced per-template `agent.py` line budgets. `easycat
   validate` exposes `quick`, `socket`, `stress`, `contracts`, `latency`,

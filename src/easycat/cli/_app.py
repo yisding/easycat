@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 import typer
 
 from easycat.cli._errors import handle_easycat_error
-from easycat.cli._output import stderr_console, stdout_console
+from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
 from easycat.errors import EasyCatError
 
 
@@ -69,13 +69,28 @@ Online source: [cyan]https://github.com/yisding/easycat[/]
 """
 
 
+_DOCS_LINKS = [
+    {"label": "Quickstart", "path": "README.md#install"},
+    {"label": "Docs map", "path": "docs/README.md"},
+    {"label": "Teaching ladder", "path": "docs/teaching/"},
+    {"label": "Public API", "path": "docs/public-api.md"},
+    {"label": "Validation", "path": "README.md#validation-workflow"},
+]
+_DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
+
+
 def _print_journey_menu() -> None:
     """Render the top-level menu on bare ``easycat`` invocation."""
     stdout_console.print(_JOURNEY_MENU)
 
 
-def docs_command() -> None:
+def docs_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
     """Show documentation entry points."""
+    if json_output:
+        emit_json(json_envelope("docs", entries=_DOCS_LINKS, source_url=_DOCS_SOURCE_URL))
+        return
     stdout_console.print(_DOCS_MENU)
 
 

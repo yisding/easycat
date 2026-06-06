@@ -6,6 +6,7 @@ that short-circuits before importing Typer/Rich.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -60,6 +61,19 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/teaching" in result.stdout
     assert "docs/public-api.md" in result.stdout
     assert "#validation-workflow" in result.stdout
+
+
+def test_docs_command_json(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "docs"
+    assert payload["status"] == "ok"
+    paths = {entry["path"] for entry in payload["entries"]}
+    assert "docs/README.md" in paths
+    assert "docs/teaching/" in paths
+    assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 
 # ── Fast-path guard ──────────────────────────────────────────────

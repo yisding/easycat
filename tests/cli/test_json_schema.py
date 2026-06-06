@@ -147,6 +147,15 @@ def test_doctor_error_envelope(
     _assert_envelope(payload, "doctor", status="error")
 
 
+def test_docs_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "docs")
+    assert isinstance(payload["entries"], list)
+    assert {"label": "Docs map", "path": "docs/README.md"} in payload["entries"]
+
+
 def test_stdout_is_parseable_json_even_with_stderr_noise(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
