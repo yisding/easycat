@@ -13,7 +13,7 @@ import json
 import pytest
 import websockets
 
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.twilio_media import (
     TwilioConnectionTransport,
@@ -296,6 +296,12 @@ class TestWebSocketConnectionTransport:
 
 
 class TestTwilioConnectionTransport:
+    def test_audio_contract_declares_distinct_tts_preference(self):
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket())
+
+        assert transport.audio_format == PCM16_MONO_16K
+        assert transport.preferred_tts_output_format == PCM16_MONO_8K
+
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
         port = find_free_port()

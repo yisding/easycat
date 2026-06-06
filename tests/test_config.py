@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from easycat import PCM16_MONO_16K, PCM16_MONO_24K, EasyConfig, create_session
+from easycat import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, EasyConfig, create_session
 from easycat.audio_format import AudioChunk
 from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
@@ -101,7 +101,20 @@ def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_insta
     config = EasyConfig(openai_api_key="test-key", transport=transport)
 
     assert isinstance(config.tts, OpenAITTSConfig)
-    assert config.tts.output_format == transport.audio_format
+    assert transport.audio_format == PCM16_MONO_16K
+    assert transport.preferred_tts_output_format == PCM16_MONO_8K
+    assert config.tts.output_format == PCM16_MONO_8K
+
+
+def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_config():
+    transport = TwilioTransportConfig()
+
+    config = EasyConfig(openai_api_key="test-key", transport=transport)
+
+    assert isinstance(config.tts, OpenAITTSConfig)
+    assert transport.audio_format == PCM16_MONO_16K
+    assert transport.preferred_tts_output_format == PCM16_MONO_8K
+    assert config.tts.output_format == PCM16_MONO_8K
 
 
 def test_easycat_config_uses_transport_echo_preference_capability():
@@ -424,6 +437,40 @@ def test_easycat_config_auto_aligns_default_tts_configs_to_transport(
         assert isinstance(config.tts, ElevenLabsTTSConfig)
         assert config.tts.output_format == expected_output
         assert config.tts.audio_format == PCM16_MONO_16K
+
+
+@pytest.mark.parametrize(
+    ("tts_config", "expected_rate", "expected_output"),
+    [
+        (OpenAITTSConfig(api_key="test-key"), None, PCM16_MONO_8K),
+        (DeepgramTTSConfig(api_key="test-key"), 8000, PCM16_MONO_8K),
+        (CartesiaTTSConfig(api_key="test-key"), 8000, PCM16_MONO_8K),
+        (ElevenLabsTTSConfig(api_key="test-key"), None, "pcm_16000"),
+    ],
+)
+def test_easycat_config_auto_aligns_default_tts_configs_to_twilio_tts_preference(
+    tts_config,
+    expected_rate,
+    expected_output,
+):
+    config = EasyConfig(
+        stt=OpenAIRealtimeSTTConfig(api_key="stt-key"),
+        tts=tts_config,
+        transport=TwilioTransportConfig(),
+    )
+
+    if isinstance(config.tts, OpenAITTSConfig):
+        assert config.tts.output_format == expected_output
+    elif isinstance(config.tts, DeepgramTTSConfig):
+        assert config.tts.sample_rate == expected_rate
+        assert config.tts.output_format == expected_output
+    elif isinstance(config.tts, CartesiaTTSConfig):
+        assert config.tts.sample_rate == expected_rate
+        assert config.tts.output_format == expected_output
+    else:
+        assert isinstance(config.tts, ElevenLabsTTSConfig)
+        assert config.tts.output_format == expected_output
+        assert config.tts.audio_format == PCM16_MONO_8K
 
 
 def test_easycat_config_auto_aligns_string_tts_shortcuts(monkeypatch: pytest.MonkeyPatch):

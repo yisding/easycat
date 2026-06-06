@@ -1,10 +1,14 @@
 # Telephony-Native TTS Output (8 kHz / μ-law) — Peripheral
 
-> **Status (2026-05-21): partially landed.** Current code can align TTS
-> config output formats to a transport's audio format in `create_session()`,
-> and provider configs carry output-format fields. Twilio still converts
-> PCM16 to μ-law in `TwilioTransport.send_audio`; μ-law pass-through and
-> full provider-native narrowband negotiation remain planned.
+> **Status (2026-06-06): partially landed.** Current code can align TTS
+> config output formats to a transport's preferred outbound audio format in
+> `EasyConfig`, and Twilio config/transports now advertise 8 kHz PCM16 for
+> TTS output while preserving 16 kHz PCM16 for inbound STT audio. Deepgram and
+> Cartesia auto-alignment requests 8 kHz PCM when Twilio asks for it; OpenAI
+> and ElevenLabs still normalize locally when the provider cannot emit the
+> exact target. Twilio still converts PCM16 to μ-law in
+> `TwilioTransport.send_audio`; μ-law pass-through and full provider-native
+> narrowband negotiation remain planned.
 >
 > **This is a peripheral initiative.** It is not essential to the
 > debug-first thesis in `../roadmap/essential-debug-first-runtime.md`. It removes

@@ -102,10 +102,12 @@ with the codebase. Counts below come from tracked files and exclude
   secret-like keys, request ids, URLs, phone numbers, home paths, and error
   payloads while preserving replay-critical transcript/agent text; full
   pluggable privacy redaction plus OTel/cost exports remain planned.
-- Telephony-native TTS output is not fully implemented. Provider
-  output-format plumbing exists and `config.py` has a hook for transport
-  preferences, but no current transport advertises `preferred_tts_output_format`;
-  Twilio still sends by converting PCM16 to mulaw at the transport boundary.
+- Telephony-native TTS output is partially implemented. Provider
+  output-format plumbing exists, Twilio config/transports advertise
+  `preferred_tts_output_format=PCM16_MONO_8K`, and default TTS configs
+  align to that outbound preference. Twilio still performs the final
+  PCM16-to-mulaw encode at the transport boundary; true μ-law pass-through
+  and provider-native codec negotiation remain planned.
 
 ## Planning Implications
 

@@ -14,13 +14,13 @@ import logging
 import struct
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import websockets
 from websockets.asyncio.server import ServerConnection
 
 from easycat._audio_utils import resample
-from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
+from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
     DTMF,
     CallAnswered,
@@ -34,12 +34,15 @@ logger = logging.getLogger(__name__)
 
 # Twilio sends/receives mulaw 8 kHz mono.
 MULAW_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="mulaw")
+TWILIO_PREFERRED_TTS_OUTPUT_FORMAT = PCM16_MONO_8K
 _TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
 
 
 @dataclass
 class TwilioTransportConfig:
     """Configuration for :class:`TwilioTransport`."""
+
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     host: str = "0.0.0.0"
     port: int = 8766
@@ -223,6 +226,9 @@ class TwilioTransport(_ServerTransportBase):
     # STT provider leaves unlabeled, letting telephony classifiers (e.g. the
     # outbound voicemail-pickup guard) trust the inbound track in production.
     inbound_stt_track = "inbound"
+    # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
+    # so send_audio only performs the final companding step.
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     def __init__(
         self,
@@ -663,6 +669,9 @@ class TwilioConnectionTransport(_AudioQueueMixin):
     default_echo_cancellation_enabled = False
     # Inbound-only capture: see ``TwilioTransport.inbound_stt_track``.
     inbound_stt_track = "inbound"
+    # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
+    # so send_audio only performs the final companding step.
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
 
     def __init__(
         self,
