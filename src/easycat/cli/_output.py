@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 
 from easycat._console import color_enabled, feedback_console
 
@@ -51,24 +52,24 @@ stderr_console = feedback_console
 
 def info(message: str) -> None:
     """Print an informational line to stderr with a two-space prefix."""
-    stderr_console.print(f"  {message}")
+    stderr_console.print(f"  {escape(message)}")
 
 
 def success(message: str) -> None:
     """Print a success line to stderr."""
-    stderr_console.print(f"  [green]✓[/] {message}")
+    stderr_console.print(f"  [green]✓[/] {escape(message)}")
 
 
 def warn(message: str) -> None:
     """Print a warning line to stderr."""
-    stderr_console.print(f"  [yellow]![/] {message}")
+    stderr_console.print(f"  [yellow]![/] {escape(message)}")
 
 
 def error(code: str, message: str, *, fix: str | None = None) -> None:
     """Print an error line to stderr tagged with its ``EASYCAT_Exxx``."""
-    stderr_console.print(f"  [red]✗[/] [red]{code}[/]: {message}")
+    stderr_console.print(f"  [red]✗[/] [red]{code}[/]: {escape(message)}")
     if fix:
-        stderr_console.print(f"    [dim]Fix:[/] {fix}")
+        stderr_console.print(f"    [dim]Fix:[/] {escape(fix)}")
     stderr_console.print(f"    Run [cyan]easycat explain {_short_code(code)}[/] for details.")
 
 
@@ -119,4 +120,4 @@ def emit_command_error(
             json_envelope(command, status="error", message=message, exit_code=exit_code, **extra)
         )
         return
-    human_console.print(f"  [red]✗[/] {message}")
+    human_console.print(f"  [red]✗[/] {escape(message)}")
