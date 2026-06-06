@@ -11,22 +11,23 @@ first, debug second, safety net third, and infrastructure last.
 | 1 | CLI boot integrity | `test_app.py` + E2E §1 |
 | 2 | `explain` catalog completeness | `test_explain.py` + `test_errors.py` |
 | 3 | `explain` fuzzy + meta paths | `test_explain.py` |
-| 4 | `init` template rendering | `test_init.py` + `test_templates.py` |
-| 5 | `init` schema rejection paths | `test_init.py` |
-| 6 | `init` overwrite safety | `test_init.py` |
-| 7 | `doctor` check matrix | `test_doctor.py` |
-| 8 | `doctor` network isolation | `test_doctor.py` + network stubs |
-| 9 | Error-code registry integrity | `test_errors.py` |
-| 10 | Exit-code contract stability | `test_errors.py` + `test_exit_codes.py` |
-| 11 | JSON envelope stability | `test_json_schema.py` |
-| 12 | `validate` command and report rendering | `test_validate.py` |
-| 13 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
-| 14 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
-| 15 | Packaging — wheel ships dotfiles and metadata | `test_packaging.py` (integration) |
-| 16 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
+| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` |
+| 5 | `init` template rendering | `test_init.py` + `test_templates.py` |
+| 6 | `init` schema rejection paths | `test_init.py` |
+| 7 | `init` overwrite safety | `test_init.py` |
+| 8 | `doctor` check matrix | `test_doctor.py` |
+| 9 | `doctor` network isolation | `test_doctor.py` + network stubs |
+| 10 | Error-code registry integrity | `test_errors.py` |
+| 11 | Exit-code contract stability | `test_errors.py` + `test_exit_codes.py` |
+| 12 | JSON envelope stability | `test_json_schema.py` |
+| 13 | `validate` command and report rendering | `test_validate.py` |
+| 14 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
+| 15 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
+| 16 | Packaging — wheel ships dotfiles and metadata | `test_packaging.py` (integration) |
+| 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
 
-Plans 1-9 are fast unit tests. Plans 10-14 add coverage for cross-
-cutting contracts. Plans 15-16 are marked `integration_local` so they
+Plans 1-10 are fast unit tests. Plans 11-15 add coverage for cross-
+cutting contracts. Plans 16-17 are marked `integration_local` so they
 run in CI but not on every `pytest` invocation.
 
 ---
@@ -102,7 +103,38 @@ render.
 
 ---
 
-## Plan 4 — `init` template rendering
+## Plan 4 — `docs` route map
+
+**Concern.** `easycat docs` is the maintained navigation surface for
+new users, contributors, operators, and coding agents. It must point to
+current docs, expose useful command hints, and keep the human output
+and JSON route map in sync.
+
+**Risks.** A docs route points at a removed file or stale anchor; the
+JSON payload drops `audience`, `commands`, `command_note`, or online
+URLs; command hints drift away from target pages; placeholders such as
+`PATH` are emitted without explaining how to replace them; the route
+order stops putting onboarding paths first.
+
+**Checks.**
+- Human `easycat docs` output includes the maintained routes, audience
+  labels, command hints, online URLs, and the machine-readable command
+  note.
+- `easycat docs --json` emits a standard envelope with every route,
+  including `label`, `path`, `audience`, `description`, `commands`,
+  `url`, `source_url`, and `command_note`.
+- Routes are unique, resolve to local sources, and match GitHub
+  heading anchors for fragments.
+- Command hints are valid local commands, appear on their target pages,
+  and use repo-local `uv run` form where appropriate.
+- The route order keeps quickstart, CLI/scaffolds, docs map, teaching,
+  first lesson, and examples on the first screen.
+
+**Backed by.** `tests/cli/test_app.py` and `tests/test_docs_index.py`.
+
+---
+
+## Plan 5 — `init` template rendering
 
 **Concern.** The scaffolded project must be runnable — `agent.py`
 must be valid Python after substitution, files must be in the right
@@ -146,7 +178,7 @@ first run.
 
 ---
 
-## Plan 5 — `init` schema rejection paths
+## Plan 6 — `init` schema rejection paths
 
 **Concern.** Coding agents (Claude Code, Cursor, Codex) send typos
 and mis-shaped JSON; silent acceptance is worse than loud rejection
@@ -168,7 +200,7 @@ accepted.
 
 ---
 
-## Plan 6 — `init` overwrite safety
+## Plan 7 — `init` overwrite safety
 
 **Concern.** `init` must never silently overwrite existing work.
 
@@ -188,7 +220,7 @@ and `test_init_force_overwrites_existing`.
 
 ---
 
-## Plan 7 — `doctor` check matrix
+## Plan 8 — `doctor` check matrix
 
 **Concern.** Doctor must produce accurate status for first-run
 environment, provider, optional-runtime, journal, and disk checks; the
@@ -219,7 +251,7 @@ the per-row statuses.
 
 ---
 
-## Plan 8 — `doctor` network isolation
+## Plan 9 — `doctor` network isolation
 
 **Concern.** Doctor probes real provider endpoints. In CI we never
 hit the network, and in user-controlled environments network probes
@@ -242,7 +274,7 @@ exception type not in our handler; the 2s timeout not honored
 
 ---
 
-## Plan 9 — Error-code registry integrity
+## Plan 10 — Error-code registry integrity
 
 **Concern.** The registry is the single source of truth for
 `easycat explain`, raising code, and CLI exit codes. Any
@@ -266,7 +298,7 @@ templates; factories leaking partial context into error messages.
 
 ---
 
-## Plan 10 — Exit-code contract stability
+## Plan 11 — Exit-code contract stability
 
 **Concern.** Shell scripts and CI pipelines branch on CLI exit
 codes; changes here are breaking changes. The mapping between
@@ -289,7 +321,7 @@ mapping.
 
 ---
 
-## Plan 11 — JSON envelope stability
+## Plan 12 — JSON envelope stability
 
 **Concern.** Every `--json` output shares a versioned envelope:
 `{"schema_version": 1, "command": "...", "status": "ok|error",
@@ -323,7 +355,7 @@ command-specific CLI suites for deeper payload details.
 
 ---
 
-## Plan 12 — `validate` command and report rendering
+## Plan 13 — `validate` command and report rendering
 
 **Concern.** Validation should have one obvious command surface while
 preserving the global `--json` stdout envelope contract and keeping
@@ -358,7 +390,7 @@ called out; `--json` output diverging from the standard envelope.
 
 ---
 
-## Plan 13 — Library prereqs — `run()` lifecycle
+## Plan 14 — Library prereqs — `run()` lifecycle
 
 **Concern.** `easycat.run(config)` is the entry point every template
 uses. If lifecycle is broken (async-enter/start/stop ordering), voice
@@ -381,7 +413,7 @@ and polluting stdout.
 
 ---
 
-## Plan 14 — Library prereqs — string-keyed providers
+## Plan 15 — Library prereqs — string-keyed providers
 
 **Concern.** `EasyConfig(stt="deepgram/flux")` is the headline DX
 win the plan promised. If the string parser silently mis-routes or
@@ -407,7 +439,7 @@ through as a valid key.
 
 ---
 
-## Plan 15 — Packaging — wheel ships template dotfiles and metadata
+## Plan 16 — Packaging — wheel ships template dotfiles and metadata
 
 **Concern.** `uvx easycat init my-agent` from a PyPI-installed
 `easycat` must get the full template catalog, including `.env.example`
@@ -439,7 +471,7 @@ suite).
 
 ---
 
-## Plan 16 — End-to-end scaffold-and-invoke
+## Plan 17 — End-to-end scaffold-and-invoke
 
 **Concern.** The scaffolded project itself must be usable. Users
 type `cd my-agent && uv sync && uv run --env-file .env python agent.py` —

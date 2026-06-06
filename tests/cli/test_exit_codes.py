@@ -1,4 +1,4 @@
-"""Plan 10 — Exit-code contract stability.
+"""Plan 11 — Exit-code contract stability.
 
 Guards:
 * Every mapped ``EASYCAT_Exxx`` in ``_CODE_TO_EXIT`` is in ``REGISTRY``.
@@ -6,7 +6,7 @@ Guards:
   CLI.
 * Unlisted codes fall back to 1.
 
-See ``TEST_PLANS.md`` §10.
+See ``TEST_PLANS.md`` §11.
 """
 
 from __future__ import annotations

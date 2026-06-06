@@ -1,13 +1,13 @@
-"""Plan 16 — End-to-end scaffold-and-invoke.
+"""Plan 17 — End-to-end scaffold-and-invoke.
 
 For each template:
 * Scaffold into a tmpdir via the CLI.
 * Assert the generated Python files pass ``py_compile`` AND ``ruff``.
 
 Full ``uv sync`` round-trip is intentionally skipped (requires the
-template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §16).
+template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §17).
 
-See ``TEST_PLANS.md`` §16.
+See ``TEST_PLANS.md`` §17.
 """
 
 from __future__ import annotations

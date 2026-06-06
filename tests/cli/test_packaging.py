@@ -1,10 +1,10 @@
-"""Plan 15 — wheel packaging ships template dotfiles and release metadata.
+"""Plan 16 — wheel packaging ships template dotfiles and release metadata.
 
 Run with ``pytest -m integration_local tests/cli/test_packaging.py``.
 Skipped by default to keep the fast test suite fast; the wheel build
 takes a few seconds.
 
-See ``TEST_PLANS.md`` §15.
+See ``TEST_PLANS.md`` §16.
 """
 
 from __future__ import annotations

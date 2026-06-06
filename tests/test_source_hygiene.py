@@ -86,3 +86,16 @@ def test_cli_test_plan_avoids_brittle_test_count_claims() -> None:
             stale.append(f"{plan.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}")
 
     assert not stale, "CLI test plan contains brittle stale-count language:\n" + "\n".join(stale)
+
+
+def test_cli_test_plan_names_docs_route_map_coverage() -> None:
+    """Keep the onboarding docs command visible in the CLI coverage map."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    docs_plan = plan.split("## Plan 4 — `docs` route map", 1)[1].split("---", 1)[0]
+
+    assert "| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` |" in plan
+    assert "easycat docs" in docs_plan
+    assert "easycat docs --json" in docs_plan
+    assert "`audience`, `commands`, `command_note`, or online" in docs_plan
+    assert "test_app.py" in docs_plan
+    assert "tests/test_docs_index.py" in docs_plan

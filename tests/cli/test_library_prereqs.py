@@ -1,4 +1,4 @@
-"""Plans 12 & 13 — library prereqs (run, string-keyed providers).
+"""Plans 14 & 15 — library prereqs (run, string-keyed providers).
 
 The CLI's scaffolded templates assume that:
 
@@ -8,7 +8,7 @@ The CLI's scaffolded templates assume that:
   strings to typed configs using env-var API keys and raises
   ``EASYCAT_E104``/``EASYCAT_E203`` on unknowns / missing keys.
 
-See ``TEST_PLANS.md`` §12 and §13.
+See ``TEST_PLANS.md`` §14 and §15.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.factory import parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 
-# ── Plan 12: easycat.run() lifecycle ─────────────────────────────
+# ── Plan 14: easycat.run() lifecycle ─────────────────────────────
 
 
 def test_run_is_exposed_publicly() -> None:
@@ -143,7 +143,7 @@ def test_run_does_not_attach_feedback_under_pytest(
     attach.assert_not_called()
 
 
-# ── Plan 13: string-keyed provider selection ─────────────────────
+# ── Plan 15: string-keyed provider selection ─────────────────────
 
 
 def test_parse_stt_deepgram_flux(monkeypatch: pytest.MonkeyPatch) -> None:

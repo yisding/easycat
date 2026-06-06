@@ -1,4 +1,4 @@
-"""Plan 11 — JSON envelope stability.
+"""Plan 12 — JSON envelope stability.
 
 Every ``--json`` output shares a versioned envelope:
 
@@ -9,7 +9,7 @@ checking the envelope shape against a single schema. Command-specific suites
 cover deeper payload behavior for individual subcommands. Drift here is a
 breaking change for coding-agent consumers.
 
-See ``TEST_PLANS.md`` §11.
+See ``TEST_PLANS.md`` §12.
 """
 
 from __future__ import annotations
