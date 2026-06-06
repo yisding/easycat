@@ -80,6 +80,10 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".ruff_cache/",
     ".pytest_cache/",
     ".mypy_cache/",
+    ".coverage",
+    "htmlcov/",
+    "dist/",
+    "build/",
     ".easycat/",
 )
 
