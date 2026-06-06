@@ -785,12 +785,19 @@ EasyCat — voice bot framework
 
   Scaffold
     init        Scaffold a new project from a template
-    doctor      Check environment and provider reachability
-    explain     Look up an error code (like `cargo --explain`)
+    doctor      Check API keys, optional extras, and provider reachability
+    explain     Look up errors and CLI schema topics
 
   Debug with the journal
-    bundles     List, inspect, and export RunBundles
-    replay      Replay a RunBundle against current code
+    bundles     List captured debug bundles and crash dumps
+    inspect     Summarise a debug bundle or SQLite journal
+    replay      Replay a debug bundle or SQLite journal
+
+  Validation
+    validate    Run validation checks and inspect validation reports
+
+  Learn
+    docs        Show docs for learning, validation, and operations
 
 Run `easycat <command> --help` for command-specific options.
 Run `easycat explain <code>` to understand an error.
@@ -838,23 +845,25 @@ Two layers:
 
 - Typer's `CliRunner` drives each command; asserts stdout, stderr,
   exit code.
-- Golden-file tests for `--help` and `--json` output. Snapshots
-  checked into the repo, `pytest --update-snapshots` regenerates.
+- Top-level help, bare journey menu, docs routes, JSON envelopes,
+  validation reports, and explain topics are asserted directly.
 - Error-path tests: every `EASYCAT_Exxx` has a test that exercises
   the failure path and asserts the code surfaces in CLI output.
-- Template lint: load every template's `agent.py`, assert it parses,
-  passes ruff, does not exceed line budget.
+- Template lint: scaffold every template, assert generated top-level
+  Python compiles, passes ruff, and stays within line budgets.
+- Bundle command tests cover `bundles list`, `bundles show`,
+  `bundles export`, `inspect`, and `replay` against fixture journals
+  and bundles.
 
 ### End-to-end (`tests/cli/e2e/`, marked `integration_local`)
 
-- **Scaffold smoke matrix.** For each template: `init` into a tmpdir
-  with stub `--config`, `uv sync`, import the scaffolded `agent.py`,
-  run it against a fake transport, assert it reaches `TurnStarted`.
-- **`bundles export --for=claude-code` round-trip.** Capture a
-  RunBundle in memory, export, assert output pack shape matches the
-  documented contract.
-- **`replay` against checked-in fixture bundles**, `--fail-on-
-  regression` asserting no latency drift.
+The e2e layer currently covers scaffold smoke only:
+
+- **Scaffold smoke matrix.** For each template: `init` into a tmpdir,
+  run `py_compile` over generated top-level Python, and run ruff over
+  the scaffold. Full `uv sync` and runtime invocation stay gated until
+  generated projects can depend on the local checkout instead of the
+  published `easycat` package.
 
 CI runs both on every PR. Template matrix isolates failures per
 template so one broken template doesn't block others.

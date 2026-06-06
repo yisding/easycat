@@ -115,6 +115,42 @@ def test_journey_sections_cover_command_text_table_once() -> None:
     assert set(command_names) == set(_COMMAND_TEXT)
 
 
+def test_peripheral_cli_plan_tracks_journey_menu() -> None:
+    plan = (REPO_ROOT / "plan/peripherals/peripheral-cli.md").read_text()
+    help_architecture = plan.split("## Help Architecture", 1)[1].split(
+        "## Error UX Integration", 1
+    )[0]
+
+    for section, command_names in _JOURNEY_SECTIONS:
+        assert section in help_architecture
+        for command_name in command_names:
+            assert re.search(rf"^\s+{re.escape(command_name)}\s+", help_architecture, re.M)
+            assert _COMMAND_TEXT[command_name].journey in help_architecture
+
+    assert "Check environment and provider reachability" not in help_architecture
+    assert "Look up an error code (like `cargo --explain`)" not in help_architecture
+    assert "List, inspect, and export RunBundles" not in help_architecture
+    assert "Replay a RunBundle against current code" not in help_architecture
+
+
+def test_peripheral_cli_plan_tracks_current_test_contract() -> None:
+    plan = (REPO_ROOT / "plan/peripherals/peripheral-cli.md").read_text()
+    testing = plan.split("## CLI-Specific Testing", 1)[1].split(
+        "## `uvx` Zero-Install Guarantee", 1
+    )[0]
+    normalized = re.sub(r"\s+", " ", testing)
+
+    assert "pytest --update-snapshots" not in testing
+    assert "Golden-file tests" not in testing
+    assert "`uv sync`, import the scaffolded `agent.py`" not in testing
+    assert "--fail-on-regression" not in testing
+    assert "Top-level help, bare journey menu, docs routes, JSON envelopes" in normalized
+    assert "generated top-level Python compiles, passes ruff" in normalized
+    assert "Full `uv sync` and runtime invocation stay gated" in normalized
+    assert "The e2e layer currently covers scaffold smoke only" in testing
+    assert "Fixture replay smoke" not in testing
+
+
 def test_journey_menu(cli: CliRunner) -> None:
     """Bare ``easycat`` prints the journey menu listing implemented commands."""
     result = cli.invoke(app, [])
