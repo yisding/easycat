@@ -573,6 +573,12 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "uv run easycat doctor --env-file .env --json" in command_section
         assert "uv run easycat explain json-schema" in command_section
         assert "uv run easycat validate quick" in command_section
+        assert "uv run easycat validate report .easycat/validation/latest.json" in (
+            command_section
+        )
+        assert "uv run easycat validate report .easycat/validation/latest.json --json" in (
+            command_section
+        )
         assert "tests/test_metrics.py" not in command_section, filename
 
     stale_recipes: list[str] = []

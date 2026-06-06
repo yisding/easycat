@@ -32,6 +32,10 @@ the raw commands below.
 - `uv run easycat explain json-schema`: inspect the CLI JSON envelope and
   command-specific fields.
 - `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
+- `uv run easycat validate report .easycat/validation/latest.json`: inspect the
+  latest saved validation report.
+- `uv run easycat validate report .easycat/validation/latest.json --json`: emit
+  that saved report inside the standard CLI JSON envelope.
 - `uv run ruff check .`: lint (imports, style, correctness rules).
 - `uv run ruff format .`: apply formatting.
 - `uv run python examples/ws_server.py`: run a local example.

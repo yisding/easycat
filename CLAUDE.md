@@ -31,6 +31,8 @@ uv run easycat doctor --json     # Parseable first-run environment checks
 uv run easycat doctor --env-file .env --json  # Parseable checks with project .env loaded
 uv run easycat explain json-schema  # CLI JSON envelope and field contract
 uv run easycat validate quick    # Repo-local validation CLI
+uv run easycat validate report .easycat/validation/latest.json  # Inspect latest report
+uv run easycat validate report .easycat/validation/latest.json --json  # JSON report envelope
 uv run ruff check .              # Lint
 uv run ruff format .             # Format
 uv run python examples/ws_server.py  # Run an example
