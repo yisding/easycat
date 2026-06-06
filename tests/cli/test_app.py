@@ -274,6 +274,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert commands["README.md#validation-workflow"] == [
         "uv run easycat validate quick",
         "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
     ]
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "JSON envelopes" in descriptions["README.md#cli"]

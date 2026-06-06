@@ -263,6 +263,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv run easycat validate quick",
             "uv run easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
         ),
     },
     {

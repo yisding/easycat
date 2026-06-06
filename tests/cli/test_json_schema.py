@@ -359,6 +359,10 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "uv run pytest tests/test_install_guidance.py" in commands["CLAUDE.md"]
     assert "uv run easycat validate quick" in commands["README.md#validation-workflow"]
+    assert (
+        "uv run easycat validate report .easycat/validation/latest.json --json"
+        in commands["README.md#validation-workflow"]
+    )
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
 
