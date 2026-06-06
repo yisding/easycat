@@ -14,18 +14,54 @@ See ``TEST_PLANS.md`` §11.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.validation.report import (
+    GitMetadata,
+    ValidationCheck,
+    ValidationEnvironment,
+    ValidationRun,
+)
+from easycat.validation.runner import ValidationRunResult
 
 
 def _assert_envelope(payload: dict, command: str, status: str = "ok") -> None:
     assert payload.get("schema_version") == 1, payload
     assert payload.get("command") == command, payload
     assert payload.get("status") == status, payload
+
+
+def _validation_run() -> ValidationRun:
+    return ValidationRun(
+        run_id="20260521T120000Z-quick-12345",
+        command=["uv", "run", "pytest", "-q"],
+        started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 21, 12, 0, 3, tzinfo=UTC),
+        duration_s=3.25,
+        status="pass",
+        exit_code=0,
+        tool_exit_codes={"pytest": 0},
+        git=GitMetadata(sha="abc123", branch="feature/validation", dirty=True),
+        environment=ValidationEnvironment(
+            python="3.12.13",
+            platform="Linux",
+            ci=False,
+            env_vars={"OPENAI_API_KEY": True},
+        ),
+        checks=[
+            ValidationCheck(
+                name="pytest.quick",
+                status="pass",
+                duration_s=2.75,
+                command=["uv", "run", "pytest", "-q"],
+            )
+        ],
+    )
 
 
 def test_explain_single_code_envelope(cli: CliRunner) -> None:
@@ -172,6 +208,35 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
     assert all(isinstance(entry.get("url"), str) for entry in payload["entries"])
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
+
+
+def test_validate_quick_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_validation_slice(slice_name: str, **kwargs: object) -> ValidationRunResult:
+        assert slice_name == "quick"
+        run = _validation_run()
+        result_report = tmp_path / "run" / "report.json"
+        result_report.parent.mkdir()
+        result_report.write_text(run.to_json())
+        return ValidationRunResult(
+            run=run,
+            run_dir=result_report.parent,
+            report_path=result_report,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("easycat.cli.validate.run_validation_slice", fake_run_validation_slice)
+
+    result = cli.invoke(app, ["validate", "quick", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "validate quick")
+    assert payload["exit_code"] == 0
+    assert payload["validation"]["kind"] == "validation_run"
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(
