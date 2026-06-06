@@ -14,6 +14,8 @@ just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 
 Run `uv run easycat docs` for the maintained reader-facing map, including
 quickstart, examples, teaching chapters, public API, validation, and operations.
+For local audio or provider work, set the relevant environment variables and
+run `uv run easycat doctor` before debugging tests or examples.
 
 Don't have [`just`](https://github.com/casey/just)? Every recipe is a one-liner
 you can copy out of the `justfile`. Install it with `uv tool install rust-just`,

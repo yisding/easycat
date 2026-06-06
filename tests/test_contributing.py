@@ -91,6 +91,8 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in quick_start
     assert "maintained reader-facing map" in quick_start
+    assert "uv run easycat doctor" in quick_start
+    assert "before debugging tests or examples" in quick_start
 
 
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
