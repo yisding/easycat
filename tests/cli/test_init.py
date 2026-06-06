@@ -36,16 +36,23 @@ def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
 def test_list_templates(cli: CliRunner) -> None:
     result = cli.invoke(app, ["init", "--list-templates"])
     assert result.exit_code == 0
+    template_names = set(available_templates())
     names = [
-        line.split()[0] for line in result.stdout.splitlines() if line and not line[0].isspace()
+        line.split()[0]
+        for line in result.stdout.splitlines()
+        if line and not line[0].isspace() and line.split()[0] in template_names
     ]
-    assert set(names) == set(available_templates())
+    assert set(names) == template_names
     assert "best first voice scaffold" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
+    assert "Command note:" in result.stdout
+    assert "Create uses installed CLI form" in result.stdout
+    assert "Repo create is for this repository" in result.stdout
+    assert "Run after cd are run inside the scaffolded project" in result.stdout
     for template in available_templates():
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
-        assert f"Repo: uv run easycat init my-agent --template {template}" in result.stdout
+        assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 

@@ -149,6 +149,10 @@ _INIT_COMMAND_NOTE = (
     "create_command uses installed CLI form; repo_create_command is for this repository; "
     "run_command and check_command are run after cd into the scaffolded project."
 )
+_INIT_HUMAN_COMMAND_NOTE = (
+    "Command note: Create uses installed CLI form; Repo create is for this repository; "
+    "Check after cd and Run after cd are run inside the scaffolded project."
+)
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -236,11 +240,11 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  {entry['description']}\n"
             f"  [dim]{metadata}[/]\n"
             f"  [dim]Create:[/] {entry['create_command']}\n"
-            f"  [dim]Repo:[/] {entry['repo_create_command']}\n"
+            f"  [dim]Repo create:[/] {entry['repo_create_command']}\n"
             f"  [dim]Check after cd:[/] {entry['check_command']}\n"
             f"  [dim]Run after cd:[/] {entry['run_command']}"
         )
-    return "\n".join(rows)
+    return "\n".join(rows) + f"\n\n[dim]{_INIT_HUMAN_COMMAND_NOTE}[/]"
 
 
 def _next_step_run_command(template: str) -> str:
