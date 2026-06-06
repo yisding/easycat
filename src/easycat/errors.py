@@ -50,14 +50,20 @@ class EasyCatError(Exception):
         template cannot turn into a constructor-time ``KeyError``.
         """
         base = f"{self.code}: {self.message}"
+        fix = self.rendered_fix()
+        if fix is None:
+            return base
+        return f"{base}\n  Fix: {fix}\n  Run `easycat explain {self.code}` for details."
+
+    def rendered_fix(self) -> str | None:
+        """Return this error's registry fix with context applied, if registered."""
         entry = REGISTRY.get(self.code)
         if entry is None:
-            return base
+            return None
         try:
-            fix = entry.fix.format(**self.context) if self.context else entry.fix
+            return entry.fix.format(**self.context) if self.context else entry.fix
         except (KeyError, IndexError):
-            fix = entry.fix
-        return f"{base}\n  Fix: {fix}\n  Run `easycat explain {self.code}` for details."
+            return entry.fix
 
 
 @dataclass

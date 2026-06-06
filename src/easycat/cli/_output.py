@@ -64,9 +64,11 @@ def warn(message: str) -> None:
     stderr_console.print(f"  [yellow]![/] {message}")
 
 
-def error(code: str, message: str) -> None:
+def error(code: str, message: str, *, fix: str | None = None) -> None:
     """Print an error line to stderr tagged with its ``EASYCAT_Exxx``."""
     stderr_console.print(f"  [red]✗[/] [red]{code}[/]: {message}")
+    if fix:
+        stderr_console.print(f"    [dim]Fix:[/] {fix}")
     stderr_console.print(f"    Run [cyan]easycat explain {_short_code(code)}[/] for details.")
 
 

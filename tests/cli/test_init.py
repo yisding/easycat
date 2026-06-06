@@ -366,6 +366,8 @@ def test_init_unknown_template(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 2
     assert "EASYCAT_E103" in result.stderr
+    assert "Fix:" in result.stderr
+    assert "easycat init --list-templates" in result.stderr
 
 
 def test_init_missing_schema_version(

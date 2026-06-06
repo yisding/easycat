@@ -60,16 +60,22 @@ def test_factory_unused_kwargs_are_stored_not_substituted() -> None:
 
 def test_rendered_message_carries_fix_and_explain_hint() -> None:
     """A registered error's ``str()`` includes the fix and the explain hint."""
-    rendered = str(EASYCAT_E101(target="/tmp/demo"))
+    err = EASYCAT_E101(target="/tmp/demo")
+    rendered = str(err)
     assert "EASYCAT_E101: " in rendered
     assert "Fix:" in rendered
     assert "easycat explain EASYCAT_E101" in rendered
+    fix = err.rendered_fix()
+    assert fix is not None
+    assert "Choose a new name" in fix
 
 
 def test_rendered_message_unknown_code_is_bare() -> None:
     """An unregistered code renders ``CODE: message`` with no fix/hint."""
-    rendered = str(EasyCatError("EASYCAT_E999", "boom"))
+    err = EasyCatError("EASYCAT_E999", "boom")
+    rendered = str(err)
     assert rendered == "EASYCAT_E999: boom"
+    assert err.rendered_fix() is None
 
 
 def test_render_survives_braced_fix_missing_context() -> None:

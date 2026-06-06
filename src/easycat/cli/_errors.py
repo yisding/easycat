@@ -68,7 +68,7 @@ def handle_easycat_error(
             )
         )
     else:
-        error(err.code, err.message)
+        error(err.code, err.message, fix=err.rendered_fix())
     if os.getenv("EASYCAT_DEBUG") == "1":
         stderr_console.print_exception(show_locals=False)
     return code_exit
