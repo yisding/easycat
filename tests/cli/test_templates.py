@@ -287,6 +287,17 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_run_command_loads_env_file(name: str) -> None:
+    """Readers who just filled ``.env`` should run with that file loaded."""
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    run_section = readme.split("## Run", 1)[1].split("## Check", 1)[0]
+    primary_run = run_section.split("Or export", 1)[0]
+
+    assert "uv run --env-file .env" in primary_run
+    assert "uv run python agent.py" not in primary_run
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     next_steps = readme.split("## Next steps", 1)[1]
