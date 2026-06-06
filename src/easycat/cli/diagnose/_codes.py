@@ -105,9 +105,20 @@ Commands that expose `--json` emit a versioned envelope:
 
 On EasyCat errors, the envelope includes `code` (EASYCAT_Exxx),
 `message`, `fix`, `context`, and `exit_code`.  Other command-specific
-errors still include `message` and `exit_code`.  Stdout carries the
-envelope; stderr carries logs and diagnostics so `2>/dev/null` remains
-safe.
+errors still include `message` and `exit_code` without inventing a fake
+EASYCAT_Exxx code.
+
+When an error is about a file or directory, commands include the
+relevant path field when it helps automation recover:
+
+  `report_path` - `easycat validate report PATH --json`
+  `path`        - `easycat bundles show PATH --json` and `easycat replay PATH --json`
+  `output_path` - `easycat bundles export PATH --output DIR --json`
+
+Stdout carries the envelope; stderr carries logs and diagnostics so
+`2>/dev/null` remains safe.  Automation should branch on `command`,
+`status`, and `exit_code`, then inspect command-specific fields only for
+the command it invoked.
 
 `schema_version` bumps on breaking changes; keep older envelope schemas
 documented before accepting a newer version.

@@ -101,6 +101,30 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "json-schema"])
     assert result.exit_code == 0
     assert "`fix`, `context`, and `exit_code`" in result.stdout
+    assert "without inventing a fake" in result.stdout
+    assert "`report_path`" in result.stdout
+    assert "`path`" in result.stdout
+    assert "`output_path`" in result.stdout
+    assert "validate report PATH --json" in result.stdout
+    assert "bundles show PATH --json" in result.stdout
+    assert "bundles export PATH --output DIR --json" in result.stdout
+    assert "branch on `command`" in result.stdout
+    assert "`status`, and `exit_code`" in result.stdout
+
+
+def test_explain_meta_json_schema_json_includes_command_specific_fields(
+    cli: CliRunner,
+) -> None:
+    result = cli.invoke(app, ["explain", "json-schema", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "explain"
+    assert payload["slug"] == "json-schema"
+    assert "`report_path`" in payload["body"]
+    assert "`path`" in payload["body"]
+    assert "`output_path`" in payload["body"]
+    assert "without inventing a fake" in payload["body"]
 
 
 def test_explain_no_arg_is_error(cli: CliRunner) -> None:
