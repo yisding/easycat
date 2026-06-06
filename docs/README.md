@@ -17,7 +17,7 @@ installed app environment, use `easycat docs`. Use
 - Building an application: scaffold with
   `uv run easycat init my-agent`, or run
   `uv run easycat init --list-templates` to compare templates with copyable
-  create commands, then use the CLI commands documented in the
+  create/check/run commands, then use the CLI commands documented in the
   [root README](../README.md#cli).
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
   route map, then use `uv run easycat explain json-schema` for the

@@ -69,7 +69,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "docs route map" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
-    assert "copyable create commands" in normalized
+    assert "copyable create/check/run commands" in normalized
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text

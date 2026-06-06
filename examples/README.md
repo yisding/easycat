@@ -9,8 +9,8 @@ Run `uv run easycat docs` for the maintained docs map; use
 map.
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
-copyable create commands for local mic, browser WebRTC, Twilio, and text-chat
-starting points.
+copyable create/check/run commands for local mic, browser WebRTC, Twilio, and
+text-chat starting points.
 
 For the fastest local mic/speaker path:
 

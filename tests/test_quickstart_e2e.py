@@ -395,13 +395,14 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    normalized_cli_section = re.sub(r"\s+", " ", cli_section)
 
     assert "installed CLI form" in cli_section
-    assert "copyable create commands" in cli_section
+    assert "copyable create/check/run commands" in normalized_cli_section
     assert "uv run easycat doctor" in cli_section
     assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (
-        "easycat init --list-templates # compare templates and copyable create commands",
+        "easycat init --list-templates # compare templates with create/check/run commands",
         "easycat doctor           # check API keys, optional extras, provider reachability",
         "easycat docs             # show docs for learning, validation, operations",
         "easycat docs --json      # emit the docs route map for scripts and agents",

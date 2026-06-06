@@ -390,6 +390,7 @@ def test_readme_cli_doctor_documents_env_file_option() -> None:
 def test_cli_init_examples_name_target_directory() -> None:
     """``easycat init`` requires NAME unless listing templates."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = re.sub(r"\s+", " ", readme)
     cli_section = _readme_cli_section()
     production_chapter = (
         REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
@@ -400,9 +401,10 @@ def test_cli_init_examples_name_target_directory() -> None:
     assert "easycat init --list-templates" in cli_section
     assert "`easycat init my-agent` scaffolds" in readme
     assert "`easycat init --list-templates` shows" in readme
-    assert "copyable create commands" in readme
+    assert "copyable create/check/run commands" in normalized_readme
     assert "`uv run easycat init my-agent`" in production_chapter
     assert "`uv run easycat init --list-templates`" in production_chapter
+    assert "copyable create/check/run commands" in production_chapter
     assert "**`uv run easycat init`**" not in production_chapter
 
 

@@ -572,7 +572,7 @@ def init(
     list_templates: bool = typer.Option(
         False,
         "--list-templates",
-        help="Show templates and create commands.",
+        help="Show templates with create, check, and run commands.",
     ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."
