@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
@@ -105,7 +106,7 @@ def check_easycat_version() -> CheckResult:
             pass
     detail = f"easycat {version}"
     if integrations:
-        detail += f"  [dim](extras: {', '.join(integrations)})[/]"
+        detail += f" (extras: {', '.join(integrations)})"
     return CheckResult(name="easycat_version", status="ok", detail=detail)
 
 
@@ -500,21 +501,21 @@ def _render_report(results: list[CheckResult], profile: str) -> None:
     table.add_column(overflow="fold")
     for r in results:
         glyph = _STATUS_GLYPH.get(r.status, "?")
-        detail = r.detail
+        detail = escape(r.detail)
         if r.status == "fail":
-            detail = f"[red]{detail}[/] [red]({r.code})[/]"
-        table.add_row(glyph, r.name, detail)
+            detail = f"[red]{detail}[/] [red]({escape(r.code)})[/]"
+        table.add_row(glyph, escape(r.name), detail)
         if r.status == "fail" and r.fix:
             short = r.code.removeprefix("EASYCAT_")
             table.add_row(
                 "",
                 "",
-                f"  [dim]Fix:[/] {r.fix}",
+                f"  [dim]Fix:[/] {escape(r.fix)}",
             )
             table.add_row(
                 "",
                 "",
-                f"  [dim]Explain:[/] [cyan]easycat explain {short}[/]",
+                f"  [dim]Explain:[/] [cyan]easycat explain {escape(short)}[/]",
             )
     stderr_console.print(table)
     stderr_console.print()

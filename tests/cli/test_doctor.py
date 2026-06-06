@@ -6,14 +6,21 @@ import json
 import os
 from collections import namedtuple
 from collections.abc import Iterator
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
 from easycat.cli.diagnose import doctor as doctor_module
 from easycat.errors import REGISTRY
+
+
+def _plain_console() -> tuple[StringIO, Console]:
+    stream = StringIO()
+    return stream, Console(file=stream, force_terminal=False, no_color=True, width=120)
 
 
 @pytest.fixture
@@ -317,6 +324,48 @@ def test_doctor_check_functions_are_pure() -> None:
     py_check = doctor_module.check_python_version()
     assert py_check.status == "ok"
     assert "Python" in py_check.detail
+
+
+def test_doctor_version_detail_is_plain_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor_module.importlib.metadata, "version", lambda package: "0.1.0")
+
+    def fake_import_module(module: str) -> object:
+        if module == "agents":
+            return object()
+        raise ImportError(module)
+
+    monkeypatch.setattr(doctor_module.importlib, "import_module", fake_import_module)
+
+    result = doctor_module.check_easycat_version()
+
+    assert result.status == "ok"
+    assert result.detail == "easycat 0.1.0 (extras: openai-agents)"
+    assert "[dim]" not in result.detail
+
+
+def test_doctor_report_renders_detail_and_fix_text_literally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream, console = _plain_console()
+    monkeypatch.setattr(doctor_module, "stderr_console", console)
+
+    doctor_module._render_report(
+        [
+            doctor_module.CheckResult(
+                name="journal[dev]",
+                status="fail",
+                detail="/tmp/easycat[dev] is not writable",
+                code="EASYCAT_E207",
+                fix="mkdir -p '/tmp/easycat[dev]'",
+            )
+        ],
+        profile="dev",
+    )
+
+    text = stream.getvalue()
+    assert "journal[dev]" in text
+    assert "/tmp/easycat[dev] is not writable" in text
+    assert "mkdir -p '/tmp/easycat[dev]'" in text
 
 
 def test_doctor_python_version_failure_includes_repo_setup_command(
