@@ -24,7 +24,9 @@ def require_env(name: str) -> str:
     if not value:
         raise SystemExit(
             f"{name} is required. Set it before running, for example: "
-            f"export {name}=...; verify provider keys with `uv run easycat doctor`."
+            f"export {name}=...; verify provider keys with `uv run easycat doctor`. "
+            "With a project `.env`, run commands as `uv run --env-file .env ...` "
+            "and verify with `uv run --env-file .env easycat doctor`."
         )
     return value
 

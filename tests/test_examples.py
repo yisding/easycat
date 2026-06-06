@@ -1275,6 +1275,7 @@ def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.Mon
     message = str(exc_info.value)
     assert "OPENAI_API_KEY is required." in message
     assert "uv run easycat doctor" in message
+    assert "uv run --env-file .env easycat doctor" in message
 
 
 def test_example_session_smoke():
