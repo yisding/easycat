@@ -197,7 +197,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "src/easycat/runtime/DURABILITY.md": (
             "uv run pytest tests/runtime/test_sqlite_journal.py"
         ),
-        "README.md#validation-workflow": "easycat validate report .easycat/validation/latest.json",
+        "README.md#validation-workflow": (
+            "uv run easycat validate report .easycat/validation/latest.json"
+        ),
     }
 
     missing = [
@@ -246,6 +248,23 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
 
     assert "easycat bundles show <path>" not in route_commands
     assert "easycat bundles export <path>" not in route_commands
+
+
+def test_validation_docs_route_matches_validation_workflow_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+    route_commands = entries["README.md#validation-workflow"].get("commands", ())
+
+    for command in (
+        "uv run easycat validate quick",
+        "uv run easycat validate report .easycat/validation/latest.json",
+    ):
+        assert command in validation_section
+        assert command in route_commands
+
+    assert "easycat validate quick" not in route_commands
+    assert "easycat validate report .easycat/validation/latest.json" not in route_commands
 
 
 def test_cli_docs_command_hints_are_locally_valid() -> None:

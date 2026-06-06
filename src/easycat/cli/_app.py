@@ -255,8 +255,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "Run the right validation lane and inspect .easycat/validation/latest.json."
         ),
         "commands": (
-            "easycat validate quick",
-            "easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate quick",
+            "uv run easycat validate report .easycat/validation/latest.json",
         ),
     },
     {
