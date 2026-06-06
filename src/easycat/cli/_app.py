@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from importlib.metadata import PackageNotFoundError, version
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 import typer
 
@@ -35,29 +35,77 @@ app = typer.Typer(
 )
 
 
-_JOURNEY_MENU = """[bold]EasyCat[/] — voice bot framework
+class _CommandText(NamedTuple):
+    help: str
+    journey: str
 
-  [cyan]Scaffold[/]
-    [green]init[/]        Scaffold a new project from a template
-    [green]doctor[/]      Check API keys, optional extras, and provider reachability
-    [green]explain[/]     Look up errors and CLI schema topics
 
-  [cyan]Debug with the journal[/]
-    [green]bundles[/]     List captured debug bundles and crash dumps
-    [green]inspect[/]     Summarise a debug bundle or SQLite journal
-    [green]replay[/]      Replay a debug bundle or SQLite journal
+_COMMAND_TEXT: dict[str, _CommandText] = {
+    "init": _CommandText(
+        help="Scaffold a new project from a template.",
+        journey="Scaffold a new project from a template",
+    ),
+    "doctor": _CommandText(
+        help="Check API keys, optional extras, and provider reachability.",
+        journey="Check API keys, optional extras, and provider reachability",
+    ),
+    "explain": _CommandText(
+        help="Look up errors and CLI schema topics.",
+        journey="Look up errors and CLI schema topics",
+    ),
+    "bundles": _CommandText(
+        help="Inspect captured debug bundles and crash dumps.",
+        journey="List captured debug bundles and crash dumps",
+    ),
+    "inspect": _CommandText(
+        help="Inspect a debug bundle or SQLite journal.",
+        journey="Summarise a debug bundle or SQLite journal",
+    ),
+    "replay": _CommandText(
+        help="Replay a debug bundle or SQLite journal.",
+        journey="Replay a debug bundle or SQLite journal",
+    ),
+    "validate": _CommandText(
+        help="Run validation checks and inspect validation reports.",
+        journey="Run validation checks and inspect validation reports",
+    ),
+    "docs": _CommandText(
+        help="Show quickstart, examples, teaching, and operations docs.",
+        journey="Show quickstart, examples, and teaching routes",
+    ),
+}
 
-  [cyan]Validation[/]
-    [green]validate[/]    Run validation checks and inspect validation reports
+_JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Scaffold", ("init", "doctor", "explain")),
+    ("Debug with the journal", ("bundles", "inspect", "replay")),
+    ("Validation", ("validate",)),
+    ("Learn", ("docs",)),
+)
 
-  [cyan]Learn[/]
-    [green]docs[/]        Show quickstart, examples, and teaching routes
+_JOURNEY_FOOTER = (
+    "Run [cyan]easycat <command> --help[/] for command-specific options.",
+    "Run [cyan]easycat docs[/] for quickstart, examples, and teaching routes.",
+    "Run [cyan]easycat explain <code>[/] for errors.",
+    "Run [cyan]easycat explain json-schema[/] for CLI JSON.",
+)
 
-Run [cyan]easycat <command> --help[/] for command-specific options.
-Run [cyan]easycat docs[/] for quickstart, examples, and teaching routes.
-Run [cyan]easycat explain <code>[/] for errors.
-Run [cyan]easycat explain json-schema[/] for CLI JSON.
-"""
+
+def _format_journey_menu() -> str:
+    """Render the bare ``easycat`` menu from the command text table."""
+    lines = ["[bold]EasyCat[/] — voice bot framework", ""]
+    command_width = 12
+    for section, command_names in _JOURNEY_SECTIONS:
+        lines.append(f"  [cyan]{section}[/]")
+        for command_name in command_names:
+            text = _COMMAND_TEXT[command_name].journey
+            padding = " " * (command_width - len(command_name))
+            lines.append(f"    [green]{command_name}[/]{padding}{text}")
+        lines.append("")
+    lines.extend(_JOURNEY_FOOTER)
+    return "\n".join(lines) + "\n"
+
+
+_JOURNEY_MENU = _format_journey_menu()
 
 
 class _DocsLink(TypedDict):
@@ -233,19 +281,14 @@ def _register_commands() -> None:
     from easycat.cli.scaffold.init import init as init_cmd
     from easycat.cli.validate import validate_app
 
-    app.command(name="init", help="Scaffold a new project from a template.")(init_cmd)
-    app.command(
-        name="doctor",
-        help="Check API keys, optional extras, and provider reachability.",
-    )(doctor_cmd)
-    app.command(name="docs", help="Show quickstart, examples, teaching, and operations docs.")(
-        docs_command
-    )
-    app.command(name="explain", help="Look up errors and CLI schema topics.")(explain_cmd)
-    app.command(name="inspect", help="Inspect a debug bundle or SQLite journal.")(inspect_bundle)
-    app.command(name="replay", help="Replay a debug bundle or SQLite journal.")(replay_bundle)
-    app.add_typer(bundles_app, name="bundles")
-    app.add_typer(validate_app, name="validate")
+    app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
+    app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
+    app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)
+    app.command(name="explain", help=_COMMAND_TEXT["explain"].help)(explain_cmd)
+    app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)
+    app.command(name="replay", help=_COMMAND_TEXT["replay"].help)(replay_bundle)
+    app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
+    app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
     _COMMANDS_REGISTERED = True
 
 

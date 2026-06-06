@@ -13,7 +13,7 @@ import sys
 
 from typer.testing import CliRunner
 
-from easycat.cli._app import app
+from easycat.cli._app import _COMMAND_TEXT, _register_commands, app
 
 
 def _registered_top_level_command_names() -> set[str]:
@@ -21,6 +21,18 @@ def _registered_top_level_command_names() -> set[str]:
     command_names.update(group.name for group in app.registered_groups)
     command_names.discard(None)
     return command_names
+
+
+def _registered_top_level_command_help() -> dict[str, str]:
+    help_by_name = {
+        command.name: command.help
+        for command in app.registered_commands
+        if command.name is not None
+    }
+    help_by_name.update(
+        {group.name: group.help for group in app.registered_groups if group.name is not None}
+    )
+    return help_by_name
 
 
 def _journey_menu_command_names(output: str) -> set[str]:
@@ -52,6 +64,13 @@ def test_help_renders(cli: CliRunner) -> None:
         if command_name not in result.stdout
     )
     assert not missing, "Help output missing registered commands: " + ", ".join(missing)
+
+
+def test_registered_help_uses_command_text_table() -> None:
+    _register_commands()
+
+    expected_help = {name: text.help for name, text in _COMMAND_TEXT.items()}
+    assert _registered_top_level_command_help() == expected_help
 
 
 def test_journey_menu(cli: CliRunner) -> None:
