@@ -401,7 +401,8 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     assert "uv run easycat doctor" in cli_section
     assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (
-        "easycat init --list-templates # compare scaffold templates",
+        "easycat init --list-templates # compare templates and copyable create commands",
+        "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
         "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
         "easycat bundles export PATH # write a redacted coding-agent context pack",
