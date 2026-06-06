@@ -31,6 +31,11 @@ def _make_chunk(value: int = 0, n_samples: int = 512) -> AudioChunk:
     return AudioChunk(data=data, format=PCM16_MONO_16K)
 
 
+def _assert_extra_hint(message: str, extra: str) -> None:
+    assert f"uv add 'easycat[{extra}]'" in message
+    assert f"uv sync --extra {extra} --group dev" in message
+
+
 # ── SileroVAD tests ─────────────────────────────────────────────────
 
 
@@ -57,8 +62,7 @@ def test_silero_fails_when_only_torch_backend_is_allowed(monkeypatch: pytest.Mon
         SileroVAD()
     message = str(exc_info.value)
     assert "torch backend is disabled" in message
-    assert "uv add 'easycat[silero-vad]'" in message
-    assert "uv sync --extra silero-vad" in message
+    _assert_extra_hint(message, "silero-vad")
 
 
 def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.MonkeyPatch):
@@ -76,8 +80,7 @@ def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.Monkey
         SileroVAD._load_torch_model(MagicMock())
     message = str(exc_info.value)
     assert "torch backend is disabled" in message
-    assert "uv add 'easycat[silero-vad]'" in message
-    assert "uv sync --extra silero-vad" in message
+    _assert_extra_hint(message, "silero-vad")
 
     mock_torch.hub.load.assert_not_called()
 
@@ -306,8 +309,7 @@ def test_funasr_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
         FunASROnnxVAD()
     message = str(exc_info.value)
     assert "FunASR" in message
-    assert "uv add 'easycat[funasr-vad]'" in message
-    assert "uv sync --extra funasr-vad" in message
+    _assert_extra_hint(message, "funasr-vad")
 
 
 @pytest.mark.asyncio
@@ -619,12 +621,9 @@ def test_vad_factory_no_backends(monkeypatch: pytest.MonkeyPatch):
         create_vad(VADConfig(backend="auto"))
     message = str(exc_info.value)
     assert "No VAD backend" in message
-    assert "uv add 'easycat[silero-vad]'" in message
-    assert "uv sync --extra silero-vad" in message
-    assert "uv add 'easycat[ten-vad]'" in message
-    assert "uv sync --extra ten-vad" in message
-    assert "uv add 'easycat[funasr-vad]'" in message
-    assert "uv sync --extra funasr-vad" in message
+    _assert_extra_hint(message, "silero-vad")
+    _assert_extra_hint(message, "ten-vad")
+    _assert_extra_hint(message, "funasr-vad")
 
 
 def test_vad_factory_explicit_silero_fails(monkeypatch: pytest.MonkeyPatch):
