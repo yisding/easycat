@@ -149,6 +149,8 @@ def test_docs_command(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs"])
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
+    assert "For: new users" in result.stdout
+    assert "For: app builders" in result.stdout
     assert "README.md#cli" in result.stdout
     assert "copyable create/check/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
@@ -184,6 +186,7 @@ def test_docs_entry_renders_bracketed_text_literally() -> None:
     entry = {
         "label": "SDK[beta]",
         "path": "docs/[beta].md",
+        "audience": "Builders[dev]",
         "description": "Install optional extra easycat[openai-agents].",
         "commands": ("uv add 'easycat[openai-agents]'",),
         "url": "https://example.test/docs/[beta].md",
@@ -193,6 +196,7 @@ def test_docs_entry_renders_bracketed_text_literally() -> None:
 
     assert "SDK[beta]" in rendered
     assert "docs/[beta].md" in rendered
+    assert "Builders[dev]" in rendered
     assert "easycat[openai-agents]" in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
     assert "https://example.test/docs/[beta].md" in rendered
@@ -225,6 +229,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     paths = {entry["path"] for entry in payload["entries"]}
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
+    audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
@@ -237,6 +242,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert ".easycat/validation/latest.json" in descriptions["README.md#validation-workflow"]
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
+    assert all(entry.get("audience") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
     assert commands["README.md#cli"] == [
@@ -250,6 +256,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "JSON envelopes" in descriptions["README.md#cli"]
+    assert audiences["README.md#install"] == "new users"
+    assert audiences["README.md#cli"] == "app builders"
+    assert audiences["docs/observability.md"] == "operators"
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]

@@ -302,6 +302,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Observability", "path": "docs/observability.md"} in entries
     assert {"label": "Validation reference", "path": "plan/validation/reference.md"} in entries
     assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
+    assert all(isinstance(entry.get("audience"), str) for entry in payload["entries"])
     assert all(isinstance(entry.get("url"), str) for entry in payload["entries"])
     assert all(
         isinstance(command, str)
@@ -309,8 +310,12 @@ def test_docs_envelope(cli: CliRunner) -> None:
         for command in entry.get("commands", [])
     )
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
+    audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
+    assert audiences["README.md#install"] == "new users"
+    assert audiences["README.md#cli"] == "app builders"
+    assert audiences["README.md#validation-workflow"] == "contributors"
     assert "easycat init --list-templates" in commands["README.md#cli"]
     assert "easycat validate quick" in commands["README.md#validation-workflow"]
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])

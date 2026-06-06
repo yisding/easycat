@@ -113,6 +113,7 @@ _JOURNEY_MENU = _format_journey_menu()
 class _DocsLink(TypedDict):
     label: str
     path: str
+    audience: str
     description: str
     commands: NotRequired[tuple[str, ...]]
 
@@ -125,6 +126,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Quickstart",
         "path": "README.md#install",
+        "audience": "new users",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
             "uv sync --extra quickstart --group dev",
@@ -135,6 +137,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "CLI and scaffolds",
         "path": "README.md#cli",
+        "audience": "app builders",
         "description": (
             "Scaffold projects, compare templates with copyable create/check/run commands, "
             "and learn CLI JSON envelopes."
@@ -148,42 +151,49 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Docs map",
         "path": "docs/README.md",
+        "audience": "all readers",
         "description": "Choose the maintained guide for your current task.",
         "commands": ("easycat docs", "easycat docs --json"),
     },
     {
         "label": "Teaching ladder",
         "path": "docs/teaching/",
+        "audience": "learners",
         "description": "Learn voice pipelines chapter by chapter.",
         "commands": ("uv run pytest tests/teaching/test_ladder_index.py",),
     },
     {
         "label": "First lesson",
         "path": "docs/teaching/00-hello-audio/",
+        "audience": "learners",
         "description": "Start with audio chunks before agents or providers.",
         "commands": ("uv run python docs/teaching/00-hello-audio/main.py",),
     },
     {
         "label": "Examples",
         "path": "examples/README.md",
+        "audience": "app builders",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
         "commands": ("easycat doctor", "easycat validate quick"),
     },
     {
         "label": "Public API",
         "path": "docs/public-api.md",
+        "audience": "maintainers",
         "description": "Review the stable import surface before changing exports.",
         "commands": ("uv run pytest tests/test_public_api.py",),
     },
     {
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
+        "audience": "contributors",
         "description": "Follow the development loop and validation slices.",
         "commands": ("uv run pytest", "uv run ruff check .", "uv run easycat validate quick"),
     },
     {
         "label": "Deployment",
         "path": "docs/deployment/docker.md",
+        "audience": "operators",
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
             "docker compose -f docker/compose.yaml up --build",
@@ -193,18 +203,21 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Observability",
         "path": "docs/observability.md",
+        "audience": "operators",
         "description": "Inspect journals, debug bundles, metrics, and traces.",
         "commands": ("easycat bundles list", "easycat inspect PATH", "easycat replay PATH"),
     },
     {
         "label": "Journal durability",
         "path": "src/easycat/runtime/DURABILITY.md",
+        "audience": "operators and maintainers",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
         "commands": ("uv run pytest tests/runtime/test_sqlite_journal.py",),
     },
     {
         "label": "Validation",
         "path": "README.md#validation-workflow",
+        "audience": "contributors",
         "description": (
             "Run the right validation lane and inspect .easycat/validation/latest.json."
         ),
@@ -216,6 +229,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Validation reference",
         "path": "plan/validation/reference.md",
+        "audience": "release maintainers",
         "description": "Read provider and report vocabulary used by validation.",
         "commands": ("easycat validate quick --json",),
     },
@@ -256,6 +270,7 @@ def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
     return (
         f"  [cyan]{escape(entry['label'])}[/]{' ' * (label_width - len(entry['label']) + 2)}"
         f"{escape(entry['path'])}\n"
+        f"    [dim]For: {escape(entry['audience'])}[/]\n"
         f"    [dim]{escape(entry['description'])}[/]\n"
         f"{command_line}"
         f"    [dim]{escape(entry['url'])}[/]"

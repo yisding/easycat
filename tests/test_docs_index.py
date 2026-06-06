@@ -74,7 +74,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "installed app environment" in text
     assert "prints the same map" in text
     assert "docs route map" in normalized
-    assert "route map and command hints" in normalized
+    assert "route map with command hints and audience labels" in normalized
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
@@ -82,6 +82,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
+    assert "`audience`" in text
     assert "uv run easycat validate quick" in text
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
 
@@ -155,6 +156,21 @@ def test_cli_docs_routes_have_descriptions() -> None:
     ]
 
     assert not missing, "easycat docs routes missing useful descriptions: " + ", ".join(missing)
+
+
+def test_cli_docs_routes_have_audience_labels() -> None:
+    missing = [
+        f"{entry['label']} ({entry['path']})"
+        for entry in _DOCS_LINKS
+        if len(entry.get("audience", "").split()) < 1
+    ]
+    audiences = {entry["path"]: entry["audience"] for entry in _DOCS_LINKS}
+
+    assert not missing, "easycat docs routes missing audience labels: " + ", ".join(missing)
+    assert audiences["README.md#install"] == "new users"
+    assert audiences["README.md#cli"] == "app builders"
+    assert audiences["docs/observability.md"] == "operators"
+    assert audiences["README.md#validation-workflow"] == "contributors"
 
 
 def test_cli_docs_routes_have_useful_command_hints() -> None:

@@ -5,8 +5,8 @@ Use this page as the map for the maintained docs. Planning notes live under
 From this repository, `uv run easycat docs` prints the same map; in an
 installed app environment, use `easycat docs`. Use
 `uv run easycat docs --json` when a script or coding agent needs the route map
-with command hints. Replace uppercase placeholders in command hints, such as
-`PATH`, before running them.
+with command hints and audience labels. Replace uppercase placeholders in
+command hints, such as `PATH`, before running them.
 
 ## Choose Your Path
 
@@ -22,10 +22,12 @@ with command hints. Replace uppercase placeholders in command hints, such as
   create/check/run commands, then use the CLI commands documented in the
   [root README](../README.md#cli).
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
-  route map and command hints, then use
+  route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,
   including command-specific success and error fields. Replace uppercase
-  placeholders in command hints, such as `PATH`, before running them.
+  placeholders in command hints, such as `PATH`, before running them. Each
+  docs route entry includes an `audience` label for choosing the right starting
+  point without scraping descriptions.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.

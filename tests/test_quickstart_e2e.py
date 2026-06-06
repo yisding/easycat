@@ -405,7 +405,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat init --list-templates # compare templates with create/check/run commands",
         "easycat doctor           # check API keys, optional extras, provider reachability",
         "easycat docs             # show docs for learning, validation, operations",
-        "easycat docs --json      # emit docs routes and command hints for automation",
+        "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
