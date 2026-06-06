@@ -1082,6 +1082,42 @@ def test_validate_report_cli_renders_summary(cli: CliRunner, tmp_path: Path) -> 
     assert f"artifact missing: {tmp_path / 'missing.log'} [missing]" in result.stdout
 
 
+def test_validate_report_cli_renders_bracketed_text_literally(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    report_path = tmp_path / "report.json"
+    run = _validation_run(
+        run_id="run[dev]",
+        command=["uv", "run", "pytest", "easycat[openai-agents]"],
+        git=GitMetadata(sha="abc[123]", branch="feature/[dev]", dirty=False),
+        checks=[ValidationCheck(name="pytest[quick]", status="pass", duration_s=0.1)],
+        skips=[
+            ValidationSkip(
+                name="provider[openai]",
+                reason="install easycat[openai-agents]",
+            )
+        ],
+        failures=[
+            ValidationFailure(
+                name="case[one]",
+                message="failed with easycat[deepgram]",
+                failure_class="class[dev]",
+            )
+        ],
+    )
+    report_path.write_text(run.to_json())
+
+    result = cli.invoke(app, ["validate", "report", str(report_path)])
+
+    assert result.exit_code == 0
+    assert "validation_run run[dev]: pass" in result.stdout
+    assert "command: uv run pytest easycat[openai-agents]" in result.stdout
+    assert "git: feature/[dev] abc[123] dirty=False" in result.stdout
+    assert "- pytest[quick]: pass" in result.stdout
+    assert "skip: provider[openai] expected=True install easycat[openai-agents]" in result.stdout
+    assert "failure: case[one] class[dev] failed with easycat[deepgram]" in result.stdout
+
+
 def test_validate_report_cli_json_uses_standard_stdout_envelope(
     cli: CliRunner,
     tmp_path: Path,

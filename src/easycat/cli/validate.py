@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+from rich.markup import escape
 
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stdout_console
 from easycat.validation.latency import LatencyMode
@@ -26,6 +27,10 @@ validate_app = typer.Typer(
 _ARTIFACTS_DIR_HELP = (
     "Validation artifact root directory; writes runs/<id>/report.json and latest.json."
 )
+
+
+def _print_literal(line: str) -> None:
+    stdout_console.print(escape(line))
 
 
 def _run_slice(
@@ -57,7 +62,7 @@ def _run_slice(
             )
         )
     else:
-        stdout_console.print(
+        _print_literal(
             f"{slice_name}: {result.run.status}; report: {report or result.report_path}"
         )
 
@@ -270,7 +275,7 @@ def latency(
             )
         )
     else:
-        stdout_console.print(
+        _print_literal(
             f"latency {mode.value}: {result.run.status}; report: {report or result.report_path}"
         )
 
@@ -330,7 +335,7 @@ def live(
             )
         )
     else:
-        stdout_console.print(f"live: {result.run.status}; report: {report or result.report_path}")
+        _print_literal(f"live: {result.run.status}; report: {report or result.report_path}")
 
     raise typer.Exit(result.exit_code)
 
@@ -407,9 +412,7 @@ def release(
             )
         )
     else:
-        stdout_console.print(
-            f"release: {result.run.status}; report: {report or result.report_path}"
-        )
+        _print_literal(f"release: {result.run.status}; report: {report or result.report_path}")
 
     raise typer.Exit(result.exit_code)
 
@@ -444,27 +447,25 @@ def report_command(
         )
         raise typer.Exit(0 if status == "pass" else 1)
 
-    stdout_console.print(f"{payload['kind']} {payload['run_id']}: {status}")
-    stdout_console.print(f"command: {_format_command(payload.get('command'))}")
-    stdout_console.print(f"duration: {payload.get('duration_s', 0):.2f}s")
-    stdout_console.print(f"exit_code: {exit_code}")
+    _print_literal(f"{payload['kind']} {payload['run_id']}: {status}")
+    _print_literal(f"command: {_format_command(payload.get('command'))}")
+    _print_literal(f"duration: {payload.get('duration_s', 0):.2f}s")
+    _print_literal(f"exit_code: {exit_code}")
     git = payload.get("git")
     if isinstance(git, dict):
-        stdout_console.print(
+        _print_literal(
             f"git: {git.get('branch', '')} {git.get('sha', '')} dirty={git.get('dirty')}"
         )
 
     for check in payload.get("checks", []):
         if isinstance(check, dict):
-            stdout_console.print(
-                f"- {check.get('name', 'unknown')}: {check.get('status', 'unknown')}"
-            )
+            _print_literal(f"- {check.get('name', 'unknown')}: {check.get('status', 'unknown')}")
 
     skips = payload.get("skips") or []
     failures = payload.get("failures") or []
     for skip in skips:
         if isinstance(skip, dict):
-            stdout_console.print(
+            _print_literal(
                 "skip: "
                 f"{skip.get('name', 'unknown')} "
                 f"expected={skip.get('expected')} "
@@ -473,7 +474,7 @@ def report_command(
     for failure in failures:
         if isinstance(failure, dict):
             failure_class = failure.get("failure_class") or ""
-            stdout_console.print(
+            _print_literal(
                 f"failure: {failure.get('name', 'unknown')} "
                 f"{failure_class} {failure.get('message', '')}"
             )
@@ -503,7 +504,7 @@ def _render_latency_percentiles(latency: object) -> None:
                 continue
             tokens.append(f"{percentile}={_format_percentile_value(value)}")
         if len(tokens) > 1:
-            stdout_console.print(" ".join(tokens))
+            _print_literal(" ".join(tokens))
 
 
 def _format_percentile_value(value: object) -> str:
