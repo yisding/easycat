@@ -44,6 +44,8 @@ def test_list_templates(cli: CliRunner) -> None:
     for template in available_templates():
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
         assert f"Repo: uv run easycat init my-agent --template {template}" in result.stdout
+        assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
+        assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 
 
 def test_list_templates_json(cli: CliRunner) -> None:

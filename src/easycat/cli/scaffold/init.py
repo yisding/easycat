@@ -232,7 +232,9 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  {entry['description']}\n"
             f"  [dim]{metadata}[/]\n"
             f"  [dim]Create:[/] {entry['create_command']}\n"
-            f"  [dim]Repo:[/] {entry['repo_create_command']}"
+            f"  [dim]Repo:[/] {entry['repo_create_command']}\n"
+            f"  [dim]Check after cd:[/] {entry['check_command']}\n"
+            f"  [dim]Run after cd:[/] {entry['run_command']}"
         )
     return "\n".join(rows)
 
@@ -585,7 +587,7 @@ def init(
         if json_output:
             emit_json(json_envelope("init", templates=templates, catalog=catalog))
         else:
-            stdout_console.print(_format_template_catalog(catalog))
+            stdout_console.print(_format_template_catalog(catalog), soft_wrap=True)
         raise typer.Exit(0)
 
     if name is None:
