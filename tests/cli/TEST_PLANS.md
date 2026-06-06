@@ -127,8 +127,8 @@ first run.
 - README tells every OpenAI-key template to run
   `uv run easycat doctor --env-file .env` during setup.
 - `easycat init --list-templates` includes per-template metadata
-  (mode, transport, framework, and description), shows a copyable
-  create command, and `--json` exposes the same catalog for tooling.
+  (mode, transport, framework, description, and copyable create
+  commands), and `--json` exposes the same catalog for tooling.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `.gitignore` contains no placeholders.
 

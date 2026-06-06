@@ -30,10 +30,9 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "best first voice scaffold" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
-    assert "Create one:" in result.stdout
-    assert "easycat init my-agent --template openai-agents" in result.stdout
-    assert "From this repo:" in result.stdout
-    assert "uv run easycat init my-agent --template openai-agents" in result.stdout
+    for template in available_templates():
+        assert f"Create: easycat init my-agent --template {template}" in result.stdout
+        assert f"Repo: uv run easycat init my-agent --template {template}" in result.stdout
 
 
 def test_list_templates_json(cli: CliRunner) -> None:
@@ -46,6 +45,9 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["openai-agents"]["transport"] == "local mic"
     assert catalog["text-chat"]["mode"] == "text"
     assert "description" in catalog["webrtc-browser"]
+    for name, entry in catalog.items():
+        assert entry["create_command"] == f"easycat init my-agent --template {name}"
+        assert entry["repo_create_command"] == f"uv run easycat init my-agent --template {name}"
 
 
 def test_missing_name_without_list_templates(cli: CliRunner) -> None:

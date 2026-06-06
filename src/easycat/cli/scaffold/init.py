@@ -92,6 +92,8 @@ class _TemplateCatalogMetadata(TypedDict):
 
 class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     name: str
+    create_command: str
+    repo_create_command: str
 
 
 _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
@@ -194,8 +196,21 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "description": "Template metadata has not been documented yet.",
             },
         )
-        catalog.append({"name": name, **metadata})
+        catalog.append(
+            {
+                "name": name,
+                "create_command": _create_template_command(name),
+                "repo_create_command": _create_template_command(name, repo_local=True),
+                **metadata,
+            }
+        )
     return catalog
+
+
+def _create_template_command(template: str, *, repo_local: bool = False) -> str:
+    """Return the copyable command for scaffolding a project from ``template``."""
+    command = f"easycat init my-agent --template {template}"
+    return f"uv run {command}" if repo_local else command
 
 
 def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
@@ -205,11 +220,13 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
     rows = []
     for entry in catalog:
         metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
-        rows.append(f"[cyan]{entry['name']}[/]\n  {entry['description']}\n  [dim]{metadata}[/]")
-    rows.append(
-        "  [dim]Create one:[/] easycat init my-agent --template openai-agents\n"
-        "  [dim]From this repo:[/] uv run easycat init my-agent --template openai-agents"
-    )
+        rows.append(
+            f"[cyan]{entry['name']}[/]\n"
+            f"  {entry['description']}\n"
+            f"  [dim]{metadata}[/]\n"
+            f"  [dim]Create:[/] {entry['create_command']}\n"
+            f"  [dim]Repo:[/] {entry['repo_create_command']}"
+        )
     return "\n".join(rows)
 
 
