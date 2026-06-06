@@ -1116,6 +1116,27 @@ def test_validate_report_cli_rejects_missing_report(cli: CliRunner, tmp_path: Pa
     assert "validation report not found" in result.stdout
 
 
+def test_validate_report_cli_json_rejects_missing_report_with_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "missing.json"
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "validation report not found" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_validate_report_cli_rejects_unsupported_schema(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     payload = _validation_run().to_dict()
@@ -1128,6 +1149,30 @@ def test_validate_report_cli_rejects_unsupported_schema(cli: CliRunner, tmp_path
     assert "unsupported validation report schema_version: 999" in result.stdout
 
 
+def test_validate_report_cli_json_rejects_unsupported_schema_with_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload["schema_version"] = 999
+    report_path.write_text(json.dumps(payload))
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "unsupported validation report schema_version: 999" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_validate_report_cli_rejects_unknown_kind(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     payload = _validation_run().to_dict()
@@ -1138,6 +1183,30 @@ def test_validate_report_cli_rejects_unknown_kind(cli: CliRunner, tmp_path: Path
 
     assert result.exit_code == 2
     assert "unknown validation report kind: other" in result.stdout
+
+
+def test_validate_report_cli_json_rejects_unknown_kind_with_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload["kind"] = "other"
+    report_path.write_text(json.dumps(payload))
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "unknown validation report kind: other" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_validate_report_cli_renders_latency_percentiles(

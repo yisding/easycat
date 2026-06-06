@@ -330,6 +330,25 @@ def test_validate_report_command_error_envelope(cli: CliRunner, tmp_path: Path) 
     assert "context" not in payload
 
 
+def test_validate_report_missing_command_error_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "missing.json"
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "validate report", status="error")
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "validation report not found" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_bundles_list_envelope(cli: CliRunner, tmp_path: Path) -> None:
     recordings = tmp_path / "recordings"
     recordings.mkdir()

@@ -510,18 +510,13 @@ def _format_percentile_value(value: object) -> str:
 
 
 def _report_load_error(path: Path, message: str, *, json_output: bool) -> NoReturn:
-    if json_output:
-        emit_json(
-            json_envelope(
-                "validate report",
-                status="error",
-                report_path=str(path),
-                message=message,
-                exit_code=2,
-            )
-        )
-    else:
-        stdout_console.print(message)
+    emit_command_error(
+        "validate report",
+        message,
+        json_output=json_output,
+        human_console=stdout_console,
+        report_path=str(path),
+    )
     raise typer.Exit(2)
 
 
