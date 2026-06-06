@@ -63,6 +63,28 @@ class TestReconnectConfig:
         config = ReconnectConfig(max_retries=-1)
         assert config.max_retries == -1
 
+    @pytest.mark.parametrize(
+        ("field", "value", "message"),
+        [
+            ("max_retries", -2, "max_retries"),
+            ("max_retries", True, "max_retries"),
+            ("base_delay", 0.0, "base_delay"),
+            ("base_delay", -0.1, "base_delay"),
+            ("max_delay", 0.0, "max_delay"),
+            ("backoff_factor", 0.99, "backoff_factor"),
+            ("jitter_factor", -0.01, "jitter_factor"),
+            ("jitter_factor", 1.01, "jitter_factor"),
+            ("jitter_factor", True, "jitter_factor"),
+        ],
+    )
+    def test_invalid_retry_policy_rejected(self, field: str, value: object, message: str):
+        with pytest.raises(ValueError, match=message):
+            ReconnectConfig(**{field: value})
+
+    def test_max_delay_must_cover_base_delay(self):
+        with pytest.raises(ValueError, match="max_delay"):
+            ReconnectConfig(base_delay=10.0, max_delay=5.0)
+
 
 class TestReconnectingWebSocket:
     def _make_ws(self, url: str = "wss://test.com", **kwargs) -> ReconnectingWebSocket:

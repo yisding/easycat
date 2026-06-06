@@ -34,6 +34,31 @@ class ReconnectConfig:
     jitter_factor: float = 0.5  # 0.0 = no jitter, 1.0 = full jitter
     extra_headers: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int):
+            raise ValueError("max_retries must be an integer")
+        if self.max_retries < -1:
+            raise ValueError("max_retries must be -1 for unlimited retries or >= 0")
+
+        _validate_positive_number("base_delay", self.base_delay)
+        _validate_positive_number("max_delay", self.max_delay)
+        if self.max_delay < self.base_delay:
+            raise ValueError("max_delay must be greater than or equal to base_delay")
+
+        _validate_positive_number("backoff_factor", self.backoff_factor)
+        if self.backoff_factor < 1.0:
+            raise ValueError("backoff_factor must be >= 1.0")
+
+        if isinstance(self.jitter_factor, bool) or not isinstance(self.jitter_factor, int | float):
+            raise ValueError("jitter_factor must be a number between 0.0 and 1.0")
+        if self.jitter_factor < 0.0 or self.jitter_factor > 1.0:
+            raise ValueError("jitter_factor must be between 0.0 and 1.0")
+
+
+def _validate_positive_number(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ValueError(f"{name} must be > 0")
+
 
 class ReconnectingWebSocket:
     """WebSocket client with automatic reconnection.

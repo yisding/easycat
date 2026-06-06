@@ -82,9 +82,11 @@ with the codebase. Counts below come from tracked files and exclude
   tests guard against cache/workspace artifacts leaking into release wheels.
   CI now runs `uv build`, and release validation exercises an installed
   package through the public CLI.
-- Connection-policy hardening and deeper live/cassette provider validation
-  remain cleanup backlog items. TTS now has a typed `TTSInputPolicy` surface
-  with legacy `supports_ssml` compatibility, and provider capability reports
+- Broader connection-policy hardening and deeper live/cassette provider
+  validation remain cleanup backlog items. Provider WebSocket reconnect policy
+  now rejects unsafe retry/backoff values before they can create busy loops or
+  confusing wait behavior. TTS now has a typed `TTSInputPolicy` surface with
+  legacy `supports_ssml` compatibility, and provider capability reports
   serialize it while distinguishing SSML input support from native
   marker/alignment event support. EventBus subscription tokens, handler
   failure/slow-callback accounting, and configurable handler-error policy now
