@@ -60,6 +60,8 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Show documentation entry points" in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout
+    assert "easycat docs" in result.stdout
+    assert "quickstart, examples, and teaching routes" in result.stdout
     assert "easycat explain json-schema" in result.stdout
     missing = sorted(
         command_name
