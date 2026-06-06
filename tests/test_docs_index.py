@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from easycat.cli._app import _DOCS_LINKS
+from easycat.cli._app import _DOCS_LINKS, _docs_entries
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
@@ -67,3 +67,15 @@ def test_cli_docs_routes_have_descriptions() -> None:
     ]
 
     assert not missing, "easycat docs routes missing useful descriptions: " + ", ".join(missing)
+
+
+def test_cli_docs_routes_have_online_urls() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+
+    assert entries["README.md#install"]["url"].endswith("/blob/main/README.md#install")
+    assert entries["docs/README.md"]["url"].endswith("/blob/main/docs/README.md")
+    assert entries["docs/teaching/"]["url"].endswith("/tree/main/docs/teaching")
+    assert all(
+        entry["url"].startswith("https://github.com/yisding/easycat/")
+        for entry in entries.values()
+    )

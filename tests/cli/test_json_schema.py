@@ -166,6 +166,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Observability", "path": "docs/observability.md"} in entries
     assert {"label": "Validation reference", "path": "plan/validation/reference.md"} in entries
     assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
+    assert all(isinstance(entry.get("url"), str) for entry in payload["entries"])
+    assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(

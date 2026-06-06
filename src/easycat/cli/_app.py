@@ -64,6 +64,10 @@ class _DocsLink(TypedDict):
     description: str
 
 
+class _DocsEntry(_DocsLink):
+    url: str
+
+
 _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Quickstart",
@@ -119,13 +123,32 @@ _DOCS_LINKS: list[_DocsLink] = [
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 
 
+def _docs_url_for(path: str) -> str:
+    """Return the GitHub URL for a docs route path."""
+    route, sep, fragment = path.partition("#")
+    normalized = route.rstrip("/")
+    if route.endswith("/"):
+        url = f"{_DOCS_SOURCE_URL}/tree/main/{normalized}"
+    else:
+        url = f"{_DOCS_SOURCE_URL}/blob/main/{normalized}"
+    if sep:
+        url = f"{url}#{fragment}"
+    return url
+
+
+def _docs_entries() -> list[_DocsEntry]:
+    return [{**entry, "url": _docs_url_for(entry["path"])} for entry in _DOCS_LINKS]
+
+
 def _format_docs_menu() -> str:
-    label_width = max(len(entry["label"]) for entry in _DOCS_LINKS)
+    entries = _docs_entries()
+    label_width = max(len(entry["label"]) for entry in entries)
     routes = "\n".join(
         f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
         f"{entry['path']}\n"
-        f"    [dim]{entry['description']}[/]"
-        for entry in _DOCS_LINKS
+        f"    [dim]{entry['description']}[/]\n"
+        f"    [dim]{entry['url']}[/]"
+        for entry in entries
     )
     return f"""[bold]EasyCat documentation[/]
 
@@ -145,7 +168,7 @@ def docs_command(
 ) -> None:
     """Show documentation entry points."""
     if json_output:
-        emit_json(json_envelope("docs", entries=_DOCS_LINKS, source_url=_DOCS_SOURCE_URL))
+        emit_json(json_envelope("docs", entries=_docs_entries(), source_url=_DOCS_SOURCE_URL))
         return
     stdout_console.print(_format_docs_menu())
 

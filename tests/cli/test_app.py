@@ -66,6 +66,8 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/observability.md" in result.stdout
     assert "#validation-workflow" in result.stdout
     assert "plan/validation/reference.md" in result.stdout
+    assert "https://github.com/yisding/easycat/blob/main/docs/README.md" in result.stdout
+    assert "https://github.com/yisding/easycat/tree/main/docs/teaching" in result.stdout
 
 
 def test_docs_command_json(cli: CliRunner) -> None:
@@ -84,9 +86,15 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/observability.md" in paths
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
+    assert all(entry.get("url") for entry in payload["entries"])
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
+    urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
+    assert urls["README.md#install"] == (
+        "https://github.com/yisding/easycat/blob/main/README.md#install"
+    )
+    assert urls["docs/teaching/"] == "https://github.com/yisding/easycat/tree/main/docs/teaching"
     assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 
