@@ -12,7 +12,7 @@ from easycat._extras import require_module
 
 def _assert_extra_hint(message: str, extra: str) -> None:
     assert f"uv add 'easycat[{extra}]'" in message
-    assert f"uv sync --extra {extra}" in message
+    assert f"From the EasyCat repo, use: uv sync --extra {extra} --group dev" in message
 
 
 def test_require_module_returns_installed_module() -> None:

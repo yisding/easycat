@@ -12,6 +12,11 @@ from easycat.integrations.agents import openai_agents as openai_agents_module
 from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 
 
+def _assert_bridge_install_hint(message: str, extra: str) -> None:
+    assert f"uv add 'easycat[{extra}]'" in message
+    assert f"From the EasyCat repo, use: uv sync --extra {extra} --group dev" in message
+
+
 @pytest.mark.asyncio
 async def test_openai_agents_bridge_missing_sdk_install_hint(monkeypatch):
     monkeypatch.setattr(openai_agents_module, "Runner", None)
@@ -22,8 +27,7 @@ async def test_openai_agents_bridge_missing_sdk_install_hint(monkeypatch):
             pass
 
     message = str(exc_info.value)
-    assert "uv add 'easycat[openai-agents]'" in message
-    assert "uv sync --extra openai-agents" in message
+    _assert_bridge_install_hint(message, "openai-agents")
 
 
 def test_llama_agents_bridge_missing_remote_client_install_hint(monkeypatch):
@@ -49,5 +53,4 @@ def test_llama_agents_bridge_missing_remote_client_install_hint(monkeypatch):
         )
 
     message = str(exc_info.value)
-    assert "uv add 'easycat[llama-agents]'" in message
-    assert "uv sync --extra llama-agents" in message
+    _assert_bridge_install_hint(message, "llama-agents")
