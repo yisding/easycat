@@ -157,6 +157,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "easycat validate quick",
         "docs/public-api.md": "uv run pytest tests/test_public_api.py",
+        "docs/deployment/docker.md": "docker compose -f docker/compose.yaml up --build",
         "docs/observability.md": "easycat bundles list",
         "src/easycat/runtime/DURABILITY.md": (
             "uv run pytest tests/runtime/test_sqlite_journal.py"

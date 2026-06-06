@@ -118,7 +118,8 @@ entry points include:
                             each docs entry has `label`, `path`,
                             `description`, `url`, and optional `commands`
                             in onboarding order; `command_note` explains
-                            installed vs repo-local `uv run` command hints
+                            installed vs repo-local `uv run` for EasyCat CLI
+                            hints
   `templates`, `catalog` - `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
                          `check_command`

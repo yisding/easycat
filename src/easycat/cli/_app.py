@@ -180,6 +180,10 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Deployment",
         "path": "docs/deployment/docker.md",
         "description": "Package the WebSocket example for container deployment.",
+        "commands": (
+            "docker compose -f docker/compose.yaml up --build",
+            "docker compose -f docker/compose.yaml down",
+        ),
     },
     {
         "label": "Observability",
@@ -213,7 +217,8 @@ _DOCS_LINKS: list[_DocsLink] = [
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 _DOCS_COMMAND_NOTE = (
-    "Command hints use installed CLI form; from this repo, prefix non-uv hints with uv run."
+    "EasyCat CLI hints use installed form; from this repo, prefix non-uv EasyCat hints "
+    "with uv run."
 )
 
 
