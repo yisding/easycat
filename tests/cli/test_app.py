@@ -17,6 +17,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from easycat.cli._app import (
+    _CLI_HINTS,
     _COMMAND_TEXT,
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
@@ -126,6 +127,8 @@ def test_peripheral_cli_plan_tracks_journey_menu() -> None:
         for command_name in command_names:
             assert re.search(rf"^\s+{re.escape(command_name)}\s+", help_architecture, re.M)
             assert _COMMAND_TEXT[command_name].journey in help_architecture
+    for command, purpose in _CLI_HINTS:
+        assert f"Run `{command}` for {purpose}" in help_architecture
 
     assert "Check environment and provider reachability" not in help_architecture
     assert "Look up an error code (like `cargo --explain`)" not in help_architecture

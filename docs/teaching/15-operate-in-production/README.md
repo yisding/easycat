@@ -420,15 +420,30 @@ checked-out EasyCat package and virtualenv. In an installed app
 environment, drop the `uv run` prefix.
 
 ```bash
-$ uv run easycat --help
-  init      Scaffold a new project from a template
-  doctor    Check API keys, optional extras, and provider reachability
-  docs      Show docs for learning, validation, and operations
-  explain   Look up errors and CLI schema topics
-  inspect   Inspect a debug bundle or SQLite journal
-  replay    Replay a debug bundle or SQLite journal
-  bundles   Inspect captured debug bundles and crash dumps
-  validate  Run validation checks and inspect validation reports
+$ uv run easycat
+EasyCat — voice bot framework
+
+  Scaffold
+    init        Scaffold a new project from a template
+    doctor      Check API keys, optional extras, and provider reachability
+    explain     Look up errors and CLI schema topics
+
+  Debug with the journal
+    bundles     List captured debug bundles and crash dumps
+    inspect     Summarise a debug bundle or SQLite journal
+    replay      Replay a debug bundle or SQLite journal
+
+  Validation
+    validate    Run validation checks and inspect validation reports
+
+  Learn
+    docs        Show docs for learning, validation, and operations
+
+Run easycat <command> --help for command-specific options.
+Run easycat docs for learning, validation, and operations routes.
+Run easycat docs --json for machine-readable docs routes, audiences, and command hints.
+Run easycat explain <code> for errors.
+Run easycat explain json-schema for CLI JSON.
 ```
 
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template

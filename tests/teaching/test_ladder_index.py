@@ -246,22 +246,20 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     readme = (TEACHING_DIR / "15-operate-in-production" / "README.md").read_text(encoding="utf-8")
     cli_section = readme.split("## The `easycat` CLI", 1)[1].split("## ", 1)[0]
 
-    assert "uv run easycat --help" in cli_section
+    assert "uv run easycat" in cli_section
     assert "drop the `uv run` prefix" in cli_section
-    expected_help_lines = (
-        "init      Scaffold a new project from a template",
-        "doctor    Check API keys, optional extras, and provider reachability",
-        "docs      Show docs for learning, validation, and operations",
-        "explain   Look up errors and CLI schema topics",
-        "inspect   Inspect a debug bundle or SQLite journal",
-        "replay    Replay a debug bundle or SQLite journal",
-        "bundles   Inspect captured debug bundles and crash dumps",
-        "validate  Run validation checks and inspect validation reports",
-    )
-    for line in expected_help_lines:
-        assert line in cli_section
+    assert "uv run easycat --help" not in cli_section
+    for section, command_names in _app._JOURNEY_SECTIONS:
+        assert section in cli_section
+        for command_name in command_names:
+            assert re.search(rf"^\s+{re.escape(command_name)}\s+", cli_section, re.M)
+            assert _app._COMMAND_TEXT[command_name].journey in cli_section
+    for command, purpose in _app._CLI_HINTS:
+        assert f"Run {command} for {purpose}" in cli_section
     assert "doctor    check environment + provider reachability" not in cli_section
     assert "docs      show documentation entry points" not in cli_section
+    assert "Inspect a debug bundle or SQLite journal" not in cli_section
+    assert "Inspect captured debug bundles and crash dumps" not in cli_section
     assert "`uv run easycat docs`" in cli_section
     assert "`uv run easycat docs --json`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
