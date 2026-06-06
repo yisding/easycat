@@ -16,7 +16,7 @@ import logging
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -35,7 +35,7 @@ from easycat.providers import (
 )
 from easycat.runtime.capabilities import default_echo_cancellation_enabled
 from easycat.session.actions import SessionActionExecutor, SessionActions
-from easycat.smart_turn import SmartTurnConfig
+from easycat.smart_turn import SmartTurnConfig, _validate_probability_threshold
 from easycat.stt.factory import STTConfig, parse_stt_string
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 
@@ -195,6 +195,32 @@ def _validate_common(
                     "Set agent_model to the model identifier the remote "
                     "Responses API server should use."
                 )
+
+
+def _normalize_smart_turn_config(
+    smart_turn: SmartTurnConfig | bool | None,
+    *,
+    sensitivity: float | None,
+) -> SmartTurnConfig:
+    """Resolve EasyConfig's beginner-facing smart-turn shortcuts."""
+    if isinstance(smart_turn, bool):
+        if not smart_turn and sensitivity is not None:
+            raise ValueError("smart_turn_sensitivity requires smart_turn=True.")
+        config = SmartTurnConfig(enabled=smart_turn)
+    elif smart_turn is None:
+        config = SmartTurnConfig(enabled=sensitivity is not None)
+    elif isinstance(smart_turn, SmartTurnConfig):
+        config = smart_turn
+    else:
+        raise ValueError("smart_turn must be a bool or SmartTurnConfig.")
+
+    if sensitivity is None:
+        return config
+
+    value = _validate_probability_threshold("smart_turn_sensitivity", sensitivity)
+    # Higher sensitivity means "treat lower completion probabilities as enough
+    # to end the turn", so it maps inversely onto the provider threshold.
+    return replace(config, enabled=True, threshold=1.0 - value)
 
 
 def _inject_agent_runtime(
@@ -458,6 +484,12 @@ class EasyConfig(_AgentSessionConfig):
             mic input. Set ``True`` (or pass an explicit ``noise_reduction``
             config) to wire the reducer; note auto-mode still falls back to
             a passthrough reducer unless Krisp or RNNoise is installed.
+        smart_turn: Smart-turn endpoint detection. Pass ``True`` for the
+            bundled default detector, or a ``SmartTurnConfig`` for full control.
+        smart_turn_sensitivity: Optional 0..1 shortcut for endpointing
+            sensitivity. Higher values end turns more eagerly; internally this
+            maps to ``SmartTurnConfig.threshold = 1 - sensitivity`` and enables
+            smart turn automatically.
         mcp_servers: Optional list of MCP server URIs to pass through to
             agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
             ``http://``, ``https://``.  Frozen per session — mid-session
@@ -474,7 +506,8 @@ class EasyConfig(_AgentSessionConfig):
     enable_echo_cancellation: bool | None = None
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
-    smart_turn: SmartTurnConfig = field(default_factory=SmartTurnConfig)
+    smart_turn: SmartTurnConfig | bool | None = None
+    smart_turn_sensitivity: float | None = None
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
     strip_markdown: bool = False
@@ -524,6 +557,10 @@ class EasyConfig(_AgentSessionConfig):
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
 
     def __post_init__(self) -> None:
+        self.smart_turn = _normalize_smart_turn_config(
+            self.smart_turn,
+            sensitivity=self.smart_turn_sensitivity,
+        )
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,

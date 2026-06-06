@@ -24,6 +24,7 @@ class _FakeConfig:
     debug: str = "full"
     stt: str = "openai"
     tts: str = "openai"
+    smart_turn_sensitivity: float = 0.8
     openai_api_key: str = "sk-secret-12345"
     secret_token: str = "tok-9999"
     timeouts: str = "default"
@@ -36,6 +37,7 @@ class TestSafeConfigSnapshot:
         assert "debug" in snap
         assert "stt" in snap
         assert "tts" in snap
+        assert "smart_turn_sensitivity" in snap
         assert "timeouts" in snap
 
     def test_excludes_secret_fields(self):

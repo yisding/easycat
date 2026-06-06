@@ -31,6 +31,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         # Turn/pipeline policy
         "turn_taking",
         "smart_turn",
+        "smart_turn_sensitivity",
         "timeouts",
         "debug",
         # Pipeline flags

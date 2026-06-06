@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.smart_turn import SmartTurnONNX, SmartTurnResult
+from easycat.smart_turn import SmartTurnConfig, SmartTurnONNX, SmartTurnResult
 
 
 def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
@@ -96,6 +96,18 @@ def test_predict_above_threshold_is_complete() -> None:
     result = provider._predict_sync(audio)
 
     assert result.prediction == 1
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, True, "strict"])
+def test_smart_turn_config_rejects_invalid_threshold(value: object) -> None:
+    with pytest.raises(ValueError, match="threshold"):
+        SmartTurnConfig(threshold=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, True, "strict"])
+def test_smart_turn_onnx_rejects_invalid_threshold(value: object) -> None:
+    with pytest.raises(ValueError, match="threshold"):
+        SmartTurnONNX(model_path="unused.onnx", threshold=value)  # type: ignore[arg-type]
 
 
 def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:

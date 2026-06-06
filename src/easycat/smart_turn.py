@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass, field
+from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -25,6 +27,16 @@ from easycat.audio_format import AudioChunk
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_probability_threshold(name: str, value: float) -> float:
+    """Validate a completion probability threshold in the inclusive 0..1 range."""
+    if not isinstance(value, Real) or isinstance(value, bool) or not math.isfinite(float(value)):
+        raise ValueError(f"{name} must be a number between 0 and 1")
+    threshold = float(value)
+    if not 0 <= threshold <= 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return threshold
 
 
 @dataclass(frozen=True)
@@ -268,7 +280,7 @@ class SmartTurnONNX:
             raise ValueError("max_audio_seconds must be positive")
 
         self._model_path = model_path
-        self._threshold = threshold
+        self._threshold = _validate_probability_threshold("threshold", threshold)
         self._timeout_s = timeout_s
         self._max_audio_samples = int(self._SAMPLE_RATE * max_audio_seconds)
         self._session: Any = None  # ort.InferenceSession (lazy)
@@ -461,6 +473,7 @@ class SmartTurnConfig:
     max_audio_seconds: float = 8.0
 
     def __post_init__(self) -> None:
+        _validate_probability_threshold("threshold", self.threshold)
         if self.timeout_s <= 0:
             raise ValueError("timeout_s must be positive")
         if self.max_audio_seconds <= 0:

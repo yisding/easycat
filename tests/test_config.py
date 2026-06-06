@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 import pytest
 
@@ -856,6 +857,49 @@ def test_create_session_derives_endpoint_threshold_from_smart_turn(
     assert session._turn_manager._config.endpoint_threshold == 0.7
     # The source config must not be mutated.
     assert config.turn_taking.endpoint_threshold is None
+
+
+def test_easyconfig_accepts_smart_turn_bool_shortcut() -> None:
+    config = EasyConfig(openai_api_key="test-key", smart_turn=True)
+
+    assert isinstance(config.smart_turn, SmartTurnConfig)
+    assert config.smart_turn.enabled is True
+    assert config.smart_turn.threshold == pytest.approx(0.5)
+
+
+def test_easyconfig_smart_turn_sensitivity_enables_and_sets_threshold() -> None:
+    config = EasyConfig(openai_api_key="test-key", smart_turn_sensitivity=0.8)
+
+    assert isinstance(config.smart_turn, SmartTurnConfig)
+    assert config.smart_turn.enabled is True
+    assert config.smart_turn.threshold == pytest.approx(0.2)
+
+
+def test_create_session_derives_endpoint_threshold_from_smart_turn_sensitivity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(
+        openai_api_key="test-key",
+        smart_turn=True,
+        smart_turn_sensitivity=0.75,
+        agent=_DummyAgent(),
+    )
+
+    session = create_session(config)
+
+    assert session._turn_manager._config.endpoint_threshold == pytest.approx(0.25)
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1, math.nan, True, "eager"])
+def test_easyconfig_smart_turn_sensitivity_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError, match="smart_turn_sensitivity"):
+        EasyConfig(openai_api_key="test-key", smart_turn_sensitivity=value)  # type: ignore[arg-type]
+
+
+def test_easyconfig_smart_turn_false_rejects_sensitivity() -> None:
+    with pytest.raises(ValueError, match="smart_turn_sensitivity requires smart_turn=True"):
+        EasyConfig(openai_api_key="test-key", smart_turn=False, smart_turn_sensitivity=0.5)
 
 
 def test_create_session_endpoint_threshold_overrides_smart_turn(

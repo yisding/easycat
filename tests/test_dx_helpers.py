@@ -116,6 +116,8 @@ def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
     assert "VADConfig" in config_doc
     assert "NoiseReducerConfig" in config_doc
     assert "EchoCancellationConfig" in config_doc
+    assert "smart_turn" in config_doc
+    assert "smart_turn_sensitivity" in config_doc
 
     assert "Next:" in mic_doc
     assert "stt=" in mic_doc and "tts=" in mic_doc

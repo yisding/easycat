@@ -15,20 +15,23 @@ Shipped:
   `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
   (`stt/factory.py`, `tts/factory.py`).
 - `OPENAI_API_KEY` auto-detection → OpenAI chain default
-  (`config.py:255`).
+  (`config/easy.py`).
 - Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
   related (`errors.py`).
 - Third-party traceback frame collapse (`runtime/records.py:50`).
-- `debug="light" | "full"`, `export_debug_bundle()` (`config.py:212`,
+- `debug="light" | "full"`, `export_debug_bundle()` (`config/easy.py`,
   `session/_session.py:987`).
 - `async with session:` context-manager support (`session/_session.py`).
 - `EasyConfig.mic() / .browser() / .phone()` factory presets
-  (`config.py`). Text-mode sessions go through `create_text_session()`
+  (`config/easy.py`). Text-mode sessions go through `create_text_session()`
   instead of a `.text()` classmethod because the config itself
   requires STT/TTS providers that a text session skips.
 - `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
-  stop/shutdown when debug journaling is enabled (`config.py`).
+  stop/shutdown when debug journaling is enabled (`config/_factory.py`).
+- `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to
+  `SmartTurnConfig(enabled=True, threshold=1-sensitivity)` so common endpoint
+  tuning does not require importing the lower-level config class.
 
 Still remaining:
 
@@ -41,11 +44,10 @@ Still remaining:
 - `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
-- Config flattening pass: currently 33 top-level `EasyConfig` fields,
+- Config flattening pass: currently 34 top-level `EasyConfig` fields,
   target ≤22.
 - Advanced knobs promised by the plan that aren't yet config fields:
-  `warmup=`, `max_session_cost_usd=`, `smart_turn_sensitivity=`,
-  `latency_budget=`.
+  `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
 
 The high-leverage DX wins are shipped; the remaining work is either
 ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
@@ -342,7 +344,7 @@ the `LIVEKIT_LOG_LEVEL` / `UVICORN_LOG_LEVEL` convention. Lives alongside
 
 ## Config Audit and Flattening
 
-`EasyConfig` currently has 33 dataclass fields, including inherited
+`EasyConfig` currently has 34 dataclass fields, including inherited
 agent/journal/runtime fields. Real complexity is in nested surfaces:
 `TelephonyConfig`, `TurnManagerConfig`, and `SmartTurnConfig`. Flatten the
 most common knobs to top level, hide the rest behind sensible defaults, and
@@ -361,7 +363,7 @@ low-level internals:
 - `redaction_policy=...`
 - `mode="local" | "webrtc" | "telephony"`
 - `runtime_mode="chained_pipeline" | "text_session"`
-- `smart_turn=True` with `smart_turn_sensitivity=0.5`
+- `smart_turn=True` with `smart_turn_sensitivity=0.5` (shipped)
 - `backchannel_filter=True`
 - `latency_budget=LatencyBudget(...)`
 - `warmup=True`
