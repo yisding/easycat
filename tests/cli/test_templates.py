@@ -327,10 +327,13 @@ def test_readme_avoids_ad_hoc_env_export_recipes(name: str) -> None:
 def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     next_steps = readme.split("## Next steps", 1)[1]
+    normalized_next_steps = " ".join(next_steps.split())
 
     assert "uv run easycat docs" in next_steps
     assert "uv run easycat docs --json" in next_steps
-    assert "script or coding agent needs the route map" in next_steps
+    assert "script or coding agent needs the route map with command hints" in (
+        normalized_next_steps
+    )
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))
