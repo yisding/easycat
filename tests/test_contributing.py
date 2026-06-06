@@ -82,6 +82,15 @@ def _render_recipe_command(command: str, args_text: str | None) -> str:
     return rendered
 
 
+def _registered_easycat_commands() -> set[str]:
+    from easycat.cli import _app
+
+    _app._register_commands()
+    commands = {command.name for command in _app.app.registered_commands if command.name}
+    commands.update(group.name for group in _app.app.registered_groups if group.name)
+    return commands
+
+
 def test_contributing_quick_start_points_to_docs_command() -> None:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     quick_start = contributing.split("## Quick start", 1)[1].split(
@@ -92,14 +101,24 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in quick_start
     assert "uv run easycat docs --json" in quick_start
+    assert "uv run easycat explain json-schema" in quick_start
     assert "maintained reader-facing map" in quick_start
     assert "script or coding agent needs the same route map with command hints" in normalized
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized
     )
+    assert "standard `--json` envelope" in normalized
+    assert "command-specific fields" in normalized
     assert "CLI and scaffold commands" in quick_start
     assert "uv run easycat doctor" in quick_start
     assert "before debugging tests or examples" in quick_start
+
+    registered_commands = _registered_easycat_commands()
+    command_mentions = re.findall(r"\buv run easycat\s+(?P<command>[A-Za-z0-9_-]+)\b", quick_start)
+    stale = sorted({command for command in command_mentions if command not in registered_commands})
+    assert not stale, (
+        "CONTRIBUTING.md quick-start references stale easycat commands: " + ", ".join(stale)
+    )
 
 
 def test_contributing_validation_report_points_to_latest_artifact() -> None:
