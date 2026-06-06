@@ -182,8 +182,8 @@ _INIT_COMMAND_NOTE = (
 )
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
-    "catalog next steps preview the my-agent post-create sequence; Check after cd and "
-    "Run after cd are run inside the scaffolded project."
+    "JSON catalog next_step_commands previews the my-agent post-create sequence; "
+    "Check after cd and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"

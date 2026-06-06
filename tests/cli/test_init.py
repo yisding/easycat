@@ -77,6 +77,9 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "Command note:" in result.stdout
     assert "Create uses installed CLI form" in result.stdout
     assert "Repo create runs from this repository root" in result.stdout
+    assert "JSON catalog next_step_commands previews the my-agent post-create sequence" in (
+        result.stdout
+    )
     assert "Run after cd are run inside the scaffolded project" in result.stdout
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
         result.stdout

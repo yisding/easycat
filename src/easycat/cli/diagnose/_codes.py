@@ -133,7 +133,8 @@ entry points include:
                          `easycat init --list-templates --json`;
                          catalog entries include `best_for`, `base_extras`,
                          `base_requirement`, `required_env`, `optional_env`,
-                         `files`, `next_step_commands`, `run_command`, and
+                         `files`, `create_command`, `repo_create_command`,
+                         `next_step_commands`, `run_command`, and
                          `check_command`;
                          `command_note` explains installed creation, repo-root
                          creation, and post-scaffold check/run context
