@@ -37,7 +37,12 @@ class _FakeSession:
         self._config = None
 
 
-def _make_bundle(path: Path, records: list[dict]) -> None:
+def _make_bundle(
+    path: Path,
+    records: list[dict],
+    *,
+    provider_versions: dict[str, str] | None = None,
+) -> None:
     """Roll a minimal valid bundle zip at *path*."""
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -45,7 +50,7 @@ def _make_bundle(path: Path, records: list[dict]) -> None:
             json.dumps(
                 {
                     "format_version": FORMAT_VERSION,
-                    "provider_versions": {"stt": "openai-realtime-1.0"},
+                    "provider_versions": provider_versions or {"stt": "openai-realtime-1.0"},
                     "replay_entry_points": [{"sequence": 7, "stage": "stt", "unit_id": "u1"}],
                 }
             ),
@@ -92,6 +97,18 @@ def test_bundles_list_empty(cli: CliRunner, tmp_path: Path) -> None:
     result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path)])
     assert result.exit_code == 0
     assert "No bundles found" in result.stderr
+
+
+def test_bundles_list_empty_renders_bracketed_path_literally(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    scan_path = tmp_path / "recordings[red]"
+    scan_path.mkdir()
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(scan_path)])
+
+    assert result.exit_code == 0
+    assert "recordings[red]" in result.stderr
 
 
 def test_bundles_list_finds_recordings(cli: CliRunner, tmp_path: Path) -> None:
@@ -207,6 +224,31 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["records"] == 1
     assert payload["turns"] == 1
     assert payload["replay_entry_points"][0]["checkpoint_id"] == "cp_7"
+
+
+def test_bundles_show_renders_bracketed_summary_values_literally(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    bundle = tmp_path / "demo[red].zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "name": "TurnStarted",
+                "turn_id": "t1",
+                "session_id": "sess[red]",
+            }
+        ],
+        provider_versions={"stt[red]": "provider[red]"},
+    )
+
+    result = cli.invoke(app, ["bundles", "show", str(bundle)])
+
+    assert result.exit_code == 0, result.stderr
+    assert "demo[red].zip" in result.stderr
+    assert "sess[red]" in result.stdout
+    assert "stt[red]=provider[red]" in result.stdout
 
 
 def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
@@ -446,6 +488,39 @@ def test_replay_bundle_json_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert "Replay" in human.stderr
     assert "artifact" in human.stdout
     assert "frames" in human.stdout
+
+
+def test_replay_summary_renders_bracketed_stage_and_tool_names_literally(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    bundle = tmp_path / "replay[red].zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "kind": "event",
+                "name": "stage_start",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "agent[red]"},
+            },
+            {
+                "sequence": 2,
+                "kind": "framework_transition",
+                "name": "tool_call_started",
+                "turn_id": "t1",
+                "session_id": "sess-xyz",
+                "data": {"stage": "agent[red]", "tool_name": "lookup[red]", "call_id": "c1"},
+            },
+        ],
+    )
+
+    result = cli.invoke(app, ["replay", str(bundle), "--tool-policy", "stub"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "replay[red].zip" in result.stderr
+    assert "lookup[red](c1)" in result.stdout
 
 
 def test_replay_bundle_blocks_tool_side_effects_by_default(

@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
@@ -597,7 +598,7 @@ def list_bundles(
 
     if not entries:
         scan_target = str(path) if path is not None else ".easycat"
-        stderr_console.print(f"No bundles found under [cyan]{scan_target}[/].")
+        stderr_console.print(f"No bundles found under [cyan]{escape(scan_target)}[/].")
         stderr_console.print(
             "[dim]Use [cyan]EasyConfig(record_to=...)[/] or "
             "[cyan]session.export_debug_bundle()[/] to capture one.[/]"
@@ -610,7 +611,7 @@ def list_bundles(
     table.add_column("modified", no_wrap=True)
     for entry in entries:
         table.add_row(
-            str(entry["path"]),
+            escape(str(entry["path"])),
             _format_size(int(entry["size_bytes"])),
             _format_mtime(float(entry["mtime"])),
         )
@@ -704,12 +705,12 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
         )
         raise typer.Exit(0)
 
-    stderr_console.print(f"[bold]Bundle[/] [cyan]{bundle_path}[/]")
+    stderr_console.print(f"[bold]Bundle[/] [cyan]{escape(str(bundle_path))}[/]")
     stderr_console.print()
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column(style="bold", no_wrap=True)
     table.add_column()
-    table.add_row("session_id", str(summary["session_id"]) or "[dim](unknown)[/]")
+    table.add_row("session_id", escape(str(summary["session_id"])) or "[dim](unknown)[/]")
     table.add_row("format_version", str(bundle.format_version))
     table.add_row("records", str(summary["records"]))
     table.add_row("turns", str(summary["turns"]))
@@ -723,13 +724,13 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     table.add_row("artifacts", str(summary["artifact_count"]))
     entry_points = summary["replay_entry_points"]
     if isinstance(entry_points, list) and entry_points:
-        rendered = ", ".join(str(ep["checkpoint_id"]) for ep in entry_points)
+        rendered = escape(", ".join(str(ep["checkpoint_id"]) for ep in entry_points))
         table.add_row("replay_entry_points", rendered)
     else:
         table.add_row("replay_entry_points", "0")
     providers = summary["provider_versions"]
     if isinstance(providers, dict) and providers:
-        pv = ", ".join(f"{k}={v}" for k, v in sorted(providers.items()))
+        pv = escape(", ".join(f"{k}={v}" for k, v in sorted(providers.items())))
         table.add_row("providers", pv)
     stdout_console.print(table)
 
@@ -906,7 +907,7 @@ def _render_replay_summary(
         emit_json(json_envelope("replay", **summary))
         raise typer.Exit(0)
 
-    stderr_console.print(f"[bold]Replay[/] [cyan]{bundle_path}[/]")
+    stderr_console.print(f"[bold]Replay[/] [cyan]{escape(str(bundle_path))}[/]")
     stderr_console.print()
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column(style="bold", no_wrap=True)
@@ -915,13 +916,13 @@ def _render_replay_summary(
     if summary["fidelity_effective"] != summary["fidelity_requested"]:
         table.add_row("requested_fidelity", str(summary["fidelity_requested"]))
     table.add_row("frames", str(summary["frames"]))
-    table.add_row("stages", ", ".join(stages) if stages else "[dim](none)[/]")
+    table.add_row("stages", escape(", ".join(stages)) if stages else "[dim](none)[/]")
     table.add_row("tool_policy", str(summary["tool_policy"]))
     table.add_row("side_effecting", "yes" if result.side_effecting else "no")
     if result.stubbed_tool_calls:
-        table.add_row("stubbed_tools", ", ".join(result.stubbed_tool_calls))
+        table.add_row("stubbed_tools", escape(", ".join(result.stubbed_tool_calls)))
     if result.allowed_tool_calls:
-        table.add_row("allowed_tools", ", ".join(result.allowed_tool_calls))
+        table.add_row("allowed_tools", escape(", ".join(result.allowed_tool_calls)))
     stdout_console.print(table)
 
 
