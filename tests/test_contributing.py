@@ -139,14 +139,12 @@ def test_contributing_development_loop_lists_validation_just_recipes() -> None:
 
 
 def test_contributing_validation_slices_track_public_validate_lanes() -> None:
+    from typer.main import get_command
+
     from easycat.cli.validate import validate_app
 
     documented_slices = {row["slice"] for row in _validation_slice_rows()}
-    public_lanes = {
-        command.name
-        for command in validate_app.registered_commands
-        if command.name not in {None, "report"}
-    }
+    public_lanes = set(get_command(validate_app).commands) - {"report"}
     missing = sorted(public_lanes - documented_slices)
 
     assert not missing, "CONTRIBUTING.md missing validation lanes: " + ", ".join(missing)

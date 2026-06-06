@@ -444,10 +444,11 @@ def test_readme_cli_section_does_not_advertise_stale_top_level_commands() -> Non
 
 
 def test_readme_validation_workflow_lists_registered_validate_commands() -> None:
+    from typer.main import get_command
+
     from easycat.cli.validate import validate_app
 
-    command_names = {command.name for command in validate_app.registered_commands}
-    command_names.discard(None)
+    command_names = set(get_command(validate_app).commands)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
@@ -460,6 +461,15 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
 
     assert not missing, "README.md validation section missing commands: " + ", ".join(missing)
     assert "easycat validate latency --smoke" in validation_section
+
+    advertised = set(
+        re.findall(
+            r"easycat validate (?P<command>[a-z][a-z0-9-]*)(?:\s|$)",
+            validation_section,
+        )
+    )
+    stale = sorted(advertised - command_names)
+    assert not stale, "README.md validation section advertises stale commands: " + ", ".join(stale)
 
     validation_blocks = re.findall(r"```bash\n(.*?)\n```", validation_section, flags=re.DOTALL)
     commands = [

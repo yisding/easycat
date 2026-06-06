@@ -214,6 +214,8 @@ def test_chapter_15_teaches_public_session_lifecycle() -> None:
 
 
 def test_chapter_15_cli_section_lists_registered_commands() -> None:
+    from typer.main import get_command
+
     from easycat.cli import _app
     from easycat.cli.debug.bundles import bundles_app
     from easycat.cli.validate import validate_app
@@ -256,13 +258,22 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     )
 
     missing_validate_commands = sorted(
-        command.name
-        for command in validate_app.registered_commands
-        if command.name is not None
-        and f"uv run easycat validate {command.name}" not in cli_section
+        command_name
+        for command_name in get_command(validate_app).commands
+        if f"uv run easycat validate {command_name}" not in cli_section
     )
     assert not missing_validate_commands, "Chapter 15 CLI section missing validate commands: " + (
         ", ".join(missing_validate_commands)
+    )
+
+    validate_commands = set(get_command(validate_app).commands)
+    advertised_validate_commands = set(
+        re.findall(r"uv run easycat validate (?P<command>[a-z][a-z0-9-]*)(?:\s|$)", cli_section)
+    )
+    stale_validate_commands = sorted(advertised_validate_commands - validate_commands)
+    assert not stale_validate_commands, (
+        "Chapter 15 CLI section advertises stale validate commands: "
+        + ", ".join(stale_validate_commands)
     )
 
 
