@@ -91,7 +91,7 @@ async def main() -> None:
     )
 
     # 3) Write a bundle. The stub below is all export_debug_bundle needs:
-    #    anything with a `_journal` attribute.
+    #    anything with a `journal` or `_journal` attribute.
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
     session_stub = types.SimpleNamespace(journal=journal)
