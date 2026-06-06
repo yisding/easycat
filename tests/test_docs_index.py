@@ -148,6 +148,10 @@ def test_cli_docs_routes_have_online_urls() -> None:
     assert entries["docs/teaching/00-hello-audio/"]["url"].endswith(
         "/tree/main/docs/teaching/00-hello-audio"
     )
+    for route, entry in entries.items():
+        route_path = route.split("#", 1)[0]
+        expected_kind = "/tree/main/" if route_path.endswith("/") else "/blob/main/"
+        assert expected_kind in entry["url"], route
     assert all(
         entry["url"].startswith("https://github.com/yisding/easycat/")
         for entry in entries.values()
