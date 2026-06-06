@@ -7,6 +7,7 @@ import re
 import tomllib
 from pathlib import Path
 
+from easycat.cli.diagnose._codes import META_ENTRIES
 from tests._justfile import just_recipe_names
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -373,6 +374,30 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "`run_command`, `check_command`, `validation`" in normalized_readme
     assert "`source_path`, and `fidelity_effective`" in normalized_readme
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
+
+
+def test_readme_json_guidance_covers_schema_command_families() -> None:
+    """README automation guidance should route agents to each JSON command family."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = re.sub(r"\s+", " ", readme)
+    schema_body = META_ENTRIES["json-schema"].body
+
+    command_family_mentions = {
+        "easycat docs --json": "docs route map",
+        "easycat init --list-templates --json": "template catalog",
+        "easycat init NAME --json": "scaffold output",
+        "easycat validate quick --json": "validation quick/report output",
+        "easycat validate report PATH --json": "validation quick/report output",
+        "easycat bundles list --json": "bundle list/show/export",
+        "easycat bundles show PATH --json": "bundle list/show/export",
+        "easycat bundles export PATH --output DIR --json": "bundle list/show/export",
+        "easycat inspect PATH --json": "inspect",
+        "easycat replay PATH --json": "replay",
+    }
+
+    for schema_command, readme_phrase in command_family_mentions.items():
+        assert schema_command in schema_body
+        assert readme_phrase in normalized_readme
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:

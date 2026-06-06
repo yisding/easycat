@@ -118,13 +118,15 @@ Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints, and `easycat explain json-schema`
-documents the standard `--json` envelope, including command-specific success
-fields such as `entries`, `commands`, `catalog`, `audience`, `command_note`,
-`base_requirement`, `create_command`, `repo_create_command`,
-`next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
-`validation`, `source_path`, and `fidelity_effective`, and error fields such as
-`report_path`, `path`, and `output_path`. Replace uppercase placeholders in
-command hints, such as `PATH`, before running them.
+documents the standard `--json` envelope. It covers the docs route map,
+template catalog, scaffold output, validation quick/report output, bundle
+list/show/export, inspect, and replay command families, including
+command-specific success fields such as `entries`, `commands`, `catalog`,
+`audience`, `command_note`, `base_requirement`, `create_command`,
+`repo_create_command`, `next_step_commands`, `pyproject_name`, `run_command`,
+`check_command`, `validation`, `source_path`, and `fidelity_effective`, and
+error fields such as `report_path`, `path`, and `output_path`. Replace
+uppercase placeholders in command hints, such as `PATH`, before running them.
 
 ## Validation Workflow
 
