@@ -98,6 +98,7 @@ class _TemplateCatalogMetadata(TypedDict):
 
 class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     name: str
+    base_extras: tuple[str, ...]
     create_command: str
     repo_create_command: str
     run_command: str
@@ -242,6 +243,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
         catalog.append(
             {
                 "name": name,
+                "base_extras": _TEMPLATE_BASE_EXTRAS.get(name, ()),
                 "create_command": _create_template_command(name),
                 "repo_create_command": _create_template_command(name, repo_local=True),
                 "run_command": _next_step_run_command(name),
@@ -269,12 +271,14 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
         optional_env_line = (
             f"  [dim]Optional env:[/] {escape(', '.join(optional_env))}\n" if optional_env else ""
         )
+        base_extras = ", ".join(entry["base_extras"]) or "none"
         rows.append(
             f"[cyan]{escape(entry['name'])}[/]\n"
             f"  {escape(entry['description'])}\n"
             f"  [dim]Best for:[/] {escape(entry['best_for'])}\n"
             f"  [dim]Required env:[/] {escape(', '.join(entry['required_env']) or 'none')}\n"
             f"{optional_env_line}"
+            f"  [dim]Base extras:[/] {escape(base_extras)}\n"
             f"  [dim]{escape(metadata)}[/]\n"
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"

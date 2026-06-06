@@ -190,6 +190,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "transport",
         "framework",
         "best_for",
+        "base_extras",
         "required_env",
         "optional_env",
         "description",
@@ -208,6 +209,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         assert entry["check_command"].startswith("uv run python -m py_compile ")
         assert isinstance(entry["best_for"], str)
         assert entry["best_for"]
+        assert isinstance(entry["base_extras"], list)
+        assert entry["base_extras"]
         assert isinstance(entry["required_env"], list)
         assert entry["required_env"]
         assert isinstance(entry["optional_env"], list)
@@ -322,6 +325,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
+    assert "base extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]

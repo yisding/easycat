@@ -158,6 +158,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "For: new users" in result.stdout
     assert "For: app builders" in result.stdout
     assert "README.md#cli" in result.stdout
+    assert "base extras" in result.stdout
     assert "env requirements" in result.stdout
     assert "optional env knobs" in result.stdout
     assert "copyable create/check/run commands" in result.stdout
@@ -270,6 +271,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "JSON envelopes" in descriptions["README.md#cli"]
+    assert "base extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert audiences["README.md#install"] == "new users"

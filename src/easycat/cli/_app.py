@@ -154,8 +154,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "README.md#cli",
         "audience": "app builders",
         "description": (
-            "Scaffold projects, compare templates with env requirements, optional "
-            "env knobs, and copyable create/check/run commands, and learn CLI JSON envelopes."
+            "Scaffold projects, compare templates with base extras, env requirements, "
+            "optional env knobs, and copyable create/check/run commands, and learn "
+            "CLI JSON envelopes."
         ),
         "commands": (
             "easycat init --list-templates",

@@ -398,6 +398,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     normalized_cli_section = re.sub(r"\s+", " ", cli_section)
 
     assert "installed CLI form" in cli_section
+    assert "base `easycat[...]` extras" in normalized_cli_section
     assert "required environment variables" in normalized_cli_section
     assert "optional environment knobs" in normalized_cli_section
     assert "copyable create/check/run commands" in normalized_cli_section

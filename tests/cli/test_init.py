@@ -61,6 +61,10 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "Optional env:" in result.stdout
     assert "TWILIO_WS_PORT" in result.stdout
     assert "TURN_SERVER_URL" in result.stdout
+    assert "Base extras:" in result.stdout
+    assert "openai-agents, local" in result.stdout
+    assert "telephony" in result.stdout
+    assert "webrtc" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
     assert "Command note:" in result.stdout
@@ -85,6 +89,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "mode": "voice",
             "transport": "local[dev]",
             "framework": "OpenAI Agents",
+            "base_extras": ("sdk[beta]",),
             "best_for": "Teams using SDK[beta].",
             "required_env": ("OPENAI_API_KEY", "SDK[KEY]"),
             "optional_env": ("SDK[OPTIONAL]",),
@@ -100,6 +105,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "demo[beta]" in rendered
     assert "easycat[openai-agents]" in rendered
     assert "local[dev]" in rendered
+    assert "sdk[beta]" in rendered
     assert "Teams using SDK[beta]." in rendered
     assert "SDK[KEY]" in rendered
     assert "SDK[OPTIONAL]" in rendered
@@ -118,11 +124,14 @@ def test_list_templates_json(cli: CliRunner) -> None:
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
     assert catalog["openai-agents"]["transport"] == "local mic"
+    assert catalog["openai-agents"]["base_extras"] == ["openai-agents", "local"]
     assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
     assert catalog["openai-agents"]["optional_env"] == []
     assert catalog["text-chat"]["mode"] == "text"
+    assert catalog["text-chat"]["base_extras"] == ["openai-agents"]
     assert "without microphone" in catalog["text-chat"]["best_for"]
+    assert catalog["twilio-phone"]["base_extras"] == ["openai-agents", "telephony"]
     assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
     assert catalog["twilio-phone"]["optional_env"] == ["TWILIO_WS_PORT"]
     assert catalog["webrtc-browser"]["optional_env"] == [
@@ -130,6 +139,7 @@ def test_list_templates_json(cli: CliRunner) -> None:
         "TURN_USERNAME",
         "TURN_CREDENTIAL",
     ]
+    assert catalog["webrtc-browser"]["base_extras"] == ["openai-agents", "webrtc"]
     assert "description" in catalog["webrtc-browser"]
     for name, entry in catalog.items():
         assert entry["create_command"] == f"easycat init my-agent --template {name}"

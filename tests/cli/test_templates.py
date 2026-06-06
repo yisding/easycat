@@ -28,6 +28,7 @@ import pytest
 from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
+    _TEMPLATE_BASE_EXTRAS,
     _TEMPLATE_CATALOG,
     _available_template_catalog,
     _render_text,
@@ -109,9 +110,17 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
 def test_template_catalog_metadata_covers_available_templates(templates: list[str]) -> None:
     missing = sorted(set(templates) - set(_TEMPLATE_CATALOG))
     stale = sorted(set(_TEMPLATE_CATALOG) - set(templates))
+    missing_base_extras = sorted(set(templates) - set(_TEMPLATE_BASE_EXTRAS))
+    stale_base_extras = sorted(set(_TEMPLATE_BASE_EXTRAS) - set(templates))
 
     assert not missing, "Template catalog missing metadata for: " + ", ".join(missing)
     assert not stale, "Template catalog references missing templates: " + ", ".join(stale)
+    assert not missing_base_extras, "Template catalog missing base extras for: " + ", ".join(
+        missing_base_extras
+    )
+    assert not stale_base_extras, "Template base extras reference missing templates: " + ", ".join(
+        stale_base_extras
+    )
 
     for name in templates:
         entry = _TEMPLATE_CATALOG[name]
@@ -147,6 +156,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     assert set(emitted) == set(templates)
     assert all(entry["name"] == name for name, entry in emitted.items())
     for name, entry in emitted.items():
+        assert entry["base_extras"] == _TEMPLATE_BASE_EXTRAS[name]
         assert entry["run_command"]
         assert entry["check_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
@@ -404,7 +414,10 @@ def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None
 def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     """Every template's pyproject.toml declares an easycat extras dep."""
     pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+    rendered = _render_text(pyproject, _substitutions(InitConfig(template=name), "demo"))
+
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
+    assert f"easycat[{','.join(_TEMPLATE_BASE_EXTRAS[name])}]" in rendered
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject

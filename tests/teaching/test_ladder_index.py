@@ -260,6 +260,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "`uv run easycat docs --json`" in cli_section
     assert "`uv run easycat init --list-templates`" in cli_section
     normalized_cli_section = re.sub(r"\s+", " ", cli_section)
+    assert "base `easycat[...]` extras" in normalized_cli_section
     assert "required environment variables" in normalized_cli_section
     assert "optional environment knobs" in normalized_cli_section
     assert "copyable create/check/run commands" in normalized_cli_section

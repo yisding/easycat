@@ -129,10 +129,10 @@ first run.
 - `easycat init` success output mirrors each template README's run and
   syntax-check commands.
 - `easycat init --list-templates` includes per-template metadata
-  (mode, transport, framework, best-fit guidance, required environment
-  variables, optional environment knobs, description, and copyable create
-  commands plus post-scaffold check/run commands), and `--json` exposes the
-  same catalog for tooling.
+  (mode, transport, framework, best-fit guidance, base extras, required
+  environment variables, optional environment knobs, description, and copyable
+  create commands plus post-scaffold check/run commands), and `--json` exposes
+  the same catalog for tooling.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `.gitignore` contains no placeholders.
 
