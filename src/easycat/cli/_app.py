@@ -85,6 +85,7 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _JOURNEY_FOOTER = (
     "Run [cyan]easycat <command> --help[/] for command-specific options.",
     "Run [cyan]easycat docs[/] for quickstart, examples, and teaching routes.",
+    "Run [cyan]easycat docs --json[/] for machine-readable docs routes.",
     "Run [cyan]easycat explain <code>[/] for errors.",
     "Run [cyan]easycat explain json-schema[/] for CLI JSON.",
 )

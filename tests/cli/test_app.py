@@ -109,7 +109,9 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Run validation checks and inspect validation reports" in result.stdout
     assert "Run validation checks and inspect reports" not in result.stdout
     assert "easycat docs" in result.stdout
+    assert "easycat docs --json" in result.stdout
     assert "quickstart, examples, and teaching routes" in result.stdout
+    assert "machine-readable docs routes" in result.stdout
     assert "easycat explain json-schema" in result.stdout
     missing = sorted(
         command_name
