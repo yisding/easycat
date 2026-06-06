@@ -122,14 +122,25 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
             "framework",
             "best_for",
             "required_env",
-            "description",
         ):
             assert entry[key], f"{name} catalog entry missing {key}"
+        assert "optional_env" in entry, f"{name} catalog entry missing optional_env"
+        assert entry["description"], f"{name} catalog entry missing description"
         env_example = (_template_dir(name) / ".env.example").read_text(encoding="utf-8")
         for env_var in entry["required_env"]:
             assert env_var.isupper(), f"{name} catalog env var is not uppercase: {env_var}"
             assert f"{env_var}=" in env_example, (
                 f"{name} catalog required_env {env_var} missing from .env.example"
+            )
+        for env_var in entry["optional_env"]:
+            assert env_var.isupper(), (
+                f"{name} catalog optional env var is not uppercase: {env_var}"
+            )
+            assert env_var not in entry["required_env"], (
+                f"{name} catalog optional_env duplicates required_env: {env_var}"
+            )
+            assert f"{env_var}=" in env_example, (
+                f"{name} catalog optional_env {env_var} missing from .env.example"
             )
 
     emitted = {entry["name"]: entry for entry in _available_template_catalog()}
@@ -139,6 +150,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert entry["run_command"]
         assert entry["check_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
+        assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
 
 
 def _template_dir(name: str) -> Path:

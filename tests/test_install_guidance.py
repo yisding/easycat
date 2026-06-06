@@ -399,6 +399,7 @@ def test_cli_init_examples_name_target_directory() -> None:
     production_chapter = (
         REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
     ).read_text(encoding="utf-8")
+    normalized_production_chapter = re.sub(r"\s+", " ", production_chapter)
 
     assert not re.search(r"(?m)^easycat init\s+#", cli_section)
     assert "easycat init my-agent" in cli_section
@@ -406,11 +407,13 @@ def test_cli_init_examples_name_target_directory() -> None:
     assert "`easycat init my-agent` scaffolds" in readme
     assert "`easycat init --list-templates` shows" in readme
     assert "required environment variables" in normalized_readme
+    assert "optional environment knobs" in normalized_readme
     assert "copyable create/check/run commands" in normalized_readme
     assert "`uv run easycat init my-agent`" in production_chapter
     assert "`uv run easycat init --list-templates`" in production_chapter
-    assert "required environment variables" in production_chapter
-    assert "copyable create/check/run commands" in production_chapter
+    assert "required environment variables" in normalized_production_chapter
+    assert "optional environment knobs" in normalized_production_chapter
+    assert "copyable create/check/run commands" in normalized_production_chapter
     assert "**`uv run easycat init`**" not in production_chapter
 
 

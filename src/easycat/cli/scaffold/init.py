@@ -92,6 +92,7 @@ class _TemplateCatalogMetadata(TypedDict):
     framework: str
     best_for: str
     required_env: tuple[str, ...]
+    optional_env: tuple[str, ...]
     description: str
 
 
@@ -110,6 +111,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "OpenAI Agents",
         "best_for": "First local voice agent and default OpenAI Agents scaffold.",
         "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
         "description": "Local microphone/speaker voice agent.",
     },
     "pydantic-ai": {
@@ -118,6 +120,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "Pydantic AI",
         "best_for": "Teams already building agents with Pydantic AI.",
         "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
         "description": "Local voice agent using Pydantic AI.",
     },
     "pydantic-ai-workflow": {
@@ -126,6 +129,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "Pydantic AI workflow",
         "best_for": "Small workflow examples around a Pydantic AI agent.",
         "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
         "description": "Local voice agent with a small workflow object.",
     },
     "text-chat": {
@@ -134,6 +138,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "OpenAI Agents",
         "best_for": "Testing agent behavior without microphone or speaker setup.",
         "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
         "description": "Text-only REPL for testing agent behavior without audio.",
     },
     "twilio-phone": {
@@ -142,6 +147,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "OpenAI Agents",
         "best_for": "Phone-call prototypes and Twilio Media Streams servers.",
         "required_env": ("OPENAI_API_KEY", "TWILIO_STREAM_URL"),
+        "optional_env": ("TWILIO_WS_PORT",),
         "description": "Phone-call voice agent with a Twilio WebSocket server.",
     },
     "webrtc-browser": {
@@ -150,6 +156,7 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "framework": "OpenAI Agents",
         "best_for": "Browser-based voice apps using WebRTC.",
         "required_env": ("OPENAI_API_KEY",),
+        "optional_env": ("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
         "description": "Browser voice agent using WebRTC audio.",
     },
 }
@@ -228,6 +235,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "framework": "unknown",
                 "best_for": "Template selection guidance has not been documented yet.",
                 "required_env": (),
+                "optional_env": (),
                 "description": "Template metadata has not been documented yet.",
             },
         )
@@ -257,11 +265,16 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
     rows = []
     for entry in catalog:
         metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
+        optional_env = entry.get("optional_env", ())
+        optional_env_line = (
+            f"  [dim]Optional env:[/] {escape(', '.join(optional_env))}\n" if optional_env else ""
+        )
         rows.append(
             f"[cyan]{escape(entry['name'])}[/]\n"
             f"  {escape(entry['description'])}\n"
             f"  [dim]Best for:[/] {escape(entry['best_for'])}\n"
             f"  [dim]Required env:[/] {escape(', '.join(entry['required_env']) or 'none')}\n"
+            f"{optional_env_line}"
             f"  [dim]{escape(metadata)}[/]\n"
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"

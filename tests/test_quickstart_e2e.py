@@ -399,6 +399,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     assert "installed CLI form" in cli_section
     assert "required environment variables" in normalized_cli_section
+    assert "optional environment knobs" in normalized_cli_section
     assert "copyable create/check/run commands" in normalized_cli_section
     assert "uv run easycat doctor" in cli_section
     assert "easycat doctor --env-file .env" in cli_section

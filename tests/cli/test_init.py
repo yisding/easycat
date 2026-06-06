@@ -58,6 +58,9 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "Required env:" in result.stdout
     assert "OPENAI_API_KEY" in result.stdout
     assert "TWILIO_STREAM_URL" in result.stdout
+    assert "Optional env:" in result.stdout
+    assert "TWILIO_WS_PORT" in result.stdout
+    assert "TURN_SERVER_URL" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
     assert "Command note:" in result.stdout
@@ -84,6 +87,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "framework": "OpenAI Agents",
             "best_for": "Teams using SDK[beta].",
             "required_env": ("OPENAI_API_KEY", "SDK[KEY]"),
+            "optional_env": ("SDK[OPTIONAL]",),
             "create_command": "easycat init demo --template demo[beta]",
             "repo_create_command": "uv run easycat init demo --template demo[beta]",
             "check_command": "uv add 'easycat[openai-agents]'",
@@ -98,6 +102,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "local[dev]" in rendered
     assert "Teams using SDK[beta]." in rendered
     assert "SDK[KEY]" in rendered
+    assert "SDK[OPTIONAL]" in rendered
     assert "easycat init demo --template demo[beta]" in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
 
@@ -115,9 +120,16 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["openai-agents"]["transport"] == "local mic"
     assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
+    assert catalog["openai-agents"]["optional_env"] == []
     assert catalog["text-chat"]["mode"] == "text"
     assert "without microphone" in catalog["text-chat"]["best_for"]
     assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
+    assert catalog["twilio-phone"]["optional_env"] == ["TWILIO_WS_PORT"]
+    assert catalog["webrtc-browser"]["optional_env"] == [
+        "TURN_SERVER_URL",
+        "TURN_USERNAME",
+        "TURN_CREDENTIAL",
+    ]
     assert "description" in catalog["webrtc-browser"]
     for name, entry in catalog.items():
         assert entry["create_command"] == f"easycat init my-agent --template {name}"
