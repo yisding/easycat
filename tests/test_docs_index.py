@@ -51,6 +51,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "teaching/00-hello-audio/",
         "../README.md#cli",
         "../examples/README.md",
+        "../CLAUDE.md",
         "public-api.md",
         "../CONTRIBUTING.md",
         "deployment/docker.md",
@@ -79,6 +80,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
     assert "copyable create/check/run commands" in normalized
+    assert "architecture map" in normalized
+    assert "provider registries" in normalized
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
@@ -181,6 +184,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "README.md#cli": "easycat init --list-templates",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "easycat validate quick",
+        "CLAUDE.md": "uv run pytest tests/test_install_guidance.py",
         "docs/public-api.md": "uv run pytest tests/test_public_api.py",
         "docs/deployment/docker.md": "docker compose -f docker/compose.yaml up --build",
         "docs/observability.md": "easycat bundles list",

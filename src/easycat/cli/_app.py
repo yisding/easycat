@@ -178,6 +178,13 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": ("easycat doctor", "easycat validate quick"),
     },
     {
+        "label": "Architecture",
+        "path": "CLAUDE.md",
+        "audience": "maintainers",
+        "description": "Orient to the pipeline, packages, provider registries, and lifecycle.",
+        "commands": ("uv run pytest tests/test_install_guidance.py",),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",

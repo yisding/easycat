@@ -31,6 +31,9 @@ command hints, such as `PATH`, before running them.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
+- Maintaining architecture or package boundaries: use the
+  [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
+  registries, session lifecycle, and test layout.
 - Maintaining public imports: review the
   [public API contract](public-api.md) before changing `easycat.__all__`.
 - Contributing code or tests: use the

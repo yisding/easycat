@@ -297,6 +297,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Docs map", "path": "docs/README.md"} in entries
     assert {"label": "First lesson", "path": "docs/teaching/00-hello-audio/"} in entries
     assert {"label": "Examples", "path": "examples/README.md"} in entries
+    assert {"label": "Architecture", "path": "CLAUDE.md"} in entries
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in entries
     assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in entries
     assert {"label": "Observability", "path": "docs/observability.md"} in entries
@@ -315,8 +316,10 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
+    assert audiences["CLAUDE.md"] == "maintainers"
     assert audiences["README.md#validation-workflow"] == "contributors"
     assert "easycat init --list-templates" in commands["README.md#cli"]
+    assert "uv run pytest tests/test_install_guidance.py" in commands["CLAUDE.md"]
     assert "easycat validate quick" in commands["README.md#validation-workflow"]
     assert all(entry["url"].startswith(payload["source_url"]) for entry in payload["entries"])
 
