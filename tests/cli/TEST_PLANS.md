@@ -124,7 +124,7 @@ first run.
 - README contains all five required sections: Install, Configure, Run,
   Check, Next steps.
 - README tells every OpenAI-key template to run
-  `uv run --env-file .env easycat doctor` during setup.
+  `uv run easycat doctor --env-file .env` during setup.
 - `easycat init --list-templates` includes per-template metadata
   (mode, transport, framework, and description), and `--json` exposes
   the same catalog for tooling.

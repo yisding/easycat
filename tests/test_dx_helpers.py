@@ -53,7 +53,7 @@ def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.Mon
     assert "export OPENAI_API_KEY=..." in message
     assert "uv run easycat doctor" in message
     assert "uv run --env-file .env ..." in message
-    assert "uv run --env-file .env easycat doctor" in message
+    assert "uv run easycat doctor --env-file .env" in message
 
 
 # ── Config factory presets ───────────────────────────────────────

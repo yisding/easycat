@@ -26,7 +26,7 @@ def require_env(name: str) -> str:
             f"{name} is required. Set it before running, for example: "
             f"export {name}=...; verify provider keys with `uv run easycat doctor`. "
             "With a project `.env`, run commands as `uv run --env-file .env ...` "
-            "and verify with `uv run --env-file .env easycat doctor`."
+            "and verify with `uv run easycat doctor --env-file .env`."
         )
     return value
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -90,7 +92,46 @@ def test_doctor_json_envelope(cli: CliRunner, empty_env: None, no_network: None)
     for check in payload["checks"]:
         assert "name" in check and "status" in check and "detail" in check
     env_any = next(check for check in payload["checks"] if check["name"] == "env_any")
-    assert "uv run --env-file .env easycat doctor" in env_any["fix"]
+    assert "easycat doctor --env-file .env" in env_any["fix"]
+
+
+def test_doctor_env_file_loads_keys_and_restores_env(
+    cli: CliRunner,
+    tmp_path: Path,
+    empty_env: None,
+    no_network: None,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# local scaffold env\nOPENAI_API_KEY='sk-from-file'\nDEEPGRAM_API_KEY=\"dg-from-file\"\n",
+        encoding="utf-8",
+    )
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["env_openai"]["status"] == "ok"
+    assert checks["env_deepgram"]["status"] == "ok"
+    assert os.getenv("OPENAI_API_KEY") is None
+    assert os.getenv("DEEPGRAM_API_KEY") is None
+
+
+def test_doctor_env_file_rejects_invalid_lines(
+    cli: CliRunner,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY sk-from-file\n", encoding="utf-8")
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file)])
+
+    assert result.exit_code == 2
+    assert "Invalid --env-file" in result.stderr
+    assert "expected" in result.stderr
+    assert "KEY=VALUE" in result.stderr
 
 
 def test_doctor_unknown_environment(cli: CliRunner, empty_env: None) -> None:

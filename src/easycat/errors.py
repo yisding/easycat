@@ -254,9 +254,9 @@ EASYCAT_E203 = register(
     fix=(
         "Set the env var: `export {var}=...`. If the project uses a "
         "`.env` file, copy `.env.example` to `.env`, fill in keys there, "
-        "and run commands with `uv run --env-file .env ...`."
+        "and verify it with `easycat doctor --env-file .env`."
     ),
-    example="export OPENAI_API_KEY=sk-...  # or: uv run --env-file .env easycat doctor",
+    example="export OPENAI_API_KEY=sk-...  # or: easycat doctor --env-file .env",
     related=["EASYCAT_E202"],
 )
 

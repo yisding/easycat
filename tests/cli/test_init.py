@@ -659,6 +659,6 @@ def test_init_next_steps_load_env_for_doctor(
     config = json.dumps({"schema_version": 1, "template": "text-chat"})
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
-    assert "uv run --env-file .env easycat doctor" in result.stderr
+    assert "uv run easycat doctor --env-file .env" in result.stderr
     assert "uv run easycat docs" in result.stderr
     assert "uvx easycat doctor" not in result.stderr

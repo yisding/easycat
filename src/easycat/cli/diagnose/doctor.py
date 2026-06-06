@@ -16,7 +16,11 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import os
+import re
+import shlex
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,6 +114,47 @@ _PROVIDER_ENV: dict[str, str] = {
     "elevenlabs": "ELEVENLABS_API_KEY",
     "cartesia": "CARTESIA_API_KEY",
 }
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise ValueError(f"{path} is not a file")
+
+    values: dict[str, str] = {}
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            parts = shlex.split(stripped, comments=True, posix=True)
+        except ValueError as exc:
+            raise ValueError(f"{path}:{line_number}: invalid .env syntax: {exc}") from exc
+        if not parts:
+            continue
+        if parts[0] == "export":
+            parts = parts[1:]
+        if len(parts) != 1 or "=" not in parts[0]:
+            raise ValueError(f"{path}:{line_number}: expected KEY=VALUE")
+        key, value = parts[0].split("=", 1)
+        if not _ENV_NAME_RE.match(key):
+            raise ValueError(f"{path}:{line_number}: invalid env var name {key!r}")
+        values[key] = value
+    return values
+
+
+@contextmanager
+def _temporary_env(values: dict[str, str]) -> Iterator[None]:
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        os.environ.update(values)
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
@@ -130,7 +175,7 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 code="EASYCAT_E203",
                 fix=(
                     f"Set {var}: `export {var}=...`, or load a project `.env` "
-                    "with `uv run --env-file .env easycat doctor`."
+                    "with `easycat doctor --env-file .env`."
                 ),
             )
         ]
@@ -162,7 +207,7 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 fix=(
                     "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, "
                     "ELEVENLABS_API_KEY, or CARTESIA_API_KEY. If your keys are "
-                    "in `.env`, run `uv run --env-file .env easycat doctor`."
+                    "in `.env`, run `easycat doctor --env-file .env`."
                 ),
             )
         )
@@ -499,6 +544,11 @@ def doctor(
             "creates a missing journal directory (EASYCAT_E207)."
         ),
     ),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="Load environment variables from a .env file before checks.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Check environment, credentials, reachability, and ONNX availability."""
@@ -519,34 +569,41 @@ def doctor(
         )
         raise typer.Exit(2)
 
-    results = _run_all_checks(only_provider=only_provider, environment=environment)
+    try:
+        env_values = _parse_env_file(env_file) if env_file is not None else {}
+    except ValueError as exc:
+        stderr_console.print(f"  [red]✗[/] Invalid --env-file: {exc}")
+        raise typer.Exit(2) from exc
 
-    if fix:
-        # ``--fix`` handles the narrow, safe remediations: creating the
-        # journal directory (E207).  API-key and mic-permission fixes
-        # stay manual — no CLI should be writing to ``~/.bashrc`` or
-        # flipping macOS privacy prompts on the user's behalf.
-        applied = _apply_safe_fixes(results)
-        if applied:
-            stderr_console.print(
-                f"[dim]--fix applied {applied} remediation(s); re-running checks.[/]"
+    with _temporary_env(env_values):
+        results = _run_all_checks(only_provider=only_provider, environment=environment)
+
+        if fix:
+            # ``--fix`` handles the narrow, safe remediations: creating the
+            # journal directory (E207).  API-key and mic-permission fixes
+            # stay manual — no CLI should be writing to ``~/.bashrc`` or
+            # flipping macOS privacy prompts on the user's behalf.
+            applied = _apply_safe_fixes(results)
+            if applied:
+                stderr_console.print(
+                    f"[dim]--fix applied {applied} remediation(s); re-running checks.[/]"
+                )
+                results = _run_all_checks(only_provider=only_provider, environment=environment)
+            else:
+                stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
+
+        if json_output:
+            failed = any(r.status == "fail" for r in results)
+            emit_json(
+                json_envelope(
+                    "doctor",
+                    status="error" if failed else "ok",
+                    environment=environment,
+                    checks=[r.as_dict() for r in results],
+                )
             )
-            results = _run_all_checks(only_provider=only_provider, environment=environment)
         else:
-            stderr_console.print("[dim]--fix: no auto-remediatable issues found.[/]")
-
-    if json_output:
-        failed = any(r.status == "fail" for r in results)
-        emit_json(
-            json_envelope(
-                "doctor",
-                status="error" if failed else "ok",
-                environment=environment,
-                checks=[r.as_dict() for r in results],
-            )
-        )
-    else:
-        _render_report(results, profile=environment)
+            _render_report(results, profile=environment)
 
     failed = any(r.status == "fail" for r in results)
     raise typer.Exit(1 if failed else 0)
