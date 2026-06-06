@@ -146,8 +146,10 @@ def test_contributing_validation_slices_track_public_validate_lanes() -> None:
     documented_slices = {row["slice"] for row in _validation_slice_rows()}
     public_lanes = set(get_command(validate_app).commands) - {"report"}
     missing = sorted(public_lanes - documented_slices)
+    stale = sorted(documented_slices - public_lanes)
 
     assert not missing, "CONTRIBUTING.md missing validation lanes: " + ", ".join(missing)
+    assert not stale, "CONTRIBUTING.md advertises stale validation lanes: " + ", ".join(stale)
 
 
 def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
