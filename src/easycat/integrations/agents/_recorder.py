@@ -273,12 +273,15 @@ class JournalAgentRecorder:
     ) -> None:
         if self._journal is None:
             return
+        record_data = {"run_id": self._context.run_id}
+        if data:
+            record_data.update(data)
         self._journal.append(
             kind=kind,
             name=name,
             session_id=self._context.session_id,
             turn_id=self._context.turn_id,
-            data=_scrub_secrets(data) if data else data,
+            data=_scrub_secrets(record_data),
             error=error,
             output_ref=output_ref,
         )

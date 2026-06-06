@@ -44,6 +44,8 @@ class TestRecorderLifecycle:
         assert len(records) == 2
         assert records[0].name == "unit_entered"
         assert records[1].name == "unit_exited"
+        assert records[0].data["run_id"] == "r1"
+        assert records[1].data["run_id"] == "r1"
 
     def test_tool_call_recorded(self, recorder, journal):
         recorder.record_tool_call(phase="start", name="get_weather")
@@ -77,6 +79,7 @@ class TestRecorderLifecycle:
         assert len(records) == 1
         assert records[0].error is not None
         assert records[0].error.type == "RuntimeError"
+        assert records[0].data["run_id"] == "r1"
 
     def test_state_snapshot_recorded(self, recorder, journal):
         recorder.record_state_snapshot(ref="abc123")
