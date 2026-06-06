@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -40,7 +41,7 @@ def _render_entry(code: str) -> None:
     assert entry is not None, f"_render_entry called for unregistered {code}"
     stdout_console.print(
         Panel(
-            entry.headline,
+            escape(entry.headline),
             title=f"[bold]{entry.code}[/]",
             border_style="cyan",
             padding=(0, 2),
@@ -48,14 +49,14 @@ def _render_entry(code: str) -> None:
     )
     stdout_console.print()
     stdout_console.print("[bold]Cause[/]")
-    stdout_console.print(f"  {entry.cause}")
+    stdout_console.print(f"  {escape(entry.cause)}")
     stdout_console.print()
     stdout_console.print("[bold]Fix[/]")
-    stdout_console.print(f"  {entry.fix}")
+    stdout_console.print(f"  {escape(entry.fix)}")
     if entry.example:
         stdout_console.print()
         stdout_console.print("[bold]Example[/]")
-        stdout_console.print(f"  [dim]{entry.example}[/]")
+        stdout_console.print(f"  [dim]{escape(entry.example)}[/]")
     if entry.related:
         stdout_console.print()
         stdout_console.print("[bold]Related[/]")
@@ -66,14 +67,14 @@ def _render_meta(slug: str) -> None:
     entry = META_ENTRIES[slug]
     stdout_console.print(
         Panel(
-            entry.headline,
-            title=f"[bold]{entry.slug}[/]",
+            escape(entry.headline),
+            title=f"[bold]{escape(entry.slug)}[/]",
             border_style="magenta",
             padding=(0, 2),
         )
     )
     stdout_console.print()
-    stdout_console.print(entry.body)
+    stdout_console.print(escape(entry.body))
 
 
 def _list_headline(template: str) -> str:
@@ -99,7 +100,9 @@ def _print_list() -> None:
     stdout_console.print()
     stdout_console.print("[dim]Meta topics:[/]")
     for slug in sorted(META_ENTRIES):
-        stdout_console.print(f"  [magenta]{slug}[/] — {META_ENTRIES[slug].headline}")
+        stdout_console.print(
+            f"  [magenta]{escape(slug)}[/] — {escape(META_ENTRIES[slug].headline)}"
+        )
 
 
 def _emit_json_list() -> None:
@@ -209,8 +212,10 @@ def explain(
             )
         )
     else:
-        stderr_console.print(f"  [red]✗[/] [red]EASYCAT_E501[/]: Unknown error code {raw!r}.")
+        stderr_console.print(
+            f"  [red]✗[/] [red]EASYCAT_E501[/]: Unknown error code {escape(repr(raw))}."
+        )
         if matches:
-            stderr_console.print(f"    Did you mean: {', '.join(matches)}?")
+            stderr_console.print(f"    Did you mean: {escape(', '.join(matches))}?")
         stderr_console.print("    Run [cyan]easycat explain --list[/] for the full catalog.")
     raise typer.Exit(2)

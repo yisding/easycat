@@ -31,6 +31,23 @@ def test_explain_known_code(cli: CliRunner) -> None:
     assert "Fix" in result.stdout
 
 
+def test_explain_preserves_bracketed_extra_install_hints(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "E202"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "uv add 'easycat[openai-agents]'" in result.stdout
+    assert "uv add 'easycat'  # or" not in result.stdout
+
+
+def test_explain_preserves_bracketed_provider_extra_hint(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "E104"])
+    stdout = " ".join(result.stdout.split())
+
+    assert result.exit_code == 0, result.stderr
+    assert "uv add 'easycat[deepgram]'" in stdout
+    assert "uv add 'easycat'" not in stdout
+
+
 def test_explain_accepts_full_prefix(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "EASYCAT_E101"])
     assert result.exit_code == 0
