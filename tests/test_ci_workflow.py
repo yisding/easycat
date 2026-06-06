@@ -78,6 +78,33 @@ def test_ci_has_package_build_smoke() -> None:
     assert 'python-version: "3.12"' in text
 
 
+def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+    matrix_versions = workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"]
+    section = (
+        (REPO_ROOT / "plan/validation/tasks.md")
+        .read_text(encoding="utf-8")
+        .split("### V1.2 Update CI Required Jobs", 1)[1]
+        .split("Files:", 1)[0]
+    )
+
+    assert "Current verified state:" in section
+    assert "`easycat validate quick`" in section
+    assert "`easycat validate socket`" in section
+    assert "`if: always()`" in section
+    assert "`--junit-prefix`" in section
+    assert "package build smoke" in section
+    assert "workflow_dispatch" in section
+    assert "CI no longer uses pytest `-x`" in section
+    for version in matrix_versions:
+        assert f"`{version}`" in section
+
+    assert "CI does not upload validation JSON or JUnit artifacts" not in section
+    assert "Current CI uses pytest `-x`" not in section
+    assert "socket integration job also runs on Python 3.12 and 3.14" not in section
+    assert '`-m "not integration_socket and not integration_live"`' not in section
+
+
 def test_nightly_validation_workflow_skeleton_exists() -> None:
     text = NIGHTLY_WORKFLOW.read_text()
 

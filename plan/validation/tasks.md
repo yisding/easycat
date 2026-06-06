@@ -383,16 +383,22 @@ Dependencies:
 
 - V1.1, or V0.3 if CI temporarily calls the script
 
-Current state:
+Current verified state:
 
-- `.github/workflows/ci.yml` has one local test matrix on Python 3.12 and
-  3.14 with `-m "not integration_socket and not integration_live"`, but the
-  package declares `requires-python >=3.11`.
-- The socket integration job also runs on Python 3.12 and 3.14.
-- The live-provider job is manual via `workflow_dispatch`.
-- CI does not upload validation JSON or JUnit artifacts.
-- Current CI uses pytest `-x`, which conflicts with complete JUnit and
-  validation reports.
+- `.github/workflows/ci.yml` runs `easycat validate quick` on every Python
+  version advertised by the package classifiers: `3.11`, `3.12`, `3.13`,
+  and `3.14`.
+- Quick validation uses `strategy.fail-fast: false`, a job timeout, isolated
+  CI artifact directories, and `--junit-prefix` values that include the Python
+  version.
+- The socket validation job runs once on Python `3.12` through
+  `easycat validate socket`.
+- Quick and socket jobs upload validation report JSON, JUnit XML,
+  stdout/stderr logs, and socket WebRTC stats when produced, using
+  `if: always()`.
+- The workflow includes a Python `3.12` package build smoke job.
+- The live-provider job remains manual via `workflow_dispatch`.
+- CI no longer uses pytest `-x`.
 
 Files:
 
