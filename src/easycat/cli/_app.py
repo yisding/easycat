@@ -85,7 +85,7 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _JOURNEY_FOOTER = (
     "Run [cyan]easycat <command> --help[/] for command-specific options.",
     "Run [cyan]easycat docs[/] for learning, validation, and operations routes.",
-    "Run [cyan]easycat docs --json[/] for machine-readable docs routes.",
+    "Run [cyan]easycat docs --json[/] for machine-readable docs routes and command hints.",
     "Run [cyan]easycat explain <code>[/] for errors.",
     "Run [cyan]easycat explain json-schema[/] for CLI JSON.",
 )
@@ -251,7 +251,7 @@ def _format_docs_menu() -> str:
 {routes}
 
 Online source: {_DOCS_SOURCE_URL}
-Machine-readable routes: easycat docs --json
+Machine-readable routes and command hints: easycat docs --json
 """
 
 
@@ -264,7 +264,7 @@ def docs_command(
     json_output: bool = typer.Option(
         False,
         "--json",
-        help="Emit the machine-readable docs route map.",
+        help="Emit the machine-readable docs route map with command hints.",
     ),
 ) -> None:
     """Show docs for learning, validation, and operations."""

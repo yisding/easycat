@@ -93,7 +93,7 @@ easycat init my-agent    # scaffold a new project from a template
 easycat init --list-templates # compare templates with create/check/run commands
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat docs             # show docs for learning, validation, operations
-easycat docs --json      # emit the docs route map for scripts and agents
+easycat docs --json      # emit docs routes and command hints for automation
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic
