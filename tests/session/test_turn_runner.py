@@ -43,6 +43,7 @@ from easycat.integrations.agents.base import (
     AgentRecorder,
     AgentTurnInput,
 )
+from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._turn_runner import TurnRunner
 from easycat.session._types import SessionConfig
@@ -493,6 +494,33 @@ async def test_send_text_runs_agent_without_audio() -> None:
     )
     response = await session.send_text("hello")
     assert response == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_send_text_task_is_runtime_scoped_and_journaled() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+            journal=journal,
+        )
+    )
+
+    response = await session.send_text("hello")
+
+    assert response == "Reply."
+    assert session._turn_runner.active_text_turn is None
+    assert session._turn_runner.text_turn_cancel_token is None
+    assert not session._runtime_scope.tasks(TurnRunner._TEXT_TURN_TASK_NAME)
+    records = [
+        record
+        for record in journal.read()
+        if record.data.get("task_name") == TurnRunner._TEXT_TURN_TASK_NAME
+    ]
+    assert [record.name for record in records] == ["task_scheduled", "task_completed"]
+    assert records[0].turn_id is not None
+    assert records[0].turn_id == records[1].turn_id
 
 
 @pytest.mark.asyncio

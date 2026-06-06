@@ -82,6 +82,8 @@ logger = logging.getLogger(__name__)
 class TurnRunner:
     """Drives the per-turn agent loop."""
 
+    _TEXT_TURN_TASK_NAME = "text_turn"
+
     def __init__(
         self,
         *,
@@ -590,6 +592,8 @@ class TurnRunner:
                     await prev
                 except (asyncio.CancelledError, Exception):
                     pass
+                finally:
+                    self._runtime_scope.discard(prev)
                 notified = _notify_bridge_interruption(
                     self._agent_stage,
                     delivered,
@@ -604,13 +608,32 @@ class TurnRunner:
                 )
 
             token = CancelToken()
+            turn_id = f"turn-{uuid4().hex[:12]}"
             self._text_turn_cancel_token = token
-            task = asyncio.ensure_future(self._execute_text_turn(text, token))
+            task = self._runtime_scope.create_journaled_task(
+                self._execute_text_turn(text, token, turn_id=turn_id),
+                name=self._TEXT_TURN_TASK_NAME,
+                journal_sink=self._journal_sink,
+                turn_id=turn_id,
+            )
+            task.add_done_callback(self._runtime_scope.log_task_exception)
             self._active_text_turn = task
-        return await task
+        try:
+            return await task
+        finally:
+            self._runtime_scope.discard(task)
+            if self._active_text_turn is task:
+                self._active_text_turn = None
+            if self._text_turn_cancel_token is token:
+                self._text_turn_cancel_token = None
 
-    async def _execute_text_turn(self, text: str, cancel_token: CancelToken | None = None) -> str:
-        turn_id = f"turn-{uuid4().hex[:12]}"
+    async def _execute_text_turn(
+        self,
+        text: str,
+        cancel_token: CancelToken | None = None,
+        *,
+        turn_id: str,
+    ) -> str:
         response = ""
         t0 = time.monotonic()
         result_attr = "fail"

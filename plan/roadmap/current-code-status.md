@@ -39,9 +39,10 @@ with the codebase. Counts below come from tracked files and exclude
   the orchestrator, but collaborators now include `AudioRouter`,
   `STTCommitter`, `TTSScheduler`, `CancelOrchestrator`, `TurnRunner`, and
   `SessionJournalSink`, with `SessionDebugBackends` owning debug backend
-  finalization and post-stop preservation. `STTCommitter` now runs its
-  background STT event consumer through `RuntimeScope` with journaled task
-  lifecycle records.
+  finalization and post-stop preservation. `STTCommitter` runs its background
+  STT event consumer through `RuntimeScope`, `AudioRouter` runs ingress and
+  outbound audio loops through `RuntimeScope`, and text-session turns are now
+  runtime-scoped; all three surfaces emit journaled task lifecycle records.
 - The exact WS3 class names `InterruptionController` and
   `VoiceDeliveryLedger` are not present as source files. Current interruption
   and delivered-text behavior is split across `CancelOrchestrator`,
@@ -49,8 +50,8 @@ with the codebase. Counts below come from tracked files and exclude
 - Stage wrappers exist for audio, VAD, STT, turn, agent, TTS, and transport.
   There is no current `src/easycat/stages/telephony.py` source file.
 - `RuntimeScope` exists and is used by `Session`; remaining direct
-  `asyncio.create_task()` calls in the session package are concentrated in
-  `AudioRouter` and `TurnRunner`.
+  `asyncio.create_task()` calls in the session package are the structured
+  per-turn agent/TTS sibling tasks inside `TurnRunner.run_streaming_agent()`.
 - Provider support includes OpenAI, Deepgram, ElevenLabs, and Cartesia for
   STT/TTS. Shared provider helpers, a `ProviderCatalog`, and a shared
   WebSocket STT base now exist.
@@ -77,7 +78,7 @@ with the codebase. Counts below come from tracked files and exclude
   validation now exposes a first-class optional WebRTC browser stats artifact
   path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
-  1,356 lines.
+  1,358 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
   151 lines, with the lazy-export registry isolated in `easycat._public_api`.
   The public surface is still broad at 85 lazy top-level exports, but it is
