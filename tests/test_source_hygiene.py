@@ -13,6 +13,8 @@ STALE_ASYNC_CONTEXT_TEARDOWN_RE = re.compile(
 TEST_PLAN_TEST_REF_RE = re.compile(
     r"`(?P<ref>(?:tests/)?[A-Za-z0-9_./-]*test_[A-Za-z0-9_./-]+\.py(?:::[A-Za-z0-9_]+)?)`"
 )
+STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
+STALE_TEST_PLAN_PHRASES = ("M1 checks",)
 
 
 def test_library_source_does_not_reference_internal_planning_labels() -> None:
@@ -70,3 +72,17 @@ def test_cli_test_plan_references_existing_test_files() -> None:
             missing.append(ref)
 
     assert not missing, "CLI test plan references missing test files: " + ", ".join(missing)
+
+
+def test_cli_test_plan_avoids_brittle_test_count_claims() -> None:
+    """Coverage plans should name files and behaviors, not stale numeric counts."""
+    plan = REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md"
+    stale: list[str] = []
+
+    for line_number, line in enumerate(plan.read_text(encoding="utf-8").splitlines(), 1):
+        if STALE_TEST_PLAN_COUNT_RE.search(line) or any(
+            phrase in line for phrase in STALE_TEST_PLAN_PHRASES
+        ):
+            stale.append(f"{plan.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}")
+
+    assert not stale, "CLI test plan contains brittle stale-count language:\n" + "\n".join(stale)

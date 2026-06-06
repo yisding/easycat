@@ -98,7 +98,7 @@ render.
 - `--json` mode for both single code and `--list` emits a valid
   envelope.
 
-**Backed by.** `test_explain.py` (10 tests).
+**Backed by.** `test_explain.py`.
 
 ---
 
@@ -155,7 +155,7 @@ accepted.
   'template'?").
 - Unknown template string → `EASYCAT_E103`, exit 2.
 
-**Backed by.** `test_init.py` (5 error-path tests).
+**Backed by.** `test_init.py` schema and error-path tests.
 
 ---
 
@@ -181,9 +181,10 @@ and `test_init_force_overwrites_existing`.
 
 ## Plan 7 — `doctor` check matrix
 
-**Concern.** Doctor must produce accurate status for each of the 5
-M1 checks, and the rendered report must not misrepresent anything as
-"ok" that failed (or vice versa).
+**Concern.** Doctor must produce accurate status for first-run
+environment, provider, optional-runtime, journal, and disk checks; the
+rendered report must not misrepresent anything as "ok" that failed (or
+vice versa).
 
 **Risks.** A check raising an uncaught exception mid-report; a skip
 incorrectly counted as a failure; the summary line diverging from
@@ -198,9 +199,14 @@ the per-row statuses.
   fails with `EASYCAT_E204`, exit 1.
 - `--provider openai` filters reachability so other providers are
   not probed.
-- Unknown `--environment` → exit 2.
+- `--env-file .env` loads scaffolded project keys without permanently
+  mutating the process environment.
+- `--environment production` drops the local microphone probe.
+- Journal/disk checks probe `.easycat/journals` by default and honor
+  `EASYCAT_DATA_DIR`.
+- Unknown `--environment` and unknown provider names → exit 2.
 
-**Backed by.** `test_doctor.py` (7 tests).
+**Backed by.** `test_doctor.py`.
 
 ---
 
@@ -247,7 +253,7 @@ templates; factories leaking partial context into error messages.
 - Factory call with unused kwargs stores them in `context` for CLI
   rendering without breaking the substitution.
 
-**Backed by.** `test_errors.py` (7 tests).
+**Backed by.** `test_errors.py`.
 
 ---
 
