@@ -48,6 +48,8 @@ class ErrorInfo:
 
         Third-party frames (site-packages) are collapsed to a single
         ``...N frames...`` line to keep journal records readable.
+        PEP 678 notes attached to the exception are preserved in the
+        structured ``notes`` field for journal filters and bundle export.
         """
         import traceback as tb_mod
 
@@ -65,12 +67,23 @@ class ErrorInfo:
         if skip_run:
             collapsed.append(f"  ...{skip_run} third-party frame(s)...\n")
 
+        combined_notes = _combine_error_notes(notes, getattr(exc, "__notes__", None))
+
         return ErrorInfo(
             type=type(exc).__qualname__,
             message=str(exc),
             traceback="".join(collapsed),
-            notes=notes,
+            notes=combined_notes,
         )
+
+
+def _combine_error_notes(notes: str | None, exception_notes: object) -> str | None:
+    combined: list[str] = []
+    if notes:
+        combined.append(notes)
+    if isinstance(exception_notes, list):
+        combined.extend(note for note in exception_notes if note)
+    return "\n".join(combined) or None
 
 
 @dataclass(frozen=True)

@@ -72,6 +72,25 @@ class TestErrorInfo:
         assert e.type == "ValueError"
         assert e.traceback is not None
 
+    def test_from_exception_captures_pep678_notes(self):
+        exc = RuntimeError("provider failed")
+        exc.add_note("provider=openai")
+        exc.add_note("stage=tts")
+
+        info = ErrorInfo.from_exception(exc)
+
+        assert info.type == "RuntimeError"
+        assert info.message == "provider failed"
+        assert info.notes == "provider=openai\nstage=tts"
+
+    def test_from_exception_merges_explicit_and_pep678_notes(self):
+        exc = ValueError("bad input")
+        exc.add_note("provider=deepgram")
+
+        info = ErrorInfo.from_exception(exc, notes="turn_id=turn-123")
+
+        assert info.notes == "turn_id=turn-123\nprovider=deepgram"
+
 
 class TestSentinelRecords:
     def test_buffer_overflow_defaults(self):

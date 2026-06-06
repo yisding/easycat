@@ -19,6 +19,9 @@ Shipped:
 - Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
   related (`errors.py`).
 - Third-party traceback frame collapse (`runtime/records.py:50`).
+- PEP 678 exception notes are captured in `ErrorInfo.notes`, so provider and
+  framework diagnostics survive journal filters and debug bundle export
+  (`runtime/records.py`).
 - `debug="light" | "full"`, `export_debug_bundle()` (`config/easy.py`,
   `session/_session.py:987`).
 - `async with session:` context-manager support (`session/_session.py`).
@@ -41,7 +44,8 @@ Still remaining:
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.1 wiring).
-- `ExceptionGroup` + PEP 678 `__notes__` across the pipeline.
+- `ExceptionGroup` support and broader PEP 678 annotations across the
+  pipeline.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
 - Config flattening pass: currently 34 top-level `EasyConfig` fields,
