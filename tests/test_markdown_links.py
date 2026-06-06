@@ -58,13 +58,15 @@ def _normalize_target(raw_target: str) -> str:
     return target
 
 
-def _is_external_or_anchor_only(target: str) -> bool:
+def _is_external(target: str) -> bool:
     lower = target.lower()
-    return target.startswith("#") or lower.startswith(EXTERNAL_SCHEMES)
+    return lower.startswith(EXTERNAL_SCHEMES)
 
 
 def _resolve_local_path(source: Path, target: str) -> Path:
     path = unquote(target.split("#", 1)[0])
+    if not path:
+        return source.resolve()
     base = REPO_ROOT if path.startswith("/") else source.parent
     return (base / path.lstrip("/")).resolve()
 
@@ -100,7 +102,7 @@ def test_maintained_markdown_local_links_resolve() -> None:
     for path in _maintained_markdown_files():
         for line_number, raw_target in _links_in(path):
             target = _normalize_target(raw_target)
-            if _is_external_or_anchor_only(target):
+            if _is_external(target):
                 continue
 
             destination = _resolve_local_path(path, target)
