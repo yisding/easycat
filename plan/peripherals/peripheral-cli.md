@@ -344,7 +344,7 @@ $ uvx easycat init my-agent
 ? TTS provider: (openai) openai
 ? LLM provider: (openai/gpt-4.1-mini) openai/gpt-4.1-mini
 Creating my-agent/
-  ✓ agent.py (12 lines)
+  ✓ agent.py (16 lines)
   ✓ pyproject.toml
   ✓ .env.example
   ✓ README.md
@@ -355,8 +355,8 @@ Next steps:
   cd my-agent
   cp .env.example .env  # then fill in your API keys
   uv sync
-  uvx easycat doctor    # verify your setup
-  uv run python agent.py
+  uv run easycat doctor --env-file .env  # verify your setup
+  uv run --env-file .env python agent.py
 ```
 
 Non-interactive equivalent:
@@ -370,7 +370,7 @@ $ uvx easycat init my-agent --config '{
   "agent_instructions": "Help the user with billing questions."
 }'
 Creating my-agent/
-  ✓ agent.py (12 lines)
+  ✓ agent.py (16 lines)
   ...
 ```
 
@@ -395,7 +395,7 @@ Every template directory contains:
 
 ```
 templates/<name>/
-    agent.py              # ≤ 15 lines, runs with one API key
+    agent.py              # per-template line budget, runs with required env
     pyproject.toml        # easycat[<extra>] + minimal deps
     .env.example          # exactly the keys the template needs
     README.md             # install → configure → run → check → next steps
@@ -409,7 +409,7 @@ CI enforces for every template:
 2. `agent.py` parses and imports cleanly on a fresh install of
    `easycat[<extra>]`.
 3. Startup success: `uvx easycat init demo --template <name> && cd
-   demo && uv sync && uv run python agent.py` reaches `TurnStarted`
+   demo && uv sync && uv run --env-file .env python agent.py` reaches `TurnStarted`
    within 60s against a stub transport.
 4. `doctor` passes on the scaffolded project with valid test keys.
 5. `README.md` has the five required sections: Install, Configure,

@@ -334,9 +334,19 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
 
 def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
+    golden_path = plan.split("### Golden path", 1)[1].split("### Exit codes", 1)[0]
 
     for name, budget in _LINE_BUDGETS.items():
         assert f"`{name}` ≤{budget}" in plan, f"peripheral-cli.md missing {name} ≤{budget}"
+
+    assert "✓ agent.py (16 lines)" in golden_path
+    assert "✓ agent.py (12 lines)" not in golden_path
+    assert "uv run easycat doctor --env-file .env" in golden_path
+    assert "uv run --env-file .env python agent.py" in golden_path
+    assert "uvx easycat doctor" not in golden_path
+    assert "uv run python agent.py" not in golden_path
+    assert "agent.py              # per-template line budget" in plan
+    assert "agent.py              # ≤ 15 lines" not in plan
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
