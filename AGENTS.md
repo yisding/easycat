@@ -22,6 +22,8 @@ the raw commands below.
 - `uv run pytest`: run full test suite.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc.py`: run focused WebRTC transport tests.
+- `uv run easycat docs`: show the maintained docs map for quickstart,
+  examples, teaching, validation, and operations.
 - `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
 - `uv run ruff check .`: lint (imports, style, correctness rules).
 - `uv run ruff format .`: apply formatting.

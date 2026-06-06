@@ -434,6 +434,7 @@ def test_agent_guide_command_examples_are_current() -> None:
     for filename, command_section in command_sections.items():
         assert "just check" in command_section
         assert "just validate-quick" in command_section
+        assert "uv run easycat docs" in command_section
         assert "uv run easycat validate quick" in command_section
         assert "tests/test_metrics.py" not in command_section, filename
 
