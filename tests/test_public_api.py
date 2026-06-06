@@ -128,6 +128,18 @@ def test_public_api_contract_doc_has_unique_allowlist_entries() -> None:
     assert not duplicates, "docs/public-api.md duplicates exports: " + ", ".join(duplicates)
 
 
+def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    preferred = doc.split("## Preferred Imports", 1)[1].split("## Top-Level Allowlist", 1)[0]
+
+    assert "from easycat import EasyConfig, run" in preferred
+    assert "from easycat import EasyConfig, STTFinal, create_session" in preferred
+    assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in preferred
+    assert "session.subscribe_event(STTFinal" in preferred
+    assert "await session.wait_closed()" in preferred
+    assert "SessionConfig" not in preferred
+
+
 def test_curated_public_api_lazy_imports() -> None:
     from easycat import (
         EasyConfig,

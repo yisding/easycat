@@ -30,8 +30,17 @@ Use the smallest import that matches your use case:
 from easycat import EasyConfig, run
 ```
 
+For long-running apps that need event subscriptions or explicit lifecycle
+control, keep the same `EasyConfig` surface and scope the session:
+
 ```python
 from easycat import EasyConfig, STTFinal, create_session
+
+
+async def main(agent) -> None:
+    async with create_session(EasyConfig.mic(agent=agent)) as session:
+        session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
+        await session.wait_closed()
 ```
 
 Use submodules for rare or implementation-specific names:
