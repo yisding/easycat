@@ -206,6 +206,10 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
     for entry in catalog:
         metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
         rows.append(f"[cyan]{entry['name']}[/]\n  {entry['description']}\n  [dim]{metadata}[/]")
+    rows.append(
+        "  [dim]Create one:[/] easycat init my-agent --template openai-agents\n"
+        "  [dim]From this repo:[/] uv run easycat init my-agent --template openai-agents"
+    )
     return "\n".join(rows)
 
 

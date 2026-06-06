@@ -26,15 +26,14 @@ def test_list_templates(cli: CliRunner) -> None:
     names = [
         line.split()[0] for line in result.stdout.splitlines() if line and not line[0].isspace()
     ]
-    assert "openai-agents" in names
-    assert "pydantic-ai" in names
-    assert "pydantic-ai-workflow" in names
-    assert "text-chat" in names
-    assert "twilio-phone" in names
-    assert "webrtc-browser" in names
+    assert set(names) == set(available_templates())
     assert "best first voice scaffold" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
+    assert "Create one:" in result.stdout
+    assert "easycat init my-agent --template openai-agents" in result.stdout
+    assert "From this repo:" in result.stdout
+    assert "uv run easycat init my-agent --template openai-agents" in result.stdout
 
 
 def test_list_templates_json(cli: CliRunner) -> None:
