@@ -26,6 +26,7 @@ the raw commands below.
   examples, teaching, validation, and operations.
 - `uv run easycat docs --json`: emit the same route map with audience labels
   and command hints for automation.
+- `uv run easycat doctor --json`: emit parseable first-run environment checks.
 - `uv run easycat explain json-schema`: inspect the CLI JSON envelope and
   command-specific fields.
 - `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
