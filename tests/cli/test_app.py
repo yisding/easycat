@@ -57,6 +57,7 @@ def test_docs_command(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs"])
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
+    assert "README.md#cli" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout
     assert "examples/README.md" in result.stdout
@@ -78,6 +79,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["command"] == "docs"
     assert payload["status"] == "ok"
     paths = {entry["path"] for entry in payload["entries"]}
+    assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
     assert "examples/README.md" in paths
@@ -91,6 +93,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
     urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
+    assert urls["README.md#cli"] == "https://github.com/yisding/easycat/blob/main/README.md#cli"
     assert urls["README.md#install"] == (
         "https://github.com/yisding/easycat/blob/main/README.md#install"
     )

@@ -75,6 +75,11 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Install EasyCat and run your first voice agent.",
     },
     {
+        "label": "CLI and scaffolds",
+        "path": "README.md#cli",
+        "description": "Scaffold projects, compare templates, and learn CLI commands.",
+    },
+    {
         "label": "Docs map",
         "path": "docs/README.md",
         "description": "Choose the maintained guide for your current task.",
