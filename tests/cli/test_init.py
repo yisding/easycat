@@ -691,6 +691,16 @@ def _template_readme_run_command(template: str) -> str:
     return commands[0]
 
 
+def _template_readme_check_command(template: str) -> str:
+    readme = (init_module._templates_root() / template / "README.md").read_text(encoding="utf-8")
+    check_section = readme.split("## Check", 1)[1].split("## Next steps", 1)[0]
+    command_block = check_section.split("```bash", 1)[1].split("```", 1)[0]
+    commands = [line.strip() for line in command_block.splitlines() if line.strip()]
+
+    assert len(commands) == 1, f"{template}/README.md should have one primary check command"
+    return commands[0]
+
+
 def test_init_next_steps_load_env_for_doctor(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -699,6 +709,8 @@ def test_init_next_steps_load_env_for_doctor(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     assert result.exit_code == 0, result.stderr
     assert "uv run easycat doctor --env-file .env" in result.stderr
+    assert "uv run python -m py_compile agent.py" in result.stderr
+    assert "quick syntax check" in result.stderr
     assert "uv run easycat docs" in result.stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map for scripts and agents" in result.stderr
@@ -721,3 +733,19 @@ def test_init_next_steps_match_template_readme_run_command(
     assert _template_readme_run_command(template) in " ".join(result.stderr.split())
     if template == "twilio-phone":
         assert "uv run --env-file .env python agent.py" not in result.stderr
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_init_next_steps_match_template_readme_check_command(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    template: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    name = f"demo-{template}"
+    config = json.dumps({"schema_version": 1, "template": template})
+    result = cli.invoke(app, ["init", name, "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    assert _template_readme_check_command(template) in " ".join(result.stderr.split())

@@ -140,6 +140,9 @@ _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
         "uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000"
     ),
 }
+_TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
+    "twilio-phone": ("agent.py", "server.py"),
+}
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -233,6 +236,12 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
 def _next_step_run_command(template: str) -> str:
     """Return the primary run command for the scaffold success footer."""
     return _TEMPLATE_RUN_COMMANDS.get(template, "uv run --env-file .env python agent.py")
+
+
+def _next_step_check_command(template: str) -> str:
+    """Return the scaffold-local syntax check command for the success footer."""
+    filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
+    return "uv run python -m py_compile " + " ".join(filenames)
 
 
 def _provider_name(spec: str) -> str:
@@ -646,6 +655,9 @@ def init(
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
     stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
+    stderr_console.print(
+        f"  {_next_step_check_command(cfg.template)} [dim]# quick syntax check[/]"
+    )
     stderr_console.print("  uv run easycat docs [dim]# find examples and guides[/]")
     stderr_console.print("  uv run easycat docs --json [dim]# route map for scripts and agents[/]")
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
