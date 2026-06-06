@@ -83,6 +83,10 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
     assert "plan/validation/reference.md" in paths
+    assert all(entry.get("description") for entry in payload["entries"])
+    descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
+    assert "maintained guide" in descriptions["docs/README.md"]
+    assert "runnable local" in descriptions["examples/README.md"]
     assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 

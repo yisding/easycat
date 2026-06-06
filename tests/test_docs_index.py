@@ -57,3 +57,13 @@ def test_cli_docs_routes_are_represented_in_docs_index() -> None:
     ]
 
     assert not missing, "easycat docs routes missing from docs/README.md: " + ", ".join(missing)
+
+
+def test_cli_docs_routes_have_descriptions() -> None:
+    missing = [
+        f"{entry['label']} ({entry['path']})"
+        for entry in _DOCS_LINKS
+        if len(entry.get("description", "").split()) < 4
+    ]
+
+    assert not missing, "easycat docs routes missing useful descriptions: " + ", ".join(missing)

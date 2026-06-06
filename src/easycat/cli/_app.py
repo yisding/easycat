@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from typing import TypedDict
 
 import typer
 
@@ -57,17 +58,63 @@ Run [cyan]easycat explain <code>[/] to understand an error.
 """
 
 
-_DOCS_LINKS = [
-    {"label": "Quickstart", "path": "README.md#install"},
-    {"label": "Docs map", "path": "docs/README.md"},
-    {"label": "Teaching ladder", "path": "docs/teaching/"},
-    {"label": "Examples", "path": "examples/README.md"},
-    {"label": "Public API", "path": "docs/public-api.md"},
-    {"label": "Contributing", "path": "CONTRIBUTING.md"},
-    {"label": "Deployment", "path": "docs/deployment/docker.md"},
-    {"label": "Observability", "path": "docs/observability.md"},
-    {"label": "Validation", "path": "README.md#validation-workflow"},
-    {"label": "Validation reference", "path": "plan/validation/reference.md"},
+class _DocsLink(TypedDict):
+    label: str
+    path: str
+    description: str
+
+
+_DOCS_LINKS: list[_DocsLink] = [
+    {
+        "label": "Quickstart",
+        "path": "README.md#install",
+        "description": "Install EasyCat and run your first voice agent.",
+    },
+    {
+        "label": "Docs map",
+        "path": "docs/README.md",
+        "description": "Choose the maintained guide for your current task.",
+    },
+    {
+        "label": "Teaching ladder",
+        "path": "docs/teaching/",
+        "description": "Learn voice pipelines chapter by chapter.",
+    },
+    {
+        "label": "Examples",
+        "path": "examples/README.md",
+        "description": "Find runnable local, browser, WebSocket, and telephony apps.",
+    },
+    {
+        "label": "Public API",
+        "path": "docs/public-api.md",
+        "description": "Review the stable import surface before changing exports.",
+    },
+    {
+        "label": "Contributing",
+        "path": "CONTRIBUTING.md",
+        "description": "Follow the development loop and validation slices.",
+    },
+    {
+        "label": "Deployment",
+        "path": "docs/deployment/docker.md",
+        "description": "Package the WebSocket example for container deployment.",
+    },
+    {
+        "label": "Observability",
+        "path": "docs/observability.md",
+        "description": "Inspect journals, debug bundles, metrics, and traces.",
+    },
+    {
+        "label": "Validation",
+        "path": "README.md#validation-workflow",
+        "description": "Pick the right pytest and CLI checks for a change.",
+    },
+    {
+        "label": "Validation reference",
+        "path": "plan/validation/reference.md",
+        "description": "Read provider and report vocabulary used by validation.",
+    },
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 
@@ -76,7 +123,8 @@ def _format_docs_menu() -> str:
     label_width = max(len(entry["label"]) for entry in _DOCS_LINKS)
     routes = "\n".join(
         f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
-        f"{entry['path']}"
+        f"{entry['path']}\n"
+        f"    [dim]{entry['description']}[/]"
         for entry in _DOCS_LINKS
     )
     return f"""[bold]EasyCat documentation[/]

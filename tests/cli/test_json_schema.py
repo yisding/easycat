@@ -153,15 +153,14 @@ def test_docs_envelope(cli: CliRunner) -> None:
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "docs")
     assert isinstance(payload["entries"], list)
-    assert {"label": "Docs map", "path": "docs/README.md"} in payload["entries"]
-    assert {"label": "Examples", "path": "examples/README.md"} in payload["entries"]
-    assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in payload["entries"]
-    assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in payload["entries"]
-    assert {"label": "Observability", "path": "docs/observability.md"} in payload["entries"]
-    assert {
-        "label": "Validation reference",
-        "path": "plan/validation/reference.md",
-    } in payload["entries"]
+    entries = [{key: entry[key] for key in ("label", "path")} for entry in payload["entries"]]
+    assert {"label": "Docs map", "path": "docs/README.md"} in entries
+    assert {"label": "Examples", "path": "examples/README.md"} in entries
+    assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in entries
+    assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in entries
+    assert {"label": "Observability", "path": "docs/observability.md"} in entries
+    assert {"label": "Validation reference", "path": "plan/validation/reference.md"} in entries
+    assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(
