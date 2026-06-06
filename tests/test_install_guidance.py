@@ -432,6 +432,7 @@ def test_cli_init_examples_name_target_directory() -> None:
     assert not re.search(r"(?m)^easycat init\s+#", cli_section)
     assert "easycat init my-agent" in cli_section
     assert "easycat init --list-templates" in cli_section
+    assert "easycat init --list-templates --json" in cli_section
     assert "`easycat init my-agent` scaffolds" in readme
     assert "`easycat init --list-templates` shows" in readme
     assert "base `easycat[...]` package requirement and extras" in normalized_readme

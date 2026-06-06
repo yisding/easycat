@@ -21,8 +21,10 @@ command hints, such as `PATH`, before running them.
   `uv run easycat init --list-templates` to compare templates with best-fit
   guidance, base `easycat[...]` package requirements and extras, required
   environment variables, optional environment knobs, generated files, and
-  copyable create/check/run commands, then use the CLI commands documented in the
-  [root README](../README.md#cli).
+  copyable create/check/run commands. Use
+  `uv run easycat init --list-templates --json` when a script or coding agent
+  needs the same template catalog and post-scaffold command previews, then use
+  the CLI commands documented in the [root README](../README.md#cli).
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,

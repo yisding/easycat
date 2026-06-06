@@ -160,6 +160,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "easycat init --list-templates",
+            "easycat init --list-templates --json",
             "easycat init my-agent",
             "easycat explain json-schema",
         ),

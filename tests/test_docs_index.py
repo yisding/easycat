@@ -97,6 +97,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
+    assert "uv run easycat init --list-templates --json" in text
     assert "base `easycat[...]` package requirements and extras" in normalized
     assert "required environment variables" in normalized
     assert "optional environment knobs" in normalized
@@ -205,7 +206,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     required_commands = {
         "README.md#install": "uv run python examples/openai_agents_voice.py",
         "docs/teaching/": "uv run python docs/teaching/00-hello-audio/main.py",
-        "README.md#cli": "easycat init --list-templates",
+        "README.md#cli": "easycat init --list-templates --json",
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
         "CLAUDE.md": "uv run pytest tests/test_install_guidance.py",

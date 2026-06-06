@@ -168,6 +168,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Commands:" in result.stdout
     assert "uv run python examples/openai_agents_voice.py" in result.stdout
     assert "easycat init --list-templates" in result.stdout
+    assert "easycat init --list-templates --json" in result.stdout
     assert "docker compose -f docker/compose.yaml up --build" in result.stdout
     assert "easycat validate report .easycat/validation/latest.json" in result.stdout
     assert "docs/README.md" in result.stdout
@@ -264,6 +265,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
     assert commands["README.md#cli"] == [
         "easycat init --list-templates",
+        "easycat init --list-templates --json",
         "easycat init my-agent",
         "easycat explain json-schema",
     ]
