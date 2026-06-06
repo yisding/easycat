@@ -1,8 +1,46 @@
 from __future__ import annotations
 
+import tomllib
 from datetime import date
+from pathlib import Path
 
 from tests._marker_lint import validate_flaky_marker, validate_provider_surface_markers
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_VALIDATION_MARKERS = {
+    "agent_bridge",
+    "contract",
+    "flaky",
+    "integration_live",
+    "integration_local",
+    "integration_socket",
+    "latency",
+    "provider",
+    "provider_cartesia",
+    "provider_deepgram",
+    "provider_elevenlabs",
+    "provider_openai",
+    "release",
+    "requires_extra",
+    "slow",
+    "stress",
+    "surface_agent",
+    "surface_stt",
+    "surface_transport",
+    "surface_tts",
+    "surface_vad",
+}
+
+
+def _registered_marker_names() -> set[str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+    return {marker.split(":", 1)[0].split("(", 1)[0].strip() for marker in markers}
+
+
+def _validation_task_section(heading: str, next_heading: str) -> str:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    return plan.split(heading, 1)[1].split(next_heading, 1)[0]
 
 
 def test_provider_scoped_live_marker_requires_surface_scope() -> None:
@@ -99,3 +137,28 @@ def test_valid_flaky_marker_passes_until_review_date() -> None:
     )
 
     assert errors == []
+
+
+def test_validation_marker_plan_tracks_registered_marker_state() -> None:
+    registered = _registered_marker_names()
+    marker_section = _validation_task_section(
+        "### V0.1 Register Validation Markers",
+        "### V0.2 Define Validation Report Model",
+    )
+    flaky_section = _validation_task_section(
+        "### V0.4 Add Flaky Quarantine Metadata Check",
+        "## V1: First-Class CLI And CI Artifacts",
+    )
+
+    assert REQUIRED_VALIDATION_MARKERS <= registered
+    assert "strict_markers = true" in marker_section
+    for marker_name in REQUIRED_VALIDATION_MARKERS:
+        assert marker_name in marker_section
+
+    assert "registers only `integration_local`" not in marker_section
+    assert "No validation-specific markers are present yet" not in marker_section
+    assert "No `flaky` marker is registered or used" not in flaky_section
+    assert "`flaky` marker is registered" in flaky_section
+    assert "`tests/_marker_lint.py`" in flaky_section
+    assert "`tests/conftest.py`" in flaky_section
+    assert "release-scoped flaky tests" in flaky_section

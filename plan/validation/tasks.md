@@ -91,13 +91,17 @@ a milestone wholesale.
 
 Status: completed
 
-Current state:
+Current verified state:
 
-- `pyproject.toml` registers only `integration_local`,
-  `integration_socket`, `integration_live`, and `slow`.
-- Existing tests use `asyncio`, `parametrize`, `skipif`, the registered
-  integration markers, and `slow`. No validation-specific markers are present
-  yet.
+- `pyproject.toml` registers `integration_local`, `integration_socket`,
+  `integration_live`, `slow`, `contract`, `latency`, `stress`, `release`,
+  `flaky`, provider markers, surface markers, `agent_bridge`,
+  `requires_extra(name)`, and `provider(name)`, with
+  `strict_markers = true`.
+- `tests/conftest.py` delegates provider/surface marker checks and flaky
+  quarantine metadata checks to `tests/_marker_lint.py`.
+- Validation-specific markers are used by the contract, latency, stress,
+  release, live, and provider-surface test lanes.
 
 Files:
 
@@ -232,9 +236,14 @@ uv run python scripts/validate.py socket
 
 Status: completed
 
-Current state:
+Current verified state:
 
-- No `flaky` marker is registered or used.
+- The `flaky` marker is registered in `pyproject.toml`.
+- `tests/_marker_lint.py` validates that every flaky test declares `issue`,
+  `owner`, and `review_by`, rejects stale review dates, and rejects
+  release-scoped flaky tests.
+- `tests/conftest.py` runs the flaky metadata lint during collection, and
+  validation slice selectors exclude `flaky`.
 
 Files:
 
