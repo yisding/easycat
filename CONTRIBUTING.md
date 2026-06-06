@@ -20,7 +20,9 @@ replace uppercase placeholders such as `PATH` before running those hints. Use
 `uv run easycat explain json-schema` for the standard `--json` envelope and
 command-specific fields.
 For local audio or provider work, set the relevant environment variables and
-run `uv run easycat doctor` before debugging tests or examples.
+run `uv run easycat doctor` before debugging tests or examples. Use
+`uv run easycat doctor --json` when a script or coding agent needs parseable
+environment/check rows.
 
 Don't have [`just`](https://github.com/casey/just)? Every recipe is a one-liner
 you can copy out of the `justfile`. Install it with `uv tool install rust-just`,

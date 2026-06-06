@@ -111,6 +111,8 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "command-specific fields" in normalized
     assert "CLI and scaffold commands" in quick_start
     assert "uv run easycat doctor" in quick_start
+    assert "uv run easycat doctor --json" in quick_start
+    assert "script or coding agent needs parseable environment/check rows" in normalized
     assert "before debugging tests or examples" in quick_start
 
     registered_commands = _registered_easycat_commands()
