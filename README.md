@@ -116,8 +116,9 @@ Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
 For coding agents and scripts, `easycat docs --json` emits the docs route map,
 and `easycat explain json-schema` documents the standard `--json` envelope,
-including command-specific success fields such as `entries` and `catalog` and
-error fields such as `report_path`, `path`, and `output_path`.
+including command-specific success fields such as `entries`, `catalog`,
+`run_command`, and `check_command`, and error fields such as `report_path`,
+`path`, and `output_path`.
 
 ## Validation Workflow
 

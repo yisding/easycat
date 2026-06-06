@@ -157,6 +157,8 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["files"], list)
     assert isinstance(payload["agent_lines"], int)
     assert isinstance(payload["git"], bool)
+    assert payload["run_command"] == "uv run --env-file .env python agent.py"
+    assert payload["check_command"] == "uv run python -m py_compile agent.py"
 
 
 def test_init_list_templates_envelope(cli: CliRunner) -> None:

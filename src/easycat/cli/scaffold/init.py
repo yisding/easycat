@@ -636,6 +636,8 @@ def init(
                 files=[str(p.relative_to(target)) for p in written],
                 agent_lines=agent_lines,
                 git=git_ok,
+                run_command=_next_step_run_command(cfg.template),
+                check_command=_next_step_check_command(cfg.template),
             )
         )
         return

@@ -120,6 +120,8 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "in onboarding order" in result.stdout
     assert "`templates`, `catalog`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
+    assert "`run_command`, `check_command`" in result.stdout
+    assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
     assert "without inventing a fake" in result.stdout
     assert "`report_path`" in result.stdout
@@ -145,6 +147,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`label`, `path`, `description`, and `url`" in payload["body"]
     assert "in onboarding order" in payload["body"]
     assert "`templates`, `catalog`" in payload["body"]
+    assert "`run_command`, `check_command`" in payload["body"]
     assert "`report_path`" in payload["body"]
     assert "validate report .easycat/validation/latest.json --json" in payload["body"]
     assert "`path`" in payload["body"]

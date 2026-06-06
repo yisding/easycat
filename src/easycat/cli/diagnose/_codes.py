@@ -118,6 +118,7 @@ entry points include:
                             `label`, `path`, `description`, and `url`
                             in onboarding order
   `templates`, `catalog` - `easycat init --list-templates --json`
+  `run_command`, `check_command` - `easycat init NAME --json`
 
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:

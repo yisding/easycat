@@ -749,3 +749,21 @@ def test_init_next_steps_match_template_readme_check_command(
 
     assert result.exit_code == 0, result.stderr
     assert _template_readme_check_command(template) in " ".join(result.stderr.split())
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_init_json_next_step_commands_match_template_readme(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    template: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    name = f"demo-{template}"
+    config = json.dumps({"schema_version": 1, "template": template})
+    result = cli.invoke(app, ["init", name, "--config", config, "--no-git", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["run_command"] == _template_readme_run_command(template)
+    assert payload["check_command"] == _template_readme_check_command(template)

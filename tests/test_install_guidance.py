@@ -364,7 +364,8 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     assert "standard `--json` envelope" in readme
     assert "command-specific success fields" in readme
-    assert "`entries` and `catalog`" in readme
+    assert "`entries`, `catalog`" in readme
+    assert "`run_command`, and `check_command`" in readme
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:
