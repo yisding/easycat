@@ -23,7 +23,7 @@ first, debug second, safety net third, and infrastructure last.
 | 13 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 14 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
 | 15 | Packaging — wheel ships dotfiles and metadata | `test_packaging.py` (integration) |
-| 16 | End-to-end scaffold-and-invoke | `test_cli_e2e.py` (integration) |
+| 16 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
 
 Plans 1-9 are fast unit tests. Plans 10-14 add coverage for cross-
 cutting contracts. Plans 15-16 are marked `integration_local` so they
@@ -269,7 +269,7 @@ mapping.
 - The documented exit codes (0, 1, 2, 3, 4, 5, 6, 101, 130) all
   appear in the exit-codes meta body.
 
-**Backed by.** `test_errors.py::test_exit_code_mapping` and new
+**Backed by.** `test_errors.py::test_exit_code_mapping` and
 `test_exit_codes.py`.
 
 ---
@@ -361,7 +361,7 @@ and polluting stdout.
 - `run()` is exposed at `easycat.run` (public attribute).
 - Signal handlers are added for SIGINT and SIGTERM.
 
-**Backed by.** New `test_library_prereqs.py::TestRun`.
+**Backed by.** `test_library_prereqs.py::TestRun`.
 
 ---
 
@@ -387,7 +387,7 @@ through as a valid key.
 - Env autodetect: `EasyConfig(agent=...)` with only
   `OPENAI_API_KEY` in env picks OpenAI STT/TTS.
 
-**Backed by.** New `test_library_prereqs.py::TestProviderStrings`.
+**Backed by.** `test_library_prereqs.py::TestProviderStrings`.
 
 ---
 
@@ -409,15 +409,15 @@ on PyPI; ignored cache directories leaking into the wheel.
 - `uv build --wheel` succeeds on a clean checkout.
 - The built wheel contains
   `easycat/cli/scaffold/templates/<name>/{agent.py, pyproject.toml,
-  README.md, .env.example, .gitignore}` for each of the three M1
-  templates.
+  README.md, .env.example, .gitignore}` for each shipped scaffold
+  template.
 - Wheel metadata includes the package name, Python requirement, author,
   project URLs, keywords, and core classifiers.
 - Wheel contents reject cache, test, build, VCS, and virtualenv
   artifacts, including ignored `.ruff_cache` directories under
   scaffold templates.
 
-**Backed by.** New `tests/cli/test_packaging.py` (marked
+**Backed by.** `tests/cli/test_packaging.py` (marked
 `integration_local` to keep the wheel build out of the fast test
 suite).
 

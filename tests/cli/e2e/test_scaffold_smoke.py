@@ -1,13 +1,13 @@
-"""Plan 15 — End-to-end scaffold-and-invoke.
+"""Plan 16 — End-to-end scaffold-and-invoke.
 
 For each template:
 * Scaffold into a tmpdir via the CLI.
 * Assert the generated ``agent.py`` passes ``py_compile`` AND ``ruff``.
 
 Full ``uv sync`` round-trip is intentionally skipped (requires the
-template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §15).
+template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §16).
 
-See ``TEST_PLANS.md`` §15.
+See ``TEST_PLANS.md`` §16.
 """
 
 from __future__ import annotations
