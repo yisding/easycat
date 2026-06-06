@@ -189,6 +189,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "mode",
         "transport",
         "framework",
+        "best_for",
         "description",
         "create_command",
         "repo_create_command",
@@ -203,6 +204,8 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         )
         assert entry["run_command"].startswith("uv run ")
         assert entry["check_command"].startswith("uv run python -m py_compile ")
+        assert isinstance(entry["best_for"], str)
+        assert entry["best_for"]
 
 
 def test_init_error_envelope(

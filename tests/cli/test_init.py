@@ -53,7 +53,8 @@ def test_list_templates(cli: CliRunner) -> None:
         if line and not line[0].isspace() and line.split()[0] in template_names
     ]
     assert set(names) == template_names
-    assert "best first voice scaffold" in result.stdout
+    assert "Best for:" in result.stdout
+    assert "First local voice agent" in result.stdout
     assert "Text-only REPL" in result.stdout
     assert "WebRTC audio" in result.stdout
     assert "Command note:" in result.stdout
@@ -78,6 +79,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "mode": "voice",
             "transport": "local[dev]",
             "framework": "OpenAI Agents",
+            "best_for": "Teams using SDK[beta].",
             "create_command": "easycat init demo --template demo[beta]",
             "repo_create_command": "uv run easycat init demo --template demo[beta]",
             "check_command": "uv add 'easycat[openai-agents]'",
@@ -90,6 +92,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "demo[beta]" in rendered
     assert "easycat[openai-agents]" in rendered
     assert "local[dev]" in rendered
+    assert "Teams using SDK[beta]." in rendered
     assert "easycat init demo --template demo[beta]" in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
 
@@ -105,7 +108,9 @@ def test_list_templates_json(cli: CliRunner) -> None:
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
     assert catalog["openai-agents"]["transport"] == "local mic"
+    assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["text-chat"]["mode"] == "text"
+    assert "without microphone" in catalog["text-chat"]["best_for"]
     assert "description" in catalog["webrtc-browser"]
     for name, entry in catalog.items():
         assert entry["create_command"] == f"easycat init my-agent --template {name}"

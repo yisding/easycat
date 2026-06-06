@@ -90,6 +90,7 @@ class _TemplateCatalogMetadata(TypedDict):
     mode: str
     transport: str
     framework: str
+    best_for: str
     description: str
 
 
@@ -106,36 +107,42 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "mode": "voice",
         "transport": "local mic",
         "framework": "OpenAI Agents",
-        "description": "Local microphone/speaker voice agent; best first voice scaffold.",
+        "best_for": "First local voice agent and default OpenAI Agents scaffold.",
+        "description": "Local microphone/speaker voice agent.",
     },
     "pydantic-ai": {
         "mode": "voice",
         "transport": "local mic",
         "framework": "Pydantic AI",
+        "best_for": "Teams already building agents with Pydantic AI.",
         "description": "Local voice agent using Pydantic AI.",
     },
     "pydantic-ai-workflow": {
         "mode": "voice",
         "transport": "local mic",
         "framework": "Pydantic AI workflow",
+        "best_for": "Small workflow examples around a Pydantic AI agent.",
         "description": "Local voice agent with a small workflow object.",
     },
     "text-chat": {
         "mode": "text",
         "transport": "terminal",
         "framework": "OpenAI Agents",
+        "best_for": "Testing agent behavior without microphone or speaker setup.",
         "description": "Text-only REPL for testing agent behavior without audio.",
     },
     "twilio-phone": {
         "mode": "voice",
         "transport": "Twilio",
         "framework": "OpenAI Agents",
+        "best_for": "Phone-call prototypes and Twilio Media Streams servers.",
         "description": "Phone-call voice agent with a Twilio WebSocket server.",
     },
     "webrtc-browser": {
         "mode": "voice",
         "transport": "WebRTC",
         "framework": "OpenAI Agents",
+        "best_for": "Browser-based voice apps using WebRTC.",
         "description": "Browser voice agent using WebRTC audio.",
     },
 }
@@ -212,6 +219,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "mode": "unknown",
                 "transport": "unknown",
                 "framework": "unknown",
+                "best_for": "Template selection guidance has not been documented yet.",
                 "description": "Template metadata has not been documented yet.",
             },
         )
@@ -244,6 +252,7 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
         rows.append(
             f"[cyan]{escape(entry['name'])}[/]\n"
             f"  {escape(entry['description'])}\n"
+            f"  [dim]Best for:[/] {escape(entry['best_for'])}\n"
             f"  [dim]{escape(metadata)}[/]\n"
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"

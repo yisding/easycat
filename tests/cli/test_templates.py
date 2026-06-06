@@ -116,7 +116,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
     for name in templates:
         entry = _TEMPLATE_CATALOG[name]
         assert "name" not in entry
-        for key in ("mode", "transport", "framework", "description"):
+        for key in ("mode", "transport", "framework", "best_for", "description"):
             assert entry[key], f"{name} catalog entry missing {key}"
 
     emitted = {entry["name"]: entry for entry in _available_template_catalog()}

@@ -128,6 +128,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "easycat init --list-templates --json" in result.stdout
     assert "`create_command`" in result.stdout
     assert "`repo_create_command`" in result.stdout
+    assert "`best_for`" in result.stdout
     assert "top-level `command_note`" in result.stdout
     assert "repository root" in stdout
     assert "post-scaffold check/run context" in stdout
@@ -165,6 +166,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
+    assert "`best_for`" in stdout
     assert "repo-root creation" in stdout
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in result.stdout
     assert "`run_command`, `check_command`" in result.stdout
@@ -203,6 +205,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "bare installed CLI hints, repo-local `uv run` hints" in normalized_body
     assert "uppercase placeholders such as PATH" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
+    assert "`best_for`" in payload["body"]
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
