@@ -44,8 +44,24 @@ async def test_async_context_manager_starts_and_shuts_down():
     async with session:
         # ``__aenter__`` leaves the session in the running state.
         assert session.is_running is True
-    # ``__aexit__`` runs shutdown(), which flips _closed.
+    # ``__aexit__`` runs ``stop(force=True)``, which flips _closed.
     assert session._closed is True
+
+
+@pytest.mark.asyncio
+async def test_aexit_calls_stop_force_true():
+    """The context manager should use the public force-stop path directly."""
+    session = Session(_config())
+    calls: list[bool] = []
+
+    async def _counting_stop(*, force: bool = False) -> None:
+        calls.append(force)
+
+    session.stop = _counting_stop  # type: ignore[method-assign]
+
+    await session.__aexit__(None, None, None)
+
+    assert calls == [True]
 
 
 @pytest.mark.asyncio
@@ -91,7 +107,7 @@ async def test_aenter_is_noop_when_session_already_running():
         async with session:
             assert session.is_running is True
     finally:
-        # Restore before the test tears down so shutdown() uses the real path.
+        # Restore before the context exits so ``stop(force=True)`` uses the real path.
         session.start = original_start  # type: ignore[method-assign]
 
     assert start_calls == 0
