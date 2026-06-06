@@ -16,6 +16,8 @@ docs map that links back to this ladder. Use
 same route map with command hints and audience labels; replace uppercase
 placeholders such as `PATH` before running those hints. Use
 `uv run easycat explain json-schema` for the JSON envelope and field contract.
+Use `uv run easycat doctor --json` when a script or coding agent needs
+parseable first-run environment checks.
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 
@@ -88,7 +90,8 @@ uv run python docs/teaching/00-hello-audio/main.py
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug
   chapter code. If the keys live in a project `.env`, run
-  `uv run easycat doctor --env-file .env`.
+  `uv run easycat doctor --env-file .env`. Add `--json` when a script or coding
+  agent needs the same environment/check rows.
 
 Each chapter's README lists its own prerequisites up front.
 

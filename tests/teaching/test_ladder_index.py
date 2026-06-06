@@ -110,6 +110,9 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "JSON envelope and field contract" in normalized
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
+    assert "uv run easycat doctor --json" in readme
+    assert "script or coding agent needs parseable first-run environment checks" in normalized
+    assert "script or coding agent needs the same environment/check rows" in normalized
 
 
 def test_teaching_chapters_have_reader_entrypoints() -> None:
@@ -275,6 +278,10 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
         normalized_cli_section
     )
     assert "`uv run easycat doctor --env-file .env`" in cli_section
+    assert "`uv run easycat doctor --json`" in cli_section
+    assert "script or coding agent needs parseable first-run environment checks" in (
+        normalized_cli_section
+    )
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
     assert "command-specific success and error fields" in normalized_cli_section

@@ -444,7 +444,9 @@ $ uv run easycat --help
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
   something's not working. If a scaffolded app stores keys in `.env`, run
-  `uv run easycat doctor --env-file .env`.
+  `uv run easycat doctor --env-file .env`. Use
+  `uv run easycat doctor --json` when a script or coding agent needs parseable
+  first-run environment checks.
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, deployment, observability, and validation reference material.
