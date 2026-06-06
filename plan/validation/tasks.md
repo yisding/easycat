@@ -1129,6 +1129,36 @@ Dependencies:
 
 - V0.2
 
+Current verified state:
+
+- `src/easycat/validation/provider_capabilities.py` defines the protocol-free
+  model types `ProviderCapabilityReport`, `ProviderCapabilities`, and
+  `ProviderIdentifier`, and `easycat.validation` exports those types for
+  validation callers.
+- `ProviderCapabilityStatus` covers `pass`, `expected_skip`, `auth_failure`,
+  `quota_failure`, `provider_drift`, and `failure`; `ProviderContractStatus`
+  and `ProviderSchemaStatus` carry contract and schema outcomes.
+- `ProviderCapabilityReport.to_dict()` emits
+  `kind=provider_capability_report`, `schema_version`, `redaction_version`,
+  `provider`, `surface`, `adapter`, `protocol`, `mode`, `adapter_version`,
+  `required_extra`, `live_checked_at`, `api_version`, nested `auth`,
+  `capabilities`, `models`, `voices`, `contract_status`, `schema_status`,
+  `latency`, `failure_class`, and `status`.
+- `ProviderCapabilities.to_dict()` emits input/output audio formats and
+  optional `streaming`, `streaming_behavior`, `finalization_behavior`,
+  `markers`, `alignment`, `ssml`, `tts_input_policy`,
+  `api_version_header_behavior`, and `provider_options` when present.
+- `ProviderIdentifier` preserves safe low-cardinality identifiers through
+  `redact_text` and replaces unsafe provider-specific identifiers with
+  `[REDACTED_PROVIDER_IDENTIFIER]`; nested capability provider options are
+  redacted through `redact_value`.
+- `tests/contracts/test_provider_capability_report_model.py` verifies the
+  required JSON shape, UTC `live_checked_at` serialization, `redaction_version`,
+  TTS input-policy serialization, nested capability redaction, safe model ID
+  preservation, unsafe voice ID suppression, `to_json()` round-tripping, and
+  pass / expected-skip / auth-failure / quota-failure / provider-drift status
+  representation.
+
 Files:
 
 - validation CLI/helper module

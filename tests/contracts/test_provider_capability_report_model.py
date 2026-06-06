@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import fields
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -11,12 +13,14 @@ from easycat.validation.provider_capabilities import (
     ProviderCapabilityReport,
     ProviderIdentifier,
 )
+from easycat.validation.redaction import REDACTION_VERSION
 
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.provider("capability-report"),
     pytest.mark.surface_tts,
 ]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_provider_capability_report_serializes_required_json_shape() -> None:
@@ -57,6 +61,7 @@ def test_provider_capability_report_serializes_required_json_shape() -> None:
 
     assert payload["kind"] == "provider_capability_report"
     assert payload["schema_version"] == 1
+    assert payload["redaction_version"] == REDACTION_VERSION
     assert payload["provider"] == "openai"
     assert payload["surface"] == "tts"
     assert payload["adapter"] == "easycat.tts.openai_tts.OpenAITTS"
@@ -182,3 +187,144 @@ def test_provider_capability_report_represents_required_outcomes(
     assert payload["contract_status"] == contract_status
     assert payload["schema_status"] == schema_status
     assert payload["failure_class"] == failure_class
+
+
+def test_validation_tasks_v41_current_state_tracks_provider_capability_model() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V4.1 Add Provider Capability Report Model", 1)[1].split(
+        "### V4.2 Implement `easycat validate live`", 1
+    )[0]
+    normalized_section = " ".join(section.split())
+    model_source = (REPO_ROOT / "src/easycat/validation/provider_capabilities.py").read_text(
+        encoding="utf-8"
+    )
+    exports_source = (REPO_ROOT / "src/easycat/validation/__init__.py").read_text(encoding="utf-8")
+    test_source = (
+        REPO_ROOT / "tests/contracts/test_provider_capability_report_model.py"
+    ).read_text(encoding="utf-8")
+    report_fields = {field.name for field in fields(ProviderCapabilityReport)}
+    expected_report_fields = {
+        "provider",
+        "surface",
+        "adapter",
+        "protocol",
+        "mode",
+        "adapter_version",
+        "required_extra",
+        "credential_env_var",
+        "credential_env_var_present",
+        "api_version",
+        "api_version_header_behavior",
+        "capabilities",
+        "contract_status",
+        "schema_status",
+        "status",
+        "live_checked_at",
+        "models",
+        "voices",
+        "latency",
+        "failure_class",
+        "schema_version",
+        "redaction_version",
+        "kind",
+    }
+
+    assert expected_report_fields <= report_fields
+    for symbol in (
+        "ProviderCapabilityStatus",
+        "ProviderContractStatus",
+        "ProviderSchemaStatus",
+        "ProviderCapabilityReport",
+        "ProviderCapabilities",
+        "ProviderIdentifier",
+        "_REDACTED_PROVIDER_IDENTIFIER",
+        "REDACTION_VERSION",
+        "redact_text",
+        "redact_value",
+    ):
+        assert symbol in model_source
+    for symbol in ("ProviderCapabilityReport", "ProviderCapabilities", "ProviderIdentifier"):
+        assert symbol in exports_source
+    for status in (
+        "pass",
+        "expected_skip",
+        "auth_failure",
+        "quota_failure",
+        "provider_drift",
+        "failure",
+    ):
+        assert status in model_source
+    for test_name in (
+        "test_provider_capability_report_serializes_required_json_shape",
+        "test_provider_capability_report_redacts_secret_like_values_inside_capabilities",
+        "test_provider_capability_report_represents_required_outcomes",
+    ):
+        assert test_name in test_source
+
+    assert "Current verified state:" in section
+    for token in (
+        "src/easycat/validation/provider_capabilities.py",
+        "ProviderCapabilityReport",
+        "ProviderCapabilities",
+        "ProviderIdentifier",
+        "easycat.validation",
+        "ProviderCapabilityStatus",
+        "ProviderContractStatus",
+        "ProviderSchemaStatus",
+        "pass",
+        "expected_skip",
+        "auth_failure",
+        "quota_failure",
+        "provider_drift",
+        "failure",
+        "kind=provider_capability_report",
+        "schema_version",
+        "redaction_version",
+        "provider",
+        "surface",
+        "adapter",
+        "protocol",
+        "mode",
+        "adapter_version",
+        "required_extra",
+        "live_checked_at",
+        "api_version",
+        "auth",
+        "capabilities",
+        "models",
+        "voices",
+        "contract_status",
+        "schema_status",
+        "latency",
+        "failure_class",
+        "status",
+        "streaming",
+        "streaming_behavior",
+        "finalization_behavior",
+        "markers",
+        "alignment",
+        "ssml",
+        "tts_input_policy",
+        "api_version_header_behavior",
+        "provider_options",
+        "redact_text",
+        "[REDACTED_PROVIDER_IDENTIFIER]",
+        "redact_value",
+        "tests/contracts/test_provider_capability_report_model.py",
+        "to_json()",
+    ):
+        assert f"`{token}`" in section
+    for phrase in (
+        "protocol-free model types",
+        "input/output audio formats",
+        "safe low-cardinality identifiers",
+        "unsafe provider-specific identifiers",
+        "nested capability provider options",
+        "required JSON shape",
+        "UTC `live_checked_at` serialization",
+        "TTS input-policy serialization",
+        "safe model ID preservation",
+        "unsafe voice ID suppression",
+        "pass / expected-skip / auth-failure / quota-failure / provider-drift",
+    ):
+        assert phrase in normalized_section
