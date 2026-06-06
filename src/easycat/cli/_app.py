@@ -209,6 +209,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
+_DOCS_COMMAND_NOTE = "Command hints use installed CLI form unless they start with uv run."
 
 
 def _docs_url_for(path: str) -> str:
@@ -252,6 +253,7 @@ def _format_docs_menu() -> str:
 
 Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes and command hints: easycat docs --json
+{_DOCS_COMMAND_NOTE}
 """
 
 
@@ -269,7 +271,14 @@ def docs_command(
 ) -> None:
     """Show docs for learning, validation, and operations."""
     if json_output:
-        emit_json(json_envelope("docs", entries=_docs_entries(), source_url=_DOCS_SOURCE_URL))
+        emit_json(
+            json_envelope(
+                "docs",
+                entries=_docs_entries(),
+                source_url=_DOCS_SOURCE_URL,
+                command_note=_DOCS_COMMAND_NOTE,
+            )
+        )
         return
     stdout_console.print(_format_docs_menu(), soft_wrap=True)
 

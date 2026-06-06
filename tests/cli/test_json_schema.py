@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from easycat.cli._app import app
+from easycat.cli._app import _DOCS_COMMAND_NOTE, app
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.validation.report import (
     GitMetadata,
@@ -276,6 +276,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     payload = json.loads(result.stdout)
     _assert_envelope(payload, "docs")
     assert isinstance(payload["entries"], list)
+    assert payload["command_note"] == _DOCS_COMMAND_NOTE
     entries = [{key: entry[key] for key in ("label", "path")} for entry in payload["entries"]]
     assert {"label": "CLI and scaffolds", "path": "README.md#cli"} in entries
     assert {"label": "Docs map", "path": "docs/README.md"} in entries

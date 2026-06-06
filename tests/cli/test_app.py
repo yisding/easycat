@@ -14,7 +14,14 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from easycat.cli._app import _COMMAND_TEXT, _DOCS_LINKS, _JOURNEY_SECTIONS, _register_commands, app
+from easycat.cli._app import (
+    _COMMAND_TEXT,
+    _DOCS_COMMAND_NOTE,
+    _DOCS_LINKS,
+    _JOURNEY_SECTIONS,
+    _register_commands,
+    app,
+)
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -157,6 +164,7 @@ def test_docs_command(cli: CliRunner) -> None:
         in result.stdout
     )
     assert "Machine-readable routes and command hints: easycat docs --json" in result.stdout
+    assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
 
 
@@ -178,6 +186,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["schema_version"] == 1
     assert payload["command"] == "docs"
     assert payload["status"] == "ok"
+    assert payload["command_note"] == _DOCS_COMMAND_NOTE
     assert [entry["label"] for entry in payload["entries"]] == [
         entry["label"] for entry in _DOCS_LINKS
     ]

@@ -114,9 +114,11 @@ EASYCAT_Exxx code.
 Successful commands may add command-specific fields. Common automation
 entry points include:
 
-  `entries`, `source_url` - `easycat docs --json`; each docs entry has
-                            `label`, `path`, `description`, `url`, and
-                            optional `commands` in onboarding order
+  `entries`, `source_url`, `command_note` - `easycat docs --json`;
+                            each docs entry has `label`, `path`,
+                            `description`, `url`, and optional `commands`
+                            in onboarding order; `command_note` explains
+                            installed vs repo-local command hints
   `templates`, `catalog` - `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
                          `check_command`

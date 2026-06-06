@@ -116,11 +116,13 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     stdout = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "Successful commands may add command-specific fields" in result.stdout
-    assert "`entries`, `source_url`" in result.stdout
+    assert "`entries`, `source_url`, `command_note`" in result.stdout
     assert "easycat docs --json" in result.stdout
-    assert "`label`, `path`, `description`, `url`, and" in result.stdout
+    assert "`label`, `path`" in result.stdout
+    assert "`description`, `url`, and optional `commands`" in result.stdout
     assert "optional `commands`" in result.stdout
     assert "in onboarding order" in result.stdout
+    assert "installed vs repo-local command hints" in result.stdout
     assert "`templates`, `catalog`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
@@ -147,10 +149,12 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert payload["schema_version"] == 1
     assert payload["command"] == "explain"
     assert payload["slug"] == "json-schema"
-    assert "`entries`, `source_url`" in payload["body"]
-    assert "`label`, `path`, `description`, `url`, and" in payload["body"]
+    assert "`entries`, `source_url`, `command_note`" in payload["body"]
+    assert "`label`, `path`" in payload["body"]
+    assert "`description`, `url`, and optional `commands`" in payload["body"]
     assert "optional `commands`" in payload["body"]
     assert "in onboarding order" in payload["body"]
+    assert "installed vs repo-local command hints" in payload["body"]
     assert "`templates`, `catalog`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]
     assert "`report_path`" in payload["body"]
