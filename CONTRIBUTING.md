@@ -103,8 +103,11 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 | `release` | `uv run easycat validate release` | installed-wheel aggregate gate |
 
 `uv run easycat validate report .easycat/validation/latest.json` renders the
-latest saved report. Use `.easycat/validation/runs/<run_id>/report.json` when
-you need a specific older run.
+latest saved report. Use
+`uv run easycat validate report .easycat/validation/latest.json --json` when a
+script or coding agent needs the saved report inside the standard CLI envelope.
+Use `.easycat/validation/runs/<run_id>/report.json` when you need a specific
+older run.
 
 ## Marker taxonomy
 

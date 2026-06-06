@@ -129,7 +129,11 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
     normalized = re.sub(r"\s+", " ", contributing)
 
     assert "uv run easycat validate report .easycat/validation/latest.json" in contributing
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in contributing
     assert "renders the latest saved report" in normalized
+    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
+        normalized
+    )
     assert ".easycat/validation/runs/<run_id>/report.json" in contributing
     assert "uv run easycat validate report <path>" not in contributing
 
