@@ -26,6 +26,8 @@ uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
 uv run pytest tests/test_install_guidance.py            # Verify onboarding/install guidance
 uv run easycat docs              # Maintained docs map
+uv run easycat docs --json       # Docs route map with audiences and command hints
+uv run easycat explain json-schema  # CLI JSON envelope and field contract
 uv run easycat validate quick    # Repo-local validation CLI
 uv run ruff check .              # Lint
 uv run ruff format .             # Format

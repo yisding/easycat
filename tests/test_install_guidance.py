@@ -465,6 +465,15 @@ def test_agent_guides_use_current_live_marker_name() -> None:
 
 
 def test_agent_guide_command_examples_are_current() -> None:
+    from easycat.cli import _app
+
+    _app._register_commands()
+    registered_easycat_commands = {
+        command.name for command in _app.app.registered_commands if command.name is not None
+    }
+    registered_easycat_commands.update(
+        group.name for group in _app.app.registered_groups if group.name is not None
+    )
     just_recipes = just_recipe_names(REPO_ROOT)
     command_sections = {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
@@ -481,6 +490,8 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "just check" in command_section
         assert "just validate-quick" in command_section
         assert "uv run easycat docs" in command_section
+        assert "uv run easycat docs --json" in command_section
+        assert "uv run easycat explain json-schema" in command_section
         assert "uv run easycat validate quick" in command_section
         assert "tests/test_metrics.py" not in command_section, filename
 
@@ -498,11 +509,23 @@ def test_agent_guide_command_examples_are_current() -> None:
             if not (REPO_ROOT / path_text).exists():
                 stale_paths.append(f"{filename}: {path_text}")
 
+    stale_easycat_commands: list[str] = []
+    easycat_command_re = re.compile(r"\b(?:uv run\s+)?easycat\s+(?P<command>[A-Za-z0-9_-]+)\b")
+    for filename, command_section in command_sections.items():
+        for match in easycat_command_re.finditer(command_section):
+            command_name = match.group("command")
+            if command_name not in registered_easycat_commands:
+                stale_easycat_commands.append(f"{filename}: easycat {command_name}")
+
     assert not stale_recipes, "Agent guide just examples point at missing recipes: " + ", ".join(
         stale_recipes
     )
     assert not stale_paths, "Agent guide pytest examples point at missing paths: " + ", ".join(
         stale_paths
+    )
+    assert not stale_easycat_commands, (
+        "Agent guide easycat examples point at missing commands: "
+        + ", ".join(stale_easycat_commands)
     )
 
 
