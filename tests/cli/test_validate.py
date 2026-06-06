@@ -476,6 +476,41 @@ def test_validation_runner_embeds_reliability_samples_for_stress_slices(tmp_path
     assert "reliability" in report["checks"][0]["artifacts"]
 
 
+def test_socket_validation_reports_webrtc_stats_artifact_when_produced(tmp_path: Path) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        stats_path = Path(env["EASYCAT_WEBRTC_STATS_PATH"])
+        stats_path.write_text(
+            json.dumps(
+                {
+                    "kind": "webrtc_client_stats",
+                    "schema_version": 1,
+                    "sample_id": "socket-1",
+                    "label": "teardown",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    result = run_validation_slice(
+        "socket",
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = result.run.to_dict()
+    artifact = payload["checks"][0]["artifacts"]["webrtc_stats"]
+    assert artifact["kind"] == "webrtc_stats"
+    assert (
+        Path(artifact["path"])
+        .read_text(encoding="utf-8")
+        .startswith('{"kind": "webrtc_client_stats"')
+    )
+    assert payload["artifacts"]["webrtc_stats"] == artifact
+
+
 def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> None:
     def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
         return CommandResult(exit_code=5, stdout="", stderr="no tests collected")

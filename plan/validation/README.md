@@ -41,6 +41,10 @@ Implemented:
 - `easycat validate contracts` runs the offline provider, protocol, cassette,
   and bridge contract suite through the same validation report machinery as
   quick/socket/stress.
+- `easycat validate socket` advertises `EASYCAT_WEBRTC_STATS_PATH`; the bundled
+  WebRTC browser client posts sanitized `RTCPeerConnection.getStats()`
+  snapshots to `/stats`, and produced snapshots are surfaced as a
+  `webrtc_stats` validation artifact.
 - `easycat validate release` builds distributions, installs the wheel into a
   clean temporary venv, verifies the installed package outside the source tree,
   and aggregates quick, stress, contracts, live, and latency release gates into
@@ -64,6 +68,9 @@ Remaining backlog:
 
 - HTTP/WebSocket provider cassettes and schema drift fingerprints are still not
   standardized.
+- Browser-driven WebRTC validation is not automated yet; the stats endpoint and
+  artifact path exist, but socket validation only reports the artifact when a
+  browser/client posts snapshots during the run.
 - The release workflow still owns GitHub environment setup and artifact upload,
   but the release gate itself now has a dedicated public CLI wrapper.
 - Deep acceptance-bullet auditing for the historical milestones in

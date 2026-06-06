@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
+from pathlib import Path
 
 import pytest
 
@@ -59,6 +61,14 @@ class _FakeWeb:
 class _FakeOfferRequest:
     async def json(self) -> dict[str, str]:
         return {"sdp": "v=0\r\n", "type": "offer"}
+
+
+class _FakeJsonRequest:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    async def json(self) -> object:
+        return self._payload
 
 
 class _FakeSessionDescription:
@@ -218,6 +228,14 @@ class TestWebRTCTransportConfig:
         assert config.static_dir == WebRTCTransportConfig._USE_BUNDLED
         assert len(config.ice_servers) == 1
         assert "stun:" in config.ice_servers[0].urls[0]
+        assert config.stats_path is None
+
+    def test_stats_path_defaults_from_validation_env(self, monkeypatch):
+        monkeypatch.setenv("EASYCAT_WEBRTC_STATS_PATH", "/tmp/easycat-webrtc-stats.jsonl")
+
+        config = WebRTCTransportConfig()
+
+        assert config.stats_path == "/tmp/easycat-webrtc-stats.jsonl"
 
     def test_custom_ice_servers(self):
         servers = [
@@ -476,6 +494,73 @@ class TestWebRTCIngressQueueOwnership:
         assert transport._client_connected.is_set()
 
 
+class TestWebRTCStatsArtifact:
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_persists_sanitized_snapshots(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
+        transport._web = _FakeWeb
+
+        response = await transport._handle_stats(
+            _FakeJsonRequest(
+                {
+                    "kind": "webrtc_client_stats",
+                    "schema_version": 1,
+                    "sample_id": "sample-1\nextra",
+                    "label": "first_received_audio",
+                    "local_candidate_ip": "192.168.1.20",
+                    "candidate_pair": {
+                        "state": "succeeded",
+                        "current_round_trip_time_ms": 12.5,
+                        "local_candidate_id": "candidate-secret",
+                    },
+                    "inbound_audio": {
+                        "packets_received": 42,
+                        "jitter_ms": 3.25,
+                        "remote_candidate_id": "candidate-secret",
+                    },
+                }
+            )
+        )
+
+        assert response.status == 200
+        line = stats_path.read_text(encoding="utf-8").strip()
+        payload = json.loads(line)
+        assert payload["sample_id"] == "sample-1 extra"
+        assert payload["label"] == "first_received_audio"
+        assert payload["candidate_pair"] == {
+            "current_round_trip_time_ms": 12.5,
+            "state": "succeeded",
+        }
+        assert payload["inbound_audio"] == {"jitter_ms": 3.25, "packets_received": 42}
+        assert "candidate-secret" not in line
+        assert "192.168.1.20" not in line
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_rejects_non_object_payload(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
+        transport._web = _FakeWeb
+
+        response = await transport._handle_stats(_FakeJsonRequest(["not", "an", "object"]))
+
+        assert response.status == 400
+        assert not stats_path.exists()
+
+    def test_bundled_client_posts_webrtc_stats_milestones(self):
+        html_path = Path(webrtc_mod.__file__).with_name("static") / "webrtc_client.html"
+        html = html_path.read_text(encoding="utf-8")
+
+        assert 'fetch(baseUrl + "/stats"' in html
+        for label in (
+            "before_speech",
+            "client_speech_end",
+            "first_received_audio",
+            "teardown",
+        ):
+            assert f'postStatsSnapshot("{label}"' in html
+
+
 # ── Lifecycle tests (require aiohttp) ────────────────────────────
 
 
@@ -546,6 +631,7 @@ class TestWebRTCTransportLifecycle:
                 data = await resp.json()
                 assert data["service"] == "easycat-webrtc-signaling"
                 assert "/offer" in data["endpoints"]
+                assert "/stats" in data["endpoints"]
                 assert "Access-Control-Allow-Origin" in resp.headers
 
         await transport.disconnect()

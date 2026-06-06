@@ -20,6 +20,7 @@ import asyncio
 import fractions
 import json
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -53,6 +54,109 @@ _CORS_HEADERS = {
     "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
+
+_WEBRTC_STATS_TOP_LEVEL_FIELDS = frozenset(
+    {
+        "kind",
+        "schema_version",
+        "sample_id",
+        "sequence",
+        "label",
+        "captured_at",
+        "connection_state",
+        "ice_connection_state",
+        "ice_gathering_state",
+        "signaling_state",
+    }
+)
+_WEBRTC_STATS_NESTED_FIELDS: dict[str, frozenset[str]] = {
+    "candidate_pair": frozenset(
+        {
+            "available_incoming_bitrate",
+            "available_outgoing_bitrate",
+            "bytes_received",
+            "bytes_sent",
+            "consent_requests_sent",
+            "current_round_trip_time_ms",
+            "nominated",
+            "packets_received",
+            "packets_sent",
+            "requests_received",
+            "requests_sent",
+            "responses_received",
+            "responses_sent",
+            "state",
+        }
+    ),
+    "inbound_audio": frozenset(
+        {
+            "bytes_received",
+            "concealed_samples",
+            "concealment_events",
+            "jitter_buffer_delay_ms",
+            "jitter_ms",
+            "packets_lost",
+            "packets_received",
+            "total_samples_received",
+        }
+    ),
+    "outbound_audio": frozenset(
+        {
+            "bytes_sent",
+            "packets_sent",
+            "retransmitted_bytes_sent",
+            "retransmitted_packets_sent",
+            "target_bitrate",
+            "total_packet_send_delay_ms",
+        }
+    ),
+}
+
+
+def _default_webrtc_stats_path() -> str | None:
+    return os.environ.get("EASYCAT_WEBRTC_STATS_PATH") or None
+
+
+def _safe_stats_scalar(value: object) -> object | None:
+    if isinstance(value, bool | int | float) or value is None:
+        return value
+    if isinstance(value, str):
+        return value.replace("\r", " ").replace("\n", " ")[:200]
+    return None
+
+
+def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
+    """Keep only non-identifying browser WebRTC stats fields.
+
+    Raw ``RTCPeerConnection.getStats()`` reports can include local/remote
+    candidate addresses and implementation-specific IDs. The bundled browser
+    client already summarizes safe fields, and this server-side filter keeps
+    the validation artifact constrained even if a custom client posts more.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("expected JSON object")
+
+    snapshot: dict[str, object] = {}
+    for field_name in _WEBRTC_STATS_TOP_LEVEL_FIELDS:
+        safe_value = _safe_stats_scalar(payload.get(field_name))
+        if safe_value is not None:
+            snapshot[field_name] = safe_value
+
+    for group_name, allowed_fields in _WEBRTC_STATS_NESTED_FIELDS.items():
+        group = payload.get(group_name)
+        if not isinstance(group, dict):
+            continue
+        safe_group: dict[str, object] = {}
+        for field_name in allowed_fields:
+            safe_value = _safe_stats_scalar(group.get(field_name))
+            if safe_value is not None:
+                safe_group[field_name] = safe_value
+        if safe_group:
+            snapshot[group_name] = safe_group
+
+    snapshot.setdefault("kind", "webrtc_client_stats")
+    snapshot.setdefault("schema_version", 1)
+    return snapshot
 
 
 # ── Configuration ────────────────────────────────────────────────
@@ -101,6 +205,11 @@ class WebRTCTransportConfig:
         ``/config`` response.  Leave this disabled for long-lived TURN
         credentials; enable it only for trusted/internal demos, authenticated
         config endpoints, or short-lived TURN credentials.
+    stats_path:
+        Optional JSONL file where browser clients can POST sanitized
+        ``RTCPeerConnection.getStats()`` snapshots via ``/stats``.  Defaults to
+        ``EASYCAT_WEBRTC_STATS_PATH`` when set so validation runs can advertise
+        the artifact path without custom app wiring.
     """
 
     _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
@@ -115,6 +224,7 @@ class WebRTCTransportConfig:
     max_pending_chunks: int = 200
     static_dir: str | None = _USE_BUNDLED
     expose_ice_credentials: bool = False
+    stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
 
 
 # ── Outbound audio track ─────────────────────────────────────────
@@ -412,10 +522,12 @@ class WebRTCTransport(_AudioQueueMixin):
 
         app = web.Application()
         app.router.add_post("/offer", self._handle_offer)
+        app.router.add_post("/stats", self._handle_stats)
         app.router.add_get("/config", self._handle_config)
         app.router.add_get("/health", self._handle_health)
         app.router.add_get("/", self._handle_root)
         app.router.add_options("/offer", self._handle_cors_preflight)
+        app.router.add_options("/stats", self._handle_cors_preflight)
 
         # Serve static files — resolve the bundled-client sentinel first.
         static_dir = self._config.static_dir
@@ -760,6 +872,38 @@ class WebRTCTransport(_AudioQueueMixin):
             headers=_CORS_HEADERS,
         )
 
+    async def _handle_stats(self, request: Any) -> Any:
+        """Receive summarized browser-side WebRTC stats snapshots.
+
+        This endpoint is optional: without ``stats_path`` it acknowledges
+        snapshots so the bundled client can run unchanged, but no artifact is
+        written. Validation runs set ``EASYCAT_WEBRTC_STATS_PATH`` so posted
+        snapshots become a first-class JSONL artifact.
+        """
+        web = self._web
+        try:
+            payload = await request.json()
+            snapshot = _sanitize_webrtc_stats_snapshot(payload)
+        except Exception as exc:
+            return web.Response(
+                status=400,
+                text=json.dumps({"error": f"Invalid WebRTC stats payload: {exc}"}),
+                content_type="application/json",
+                headers=_CORS_HEADERS,
+            )
+
+        if self._config.stats_path:
+            stats_path = Path(self._config.stats_path)
+            stats_path.parent.mkdir(parents=True, exist_ok=True)
+            with stats_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps({"status": "ok"}),
+            headers=_CORS_HEADERS,
+        )
+
     async def _handle_health(self, request: Any) -> Any:
         web = self._web
         return web.Response(
@@ -783,7 +927,7 @@ class WebRTCTransport(_AudioQueueMixin):
             text=json.dumps(
                 {
                     "service": "easycat-webrtc-signaling",
-                    "endpoints": ["/offer", "/config", "/health"],
+                    "endpoints": ["/offer", "/stats", "/config", "/health"],
                     "note": (
                         "Set WebRTCTransportConfig.static_dir to serve "
                         "the demo browser client from this server."

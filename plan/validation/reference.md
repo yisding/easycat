@@ -84,7 +84,9 @@ Current gaps:
   surface, scenario, cost, and flake risk.
 - HTTP record/replay and WebSocket protocol cassette workflows are not
   standardized.
-- Browser-side WebRTC network stats are not first-class validation artifacts.
+- Browser-side WebRTC network stats now have a first-class optional socket
+  validation artifact path; browser automation that always produces those
+  snapshots is still open.
 
 ## Principles
 
@@ -720,11 +722,10 @@ example collectors belong in an optional extra or application configuration.
 
 ## WebRTC Stats
 
-Browser-facing validation should collect `RTCPeerConnection.getStats()` when
-available:
+Browser-facing validation should collect sanitized
+`RTCPeerConnection.getStats()` summaries when available:
 
 - selected ICE candidate pair
-- local/remote candidate types
 - round-trip time
 - jitter
 - packet loss
@@ -733,8 +734,9 @@ available:
 - available outgoing bitrate when available
 
 Capture snapshots before speech, at client speech end, at first received
-audio, and on teardown. Persist WebRTC stats alongside the same latency
-`sample_id`.
+audio, and on teardown. Persist WebRTC stats alongside the same validation
+`sample_id`. Do not persist raw ICE candidate addresses, candidate IDs, or
+provider/browser-specific identifiers.
 
 ## Code Paths To Validate
 

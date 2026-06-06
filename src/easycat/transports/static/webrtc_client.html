@@ -108,6 +108,9 @@ var analyser = null;
 var micCtx = null;
 var levelRAF = 0;
 var manualStop = false;
+var statsSampleId = "";
+var statsSequence = 0;
+var firstReceivedAudioStatsSent = false;
 
 // ── UI ───────────────────────────────────────────────────────────
 var startBtn     = document.getElementById("startBtn");
@@ -179,6 +182,130 @@ async function fetchIceConfig(baseUrl) {
   return { iceServers: [] };
 }
 
+// ── WebRTC validation stats ─────────────────────────────────────
+function makeStatsSampleId() {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+
+function metric(target, key, value) {
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "string") {
+    target[key] = value;
+  }
+}
+
+function secondsToMs(value) {
+  if (typeof value !== "number") return undefined;
+  return Math.round(value * 1000000) / 1000;
+}
+
+function summarizeCandidatePair(report) {
+  var summary = {};
+  metric(summary, "state", report.state);
+  metric(summary, "nominated", report.nominated);
+  metric(summary, "current_round_trip_time_ms", secondsToMs(report.currentRoundTripTime));
+  metric(summary, "available_outgoing_bitrate", report.availableOutgoingBitrate);
+  metric(summary, "available_incoming_bitrate", report.availableIncomingBitrate);
+  metric(summary, "bytes_sent", report.bytesSent);
+  metric(summary, "bytes_received", report.bytesReceived);
+  metric(summary, "packets_sent", report.packetsSent);
+  metric(summary, "packets_received", report.packetsReceived);
+  metric(summary, "requests_sent", report.requestsSent);
+  metric(summary, "requests_received", report.requestsReceived);
+  metric(summary, "responses_sent", report.responsesSent);
+  metric(summary, "responses_received", report.responsesReceived);
+  metric(summary, "consent_requests_sent", report.consentRequestsSent);
+  return summary;
+}
+
+function summarizeInboundAudio(report) {
+  var summary = {};
+  metric(summary, "packets_received", report.packetsReceived);
+  metric(summary, "packets_lost", report.packetsLost);
+  metric(summary, "bytes_received", report.bytesReceived);
+  metric(summary, "jitter_ms", secondsToMs(report.jitter));
+  metric(summary, "jitter_buffer_delay_ms", secondsToMs(report.jitterBufferDelay));
+  metric(summary, "concealed_samples", report.concealedSamples);
+  metric(summary, "concealment_events", report.concealmentEvents);
+  metric(summary, "total_samples_received", report.totalSamplesReceived);
+  return summary;
+}
+
+function summarizeOutboundAudio(report) {
+  var summary = {};
+  metric(summary, "packets_sent", report.packetsSent);
+  metric(summary, "bytes_sent", report.bytesSent);
+  metric(summary, "retransmitted_packets_sent", report.retransmittedPacketsSent);
+  metric(summary, "retransmitted_bytes_sent", report.retransmittedBytesSent);
+  metric(summary, "target_bitrate", report.targetBitrate);
+  metric(summary, "total_packet_send_delay_ms", secondsToMs(report.totalPacketSendDelay));
+  return summary;
+}
+
+async function buildStatsSnapshot(label, peer) {
+  if (!peer || typeof peer.getStats !== "function") return null;
+
+  var stats = await peer.getStats();
+  var selectedPairId = "";
+  var selectedPair = null;
+  var inboundAudio = null;
+  var outboundAudio = null;
+
+  stats.forEach(function(report) {
+    if (report.type === "transport" && report.selectedCandidatePairId) {
+      selectedPairId = report.selectedCandidatePairId;
+    }
+  });
+
+  stats.forEach(function(report) {
+    if (report.type === "candidate-pair") {
+      var selected = report.id === selectedPairId
+        || report.selected
+        || (report.nominated && report.state === "succeeded");
+      if (selected && !selectedPair) selectedPair = summarizeCandidatePair(report);
+    } else if (report.type === "inbound-rtp" && report.kind === "audio" && !inboundAudio) {
+      inboundAudio = summarizeInboundAudio(report);
+    } else if (report.type === "outbound-rtp" && report.kind === "audio" && !outboundAudio) {
+      outboundAudio = summarizeOutboundAudio(report);
+    }
+  });
+
+  var snapshot = {
+    kind: "webrtc_client_stats",
+    schema_version: 1,
+    sample_id: statsSampleId,
+    sequence: ++statsSequence,
+    label: label,
+    captured_at: new Date().toISOString(),
+    connection_state: peer.connectionState,
+    ice_connection_state: peer.iceConnectionState,
+    ice_gathering_state: peer.iceGatheringState,
+    signaling_state: peer.signalingState,
+  };
+  if (selectedPair) snapshot.candidate_pair = selectedPair;
+  if (inboundAudio) snapshot.inbound_audio = inboundAudio;
+  if (outboundAudio) snapshot.outbound_audio = outboundAudio;
+  return snapshot;
+}
+
+async function postStatsSnapshot(label, peer) {
+  var activePeer = peer || pc;
+  if (!activePeer) return;
+
+  try {
+    var snapshot = await buildStatsSnapshot(label, activePeer);
+    if (!snapshot) return;
+    var baseUrl = signalingUrl.value.replace(/\/$/, "");
+    await fetch(baseUrl + "/stats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot),
+      keepalive: label === "teardown",
+    });
+  } catch (err) {
+    console.warn("Could not post WebRTC stats snapshot:", err);
+  }
+}
+
 // ── WebRTC negotiation ───────────────────────────────────────────
 async function negotiate(offerUrl) {
   var offer = await pc.createOffer();
@@ -218,6 +345,9 @@ async function negotiate(offerUrl) {
 // ── Start / Stop ─────────────────────────────────────────────────
 async function start() {
   manualStop = false;
+  statsSampleId = makeStatsSampleId();
+  statsSequence = 0;
+  firstReceivedAudioStatsSent = false;
   startBtn.disabled = true;
   setStatus("Requesting microphone...", "connecting");
 
@@ -243,6 +373,7 @@ async function start() {
     localStream.getTracks().forEach(function(track) {
       pc.addTrack(track, localStream);
     });
+    await postStatsSnapshot("before_speech", pc);
 
     // 4. Handle remote audio track (agent TTS output).
     pc.addEventListener("track", function(evt) {
@@ -255,6 +386,11 @@ async function start() {
         audio.srcObject = evt.streams[0];
         audio.autoplay = true;
         audio.id = "remoteAudio";
+        audio.addEventListener("playing", function() {
+          if (firstReceivedAudioStatsSent) return;
+          firstReceivedAudioStatsSent = true;
+          postStatsSnapshot("first_received_audio", pc);
+        }, { once: true });
         document.body.appendChild(audio);
         connInfo.textContent = "Receiving audio from agent";
       }
@@ -282,25 +418,28 @@ async function start() {
   } catch (err) {
     console.error(err);
     setStatus("Error: " + err.message, "error");
-    cleanup();
+    await cleanup();
   }
 }
 
-function stop() {
+async function stop() {
   manualStop = true;
-  cleanup();
+  await postStatsSnapshot("client_speech_end", pc);
+  await cleanup();
   setStatus("Ready", "idle");
 }
 
-function cleanup() {
+async function cleanup() {
+  var peer = pc;
   stopLevelMeter();
+  await postStatsSnapshot("teardown", peer);
   if (localStream) {
     localStream.getTracks().forEach(function(t) { t.stop(); });
     localStream = null;
   }
-  if (pc) {
-    pc.close();
-    pc = null;
+  if (peer) {
+    peer.close();
+    if (pc === peer) pc = null;
   }
   var remoteAudio = document.getElementById("remoteAudio");
   if (remoteAudio) remoteAudio.remove();

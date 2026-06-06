@@ -144,6 +144,9 @@ def run_validation_slice(
     requested_report_path = Path(report_path) if report_path is not None else None
     reliability_samples_path = run_dir / "reliability" / "samples.json"
     reliability_samples_path.parent.mkdir(parents=True, exist_ok=True)
+    webrtc_stats_path = run_dir / "webrtc" / "stats.jsonl"
+    if slice_name == "socket":
+        webrtc_stats_path.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
         *_pytest_command_prefix(),
@@ -160,6 +163,8 @@ def run_validation_slice(
         **os.environ,
         "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
     }
+    if slice_name == "socket":
+        command_env["EASYCAT_WEBRTC_STATS_PATH"] = str(webrtc_stats_path)
     runtime_secret_values = _runtime_secret_values()
     started_monotonic = time.perf_counter()
     result = command_runner(command, env=command_env)
@@ -198,6 +203,11 @@ def run_validation_slice(
         check_artifacts["reliability"] = ArtifactRef(
             kind="reliability",
             path=str(reliability_samples_path),
+        )
+    if slice_name == "socket" and webrtc_stats_path.exists():
+        check_artifacts["webrtc_stats"] = ArtifactRef(
+            kind="webrtc_stats",
+            path=str(webrtc_stats_path),
         )
 
     artifacts: dict[str, ArtifactRef] = {

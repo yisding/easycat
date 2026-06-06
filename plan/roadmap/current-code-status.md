@@ -67,8 +67,10 @@ with the codebase. Counts below come from tracked files and exclude
 ## Still Active Gaps
 
 - Validation still has backlog around deeper protocol cassette coverage and
-  browser-side WebRTC network stats. The dedicated `easycat validate release`
-  wrapper now exists and aggregates installed-wheel release gates.
+  browser-automated WebRTC validation. The dedicated `easycat validate release`
+  wrapper now exists and aggregates installed-wheel release gates; socket
+  validation now exposes a first-class optional WebRTC browser stats artifact
+  path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
   1,390 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note but still a
