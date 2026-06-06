@@ -48,6 +48,14 @@ def test_docs_index_routes_primary_reader_paths() -> None:
     assert not missing, "docs/README.md missing route links: " + ", ".join(missing)
 
 
+def test_docs_index_points_to_docs_command() -> None:
+    text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+
+    assert "uv run easycat docs" in text
+    assert "installed app environment" in text
+    assert "prints the same map" in text
+
+
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:
     docs_links = _root_relative_doc_links()
     missing = [

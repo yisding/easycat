@@ -2,6 +2,8 @@
 
 Use this page as the map for the maintained docs. Planning notes live under
 `plan/`; the files below are the current reader-facing documentation.
+From this repository, `uv run easycat docs` prints the same map; in an
+installed app environment, use `easycat docs`.
 
 ## Choose Your Path
 
