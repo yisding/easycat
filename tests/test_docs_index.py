@@ -70,6 +70,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
+        "../AGENTS.md",
         "public-api.md",
         "../CONTRIBUTING.md",
         "deployment/docker.md",
@@ -108,6 +109,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "copyable create/check/run commands" in normalized
     assert "architecture map" in normalized
     assert "provider registries" in normalized
+    assert "repository agent guide" in normalized
+    assert "development commands, validation commands, and PR expectations" in normalized
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
@@ -204,6 +207,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     assert not missing, "easycat docs routes missing audience labels: " + ", ".join(missing)
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
+    assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
     assert audiences["README.md#validation-workflow"] == "contributors"
 
@@ -217,6 +221,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "docs/README.md": "easycat docs --json",
         "examples/README.md": "uv run easycat validate quick",
         "CLAUDE.md": "uv run pytest tests/test_install_guidance.py",
+        "AGENTS.md": "uv run easycat validate quick",
         "docs/public-api.md": "uv run pytest tests/test_public_api.py",
         "docs/deployment/docker.md": "docker compose -f docker/compose.yaml up --build",
         "docs/observability.md": "easycat bundles list",

@@ -245,6 +245,8 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "examples/README.md" in result.stdout
     assert "CLAUDE.md" in result.stdout
     assert "provider registries" in result.stdout
+    assert "AGENTS.md" in result.stdout
+    assert "PR expectations" in result.stdout
     assert "docs/public-api.md" in result.stdout
     assert "CONTRIBUTING.md" in result.stdout
     assert "docs/deployment/docker.md" in result.stdout
@@ -322,6 +324,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/teaching/00-hello-audio/" in paths
     assert "examples/README.md" in paths
     assert "CLAUDE.md" in paths
+    assert "AGENTS.md" in paths
     assert "CONTRIBUTING.md" in paths
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
@@ -362,9 +365,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"
+    assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert "provider registries" in descriptions["CLAUDE.md"]
+    assert "development commands" in descriptions["AGENTS.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
     assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]

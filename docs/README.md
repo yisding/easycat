@@ -42,7 +42,9 @@ command hints, such as `PATH`, before running them.
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
 - Maintaining architecture or package boundaries: use the
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
-  registries, session lifecycle, and test layout.
+  registries, session lifecycle, and test layout. Coding agents should also
+  read the [repository agent guide](../AGENTS.md) for repo structure,
+  development commands, validation commands, and PR expectations.
 - Maintaining public imports: review the
   [public API contract](public-api.md) before changing `easycat.__all__`.
 - Contributing code or tests: use the

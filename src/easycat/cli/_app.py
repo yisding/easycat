@@ -215,6 +215,17 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": ("uv run pytest tests/test_install_guidance.py",),
     },
     {
+        "label": "Coding agents",
+        "path": "AGENTS.md",
+        "audience": "coding agents",
+        "description": "Follow repo structure, development commands, and PR expectations.",
+        "commands": (
+            "uv run easycat docs",
+            "uv run easycat validate quick",
+            "uv run easycat validate report .easycat/validation/latest.json",
+        ),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",

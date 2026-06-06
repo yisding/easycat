@@ -332,6 +332,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "First lesson", "path": "docs/teaching/00-hello-audio/"} in entries
     assert {"label": "Examples", "path": "examples/README.md"} in entries
     assert {"label": "Architecture", "path": "CLAUDE.md"} in entries
+    assert {"label": "Coding agents", "path": "AGENTS.md"} in entries
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in entries
     assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in entries
     assert {"label": "Observability", "path": "docs/observability.md"} in entries
@@ -356,11 +357,13 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"
+    assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["README.md#validation-workflow"] == "contributors"
     assert "easycat init --list-templates" in commands["README.md#cli"]
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "easycat doctor --env-file .env --json" in commands["README.md#cli"]
     assert "uv run pytest tests/test_install_guidance.py" in commands["CLAUDE.md"]
+    assert "uv run easycat validate quick" in commands["AGENTS.md"]
     assert "uv run easycat validate quick" in commands["README.md#validation-workflow"]
     assert (
         "uv run easycat validate report .easycat/validation/latest.json --json"
