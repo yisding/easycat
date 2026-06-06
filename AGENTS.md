@@ -7,7 +7,7 @@
 - Provider interfaces are centralized in `providers.py`; STT/TTS factory registries live in `stt/factory.py` and `tts/factory.py`.
 - Agent framework bridges live in `src/easycat/integrations/agents/` (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, `LangGraphBridge`, plus `AgentRunner`).
 - `src/easycat/models/`: runtime model assets (for example ONNX smart-turn model).
-- `tests/`: pytest suite mirroring domains (`tests/stt/`, `tests/tts/`, `tests/vad/`, `tests/session/`, `tests/stages/`, `tests/transports/`, `tests/websocket/`, `tests/integrations/agents/`, `tests/telephony/`, `tests/runtime/`, `tests/validation/`, `tests/debug/`, `tests/debugger/`).
+- `tests/`: pytest suite mirroring domains (`tests/stt/`, `tests/tts/`, `tests/vad/`, `tests/session/`, `tests/stages/`, `tests/transports/`, `tests/websocket/`, `tests/integrations/agents/`, `tests/telephony/`, `tests/runtime/`, `tests/validation/`, `tests/cli/`, `tests/debug/`, `tests/debugger/`).
 - `examples/`: runnable reference apps covering local microphone, WebSocket, WebRTC, Twilio, and Cartesia/Deepgram/ElevenLabs provider swaps.
 
 ## Build, Test, and Development Commands
@@ -40,7 +40,7 @@ the raw commands below.
 ## Testing Guidelines
 - Framework: `pytest` with `pytest-asyncio` (`asyncio_mode = auto`).
 - Test files use `test_*.py`; test functions use `test_*`.
-- Put tests near related domain folders (audio, session, turns, transports, providers, agents, websocket, telephony, VAD, validation, debugger).
+- Put tests near related domain folders (audio, session, turns, transports, providers, agents, websocket, telephony, VAD, validation, CLI, debugger).
 - For live API tests, use `@pytest.mark.integration_live`, pair it with provider
   and surface markers, and skip when credentials are missing.
 - No fixed coverage gate is enforced; add or update tests for every behavior change.

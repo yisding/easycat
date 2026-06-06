@@ -59,6 +59,8 @@ uv run python examples/ws_server.py  # Run an example
 - `validation/` — Validation report models, redaction, and runner helpers behind the `easycat validate` lanes.
 - `stages/` — Pipeline stages wrapping providers with a uniform `execute` / `snapshot_state` / `handle_upstream` surface and optional journal recording. `Stage` protocol defined in `stages/base.py`.
 - `debug/` — `RunBundle` for serializing/loading complete session recordings. `load_bundle()` for test fixtures.
+- `debugger/` — aiohttp debugger UI for live journals and exported bundles.
+- `cli/` — Typer command surface for `init`, `doctor`, `docs`, `bundles`, `inspect`, `replay`, and `validate`.
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
 - `_turn_context.py` (package root) — `TurnContext` per-turn state (timing, playback tracking, cancel token; created fresh each turn) and the `TurnHandle` protocol. Lives at the root as a leaf (depends only on `cancel.py`) so both `session/` and the lower `stages/` layer import it downward — preserving the `Session → Stages → Providers` direction without an import cycle.
 
@@ -96,4 +98,4 @@ uv run python examples/ws_server.py  # Run an example
 - pytest with pytest-asyncio (`asyncio_mode = auto`)
 - `@pytest.mark.integration_live` for live API tests (skipped without credentials);
   pair live/contract/latency tests with provider and surface markers
-- Tests mirror source structure: `tests/stt/`, `tests/tts/`, `tests/vad/`, `tests/session/`, `tests/transports/`, `tests/validation/`, etc.
+- Tests mirror source structure: `tests/stt/`, `tests/tts/`, `tests/vad/`, `tests/session/`, `tests/transports/`, `tests/validation/`, `tests/cli/`, `tests/debugger/`, etc.
