@@ -14,8 +14,10 @@ from io import StringIO
 from pathlib import Path
 
 from rich.console import Console
+from typer.main import get_command
 from typer.testing import CliRunner
 
+import easycat.cli._app as cli_app
 from easycat.cli._app import (
     _CLI_HINTS,
     _COMMAND_TEXT,
@@ -26,6 +28,7 @@ from easycat.cli._app import (
     _register_commands,
     app,
 )
+from easycat.cli.validate import validate_app
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -116,6 +119,14 @@ def test_journey_sections_cover_command_text_table_once() -> None:
     assert set(command_names) == set(_COMMAND_TEXT)
 
 
+def test_cli_app_docstring_tracks_journey_sections() -> None:
+    docstring = cli_app.__doc__ or ""
+
+    for section, _ in _JOURNEY_SECTIONS:
+        assert section in docstring
+    assert "Scaffold* and *Debug with the journal*" not in docstring
+
+
 def test_peripheral_cli_plan_tracks_journey_menu() -> None:
     plan = (REPO_ROOT / "plan/peripherals/peripheral-cli.md").read_text()
     help_architecture = plan.split("## Help Architecture", 1)[1].split(
@@ -134,6 +145,22 @@ def test_peripheral_cli_plan_tracks_journey_menu() -> None:
     assert "Look up an error code (like `cargo --explain`)" not in help_architecture
     assert "List, inspect, and export RunBundles" not in help_architecture
     assert "Replay a RunBundle against current code" not in help_architecture
+
+
+def test_validation_tasks_current_state_tracks_cli_surface() -> None:
+    _register_commands()
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text()
+    current_state = plan.split("### V1.1 Move Validation Into CLI", 1)[1].split("Files:", 1)[0]
+    validate_commands = set(get_command(validate_app).commands)
+
+    for command_name in sorted(_registered_top_level_command_names()):
+        assert f"`{command_name}`" in current_state
+    for section, _ in _JOURNEY_SECTIONS:
+        assert f"`{section}`" in current_state
+    for command_name in sorted(validate_commands):
+        assert f"`{command_name}`" in current_state
+
+    assert "has no validation section" not in current_state
 
 
 def test_peripheral_cli_plan_tracks_current_test_contract() -> None:
