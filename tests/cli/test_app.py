@@ -65,6 +65,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/deployment/docker.md" in result.stdout
     assert "docs/observability.md" in result.stdout
     assert "#validation-workflow" in result.stdout
+    assert "plan/validation/reference.md" in result.stdout
 
 
 def test_docs_command_json(cli: CliRunner) -> None:
@@ -81,6 +82,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "CONTRIBUTING.md" in paths
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
+    assert "plan/validation/reference.md" in paths
     assert payload["source_url"] == "https://github.com/yisding/easycat"
 
 

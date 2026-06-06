@@ -57,22 +57,6 @@ Run [cyan]easycat explain <code>[/] to understand an error.
 """
 
 
-_DOCS_MENU = """[bold]EasyCat documentation[/]
-
-  [cyan]Quickstart[/]       README.md#install
-  [cyan]Docs map[/]         docs/README.md
-  [cyan]Teaching ladder[/]  docs/teaching/
-  [cyan]Examples[/]         examples/README.md
-  [cyan]Public API[/]       docs/public-api.md
-  [cyan]Contributing[/]     CONTRIBUTING.md
-  [cyan]Deployment[/]       docs/deployment/docker.md
-  [cyan]Observability[/]    docs/observability.md
-  [cyan]Validation[/]       README.md#validation-workflow
-
-Online source: https://github.com/yisding/easycat
-"""
-
-
 _DOCS_LINKS = [
     {"label": "Quickstart", "path": "README.md#install"},
     {"label": "Docs map", "path": "docs/README.md"},
@@ -83,8 +67,24 @@ _DOCS_LINKS = [
     {"label": "Deployment", "path": "docs/deployment/docker.md"},
     {"label": "Observability", "path": "docs/observability.md"},
     {"label": "Validation", "path": "README.md#validation-workflow"},
+    {"label": "Validation reference", "path": "plan/validation/reference.md"},
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
+
+
+def _format_docs_menu() -> str:
+    label_width = max(len(entry["label"]) for entry in _DOCS_LINKS)
+    routes = "\n".join(
+        f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
+        f"{entry['path']}"
+        for entry in _DOCS_LINKS
+    )
+    return f"""[bold]EasyCat documentation[/]
+
+{routes}
+
+Online source: {_DOCS_SOURCE_URL}
+"""
 
 
 def _print_journey_menu() -> None:
@@ -99,7 +99,7 @@ def docs_command(
     if json_output:
         emit_json(json_envelope("docs", entries=_DOCS_LINKS, source_url=_DOCS_SOURCE_URL))
         return
-    stdout_console.print(_DOCS_MENU)
+    stdout_console.print(_format_docs_menu())
 
 
 @app.callback(invoke_without_command=True)
