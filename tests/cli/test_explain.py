@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 
 from typer.testing import CliRunner
 
@@ -11,6 +13,12 @@ from easycat.cli._app import app
 from easycat.cli.diagnose._codes import META_ENTRIES
 from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
 from easycat.errors import REGISTRY, register
+from easycat.validation.report import (
+    GitMetadata,
+    ValidationCheck,
+    ValidationEnvironment,
+    ValidationRun,
+)
 
 
 def _json_schema_catalog_block(body: str) -> str:
@@ -22,6 +30,43 @@ def _catalog_entry_keys_from_cli(cli: CliRunner) -> set[str]:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     return set(payload["catalog"][0])
+
+
+def _validation_run() -> ValidationRun:
+    return ValidationRun(
+        run_id="20260521T120000Z-quick-12345",
+        command=["uv", "run", "pytest", "-q"],
+        started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 21, 12, 0, 3, tzinfo=UTC),
+        duration_s=3.25,
+        status="pass",
+        exit_code=0,
+        tool_exit_codes={"pytest": 0},
+        git=GitMetadata(sha="abc123", branch="feature/validation", dirty=True),
+        environment=ValidationEnvironment(
+            python="3.12.13",
+            platform="Linux",
+            ci=False,
+            env_vars={"OPENAI_API_KEY": True},
+        ),
+        checks=[
+            ValidationCheck(
+                name="pytest.quick",
+                status="pass",
+                duration_s=2.75,
+                command=["uv", "run", "pytest", "-q"],
+            )
+        ],
+    )
+
+
+def _validate_report_keys_from_cli(cli: CliRunner, tmp_path: Path) -> set[str]:
+    report_path = tmp_path / "report.json"
+    report_path.write_text(_validation_run().to_json())
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    return set(payload) - {"schema_version", "command", "status"}
 
 
 def test_explain_help_names_meta_topics(cli: CliRunner) -> None:
@@ -165,7 +210,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert documented_keys == SCHEMA_V1_KEYS
 
 
-def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
+def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner, tmp_path: Path) -> None:
     result = cli.invoke(app, ["explain", "json-schema"])
     stdout = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
@@ -204,6 +249,11 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout
+    for key in _validate_report_keys_from_cli(cli, tmp_path):
+        assert f"`{key}`" in result.stdout
+    assert "easycat validate quick --json" in result.stdout
+    assert "easycat validate report PATH --json" in result.stdout
+    assert "redacted validation report object" in stdout
     assert "post-scaffold check/run context" in stdout
     assert "easycat init NAME --json" in result.stdout
     assert "`fix`, `context`, and `exit_code`" in result.stdout
@@ -220,6 +270,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
 
 def test_explain_meta_json_schema_json_includes_command_specific_fields(
     cli: CliRunner,
+    tmp_path: Path,
 ) -> None:
     result = cli.invoke(app, ["explain", "json-schema", "--json"])
     assert result.exit_code == 0
@@ -258,6 +309,11 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`run_command`" in payload["body"]
     assert "`check_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
+    for key in _validate_report_keys_from_cli(cli, tmp_path):
+        assert f"`{key}`" in payload["body"]
+    assert "easycat validate quick --json" in payload["body"]
+    assert "easycat validate report PATH --json" in payload["body"]
+    assert "redacted validation report object" in normalized_body
     assert "post-scaffold check/run context" in re.sub(r"\s+", " ", payload["body"])
     assert "`report_path`" in payload["body"]
     assert "validate report .easycat/validation/latest.json --json" in payload["body"]

@@ -142,6 +142,10 @@ entry points include:
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
   `run_command`, `check_command`, `next_step_commands`, `command_note` -
                          `easycat init NAME --json`
+  `validation`, `report_path`, `exit_code` -
+                         `easycat validate quick --json` and
+                         `easycat validate report PATH --json`; `validation`
+                         contains the redacted validation report object
 
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:
