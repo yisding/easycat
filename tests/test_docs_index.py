@@ -117,6 +117,24 @@ def test_cli_docs_routes_are_unique() -> None:
     )
 
 
+def test_cli_docs_routes_keep_onboarding_order() -> None:
+    """Keep the first screen of ``easycat docs`` useful for new users."""
+    labels = [entry["label"] for entry in _DOCS_LINKS]
+
+    expected_prefix = [
+        "Quickstart",
+        "CLI and scaffolds",
+        "Docs map",
+        "Teaching ladder",
+        "First lesson",
+        "Examples",
+    ]
+    expected_suffix = ["Validation", "Validation reference"]
+
+    assert labels[: len(expected_prefix)] == expected_prefix
+    assert labels[-len(expected_suffix) :] == expected_suffix
+
+
 def test_cli_docs_routes_resolve_locally() -> None:
     broken: list[str] = []
 
