@@ -13,7 +13,7 @@ runnable artifact you can visit independently.
 From this repository, `uv run easycat docs` prints the maintained
 docs map that links back to this ladder. Use
 `uv run easycat docs --json` when a script or coding agent needs the
-same route map.
+same route map with command hints.
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 

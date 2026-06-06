@@ -136,6 +136,8 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "README.md#cli" in result.stdout
     assert "copyable create/check/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
+    assert "Commands: easycat init --list-templates" in result.stdout
+    assert "easycat validate report .easycat/validation/latest.json" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout
     assert "docs/teaching/00-hello-audio" in result.stdout
@@ -195,6 +197,16 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
+    commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
+    assert commands["README.md#cli"] == [
+        "easycat init --list-templates",
+        "easycat init my-agent",
+        "easycat explain json-schema",
+    ]
+    assert commands["README.md#validation-workflow"] == [
+        "easycat validate quick",
+        "easycat validate report .easycat/validation/latest.json",
+    ]
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     assert "JSON envelopes" in descriptions["README.md#cli"]
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]

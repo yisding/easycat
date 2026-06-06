@@ -362,10 +362,11 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "easycat explain json-schema" in cli_section
     assert "easycat explain --list" in cli_section
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "standard `--json` envelope" in readme
-    assert "command-specific success fields" in readme
-    assert "`entries`, `catalog`" in readme
-    assert "`run_command`, and `check_command`" in readme
+    normalized_readme = re.sub(r"\s+", " ", readme)
+    assert "standard `--json` envelope" in normalized_readme
+    assert "command-specific success fields" in normalized_readme
+    assert "`entries`, `commands`, `catalog`" in normalized_readme
+    assert "`run_command`, and `check_command`" in normalized_readme
 
 
 def test_readme_cli_validate_examples_are_copyable() -> None:

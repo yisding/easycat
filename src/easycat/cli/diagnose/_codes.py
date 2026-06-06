@@ -90,8 +90,8 @@ generated `agent.py` for now.
 Run `easycat init --list-templates --json` for the current
 machine-readable template catalog.  Each `catalog` row includes:
 `name`, `mode`, `transport`, `framework`, `description`,
-`create_command` (installed CLI form), and `repo_create_command`
-(repo-local `uv run` form).
+`create_command` (installed CLI form), `repo_create_command`
+(repo-local `uv run` form), `run_command`, and `check_command`.
 Bump `schema_version` when the shape changes; keep older schemas
 documented before accepting a newer version.
 """
@@ -115,8 +115,8 @@ Successful commands may add command-specific fields. Common automation
 entry points include:
 
   `entries`, `source_url` - `easycat docs --json`; each docs entry has
-                            `label`, `path`, `description`, and `url`
-                            in onboarding order
+                            `label`, `path`, `description`, `url`, and
+                            optional `commands` in onboarding order
   `templates`, `catalog` - `easycat init --list-templates --json`;
                          catalog entries include `run_command` and
                          `check_command`

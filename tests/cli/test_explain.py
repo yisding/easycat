@@ -97,6 +97,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "easycat init --list-templates --json" in result.stdout
     assert "`create_command`" in result.stdout
     assert "`repo_create_command`" in result.stdout
+    assert "`run_command`" in result.stdout
+    assert "`check_command`" in result.stdout
     assert "EASYCAT_E102" in result.stdout
     assert "agent.py" in result.stdout
 
@@ -116,7 +118,8 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "Successful commands may add command-specific fields" in result.stdout
     assert "`entries`, `source_url`" in result.stdout
     assert "easycat docs --json" in result.stdout
-    assert "`label`, `path`, `description`, and `url`" in result.stdout
+    assert "`label`, `path`, `description`, `url`, and" in result.stdout
+    assert "optional `commands`" in result.stdout
     assert "in onboarding order" in result.stdout
     assert "`templates`, `catalog`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
@@ -145,7 +148,8 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert payload["command"] == "explain"
     assert payload["slug"] == "json-schema"
     assert "`entries`, `source_url`" in payload["body"]
-    assert "`label`, `path`, `description`, and `url`" in payload["body"]
+    assert "`label`, `path`, `description`, `url`, and" in payload["body"]
+    assert "optional `commands`" in payload["body"]
     assert "in onboarding order" in payload["body"]
     assert "`templates`, `catalog`" in payload["body"]
     assert "`run_command`, `check_command`" in payload["body"]

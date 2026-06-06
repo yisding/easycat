@@ -67,6 +67,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "installed app environment" in text
     assert "prints the same map" in text
     assert "docs route map" in normalized
+    assert "route map and command hints" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run easycat init --list-templates" in text
     assert "copyable create/check/run commands" in normalized
@@ -146,6 +147,25 @@ def test_cli_docs_routes_have_descriptions() -> None:
     ]
 
     assert not missing, "easycat docs routes missing useful descriptions: " + ", ".join(missing)
+
+
+def test_cli_docs_routes_have_useful_command_hints() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    required_commands = {
+        "README.md#cli": "easycat init --list-templates",
+        "docs/README.md": "easycat docs --json",
+        "examples/README.md": "easycat validate quick",
+        "docs/observability.md": "easycat bundles list",
+        "README.md#validation-workflow": "easycat validate report .easycat/validation/latest.json",
+    }
+
+    missing = [
+        f"{path}: {command}"
+        for path, command in required_commands.items()
+        if command not in entries[path].get("commands", ())
+    ]
+
+    assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
 
 
 def test_cli_docs_routes_have_online_urls() -> None:

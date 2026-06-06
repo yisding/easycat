@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from importlib.metadata import PackageNotFoundError, version
-from typing import NamedTuple, TypedDict
+from typing import NamedTuple, NotRequired, TypedDict
 
 import typer
 
@@ -113,6 +113,7 @@ class _DocsLink(TypedDict):
     label: str
     path: str
     description: str
+    commands: NotRequired[tuple[str, ...]]
 
 
 class _DocsEntry(_DocsLink):
@@ -124,6 +125,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Quickstart",
         "path": "README.md#install",
         "description": "Install EasyCat and run your first voice agent.",
+        "commands": ("easycat doctor",),
     },
     {
         "label": "CLI and scaffolds",
@@ -132,11 +134,17 @@ _DOCS_LINKS: list[_DocsLink] = [
             "Scaffold projects, compare templates with copyable create/check/run commands, "
             "and learn CLI JSON envelopes."
         ),
+        "commands": (
+            "easycat init --list-templates",
+            "easycat init my-agent",
+            "easycat explain json-schema",
+        ),
     },
     {
         "label": "Docs map",
         "path": "docs/README.md",
         "description": "Choose the maintained guide for your current task.",
+        "commands": ("easycat docs", "easycat docs --json"),
     },
     {
         "label": "Teaching ladder",
@@ -147,11 +155,13 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "First lesson",
         "path": "docs/teaching/00-hello-audio/",
         "description": "Start with audio chunks before agents or providers.",
+        "commands": ("uv run python docs/teaching/00-hello-audio/main.py",),
     },
     {
         "label": "Examples",
         "path": "examples/README.md",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
+        "commands": ("easycat doctor", "easycat validate quick"),
     },
     {
         "label": "Public API",
@@ -162,6 +172,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "description": "Follow the development loop and validation slices.",
+        "commands": ("uv run pytest", "uv run ruff check .", "uv run easycat validate quick"),
     },
     {
         "label": "Deployment",
@@ -172,6 +183,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Observability",
         "path": "docs/observability.md",
         "description": "Inspect journals, debug bundles, metrics, and traces.",
+        "commands": ("easycat bundles list", "easycat inspect PATH", "easycat replay PATH"),
     },
     {
         "label": "Journal durability",
@@ -184,11 +196,16 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": (
             "Run the right validation lane and inspect .easycat/validation/latest.json."
         ),
+        "commands": (
+            "easycat validate quick",
+            "easycat validate report .easycat/validation/latest.json",
+        ),
     },
     {
         "label": "Validation reference",
         "path": "plan/validation/reference.md",
         "description": "Read provider and report vocabulary used by validation.",
+        "commands": ("easycat validate quick --json",),
     },
 ]
 _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
@@ -211,16 +228,24 @@ def _docs_entries() -> list[_DocsEntry]:
     return [{**entry, "url": _docs_url_for(entry["path"])} for entry in _DOCS_LINKS]
 
 
-def _format_docs_menu() -> str:
-    entries = _docs_entries()
-    label_width = max(len(entry["label"]) for entry in entries)
-    routes = "\n".join(
+def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
+    commands = entry.get("commands")
+    command_line = ""
+    if commands:
+        command_line = f"    [dim]Commands: {'; '.join(commands)}[/]\n"
+    return (
         f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
         f"{entry['path']}\n"
         f"    [dim]{entry['description']}[/]\n"
+        f"{command_line}"
         f"    [dim]{entry['url']}[/]"
-        for entry in entries
     )
+
+
+def _format_docs_menu() -> str:
+    entries = _docs_entries()
+    label_width = max(len(entry["label"]) for entry in entries)
+    routes = "\n".join(_format_docs_entry(entry, label_width=label_width) for entry in entries)
     return f"""[bold]EasyCat documentation[/]
 
 {routes}
