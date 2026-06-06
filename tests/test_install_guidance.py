@@ -107,26 +107,23 @@ BRIDGE_DISPLAY_NAMES = {
 }
 
 
-def _iter_guidance_files() -> list[Path]:
+def _iter_text_files(targets: tuple[Path, ...]) -> list[Path]:
     files: list[Path] = []
-    for target in GUIDANCE_TARGETS:
+    for target in targets:
         if target.is_file():
             files.append(target)
             continue
         if target.is_dir():
             files.extend(path for path in target.rglob("*") if path.suffix in TEXT_SUFFIXES)
     return sorted(files)
+
+
+def _iter_guidance_files() -> list[Path]:
+    return _iter_text_files(GUIDANCE_TARGETS)
 
 
 def _iter_reader_guidance_files() -> list[Path]:
-    files: list[Path] = []
-    for target in READER_GUIDANCE_TARGETS:
-        if target.is_file():
-            files.append(target)
-            continue
-        if target.is_dir():
-            files.extend(path for path in target.rglob("*") if path.suffix in TEXT_SUFFIXES)
-    return sorted(files)
+    return _iter_text_files(READER_GUIDANCE_TARGETS)
 
 
 def _known_extras() -> set[str]:
