@@ -97,3 +97,23 @@ def json_envelope(command: str, status: str = "ok", **extra: Any) -> dict[str, A
         "status": status,
         **extra,
     }
+
+
+def emit_command_error(
+    command: str,
+    message: str,
+    *,
+    json_output: bool,
+    exit_code: int = 2,
+    human_console: Console = stderr_console,
+) -> None:
+    """Emit a command-specific error in human or JSON mode.
+
+    Use this for usage and file-format failures that are not backed by an
+    ``EASYCAT_Exxx`` registry entry. Registry errors should keep going
+    through ``handle_easycat_error`` so they retain ``code``/``fix``/``context``.
+    """
+    if json_output:
+        emit_json(json_envelope(command, status="error", message=message, exit_code=exit_code))
+        return
+    human_console.print(f"  [red]✗[/] {message}")

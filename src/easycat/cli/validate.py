@@ -6,7 +6,7 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from easycat.cli._output import emit_json, json_envelope, stdout_console
+from easycat.cli._output import emit_command_error, emit_json, json_envelope, stdout_console
 from easycat.validation.latency import LatencyMode
 from easycat.validation.runner import (
     run_latency_validation,
@@ -235,7 +235,12 @@ def latency(
 ) -> None:
     """Run live latency validation and write structured latency artifacts."""
     if smoke and sweep:
-        stdout_console.print("choose only one of --smoke or --sweep")
+        emit_command_error(
+            "validate latency",
+            "choose only one of --smoke or --sweep",
+            json_output=json_output,
+            human_console=stdout_console,
+        )
         raise typer.Exit(2)
 
     mode = LatencyMode.SWEEP if sweep else LatencyMode.SMOKE
@@ -367,7 +372,12 @@ def release(
 ) -> None:
     """Build, install, and run the strict release validation gate."""
     if latency_smoke and latency_sweep:
-        stdout_console.print("choose only one of --latency-smoke or --latency-sweep")
+        emit_command_error(
+            "validate release",
+            "choose only one of --latency-smoke or --latency-sweep",
+            json_output=json_output,
+            human_console=stdout_console,
+        )
         raise typer.Exit(2)
 
     mode = LatencyMode.SMOKE if latency_smoke else LatencyMode.SWEEP

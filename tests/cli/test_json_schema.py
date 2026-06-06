@@ -171,6 +171,18 @@ def test_init_error_envelope(
     assert payload["exit_code"] == 4
 
 
+def test_init_usage_error_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["init", "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "init", status="error")
+    assert payload["exit_code"] == 2
+    assert "Missing argument 'NAME'" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_doctor_ok_envelope(cli: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.delenv(var, raising=False)
@@ -272,6 +284,19 @@ def test_validate_quick_envelope(
     _assert_envelope(payload, "validate quick")
     assert payload["exit_code"] == 0
     assert payload["validation"]["kind"] == "validation_run"
+
+
+def test_validate_usage_error_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["validate", "latency", "--smoke", "--sweep", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "validate latency", status="error")
+    assert payload["exit_code"] == 2
+    assert "choose only one of --smoke or --sweep" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
 
 
 def test_validate_report_envelope(cli: CliRunner, tmp_path: Path) -> None:

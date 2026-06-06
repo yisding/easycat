@@ -1014,6 +1014,26 @@ def test_validate_release_cli_rejects_conflicting_latency_modes(cli: CliRunner) 
     assert "choose only one of --latency-smoke or --latency-sweep" in result.stdout
 
 
+def test_validate_release_cli_rejects_conflicting_latency_modes_json_envelope(
+    cli: CliRunner,
+) -> None:
+    result = cli.invoke(
+        app,
+        ["validate", "release", "--latency-smoke", "--latency-sweep", "--json"],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate release"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "choose only one of --latency-smoke or --latency-sweep" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_validate_report_cli_renders_summary(cli: CliRunner, tmp_path: Path) -> None:
     report_path = tmp_path / "report.json"
     junit_path = tmp_path / "junit.xml"

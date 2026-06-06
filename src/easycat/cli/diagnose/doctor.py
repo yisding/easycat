@@ -29,7 +29,7 @@ import typer
 from rich.table import Table
 
 from easycat.cli._errors import cli_command
-from easycat.cli._output import emit_json, json_envelope, stderr_console
+from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
 
 
 @dataclass
@@ -483,10 +483,7 @@ def _run_all_checks(only_provider: str | None, environment: str = "dev") -> list
 
 
 def _doctor_usage_error(message: str, *, json_output: bool) -> NoReturn:
-    if json_output:
-        emit_json(json_envelope("doctor", status="error", message=message, exit_code=2))
-    else:
-        stderr_console.print(f"  [red]✗[/] {message}")
+    emit_command_error("doctor", message, json_output=json_output)
     raise typer.Exit(2)
 
 

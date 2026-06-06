@@ -20,6 +20,7 @@ from rich.prompt import Prompt
 
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
+    emit_command_error,
     emit_json,
     info,
     json_envelope,
@@ -541,9 +542,16 @@ def init(
         raise typer.Exit(0)
 
     if name is None:
-        stderr_console.print("[red]✗[/] Missing argument 'NAME'.")
-        stderr_console.print("  [dim]Usage:[/] easycat init NAME [OPTIONS]")
-        stderr_console.print("  [dim]Or:[/]    easycat init --list-templates")
+        message = (
+            "Missing argument 'NAME'. Usage: easycat init NAME [OPTIONS]. "
+            "Or: easycat init --list-templates."
+        )
+        if json_output:
+            emit_command_error("init", message, json_output=True)
+        else:
+            stderr_console.print("[red]✗[/] Missing argument 'NAME'.")
+            stderr_console.print("  [dim]Usage:[/] easycat init NAME [OPTIONS]")
+            stderr_console.print("  [dim]Or:[/]    easycat init --list-templates")
         raise typer.Exit(2)
 
     # Resolve scaffolding config.  Priority: --config JSON > interactive

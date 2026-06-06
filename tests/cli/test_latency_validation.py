@@ -665,6 +665,23 @@ def test_validate_latency_cli_rejects_smoke_and_sweep_together(cli: CliRunner) -
     assert "choose only one of --smoke or --sweep" in result.stdout
 
 
+def test_validate_latency_cli_rejects_smoke_and_sweep_json_envelope(
+    cli: CliRunner,
+) -> None:
+    result = cli.invoke(app, ["validate", "latency", "--smoke", "--sweep", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate latency"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "choose only one of --smoke or --sweep" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 def test_validate_latency_cli_json_uses_standard_envelope(
     cli: CliRunner,
     tmp_path: Path,

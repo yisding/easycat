@@ -56,6 +56,23 @@ def test_missing_name_without_list_templates(cli: CliRunner) -> None:
     assert "Missing argument 'NAME'" in result.stderr
 
 
+def test_missing_name_json_uses_standard_error_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["init", "--json"])
+
+    assert result.exit_code == 2
+    assert result.stderr == ""
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "init"
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+    assert "Missing argument 'NAME'" in payload["message"]
+    assert "easycat init --list-templates" in payload["message"]
+    assert "code" not in payload
+    assert "fix" not in payload
+    assert "context" not in payload
+
+
 # ── Scaffolding success paths ────────────────────────────────────────
 
 
