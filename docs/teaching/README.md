@@ -92,8 +92,9 @@ uv run python docs/teaching/00-hello-audio/main.py
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug
   chapter code. If the keys live in a project `.env`, run
-  `uv run easycat doctor --env-file .env`. Add `--json` when a script or coding
-  agent needs the same environment/check rows.
+  `uv run easycat doctor --env-file .env`; use
+  `uv run easycat doctor --env-file .env --json` when a script or coding agent
+  needs the same environment/check rows.
 
 Each chapter's README lists its own prerequisites up front.
 

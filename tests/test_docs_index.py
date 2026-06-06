@@ -97,6 +97,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "easycat doctor --json" in text
+    assert "uv run easycat doctor --env-file .env --json" in text
     assert "environment/check rows without Rich formatting" in normalized
     assert "uv run easycat init --list-templates" in text
     assert "uv run easycat init --list-templates --json" in text

@@ -111,6 +111,7 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --json" in readme
+    assert "uv run easycat doctor --env-file .env --json" in readme
     assert "script or coding agent needs parseable first-run environment checks" in normalized
     assert "script or coding agent needs the same environment/check rows" in normalized
 

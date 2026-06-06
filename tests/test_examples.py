@@ -436,6 +436,7 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run easycat explain json-schema" in intro
     assert "JSON envelope and field contract" in normalized_intro
     assert "uv run easycat doctor --json" in intro
+    assert "uv run easycat doctor --env-file .env --json" in intro
     assert "script or coding agent needs parseable first-run environment checks" in (
         normalized_intro
     )
