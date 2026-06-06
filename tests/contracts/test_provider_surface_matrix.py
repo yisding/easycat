@@ -194,3 +194,104 @@ def test_validation_tasks_v32_current_state_tracks_provider_matrix_scope() -> No
         "cassette replay, schema drift fingerprints, and bridge event grammar",
     ):
         assert phrase in normalized_section
+
+
+def test_validation_tasks_v33_current_state_tracks_surface_contract_files() -> None:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    section = plan.split("### V3.3 Add STT/TTS/VAD/Transport Contract Tests", 1)[1].split(
+        "### V3.4 Add Agent Bridge Contract Tests", 1
+    )[0]
+    normalized_section = " ".join(section.split())
+    contract_paths_by_surface = {
+        "stt": "tests/contracts/test_stt_provider_contracts.py",
+        "tts": "tests/contracts/test_tts_provider_contracts.py",
+        "vad": "tests/contracts/test_vad_provider_contracts.py",
+        "transport": "tests/contracts/test_transport_contracts.py",
+    }
+    expected_providers_by_surface = {
+        "stt": {"openai", "openai-realtime", "deepgram", "elevenlabs", "cartesia"},
+        "tts": {"openai", "deepgram", "elevenlabs", "cartesia"},
+        "vad": {"silero", "funasr", "ten", "krisp"},
+        "transport": {"local", "websocket", "twilio", "webrtc", "webtransport"},
+    }
+    source_by_surface = {
+        surface: (REPO_ROOT / contract_path).read_text(encoding="utf-8")
+        for surface, contract_path in contract_paths_by_surface.items()
+    }
+
+    for surface, contract_path in contract_paths_by_surface.items():
+        rows = [row for row in PROVIDER_SURFACE_CONTRACTS if row.surface == surface]
+        assert rows
+        assert {row.provider for row in rows} == expected_providers_by_surface[surface]
+        assert {row.contract_path for row in rows} == {contract_path}
+        assert Path(contract_path).exists()
+        assert "pytest.mark.contract" in source_by_surface[surface]
+        assert f"pytest.mark.surface_{surface}" in source_by_surface[surface]
+
+    stt_source = source_by_surface["stt"]
+    tts_source = source_by_surface["tts"]
+    vad_source = source_by_surface["vad"]
+    transport_source = source_by_surface["transport"]
+    assert "STTEventType.PARTIAL" in stt_source
+    assert "STTEventType.FINAL" in stt_source
+    assert "commit_segment" in stt_source
+    assert "end_stream" in stt_source
+    assert "PCM16_MONO_16K" in stt_source
+    assert "TTSEventType.AUDIO" in tts_source
+    assert "TTSEventType.MARKERS" in tts_source
+    assert "supports_ssml = False" in tts_source
+    assert "PCM16_MONO_24K" in tts_source
+    assert "stop()" in tts_source
+    assert "cancel()" in tts_source
+    assert "VADStartSpeaking" in vad_source
+    assert "VADStopSpeaking" in vad_source
+    assert "configure" in vad_source
+    assert "send_audio" in transport_source
+    assert "receive_audio" in transport_source
+    assert "clear_audio" in transport_source
+    assert not missing_registered_provider_surfaces()
+
+    assert "Current verified state:" in section
+    for token in (
+        "tests/contracts/test_stt_provider_contracts.py",
+        "tests/contracts/test_tts_provider_contracts.py",
+        "tests/contracts/test_vad_provider_contracts.py",
+        "tests/contracts/test_transport_contracts.py",
+        "contract",
+        "surface_stt",
+        "surface_tts",
+        "surface_vad",
+        "surface_transport",
+        "matrix",
+        "offline-fake",
+        "STTEventType.PARTIAL",
+        "STTEventType.FINAL",
+        "AudioChunk",
+        "PCM16_MONO_16K",
+        "TTSEventType.AUDIO",
+        "TTSEventType.MARKERS",
+        "PCM16_MONO_24K",
+        "supports_ssml=False",
+        "VADStartSpeaking",
+        "VADStopSpeaking",
+        "clear_audio()",
+        "tests/contracts/provider_surface_matrix.py",
+        "missing_registered_provider_surfaces()",
+    ):
+        assert f"`{token}`" in section
+    expected_provider_names = {
+        name for names in expected_providers_by_surface.values() for name in names
+    }
+    for provider in sorted(expected_provider_names):
+        assert f"`{provider}`" in section
+    for phrase in (
+        "provider protocol conformance",
+        "repeat `end_stream()` behavior",
+        "idempotent `stop()` / `cancel()`",
+        "failed sends before connect",
+        "audio-format expectations",
+        "marker passthrough",
+        "idempotency behavior",
+        "provider error-taxonomy and live-output quality checks remain outside",
+    ):
+        assert phrase in normalized_section

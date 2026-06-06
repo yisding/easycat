@@ -828,6 +828,42 @@ Dependencies:
 
 - V3.1
 
+Current verified state:
+
+- `tests/contracts/test_stt_provider_contracts.py` is marked `contract`,
+  `surface_stt`, and provider `matrix`; it verifies STT matrix rows, provider
+  protocol conformance, start/send/commit/end lifecycle calls, normalized
+  `STTEventType.PARTIAL` and `STTEventType.FINAL` events, `AudioChunk`
+  input at `PCM16_MONO_16K`, and repeat `end_stream()` behavior. Current STT
+  rows cover `openai`, `openai-realtime`, `deepgram`, `elevenlabs`, and
+  `cartesia`.
+- `tests/contracts/test_tts_provider_contracts.py` is marked `contract`,
+  `surface_tts`, and provider `matrix`; it verifies TTS matrix rows, provider
+  protocol conformance, `TTSInput` coercion, normalized `TTSEventType.AUDIO`
+  and `TTSEventType.MARKERS` events, `PCM16_MONO_24K` output audio, marker
+  passthrough, `supports_ssml=False`, and idempotent `stop()` / `cancel()`.
+  Current TTS rows cover `openai`, `deepgram`, `elevenlabs`, and `cartesia`.
+- `tests/contracts/test_vad_provider_contracts.py` is marked `contract`,
+  `surface_vad`, and provider `offline-fake`; it verifies the VAD matrix rows
+  for `silero`, `funasr`, `ten`, and `krisp`, provider protocol conformance,
+  configuration passthrough, `PCM16_MONO_16K` input, and normalized
+  `VADStartSpeaking` / `VADStopSpeaking` events.
+- `tests/contracts/test_transport_contracts.py` is marked `contract`,
+  `surface_transport`, and provider `offline-fake`; it verifies transport
+  matrix rows for `local`, `websocket`, `twilio`, `webrtc`, and
+  `webtransport`, provider protocol conformance, connect/disconnect,
+  send/receive delivery semantics, failed sends before connect, and
+  idempotent `clear_audio()`.
+- `tests/contracts/provider_surface_matrix.py` maps all current STT, TTS, VAD,
+  and transport rows to those contract files, while
+  `missing_registered_provider_surfaces()` fails if a registered provider
+  surface lacks a row or explicit exclusion.
+- The current offline contracts validate lifecycle semantics, normalized
+  events, audio-format expectations, marker passthrough, EventBus-adjacent
+  provider protocol shape, and idempotency behavior; provider error-taxonomy
+  and live-output quality checks remain outside these offline surface contract
+  files.
+
 Files:
 
 - `tests/contracts/test_stt_provider_contracts.py`
