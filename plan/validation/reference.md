@@ -164,6 +164,12 @@ Shared planned options:
 machine-readable stdout envelope. Persisted validation reports should use
 `--report PATH` or the default artifact path.
 
+JSON envelope smoke check:
+
+```bash
+easycat validate quick --json
+```
+
 ## Validation Tiers
 
 ### Quick

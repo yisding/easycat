@@ -36,6 +36,24 @@ def _root_relative_doc_links() -> set[str]:
     return links
 
 
+def _route_target_text(route: str) -> str:
+    path = REPO_ROOT / route.split("#", 1)[0].rstrip("/")
+    if path.is_dir():
+        path = path / "README.md"
+    return path.read_text(encoding="utf-8")
+
+
+def _command_hint_variants(command: str) -> set[str]:
+    variants = {command, command.replace("PATH", "<path>")}
+
+    if command.startswith("easycat "):
+        variants.update(f"uv run {variant}" for variant in tuple(variants))
+    if command.startswith("uv run easycat "):
+        variants.update(variant.removeprefix("uv run ") for variant in tuple(variants))
+
+    return variants
+
+
 def test_docs_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:
     page = tmp_path / "page.md"
     page.write_text("# Root\n## Route\n## Route\n## Route!\n", encoding="utf-8")
@@ -209,6 +227,20 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ]
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
+
+
+def test_cli_docs_command_hints_are_visible_on_target_pages() -> None:
+    missing: list[str] = []
+
+    for entry in _docs_entries():
+        target_text = _route_target_text(entry["path"])
+        for command in entry.get("commands", ()):
+            if not any(variant in target_text for variant in _command_hint_variants(command)):
+                missing.append(f"{entry['label']} ({entry['path']}): {command}")
+
+    assert not missing, "easycat docs command hints missing from target pages:\n" + "\n".join(
+        missing
+    )
 
 
 def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:

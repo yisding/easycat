@@ -21,6 +21,8 @@ changes to this page and the snapshot should be reviewed together.
   `PUBLIC_API_SNAPSHOT` in `tests/test_public_api.py`.
 - The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
   CI parses this section rather than accepting incidental mentions elsewhere.
+- After changing top-level exports, run
+  `uv run pytest tests/test_public_api.py` before opening the PR.
 
 ## Preferred Imports
 

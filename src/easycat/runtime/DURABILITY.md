@@ -1,5 +1,9 @@
 # Journal Durability Guarantees
 
+Maintenance check: after changing journal persistence, recovery, storage
+layout, or teardown semantics, run
+`uv run pytest tests/runtime/test_sqlite_journal.py`.
+
 ## Application-crash durability (default)
 
 The SQLite journal backend (`debug="full"`) survives:

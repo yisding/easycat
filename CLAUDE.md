@@ -24,6 +24,7 @@ just validate-quick              # Deterministic local validation slice
 uv run pytest                    # Run full test suite
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
+uv run pytest tests/test_install_guidance.py            # Verify onboarding/install guidance
 uv run easycat docs              # Maintained docs map
 uv run easycat validate quick    # Repo-local validation CLI
 uv run ruff check .              # Lint
