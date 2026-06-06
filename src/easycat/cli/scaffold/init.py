@@ -82,52 +82,49 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
 }
 
 
-class _TemplateCatalogEntry(TypedDict):
-    name: str
+class _TemplateCatalogMetadata(TypedDict):
     mode: str
     transport: str
     framework: str
     description: str
 
 
-_TEMPLATE_CATALOG: dict[str, _TemplateCatalogEntry] = {
+class _TemplateCatalogEntry(_TemplateCatalogMetadata):
+    name: str
+
+
+_TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
     "openai-agents": {
-        "name": "openai-agents",
         "mode": "voice",
         "transport": "local mic",
         "framework": "OpenAI Agents",
         "description": "Local microphone/speaker voice agent; best first voice scaffold.",
     },
     "pydantic-ai": {
-        "name": "pydantic-ai",
         "mode": "voice",
         "transport": "local mic",
         "framework": "Pydantic AI",
         "description": "Local voice agent using Pydantic AI.",
     },
     "pydantic-ai-workflow": {
-        "name": "pydantic-ai-workflow",
         "mode": "voice",
         "transport": "local mic",
         "framework": "Pydantic AI workflow",
         "description": "Local voice agent with a small workflow object.",
     },
     "text-chat": {
-        "name": "text-chat",
         "mode": "text",
         "transport": "terminal",
         "framework": "OpenAI Agents",
         "description": "Text-only REPL for testing agent behavior without audio.",
     },
     "twilio-phone": {
-        "name": "twilio-phone",
         "mode": "voice",
         "transport": "Twilio",
         "framework": "OpenAI Agents",
         "description": "Phone-call voice agent with a Twilio WebSocket server.",
     },
     "webrtc-browser": {
-        "name": "webrtc-browser",
         "mode": "voice",
         "transport": "WebRTC",
         "framework": "OpenAI Agents",
@@ -181,18 +178,16 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
     """Return template metadata in the same order as ``available_templates()``."""
     catalog: list[_TemplateCatalogEntry] = []
     for name in available_templates():
-        catalog.append(
-            _TEMPLATE_CATALOG.get(
-                name,
-                {
-                    "name": name,
-                    "mode": "unknown",
-                    "transport": "unknown",
-                    "framework": "unknown",
-                    "description": "Template metadata has not been documented yet.",
-                },
-            )
+        metadata = _TEMPLATE_CATALOG.get(
+            name,
+            {
+                "mode": "unknown",
+                "transport": "unknown",
+                "framework": "unknown",
+                "description": "Template metadata has not been documented yet.",
+            },
         )
+        catalog.append({"name": name, **metadata})
     return catalog
 
 

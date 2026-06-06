@@ -28,6 +28,7 @@ import pytest
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
     _TEMPLATE_CATALOG,
+    _available_template_catalog,
     _render_text,
     _substitutions,
     _templates_root,
@@ -109,9 +110,13 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
 
     for name in templates:
         entry = _TEMPLATE_CATALOG[name]
-        assert entry["name"] == name
+        assert "name" not in entry
         for key in ("mode", "transport", "framework", "description"):
             assert entry[key], f"{name} catalog entry missing {key}"
+
+    emitted = {entry["name"]: entry for entry in _available_template_catalog()}
+    assert set(emitted) == set(templates)
+    assert all(entry["name"] == name for name, entry in emitted.items())
 
 
 def _template_dir(name: str) -> Path:
