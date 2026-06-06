@@ -28,6 +28,11 @@ def _workflow_text() -> str:
     return WORKFLOW.read_text()
 
 
+def _validation_tasks_section(heading: str, next_heading: str) -> str:
+    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
+    return plan.split(heading, 1)[1].split(next_heading, 1)[0]
+
+
 def test_quick_validation_ci_runs_declared_python_versions_without_fail_fast() -> None:
     text = _workflow_text()
     workflow = yaml.safe_load(text)
@@ -81,11 +86,9 @@ def test_ci_has_package_build_smoke() -> None:
 def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
     workflow = yaml.safe_load(_workflow_text())
     matrix_versions = workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"]
-    section = (
-        (REPO_ROOT / "plan/validation/tasks.md")
-        .read_text(encoding="utf-8")
-        .split("### V1.2 Update CI Required Jobs", 1)[1]
-        .split("Files:", 1)[0]
+    section = _validation_tasks_section(
+        "### V1.2 Update CI Required Jobs",
+        "### V1.3 Add Manual And Nightly Workflow Skeletons",
     )
 
     assert "Current verified state:" in section
@@ -103,6 +106,35 @@ def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
     assert "Current CI uses pytest `-x`" not in section
     assert "socket integration job also runs on Python 3.12 and 3.14" not in section
     assert '`-m "not integration_socket and not integration_live"`' not in section
+
+
+def test_validation_tasks_v13_current_state_tracks_nightly_and_release_workflows() -> None:
+    nightly = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    section = _validation_tasks_section(
+        "### V1.3 Add Manual And Nightly Workflow Skeletons",
+        "## V2: Structured Latency Validation",
+    )
+
+    assert "Current verified state:" in section
+    for job_name in nightly["jobs"]:
+        assert f"`{job_name}`" in section
+    assert "`workflow_dispatch`" in section
+    assert "protected, non-PR runs" in section
+    assert "`live-validation` environment" in section
+    assert "`easycat validate latency --require-samples`" in section
+    assert "`OPENAI_API_KEY` only on the validation step" in section
+    assert "`if: always()`" in section
+    assert "`release-validation` environment" in section
+    assert "clean temporary venv outside the workspace" in section
+    assert "strict live validation" in section
+    assert "latency sweep with `--require-samples`" in section
+    assert "unexpected skips" in section
+    assert "bounded retention" in section
+
+    assert "latency-placeholder" not in nightly["jobs"]
+    assert release["jobs"]["release-validation"]["environment"] == "release-validation"
+    assert "placeholder live/latency jobs" not in section
 
 
 def test_nightly_validation_workflow_skeleton_exists() -> None:

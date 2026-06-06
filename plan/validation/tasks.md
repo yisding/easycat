@@ -443,6 +443,25 @@ Dependencies:
 
 - V1.2
 
+Current verified state:
+
+- `.github/workflows/nightly-validation.yml` runs on a schedule and
+  `workflow_dispatch`; it has `full-local`, `quick`, `socket`, `stress`,
+  `flaky-quarantine`, `live-canaries`, and `latency` jobs.
+- Nightly `live-canaries` and `latency` are gated to protected, non-PR runs
+  and use the `live-validation` environment.
+- Nightly latency is a real `easycat validate latency --require-samples` job,
+  receives `OPENAI_API_KEY` only on the validation step, masks it before use,
+  and uploads artifacts with `if: always()`.
+- `.github/workflows/release-validation.yml` is a manual
+  `workflow_dispatch` workflow using the `release-validation` environment.
+- Release validation builds the sdist and wheel, installs the wheel into a
+  clean temporary venv outside the workspace, runs installed-wheel smoke tests,
+  quick validation, stress validation, flaky collection, strict live validation,
+  and latency sweep with `--require-samples` when `OPENAI_API_KEY` is present.
+- Release validation rejects unexpected skips and uploads distribution plus
+  validation artifacts with bounded retention.
+
 Files:
 
 - `.github/workflows/nightly-validation.yml`
@@ -450,8 +469,8 @@ Files:
 
 Tasks:
 
-- Add nightly scheduled workflow for full local suite, socket suite, flaky
-  quarantine lane, and placeholder live/latency jobs.
+- Add nightly scheduled workflow for full local, quick, socket, stress,
+  flaky quarantine, live-canary, and latency jobs.
 - Add manual `workflow_dispatch` workflow for live provider and latency
   validation.
 - Protect live jobs with branch/environment conditions.
