@@ -37,6 +37,9 @@ def _maintained_markdown_files() -> list[Path]:
 def _current_user_markdown_files() -> list[Path]:
     files: set[Path] = set(REPO_ROOT.glob("*.md"))
     files.update((REPO_ROOT / "docs").rglob("*.md"))
+    files.update(
+        (REPO_ROOT / "src" / "easycat" / "cli" / "scaffold" / "templates").rglob("README.md")
+    )
     files.add(REPO_ROOT / "examples" / "README.md")
     return sorted(path for path in files if path.exists())
 
