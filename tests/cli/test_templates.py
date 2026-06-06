@@ -349,6 +349,31 @@ def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     assert "agent.py              # ≤ 15 lines" not in plan
 
 
+def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
+    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-dx-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    template_section = plan.split("## `easycat init` Template Content", 1)[1].split(
+        "## Config Factory Presets",
+        1,
+    )[0]
+
+    for name, budget in _LINE_BUDGETS.items():
+        assert f"`{name}` ≤{budget}" in template_section, (
+            f"peripheral-dx-onboarding.md missing {name} ≤{budget}"
+        )
+
+    assert "Every template's `agent.py` ≤ 15 lines" not in template_section
+    assert "ships with one MCP server" not in template_section
+    assert "official `filesystem` server" not in template_section
+    assert "concrete working tool or workflow" in template_section
+    assert "cp .env.example .env" in template_section
+    assert "uv run easycat doctor --env-file .env" in template_section
+    assert "uv run --env-file .env python agent.py" in template_section
+    assert "uv run --env-file .env uvicorn server:create_app" in template_section
+    assert "uv run python agent.py" not in template_section
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_install_section_names_rendered_base_requirement(name: str) -> None:
     source = (_template_dir(name) / "README.md").read_text(encoding="utf-8")

@@ -5,7 +5,7 @@
 > however, the most visible user-facing work in the overall redesign, and
 > the one the outside world will judge EasyCat on first.
 
-## Status (2026-06-05)
+## Status (2026-06-06)
 
 Shipped:
 
@@ -240,11 +240,28 @@ Voice-to-voice / realtime speech-to-speech templates are explicitly
 out of scope — EasyCat is a chained voice runtime, see the "Chained
 Only" rationale in `../roadmap/essential-debug-first-runtime.md`.
 
-Every template's `agent.py` ≤ 15 lines, ships with one MCP server
-wired up (the official `filesystem` server), runs with a single API
-key. CI regression-tests line count and startup success. `uvx easycat
-init my-agent && cd my-agent && uv sync && uv run python agent.py`
-must succeed end-to-end under 60 seconds in CI.
+Template `agent.py` line budgets match the shipped scaffold caps:
+`openai-agents` ≤16, `pydantic-ai` ≤17, `pydantic-ai-workflow` ≤20,
+`text-chat` ≤17, `twilio-phone` ≤15, and `webrtc-browser` ≤14. Each
+template ships with a concrete working tool or workflow instead of a
+blank TODO; MCP server wiring is generated when requested rather than
+forced into every starter. CI regression-tests line count and startup
+success. The direct-agent generated-project path is:
+
+```bash
+uvx easycat init my-agent
+cd my-agent
+cp .env.example .env
+uv sync
+uv run easycat doctor --env-file .env
+uv run --env-file .env python agent.py
+```
+
+`twilio-phone` runs through:
+
+```bash
+uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000
+```
 
 ## Config Factory Presets
 
