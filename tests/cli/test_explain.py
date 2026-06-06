@@ -111,6 +111,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
 
 def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "json-schema"])
+    stdout = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "Successful commands may add command-specific fields" in result.stdout
     assert "`entries`, `source_url`" in result.stdout
@@ -124,7 +125,7 @@ def test_explain_meta_json_schema_documents_error_fix(cli: CliRunner) -> None:
     assert "`report_path`" in result.stdout
     assert "`path`" in result.stdout
     assert "`output_path`" in result.stdout
-    assert "validate report PATH --json" in result.stdout
+    assert "validate report .easycat/validation/latest.json --json" in stdout
     assert "bundles show PATH --json" in result.stdout
     assert "bundles export PATH --output DIR --json" in result.stdout
     assert "branch on `command`" in result.stdout
@@ -145,6 +146,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "in onboarding order" in payload["body"]
     assert "`templates`, `catalog`" in payload["body"]
     assert "`report_path`" in payload["body"]
+    assert "validate report .easycat/validation/latest.json --json" in payload["body"]
     assert "`path`" in payload["body"]
     assert "`output_path`" in payload["body"]
     assert "without inventing a fake" in payload["body"]

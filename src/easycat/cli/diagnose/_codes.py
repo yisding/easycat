@@ -122,7 +122,7 @@ entry points include:
 When an error is about a file or directory, commands include the
 relevant path field when it helps automation recover:
 
-  `report_path` - `easycat validate report PATH --json`
+  `report_path` - `easycat validate report .easycat/validation/latest.json --json`
   `path`        - `easycat bundles show PATH --json` and `easycat replay PATH --json`
   `output_path` - `easycat bundles export PATH --output DIR --json`
 

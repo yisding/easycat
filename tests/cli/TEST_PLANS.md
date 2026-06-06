@@ -336,11 +336,12 @@ called out; `--json` output diverging from the standard envelope.
 - `easycat validate release --json` dispatches the installed-wheel
   release gate, preserves release options, and emits the standard JSON
   envelope on stdout.
-- `easycat validate report PATH` renders run status, checks, git dirty
-  state, expected skips, failures, artifact paths, and missing artifact
-  warnings.
-- `easycat validate report PATH --json` re-emits the saved validation
-  run inside the standard envelope and keeps failed reports parseable.
+- `easycat validate report .easycat/validation/latest.json` renders run
+  status, checks, git dirty state, expected skips, failures, artifact paths,
+  and missing artifact warnings.
+- `easycat validate report .easycat/validation/latest.json --json` re-emits
+  the saved validation run inside the standard envelope and keeps failed
+  reports parseable.
 - Missing, invalid, unsupported-schema, and unknown-kind report files
   fail explicitly.
 

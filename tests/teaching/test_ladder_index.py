@@ -260,9 +260,12 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
-    assert "command-specific success and error fields" in re.sub(r"\s+", " ", cli_section)
-    assert "validate report <path>" in cli_section
-    assert "Add `--json` when a coding agent or script" in cli_section
+    normalized_cli_section = re.sub(r"\s+", " ", cli_section)
+    assert "command-specific success and error fields" in normalized_cli_section
+    assert "validate report .easycat/validation/latest.json" in cli_section
+    assert ".easycat/validation/runs/<run_id>/report.json" in cli_section
+    assert "validate report <path>" not in cli_section
+    assert "Add `--json` when a coding agent or script" in normalized_cli_section
 
     top_level_commands = {command.name for command in _app.app.registered_commands}
     top_level_commands.update(group.name for group in _app.app.registered_groups)
