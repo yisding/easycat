@@ -401,6 +401,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat init --list-templates # compare scaffold templates",
         "easycat bundles list      # list captured debug bundles and crash dumps",
         "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
+        "easycat bundles export PATH # write a redacted coding-agent context pack",
         "easycat inspect PATH      # summarise a debug bundle or SQLite journal",
         "easycat replay PATH       # replay a debug bundle or SQLite journal",
     )
