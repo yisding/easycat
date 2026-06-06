@@ -75,6 +75,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "openai-agents": ("openai-agents", "local"),
     "pydantic-ai": ("pydantic-ai", "local"),
     "pydantic-ai-workflow": ("pydantic-ai", "local"),
+    "twilio-phone": ("openai-agents", "telephony"),
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
 }
@@ -83,19 +84,28 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
 # the audio pipeline entirely, so those fields are rejected up front.
 _VOICE_TEMPLATES: frozenset[str] = frozenset(
-    {"openai-agents", "pydantic-ai", "pydantic-ai-workflow", "webrtc-browser"}
+    {
+        "openai-agents",
+        "pydantic-ai",
+        "pydantic-ai-workflow",
+        "twilio-phone",
+        "webrtc-browser",
+    }
 )
 
 _TEMPLATE_TRANSPORTS: dict[str, str] = {
     "openai-agents": "local",
     "pydantic-ai": "local",
     "pydantic-ai-workflow": "local",
+    "twilio-phone": "twilio",
     "webrtc-browser": "webrtc",
 }
 
 _TRANSPORT_ALIASES: dict[str, str] = {
     "browser": "webrtc",
     "local-mic": "local",
+    "phone": "twilio",
+    "telephony": "twilio",
 }
 
 # Directory names that may sit in the live template source at install time
@@ -317,10 +327,11 @@ def _should_template(source: Path) -> bool:
 def _render_text(text: str, mapping: dict[str, str]) -> str:
     rendered = Template(text).safe_substitute(mapping)
     extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
-    rendered = rendered.replace(
-        "        **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
-        f"        {extra_kwargs},\n" if extra_kwargs else "",
-    )
+    for indent in ("        ", "            "):
+        rendered = rendered.replace(
+            f"{indent}**__EASYCAT_CONFIG_EXTRA__,  # noqa: F821\n",
+            f"{indent}{extra_kwargs},\n" if extra_kwargs else "",
+        )
     rendered = rendered.replace("**__EASYCAT_CONFIG_EXTRA__", extra_kwargs)
     rendered = rendered.replace("  # noqa: F821", "")
     return rendered.replace("agent=voice_agent, )", "agent=voice_agent)")

@@ -20,7 +20,7 @@ Status from static inspection on 2026-06-06:
 
 | Plan | Status | Notes |
 |---|---|---|
-| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show`, `inspect`, and the `pydantic-ai-workflow` / `webrtc-browser` scaffolds exist; replay/export and remaining templates remain planned. |
+| [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show`, `inspect`, and all planned scaffold templates exist; replay/export and line-budget cleanup remain planned. |
 | [peripheral-dx-onboarding.md](peripheral-dx-onboarding.md) | Partially landed | `run`, string-keyed providers, config presets, error codes, `record_to`, and log-level env support exist; line-budget/config cleanup remains. |
 | [peripheral-redaction.md](peripheral-redaction.md) | Mostly planned | Safe default snapshots exist; full `RedactionPolicy` and export policies remain planned. |
 | [peripheral-observability-and-cost.md](peripheral-observability-and-cost.md) | Mostly planned | Debugger cost endpoint degrades to zero; real `CostRecord`, OTel export, and latency-budget objects remain planned. |

@@ -1,0 +1,60 @@
+# $PROJECT_NAME
+
+Inbound phone agent for Twilio Media Streams. The FastAPI app serves TwiML at
+`/twiml` and starts a WebSocket listener for each call; every call gets its own
+EasyCat session and the agent from `agent.py`.
+
+## Install
+
+```bash
+uv sync
+```
+
+## Configure
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`, set `OPENAI_API_KEY`, and set `TWILIO_STREAM_URL` to the public
+`wss://...` URL Twilio should connect to. Run `uv run easycat doctor` to verify:
+
+```bash
+uv run easycat doctor
+```
+
+For local testing, expose the WebSocket port with a tunnel such as ngrok and
+point `TWILIO_STREAM_URL` at the public `wss://` forwarding URL.
+
+## Run
+
+```bash
+uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Set your Twilio voice webhook to `https://<public-host>/twiml`. Call the number
+and ask to leave a message to see the `take_message` tool fire.
+
+Ctrl-C to quit.
+
+## Check
+
+After editing the scaffold, run a quick syntax check:
+
+```bash
+uv run python -m py_compile agent.py server.py
+```
+
+## Next steps
+
+- **Change the call behavior:** edit `instructions=...` in `agent.py`.
+- **Add more tools:** decorate functions with `@function_tool` and pass them in
+  the `tools=[...]` list.
+- **Swap STT providers:** add `stt="deepgram/flux"` to `EasyConfig(...)` in
+  `server.py`, add `deepgram` to the `easycat[...]` dependency in
+  `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`.
+- **Harden production webhooks:** copy signature validation, status callbacks,
+  and outbound call helpers from `examples/twilio_app.py`.
+- **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat writes
+  a SQLite journal under `.easycat/journals/`; inspect it with
+  `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.

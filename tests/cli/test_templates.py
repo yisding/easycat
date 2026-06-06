@@ -36,7 +36,12 @@ _LINE_BUDGETS: dict[str, int] = {
     "pydantic-ai": 22,
     "pydantic-ai-workflow": 40,
     "text-chat": 18,
+    "twilio-phone": 15,
     "webrtc-browser": 23,
+}
+
+_EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
+    "twilio-phone": ("server.py",),
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -84,6 +89,7 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
         "pydantic-ai",
         "pydantic-ai-workflow",
         "text-chat",
+        "twilio-phone",
         "webrtc-browser",
     ):
         assert required in templates, f"missing template: {required}"
@@ -137,7 +143,7 @@ def _uses_async_with_create_text_session(source: str) -> bool:
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_required_files_present(name: str) -> None:
     d = _template_dir(name)
-    for fname in _REQUIRED_FILES:
+    for fname in (*_REQUIRED_FILES, *_EXTRA_TEMPLATE_FILES.get(name, ())):
         assert (d / fname).is_file(), f"{name}/{fname} missing"
 
 
@@ -163,6 +169,20 @@ def test_agent_py_renders_and_parses(name: str) -> None:
     assert "$AGENT_NAME" not in rendered
     assert "$AGENT_INSTRUCTIONS" not in rendered
     ast.parse(rendered)  # raises on syntax error
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_python_files_render_and_parse(name: str) -> None:
+    """All top-level template Python files must survive substitution."""
+    cfg = InitConfig(
+        template=name,
+        agent_name="Support",
+        agent_instructions="Help the user with billing.",
+    )
+    mapping = _substitutions(cfg, project_name="demo")
+    for py_file in _template_dir(name).glob("*.py"):
+        rendered = _render_text(py_file.read_text(encoding="utf-8"), mapping)
+        ast.parse(rendered, filename=str(py_file))
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

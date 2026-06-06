@@ -26,19 +26,21 @@ M1 (scaffolding) is effectively done:
   unknown codes.
 - Output contract (`--json`, stdout/stderr split, exit-code mapping)
   and top-level `EasyCatError` handler.
-- Five templates: `openai-agents`, `pydantic-ai`,
-  `pydantic-ai-workflow`, `text-chat`, `webrtc-browser`.
+- Six templates: `openai-agents`, `pydantic-ai`,
+  `pydantic-ai-workflow`, `text-chat`, `twilio-phone`,
+  `webrtc-browser`.
 
 M2 gaps:
 
-- Template `twilio-phone` is not shipped.
 - Template `agent.py` line budgets overshoot: `openai-agents` 24 lines
   (target ≤15), `pydantic-ai` 21 lines (target ≤12),
   `pydantic-ai-workflow` 40 lines (target ≤15), `text-chat` 18 lines
-  (target ≤8), and `webrtc-browser` 23 lines (target ≤12). Templates
-  currently wire simple Python tools/workflows instead of the plan's
-  `calculator` + `filesystem` MCP; the tools are working, but the plan text
-  should be updated to match the shipped content or vice-versa.
+  (target ≤8), and `webrtc-browser` 23 lines (target ≤12). The
+  `twilio-phone` `agent.py` is under its ≤15-line target. Templates
+  currently wire simple
+  Python tools/workflows instead of the plan's `calculator` + `filesystem`
+  MCP; the tools are working, but the plan text should be updated to match
+  the shipped content or vice-versa.
 
 M3 (journal debugging) — partial:
 
@@ -306,7 +308,8 @@ documented under `easycat explain init-schema`.
 ```
 
 `transport` is optional and must match the selected template: local voice
-templates accept `local`; `webrtc-browser` accepts `webrtc` or `browser`.
+templates accept `local`; `webrtc-browser` accepts `webrtc` or `browser`;
+`twilio-phone` accepts `twilio`, `phone`, or `telephony`.
 
 Rules:
 
@@ -449,11 +452,11 @@ Target ≤ 15 lines remains open.
 
 **`twilio-phone`**
 
-Inbound PSTN bot via Twilio. `agent.py` plus a small `server.py` for
-the FastAPI app; `agent.py` itself stays under budget. The bot reads
-back the caller's number and takes a message. Shows: telephony
-transport, FastAPI wiring. Ships with a README section on ngrok for
-local testing.
+Shipped as an inbound Twilio Media Streams scaffold with `agent.py`
+plus a small FastAPI `server.py`. The bot can take a caller message,
+serves `/twiml`, starts a WebSocket listener for call media, and points
+production webhook hardening at `examples/twilio_app.py`. Target
+`agent.py` ≤ 15 lines is met.
 
 **`webrtc-browser`**
 
@@ -895,8 +898,9 @@ agent.py` end-to-end in under 60 seconds.
 - `easycat --version`, `easycat --help`, journey menu
 - `easycat explain` + error-code registry (with `exit-codes` and
   `init-schema` meta-entries)
-- `easycat init` with five templates: `openai-agents`, `pydantic-ai`,
-  `pydantic-ai-workflow`, `text-chat`, `webrtc-browser`
+- `easycat init` with six templates: `openai-agents`, `pydantic-ai`,
+  `pydantic-ai-workflow`, `text-chat`, `twilio-phone`,
+  `webrtc-browser`
 - `easycat init --config` non-interactive path with schema v1
   validator
 - `easycat doctor` with checks 1–5 (env, extras, provider
@@ -908,7 +912,8 @@ agent.py` end-to-end in under 60 seconds.
 
 Finishes the scaffolding surface.
 
-- Remaining template: `twilio-phone`
+- Planned scaffold templates shipped; remaining work is line-budget,
+  MCP/tool content, and run-matrix cleanup.
 - `easycat doctor` checks 6–8 (microphone, journal, disk)
 - `easycat doctor --fix` for safe auto-fixes
 - E2E scaffold matrix: init → sync → run per template against stub

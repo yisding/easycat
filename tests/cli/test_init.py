@@ -28,6 +28,7 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "pydantic-ai" in names
     assert "pydantic-ai-workflow" in names
     assert "text-chat" in names
+    assert "twilio-phone" in names
     assert "webrtc-browser" in names
 
 
@@ -214,6 +215,59 @@ def test_init_pydantic_ai_workflow_template(
     assert "EasyConfig.mic(" in agent_py
     pyproject = (project / "pyproject.toml").read_text()
     assert "pydantic-ai,local" in pyproject
+
+
+def test_init_twilio_phone_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "twilio-phone",
+            "transport": "phone",
+            "agent_name": "PhoneBot",
+            "agent_instructions": "Take concise phone messages.",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    assert (project / "server.py").exists()
+    agent_py = (project / "agent.py").read_text()
+    assert "def make_agent" in agent_py
+    assert 'name="PhoneBot"' in agent_py
+    assert "Take concise phone messages." in agent_py
+    server_py = (project / "server.py").read_text()
+    assert "TwilioConnectionTransport" in server_py
+    assert "twiml_connect_stream" in server_py
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "openai-agents,telephony" in pyproject
+    env_example = (project / ".env.example").read_text()
+    assert "TWILIO_STREAM_URL" in env_example
+
+
+def test_init_twilio_phone_honors_provider_shortcuts(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "twilio-phone",
+            "stt": "deepgram/flux",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    project = tmp_path / "demo"
+    assert 'stt="deepgram/flux"' in (project / "server.py").read_text()
+    assert "deepgram" in (project / "pyproject.toml").read_text()
+    assert "DEEPGRAM_API_KEY" in (project / ".env.example").read_text()
 
 
 def test_init_omits_cache_artifacts(
@@ -458,6 +512,25 @@ def test_init_rejects_local_transport_for_webrtc_template(
     assert result.exit_code == 4
     assert "EASYCAT_E102" in result.stderr
     assert "webrtc" in result.stderr
+
+
+def test_init_rejects_webrtc_transport_for_twilio_template(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "twilio-phone",
+            "transport": "webrtc",
+        }
+    )
+
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+    assert "twilio" in result.stderr
 
 
 def test_init_rejects_tools_field(

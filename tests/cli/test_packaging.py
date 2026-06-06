@@ -35,6 +35,7 @@ _EXPECTED_TEMPLATES: tuple[str, ...] = (
     "pydantic-ai",
     "pydantic-ai-workflow",
     "text-chat",
+    "twilio-phone",
     "webrtc-browser",
 )
 _EXPECTED_FILES: tuple[str, ...] = (
@@ -95,6 +96,11 @@ def test_wheel_ships_template_file(built_wheel: Path, template: str, fname: str)
     members = _wheel_members(built_wheel)
     expected = f"easycat/cli/scaffold/templates/{template}/{fname}"
     assert expected in members, f"{expected} missing from wheel"
+
+
+def test_wheel_ships_twilio_phone_server(built_wheel: Path) -> None:
+    members = _wheel_members(built_wheel)
+    assert "easycat/cli/scaffold/templates/twilio-phone/server.py" in members
 
 
 def test_wheel_ships_cli_entry_point(built_wheel: Path) -> None:
