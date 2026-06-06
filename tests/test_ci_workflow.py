@@ -34,6 +34,15 @@ def test_socket_validation_ci_runs_once_on_python_312() -> None:
     assert "uv run --python 3.12 easycat validate socket" in socket_job
 
 
+def test_socket_validation_ci_uploads_webrtc_stats_artifact_when_produced() -> None:
+    text = _workflow_text()
+    socket_job = text.split("integration-socket:", maxsplit=1)[1].split(
+        "integration-live:", maxsplit=1
+    )[0]
+
+    assert "runs/**/webrtc/stats.jsonl" in socket_job
+
+
 def test_validation_ci_uploads_reports_junit_and_logs_even_on_failure() -> None:
     text = _workflow_text()
 

@@ -132,6 +132,7 @@ jobs:
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/junit.xml
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stdout.log
             ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/stderr.log
+            ${{ env.VALIDATION_ARTIFACTS_DIR }}/runs/**/webrtc/stats.jsonl
 
   build-smoke:
     name: Build Smoke

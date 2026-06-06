@@ -50,8 +50,8 @@ Implemented:
   and aggregates quick, stress, contracts, live, and latency release gates into
   one validation report.
 - `.github/workflows/ci.yml` runs `easycat validate quick` and
-  `easycat validate socket` with uploaded JSON, JUnit, stdout, and stderr
-  artifacts.
+  `easycat validate socket` with uploaded JSON, JUnit, stdout, stderr, and
+  produced WebRTC stats artifacts.
 - `.github/workflows/nightly-validation.yml` runs quick, socket, stress, live,
   and latency validation lanes with uploaded artifacts.
 - `.github/workflows/release-validation.yml` validates an installed package
