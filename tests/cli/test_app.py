@@ -10,8 +10,10 @@ import json
 import re
 import subprocess
 import sys
+from io import StringIO
 from pathlib import Path
 
+from rich.console import Console
 from typer.testing import CliRunner
 
 from easycat.cli._app import (
@@ -19,12 +21,19 @@ from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _JOURNEY_SECTIONS,
+    _format_docs_entry,
     _register_commands,
     app,
 )
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _render_rich_markup(markup: str) -> str:
+    stream = StringIO()
+    Console(file=stream, force_terminal=False, no_color=True, width=120).print(markup)
+    return stream.getvalue()
 
 
 def _registered_top_level_command_names() -> set[str]:
@@ -169,6 +178,24 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Machine-readable routes and command hints: easycat docs --json" in result.stdout
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
+
+
+def test_docs_entry_renders_bracketed_text_literally() -> None:
+    entry = {
+        "label": "SDK[beta]",
+        "path": "docs/[beta].md",
+        "description": "Install optional extra easycat[openai-agents].",
+        "commands": ("uv add 'easycat[openai-agents]'",),
+        "url": "https://example.test/docs/[beta].md",
+    }
+
+    rendered = _render_rich_markup(_format_docs_entry(entry, label_width=len(entry["label"])))
+
+    assert "SDK[beta]" in rendered
+    assert "docs/[beta].md" in rendered
+    assert "easycat[openai-agents]" in rendered
+    assert "uv add 'easycat[openai-agents]'" in rendered
+    assert "https://example.test/docs/[beta].md" in rendered
 
 
 def test_docs_help_names_primary_routes(cli: CliRunner) -> None:

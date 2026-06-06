@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import shlex
 import tomllib
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
@@ -17,6 +19,13 @@ from easycat.stt.factory import available_providers as available_stt_providers
 from easycat.tts.factory import available_providers as available_tts_providers
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _render_rich_markup(markup: str) -> str:
+    stream = StringIO()
+    Console(file=stream, force_terminal=False, no_color=True, width=120).print(markup)
+    return stream.getvalue()
+
 
 # ── --list-templates and basic flows ─────────────────────────────────
 
@@ -59,6 +68,30 @@ def test_list_templates(cli: CliRunner) -> None:
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
+
+
+def test_template_catalog_renders_bracketed_text_literally() -> None:
+    catalog = [
+        {
+            "name": "demo[beta]",
+            "description": "Uses optional extra easycat[openai-agents].",
+            "mode": "voice",
+            "transport": "local[dev]",
+            "framework": "OpenAI Agents",
+            "create_command": "easycat init demo --template demo[beta]",
+            "repo_create_command": "uv run easycat init demo --template demo[beta]",
+            "check_command": "uv add 'easycat[openai-agents]'",
+            "run_command": "uv run --env-file .env python agent.py",
+        }
+    ]
+
+    rendered = _render_rich_markup(init_module._format_template_catalog(catalog))
+
+    assert "demo[beta]" in rendered
+    assert "easycat[openai-agents]" in rendered
+    assert "local[dev]" in rendered
+    assert "easycat init demo --template demo[beta]" in rendered
+    assert "uv add 'easycat[openai-agents]'" in rendered
 
 
 def test_list_templates_json(cli: CliRunner) -> None:

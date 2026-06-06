@@ -13,6 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import NamedTuple, NotRequired, TypedDict
 
 import typer
+from rich.markup import escape
 
 from easycat.cli._errors import handle_easycat_error
 from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
@@ -248,16 +249,16 @@ def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
     command_line = ""
     if commands:
         if len(commands) == 1:
-            command_line = f"    [dim]Commands: {commands[0]}[/]\n"
+            command_line = f"    [dim]Commands: {escape(commands[0])}[/]\n"
         else:
-            command_items = "\n".join(f"      [dim]{command}[/]" for command in commands)
+            command_items = "\n".join(f"      [dim]{escape(command)}[/]" for command in commands)
             command_line = f"    [dim]Commands:[/]\n{command_items}\n"
     return (
-        f"  [cyan]{entry['label']}[/]{' ' * (label_width - len(entry['label']) + 2)}"
-        f"{entry['path']}\n"
-        f"    [dim]{entry['description']}[/]\n"
+        f"  [cyan]{escape(entry['label'])}[/]{' ' * (label_width - len(entry['label']) + 2)}"
+        f"{escape(entry['path'])}\n"
+        f"    [dim]{escape(entry['description'])}[/]\n"
         f"{command_line}"
-        f"    [dim]{entry['url']}[/]"
+        f"    [dim]{escape(entry['url'])}[/]"
     )
 
 

@@ -242,18 +242,18 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
     for entry in catalog:
         metadata = f"{entry['mode']}; {entry['transport']}; {entry['framework']}"
         rows.append(
-            f"[cyan]{entry['name']}[/]\n"
-            f"  {entry['description']}\n"
-            f"  [dim]{metadata}[/]\n"
-            f"  [dim]Create:[/] {entry['create_command']}\n"
-            f"  [dim]Repo create:[/] {entry['repo_create_command']}\n"
-            f"  [dim]Check after cd:[/] {entry['check_command']}\n"
-            f"  [dim]Run after cd:[/] {entry['run_command']}"
+            f"[cyan]{escape(entry['name'])}[/]\n"
+            f"  {escape(entry['description'])}\n"
+            f"  [dim]{escape(metadata)}[/]\n"
+            f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
+            f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"
+            f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
+            f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
         )
     return (
         "\n".join(rows)
-        + f"\n\n[dim]{_INIT_HUMAN_COMMAND_NOTE}[/]"
-        + f"\n[dim]{_INIT_MACHINE_READABLE_HINT}[/]"
+        + f"\n\n[dim]{escape(_INIT_HUMAN_COMMAND_NOTE)}[/]"
+        + f"\n[dim]{escape(_INIT_MACHINE_READABLE_HINT)}[/]"
     )
 
 
