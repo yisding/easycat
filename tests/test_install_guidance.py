@@ -391,6 +391,25 @@ def test_docs_json_guidance_points_to_schema_contract() -> None:
     )
 
 
+def test_template_list_guidance_points_to_catalog_json() -> None:
+    """Template comparison guidance should expose the machine-readable catalog too."""
+    missing: list[str] = []
+
+    for path in _iter_reader_guidance_files():
+        text = path.read_text(encoding="utf-8")
+        if "easycat init --list-templates" not in text:
+            continue
+        if "copyable create/check/run commands" not in text:
+            continue
+        if "easycat init --list-templates --json" not in text:
+            missing.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not missing, (
+        "Template comparison guidance with copyable commands should also point "
+        "scripts/coding agents to `easycat init --list-templates --json`:\n" + "\n".join(missing)
+    )
+
+
 def test_readme_cli_explain_examples_are_copyable() -> None:
     """``easycat explain`` requires a code or --list; the README should show one."""
     cli_section = _readme_cli_section()
