@@ -607,6 +607,8 @@ context. Several bullets are known stale; use the current-state list above and
   events instead of long sleeps.
 - Done: AgentRunner and IVR timeout tests use cancellation-friendly event waits
   instead of long sentinel sleeps.
+- Done: runtime e2e session completion now waits for `BotStoppedSpeaking`
+  instead of a fixed pipeline sleep.
 - Done: the shared integration polling helper was removed after replacing its
   call sites with event-backed waits.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound

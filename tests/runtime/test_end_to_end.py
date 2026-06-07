@@ -15,6 +15,7 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import (
+    BotStoppedSpeaking,
     Event,
     STTEvent,
     STTEventType,
@@ -129,9 +130,11 @@ async def test_full_turn_completes_successfully():
         session_id="e2e-test",
     )
     session = Session(config)
+    pipeline_done = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda event: pipeline_done.set())
 
     await session.start()
-    await asyncio.sleep(0.5)  # let the pipeline complete
+    await asyncio.wait_for(pipeline_done.wait(), timeout=1.0)
     await session.stop()
 
     # The transport should have received at least one audio chunk from TTS

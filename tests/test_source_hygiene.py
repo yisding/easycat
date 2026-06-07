@@ -719,6 +719,15 @@ def test_session_smoke_waits_for_pipeline_completion_event() -> None:
     assert "BotStoppedSpeaking" in source
 
 
+def test_runtime_e2e_waits_for_pipeline_completion_event() -> None:
+    """The runtime e2e test should wait for pipeline completion, not a sleep."""
+    source = (REPO_ROOT / "tests" / "runtime" / "test_end_to_end.py").read_text(encoding="utf-8")
+
+    assert "asyncio.sleep(" not in source
+    assert "pipeline_done.wait()" in source
+    assert "BotStoppedSpeaking" in source
+
+
 def test_session_tests_use_events_for_never_complete_tasks() -> None:
     """Tests that keep a task pending should wait on events, not long sleeps."""
     files = (
