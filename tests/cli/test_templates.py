@@ -30,6 +30,7 @@ import pytest
 from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
+    _COPY_IGNORE,
     _TEMPLATE_BASE_EXTRAS,
     _TEMPLATE_CATALOG,
     _available_template_catalog,
@@ -83,11 +84,18 @@ _VOICE_TEMPLATE_PRESETS: dict[str, str] = {
 _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".env",
     ".venv/",
+    ".agents/",
+    ".claude/",
+    ".codex",
+    ".codex/",
     "__pycache__/",
     "*.pyc",
+    ".hypothesis/",
+    ".mypy_cache/",
+    ".pipecat-bench/",
     ".ruff_cache/",
     ".pytest_cache/",
-    ".mypy_cache/",
+    ".uv-cache/",
     ".coverage",
     "htmlcov/",
     "dist/",
@@ -890,3 +898,21 @@ def test_template_gitignore_covers_local_artifacts(name: str) -> None:
 
     for pattern in _GITIGNORE_PATTERNS:
         assert pattern in patterns, f"{name}/.gitignore missing {pattern!r}"
+
+
+def test_template_copy_filter_omits_local_artifact_directories() -> None:
+    """The scaffold copier should enforce the same local-artifact policy."""
+    expected = {
+        "__pycache__",
+        ".agents",
+        ".claude",
+        ".codex",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pipecat-bench",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".uv-cache",
+    }
+
+    assert expected <= _COPY_IGNORE

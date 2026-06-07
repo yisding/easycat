@@ -226,11 +226,22 @@ _TRANSPORT_ALIASES: dict[str, str] = {
 }
 
 # Directory names that may sit in the live template source at install time
-# (cache artifacts from running ruff/pytest/mypy against the templates) but
-# must never ship into a freshly scaffolded project.  ``*.pyc`` files are
-# filtered separately by suffix.
+# (cache and local tool artifacts from running validation or coding agents
+# against the templates) but must never ship into a freshly scaffolded
+# project. ``*.pyc`` files are filtered separately by suffix.
 _COPY_IGNORE: frozenset[str] = frozenset(
-    {"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
+    {
+        "__pycache__",
+        ".agents",
+        ".claude",
+        ".codex",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pipecat-bench",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".uv-cache",
+    }
 )
 
 

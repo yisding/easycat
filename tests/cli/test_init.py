@@ -483,7 +483,18 @@ def test_init_omits_cache_artifacts(
     assert result.exit_code == 0, result.stderr
     project = tmp_path / "demo"
 
-    forbidden = {"__pycache__", ".ruff_cache", ".pytest_cache", ".mypy_cache"}
+    forbidden = {
+        "__pycache__",
+        ".agents",
+        ".claude",
+        ".codex",
+        ".hypothesis",
+        ".mypy_cache",
+        ".pipecat-bench",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".uv-cache",
+    }
     for path in project.rglob("*"):
         parts = set(path.relative_to(project).parts)
         assert not (parts & forbidden), f"shipped a cache artifact: {path}"

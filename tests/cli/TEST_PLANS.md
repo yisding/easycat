@@ -474,9 +474,9 @@ on PyPI; ignored cache directories leaking into the wheel.
   template.
 - Wheel metadata includes the package name, Python requirement, author,
   project URLs, keywords, and core classifiers.
-- Wheel contents reject cache, test, build, VCS, and virtualenv
-  artifacts, including ignored `.ruff_cache` directories under
-  scaffold templates.
+- Wheel contents reject cache, local-tool, test, build, VCS, and
+  virtualenv artifacts, including ignored `.ruff_cache`, `.uv-cache`,
+  `.agents`, or `.codex` directories under scaffold templates.
 
 **Backed by.** `tests/cli/test_packaging.py` (marked
 `integration_local` to keep the wheel build out of the fast test

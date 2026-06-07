@@ -148,12 +148,17 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
     members = _wheel_members(built_wheel)
     forbidden_parts = {
         ".easycat",
+        ".agents",
+        ".claude",
+        ".codex",
         ".git",
         ".github",
         ".hypothesis",
         ".mypy_cache",
+        ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
+        ".uv-cache",
         ".venv",
         "__pycache__",
         "build",
