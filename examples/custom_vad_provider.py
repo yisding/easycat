@@ -69,14 +69,13 @@ class LoggingVAD:
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
     vad = LoggingVAD(create_vad(VADConfig()))
 
     config = EasyConfig.mic(
-        openai_api_key=api_key,
         vad=vad,
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )

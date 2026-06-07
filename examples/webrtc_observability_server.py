@@ -83,7 +83,7 @@ def multiply_numbers(a: float, b: float) -> float:
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
 
     signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
@@ -92,7 +92,6 @@ async def main() -> None:
 
     session = create_session(
         EasyConfig(
-            openai_api_key=api_key,
             transport=WebRTCTransportConfig(
                 host=signaling_host,
                 port=signaling_port,

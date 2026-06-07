@@ -201,9 +201,28 @@ def _documented_setup_extras(path: Path) -> set[str]:
 
 def _uses_default_openai_providers(path: Path) -> bool:
     module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return any(
-        isinstance(node, ast.keyword) and node.arg == "openai_api_key" for node in ast.walk(module)
-    )
+    for node in ast.walk(module):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            is_easy_config_call = node.func.id == "EasyConfig"
+        elif isinstance(node.func, ast.Attribute):
+            is_easy_config_call = (
+                isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "EasyConfig"
+                and node.func.attr in {"browser", "mic", "phone"}
+            )
+        else:
+            is_easy_config_call = False
+
+        if not is_easy_config_call:
+            continue
+
+        provider_overrides = {kw.arg for kw in node.keywords if kw.arg in {"stt", "tts"}}
+        if provider_overrides != {"stt", "tts"}:
+            return True
+
+    return False
 
 
 def _dockerfile_default_extras() -> set[str]:
@@ -1351,6 +1370,25 @@ def test_custom_provider_examples_use_easyconfig_surface():
         assert "SessionConfig" not in source
         assert "Session(" not in source
         assert "AgentRunner(" not in source
+
+
+def test_examples_keep_easyconfig_env_first_for_openai_key():
+    """Examples preflight OPENAI_API_KEY but let EasyConfig consume the env var."""
+    exceptions = {
+        # create_app(api_key=...) intentionally supports injection without
+        # mutating process env, so this example must pass the key explicitly.
+        "twilio_app.py",
+    }
+    stale: list[str] = []
+
+    for path in sorted((REPO_ROOT / "examples").glob("*.py")):
+        if path.name in exceptions:
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "openai_api_key=api_key" in source:
+            stale.append(path.name)
+
+    assert not stale, "Examples should let EasyConfig read OPENAI_API_KEY: " + ", ".join(stale)
 
 
 def test_agent_event_subscription_example_imports():

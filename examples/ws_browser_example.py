@@ -62,7 +62,7 @@ def _run_http_server() -> None:
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(
@@ -71,7 +71,6 @@ async def main() -> None:
     )
 
     config = EasyConfig(
-        openai_api_key=api_key,
         transport=WebSocketTransportConfig(port=WS_PORT),
         agent=agent,
     )

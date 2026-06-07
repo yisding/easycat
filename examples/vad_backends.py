@@ -41,7 +41,7 @@ from easycat.vad import VADConfig, create_vad
 
 
 async def main(backend: str) -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
@@ -49,7 +49,6 @@ async def main(backend: str) -> None:
     print(f"[vad_backends] requested={backend!r} built={type(vad).__name__}")
 
     config = EasyConfig.mic(
-        openai_api_key=api_key,
         vad=vad,
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )

@@ -78,7 +78,6 @@ async def main() -> None:
     tts = LoggingTTS(inner_tts)
 
     config = EasyConfig.mic(
-        openai_api_key=api_key,
         tts=tts,
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )

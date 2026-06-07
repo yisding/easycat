@@ -100,7 +100,7 @@ async def _close_with_error(
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     manager: SessionManager[str] = SessionManager()
@@ -114,7 +114,6 @@ async def main() -> None:
         transport = WebSocketConnectionTransport(ws)
         session = create_session(
             EasyConfig(
-                openai_api_key=api_key,
                 transport=transport,
                 agent=agent,
             )

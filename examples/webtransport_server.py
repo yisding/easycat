@@ -40,7 +40,7 @@ from easycat import (
 
 
 async def main(args: argparse.Namespace) -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     manager: SessionManager[int] = SessionManager()
@@ -49,7 +49,6 @@ async def main(args: argparse.Namespace) -> None:
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         session = create_session(
             EasyConfig(
-                openai_api_key=api_key,
                 transport=transport,
                 agent=agent,
             )

@@ -81,7 +81,6 @@ async def main() -> None:
     stt = LoggingSTT(inner_stt)
 
     config = EasyConfig.mic(
-        openai_api_key=api_key,
         stt=stt,
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )

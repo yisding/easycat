@@ -77,7 +77,7 @@ def _env_flag(name: str) -> bool:
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(
@@ -92,7 +92,6 @@ async def main() -> None:
     ice_servers = _build_ice_servers()
 
     config = EasyConfig(
-        openai_api_key=api_key,
         transport=WebRTCTransportConfig(
             host=signaling_host,
             port=signaling_port,

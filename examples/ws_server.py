@@ -21,14 +21,14 @@ from easycat import EasyConfig, create_session, require_env
 
 
 def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
 
     def session(ws):
         from agents import Agent  # type: ignore[import-untyped]
 
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
         transport = easycat.transports.WebSocketConnectionTransport(ws)
-        return create_session(EasyConfig(openai_api_key=api_key, transport=transport, agent=agent))
+        return create_session(EasyConfig(transport=transport, agent=agent))
 
     config = easycat.transports.websocket_session_server_config_from_env()
     asyncio.run(easycat.transports.serve_websocket_sessions(session, config))

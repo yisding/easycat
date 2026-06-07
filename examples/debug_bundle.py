@@ -77,14 +77,13 @@ def _summarize(bundle: RunBundle) -> None:
 
 
 async def main() -> None:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
     config = EasyConfig(
-        openai_api_key=api_key,
         transport=LocalTransportConfig(),
         agent=agent,
         debug="light",  # enables journal + in-memory artifact store
