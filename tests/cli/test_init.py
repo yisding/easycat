@@ -485,15 +485,21 @@ def test_init_omits_cache_artifacts(
 
     forbidden = {
         "__pycache__",
+        ".coverage",
         ".agents",
         ".claude",
         ".codex",
+        ".easycat",
         ".hypothesis",
         ".mypy_cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
         ".uv-cache",
+        "build",
+        "coverage.xml",
+        "dist",
+        "htmlcov",
     }
     for path in project.rglob("*"):
         parts = set(path.relative_to(project).parts)

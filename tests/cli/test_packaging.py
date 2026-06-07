@@ -148,6 +148,7 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
     members = _wheel_members(built_wheel)
     forbidden_parts = {
         ".easycat",
+        ".coverage",
         ".agents",
         ".claude",
         ".codex",
@@ -162,7 +163,9 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
         ".venv",
         "__pycache__",
         "build",
+        "coverage.xml",
         "dist",
+        "htmlcov",
         "tests",
     }
     offenders = []

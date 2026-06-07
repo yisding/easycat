@@ -235,14 +235,20 @@ _COPY_IGNORE: frozenset[str] = frozenset(
         ".agents",
         ".claude",
         ".codex",
+        ".easycat",
         ".hypothesis",
         ".mypy_cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
         ".uv-cache",
+        "build",
+        "dist",
+        "htmlcov",
     }
 )
+_COPY_FILE_IGNORE: frozenset[str] = frozenset({".coverage", "coverage.xml"})
+_COPY_FILE_PREFIX_IGNORE: tuple[str, ...] = (".coverage.",)
 _COPY_SUFFIX_IGNORE: frozenset[str] = frozenset({".pyc", ".pyo"})
 
 
@@ -259,8 +265,11 @@ def _template_sources(template_name: str) -> list[Path]:
         if source.is_dir():
             continue
         ignored_directory = any(part in _COPY_IGNORE for part in source.parts)
+        ignored_file = source.name in _COPY_FILE_IGNORE or source.name.startswith(
+            _COPY_FILE_PREFIX_IGNORE
+        )
         ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
-        if ignored_directory or ignored_suffix:
+        if ignored_directory or ignored_file or ignored_suffix:
             continue
         sources.append(source)
     return sources

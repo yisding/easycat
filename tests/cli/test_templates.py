@@ -30,6 +30,8 @@ import pytest
 from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
+    _COPY_FILE_IGNORE,
+    _COPY_FILE_PREFIX_IGNORE,
     _COPY_IGNORE,
     _COPY_SUFFIX_IGNORE,
     _TEMPLATE_BASE_EXTRAS,
@@ -42,6 +44,7 @@ from easycat.cli.scaffold.init import (
     _render_text,
     _substitutions,
     _template_file_names,
+    _template_sources,
     _templates_root,
 )
 
@@ -101,6 +104,8 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".pytest_cache/",
     ".uv-cache/",
     ".coverage",
+    ".coverage.*",
+    "coverage.xml",
     "htmlcov/",
     "dist/",
     "build/",
@@ -911,16 +916,53 @@ def test_template_copy_filter_omits_local_artifact_directories() -> None:
         ".agents",
         ".claude",
         ".codex",
+        ".easycat",
         ".hypothesis",
         ".mypy_cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
         ".uv-cache",
+        "build",
+        "dist",
+        "htmlcov",
     }
 
     assert expected <= _COPY_IGNORE
 
 
+def test_template_copy_filter_omits_coverage_report_files() -> None:
+    assert {".coverage", "coverage.xml"} <= _COPY_FILE_IGNORE
+    assert ".coverage." in _COPY_FILE_PREFIX_IGNORE
+
+
 def test_template_copy_filter_omits_compiled_bytecode_suffixes() -> None:
     assert {".pyc", ".pyo"} <= _COPY_SUFFIX_IGNORE
+
+
+def test_template_sources_skip_generated_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    templates_root = tmp_path / "templates"
+    template = templates_root / "demo"
+    template.mkdir(parents=True)
+    kept = template / "agent.py"
+    kept.write_text("print('ok')\n", encoding="utf-8")
+    for rel in (
+        "__pycache__/agent.cpython-312.pyc",
+        ".pytest_cache/state",
+        "build/generated.py",
+        "dist/package.whl",
+        "htmlcov/index.html",
+        ".coverage",
+        ".coverage.worker",
+        "coverage.xml",
+        "optimized.pyo",
+    ):
+        path = template / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("generated\n", encoding="utf-8")
+    monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
+
+    assert _template_sources("demo") == [kept]
