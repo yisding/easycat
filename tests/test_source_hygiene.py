@@ -224,6 +224,31 @@ def test_cli_test_plan_names_scaffold_artifact_hygiene() -> None:
     assert "the real top-level `.gitignore` remains" in normalized
 
 
+def test_cli_test_plan_names_packaging_artifact_hygiene() -> None:
+    """Keep the packaging plan aligned with wheel artifact rejection checks."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    packaging_plan = plan.split(
+        "## Plan 16 — Packaging — wheel ships template dotfiles and metadata", 1
+    )[1].split("---", 1)[0]
+    normalized = " ".join(packaging_plan.split())
+
+    assert "cache, coverage, docs, mutation, package metadata" in normalized
+    assert "bytecode, or local secret-key artifacts leaking into the wheel" in normalized
+    assert "build, coverage, docs, mutation, VCS, virtualenv" in normalized
+    assert "package metadata artifacts" in normalized
+    for token in (
+        "`.ruff_cache`",
+        "`.uv-cache`",
+        "`.agents`",
+        "`.codex`",
+        "`.coverage`",
+        "`.egg-info`",
+        "bytecode",
+        "local `.pem` / `.key` files",
+    ):
+        assert token in packaging_plan
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

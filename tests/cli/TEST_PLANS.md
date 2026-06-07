@@ -475,7 +475,8 @@ cache or workspace artifacts that happen to exist under `src/`.
 **Risks.** `uv_build` / hatchling excluding dotfiles; a templates
 subdir missing from the wheel; files copied under a different tree
 structure than the source; missing author/project/classifier metadata
-on PyPI; ignored cache directories leaking into the wheel.
+on PyPI; ignored cache, coverage, docs, mutation, package metadata,
+bytecode, or local secret-key artifacts leaking into the wheel.
 
 **Checks.**
 - `uv build --wheel` succeeds on a clean checkout.
@@ -485,9 +486,11 @@ on PyPI; ignored cache directories leaking into the wheel.
   template.
 - Wheel metadata includes the package name, Python requirement, author,
   project URLs, keywords, and core classifiers.
-- Wheel contents reject cache, local-tool, test, build, VCS, and
-  virtualenv artifacts, including ignored `.ruff_cache`, `.uv-cache`,
-  `.agents`, or `.codex` directories under scaffold templates.
+- Wheel contents reject cache, local-tool, test, build, coverage, docs,
+  mutation, VCS, virtualenv, and package metadata artifacts, including
+  ignored `.ruff_cache`, `.uv-cache`, `.agents`, `.codex`,
+  `.coverage`, `.egg-info`, bytecode, or local `.pem` / `.key` files
+  under `src/`.
 
 **Backed by.** `tests/cli/test_packaging.py` (marked
 `integration_local` to keep the wheel build out of the fast test
