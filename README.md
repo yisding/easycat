@@ -270,7 +270,7 @@ provider-surface matrix vocabulary covering extras, credential env vars,
 contract status, cassette status, and live canaries.
 
 ## Current capabilities
-- Session runtime that wires the audio pipeline (noise reduction (opt-in via `enable_noise_reduction=True`) -> VAD -> STT -> agent -> TTS)
+- Session runtime that wires the audio pipeline (`AudioProcessingConfig` controls optional noise reduction, echo cancellation, VAD, and smart-turn tuning) -> STT -> agent -> TTS
 - Typed event system with an EventBus for streaming-first voice events and
   configurable handler-error policy
 - Passive supervisor listen-in via session audio fan-out on the EventBus
@@ -647,8 +647,10 @@ session = create_session(
 
 This keeps the pipeline (VAD → STT → agent → TTS) identical while letting you
 swap in open-source models for fully local operation. Provider instances are
-accepted by `vad=`, `noise_reduction=`, and `echo_cancellation=` when you have
-custom audio-processing stages.
+accepted by
+`audio_processing=AudioProcessingConfig(vad=..., noise_reduction=..., echo_cancellation=...)`
+when you have custom audio-processing stages; the shorter legacy `vad=`,
+`noise_reduction=`, and `echo_cancellation=` aliases remain supported.
 
 ## Inspecting conversation flow
 

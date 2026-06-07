@@ -430,6 +430,25 @@ class SessionPolicyConfig:
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
 
 
+@dataclass
+class AudioProcessingConfig:
+    """Audio input processing knobs for ``EasyConfig``.
+
+    New code should prefer grouping these lower-frequency tuning knobs under
+    ``audio_processing=...``. The legacy top-level aliases (``vad=``,
+    ``noise_reduction=``, ``smart_turn=...``, etc.) still work and forward
+    into this object.
+    """
+
+    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
+    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
+    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
+    enable_noise_reduction: bool = False
+    enable_echo_cancellation: bool | None = None
+    smart_turn: SmartTurnConfig | bool | None = None
+    smart_turn_sensitivity: float | None = None
+
+
 _SESSION_POLICY_ALIAS_FIELDS = frozenset(
     {
         "greeting",
@@ -437,6 +456,18 @@ _SESSION_POLICY_ALIAS_FIELDS = frozenset(
         "opt_out_detection",
         "opt_out_phrases",
         "caller_id_exposure",
+    }
+)
+
+_AUDIO_PROCESSING_ALIAS_FIELDS = frozenset(
+    {
+        "vad",
+        "noise_reduction",
+        "echo_cancellation",
+        "enable_noise_reduction",
+        "enable_echo_cancellation",
+        "smart_turn",
+        "smart_turn_sensitivity",
     }
 )
 
@@ -500,24 +531,9 @@ class EasyConfig(_AgentSessionConfig):
             implement EasyCat's provider Protocols. Leave both unset with
             ``openai_api_key`` (or ``OPENAI_API_KEY``) to use the default
             OpenAI realtime STT + TTS chain.
-        vad: A ``VADConfig`` or an already-built VAD provider instance.
-        noise_reduction: A ``NoiseReducerConfig`` or an already-built
-            noise reducer instance. Passing an instance opts the audio
-            processing stage in without requiring ``enable_noise_reduction``.
-        echo_cancellation: An ``EchoCancellationConfig`` or an already-built
-            echo canceller instance. Passing an instance opts the audio
-            processing stage in when the provider is not marked passthrough.
-        enable_noise_reduction: Opt-in noise reduction. Defaults to
-            ``False``, so the out-of-the-box pipeline does **not** denoise
-            mic input. Set ``True`` (or pass an explicit ``noise_reduction``
-            config) to wire the reducer; note auto-mode still falls back to
-            a passthrough reducer unless Krisp or RNNoise is installed.
-        smart_turn: Smart-turn endpoint detection. Pass ``True`` for the
-            bundled default detector, or a ``SmartTurnConfig`` for full control.
-        smart_turn_sensitivity: Optional 0..1 shortcut for endpointing
-            sensitivity. Higher values end turns more eagerly; internally this
-            maps to ``SmartTurnConfig.threshold = 1 - sensitivity`` and enables
-            smart turn automatically.
+        audio_processing: Grouped audio input processing policies such as
+            ``VADConfig``, ``NoiseReducerConfig``, ``EchoCancellationConfig``,
+            ``smart_turn``, and ``smart_turn_sensitivity``.
         session_policy: Grouped conversation/telephony policies such as
             greeting, opt-out auto-detection, DNC list, and caller-ID exposure.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -529,15 +545,9 @@ class EasyConfig(_AgentSessionConfig):
     openai_api_key: str | None = None
     stt: STTConfig | STTProvider | str | None = None
     tts: TTSConfig | TTSProvider | str | None = None
-    vad: VADConfig | VADProvider = field(default_factory=VADConfig)
-    noise_reduction: NoiseReducerConfig | NoiseReducer | None = None
-    echo_cancellation: EchoCancellationConfig | EchoCanceller | None = None
-    enable_noise_reduction: bool = False
-    enable_echo_cancellation: bool | None = None
+    audio_processing: AudioProcessingConfig = field(default_factory=AudioProcessingConfig)
     transport: TransportConfig = field(default_factory=LocalTransportConfig)
     turn_taking: TurnManagerConfig = field(default_factory=TurnManagerConfig)
-    smart_turn: SmartTurnConfig | bool | None = None
-    smart_turn_sensitivity: float | None = None
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
     telephony: TelephonyConfig | None = None
     strip_markdown: bool = False
@@ -554,6 +564,18 @@ class EasyConfig(_AgentSessionConfig):
     record_to: str | Path | None = None
 
     # Backward-compatible aliases for fields now grouped under
+    # ``audio_processing``. ``None`` means "leave the grouped value as-is";
+    # pass ``audio_processing=AudioProcessingConfig(...)`` when you need to set
+    # one of the nullable audio values to ``None`` explicitly.
+    vad: InitVar[VADConfig | VADProvider | None] = None
+    noise_reduction: InitVar[NoiseReducerConfig | NoiseReducer | None] = None
+    echo_cancellation: InitVar[EchoCancellationConfig | EchoCanceller | None] = None
+    enable_noise_reduction: InitVar[bool | None] = None
+    enable_echo_cancellation: InitVar[bool | None] = None
+    smart_turn: InitVar[SmartTurnConfig | bool | None] = None
+    smart_turn_sensitivity: InitVar[float | None] = None
+
+    # Backward-compatible aliases for fields now grouped under
     # ``session_policy``. ``None`` means "leave the grouped value as-is";
     # pass ``session_policy=SessionPolicyConfig(...)`` when you need to set
     # one of the nullable policy values to ``None`` explicitly.
@@ -564,6 +586,12 @@ class EasyConfig(_AgentSessionConfig):
     caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
 
     def __getattribute__(self, name: str) -> Any:
+        if name in _AUDIO_PROCESSING_ALIAS_FIELDS:
+            try:
+                audio_processing = object.__getattribute__(self, "audio_processing")
+            except AttributeError:
+                return object.__getattribute__(self, name)
+            return getattr(audio_processing, name)
         if name in _SESSION_POLICY_ALIAS_FIELDS:
             try:
                 policy = object.__getattribute__(self, "session_policy")
@@ -573,6 +601,9 @@ class EasyConfig(_AgentSessionConfig):
         return object.__getattribute__(self, name)
 
     def __setattr__(self, name: str, value: Any) -> None:
+        if name in _AUDIO_PROCESSING_ALIAS_FIELDS and "audio_processing" in self.__dict__:
+            setattr(self.audio_processing, name, value)
+            return
         if name in _SESSION_POLICY_ALIAS_FIELDS and "session_policy" in self.__dict__:
             setattr(self.session_policy, name, value)
             return
@@ -580,12 +611,33 @@ class EasyConfig(_AgentSessionConfig):
 
     def __post_init__(
         self,
+        vad: VADConfig | VADProvider | None,
+        noise_reduction: NoiseReducerConfig | NoiseReducer | None,
+        echo_cancellation: EchoCancellationConfig | EchoCanceller | None,
+        enable_noise_reduction: bool | None,
+        enable_echo_cancellation: bool | None,
+        smart_turn: SmartTurnConfig | bool | None,
+        smart_turn_sensitivity: float | None,
         greeting: str | None,
         dnc_list: Any | None,
         opt_out_detection: bool | None,
         opt_out_phrases: tuple[str, ...] | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
+        if vad is not None:
+            self.vad = vad
+        if noise_reduction is not None:
+            self.noise_reduction = noise_reduction
+        if echo_cancellation is not None:
+            self.echo_cancellation = echo_cancellation
+        if enable_noise_reduction is not None:
+            self.enable_noise_reduction = enable_noise_reduction
+        if enable_echo_cancellation is not None:
+            self.enable_echo_cancellation = enable_echo_cancellation
+        if smart_turn is not None:
+            self.smart_turn = smart_turn
+        if smart_turn_sensitivity is not None:
+            self.smart_turn_sensitivity = smart_turn_sensitivity
         if greeting is not None:
             self.greeting = greeting
         if dnc_list is not None:
@@ -737,7 +789,16 @@ class EasyConfig(_AgentSessionConfig):
         pin or replace voice activity detection.
         """
         kwargs.setdefault("transport", WebRTCTransportConfig())
-        kwargs.setdefault("enable_echo_cancellation", True)
+        if "enable_echo_cancellation" not in kwargs:
+            audio_processing = kwargs.get("audio_processing")
+            if isinstance(audio_processing, AudioProcessingConfig):
+                if audio_processing.enable_echo_cancellation is None:
+                    kwargs["audio_processing"] = replace(
+                        audio_processing,
+                        enable_echo_cancellation=True,
+                    )
+            else:
+                kwargs["enable_echo_cancellation"] = True
         return cls(**kwargs)
 
     @classmethod

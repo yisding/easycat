@@ -187,12 +187,22 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     )[0]
 
     assert "session_policy" in field_names
+    assert "audio_processing" in field_names
     assert {
         "greeting",
         "dnc_list",
         "opt_out_detection",
         "opt_out_phrases",
         "caller_id_exposure",
+    }.isdisjoint(field_names)
+    assert {
+        "vad",
+        "noise_reduction",
+        "echo_cancellation",
+        "enable_noise_reduction",
+        "enable_echo_cancellation",
+        "smart_turn",
+        "smart_turn_sensitivity",
     }.isdisjoint(field_names)
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan

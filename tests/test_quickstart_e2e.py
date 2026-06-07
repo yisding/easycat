@@ -669,6 +669,8 @@ def test_readme_local_speech_pipeline_uses_easyconfig_provider_instances() -> No
         "tts=LocalTTSProvider(...)",
         "agent=LocalAgent(...)",
         "Provider instances are",
+        "AudioProcessingConfig",
+        "`audio_processing=AudioProcessingConfig(",
         "`vad=`",
         "`noise_reduction=`",
         "`echo_cancellation=`",

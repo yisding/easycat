@@ -9,6 +9,7 @@ from easycat import (
     PCM16_MONO_8K,
     PCM16_MONO_16K,
     PCM16_MONO_24K,
+    AudioProcessingConfig,
     EasyConfig,
     SessionPolicyConfig,
     create_session,
@@ -331,6 +332,45 @@ def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
 
     assert config.session_policy.opt_out_detection is True
     assert config.session_policy.caller_id_exposure == "tools_only"
+
+
+def test_easyconfig_audio_processing_keeps_legacy_top_level_aliases():
+    echo_cancellation = EchoCancellationConfig(enabled=False)
+
+    config = EasyConfig(
+        openai_api_key="test-key",
+        echo_cancellation=echo_cancellation,
+        enable_noise_reduction=True,
+        smart_turn=True,
+    )
+
+    assert config.audio_processing.echo_cancellation is echo_cancellation
+    assert config.echo_cancellation is echo_cancellation
+    assert config.audio_processing.enable_noise_reduction is True
+    assert config.enable_noise_reduction is True
+    assert isinstance(config.audio_processing.smart_turn, SmartTurnConfig)
+    assert config.smart_turn.enabled is True
+
+    config.enable_noise_reduction = False
+    config.echo_cancellation = EchoCancellationConfig(enabled=True)
+
+    assert config.audio_processing.enable_noise_reduction is False
+    assert config.audio_processing.echo_cancellation is config.echo_cancellation
+    assert config.echo_cancellation.enabled is True
+
+
+def test_browser_preset_preserves_grouped_echo_cancellation_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    config = EasyConfig.browser(
+        audio_processing=AudioProcessingConfig(enable_echo_cancellation=False)
+    )
+
+    assert config.enable_echo_cancellation is False
+    assert config.echo_cancellation is not None
+    assert config.echo_cancellation.enabled is False
 
 
 @pytest.mark.asyncio
@@ -922,6 +962,27 @@ def test_create_session_derives_endpoint_threshold_from_smart_turn_sensitivity(
         smart_turn_sensitivity=0.75,
         agent=_DummyAgent(),
     )
+
+    session = create_session(config)
+
+    assert session._turn_manager._config.endpoint_threshold == pytest.approx(0.25)
+
+
+def test_create_session_derives_endpoint_threshold_from_grouped_audio_processing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_audio_backends(monkeypatch)
+    config = EasyConfig(
+        openai_api_key="test-key",
+        audio_processing=AudioProcessingConfig(
+            smart_turn=True,
+            smart_turn_sensitivity=0.75,
+        ),
+        agent=_DummyAgent(),
+    )
+
+    assert isinstance(config.audio_processing.smart_turn, SmartTurnConfig)
+    assert config.smart_turn.threshold == pytest.approx(0.25)
 
     session = create_session(config)
 

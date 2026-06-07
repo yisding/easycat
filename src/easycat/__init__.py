@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     )
     from easycat.cancel import CancelToken
     from easycat.config import (
+        AudioProcessingConfig,
         EasyConfig,
         OutboundCallConfig,
         SessionPolicyConfig,

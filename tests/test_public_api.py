@@ -23,6 +23,7 @@ PUBLIC_API_SNAPSHOT = (
     "AudioFormat",
     "AudioIn",
     "AudioOut",
+    "AudioProcessingConfig",
     "BotStartedSpeaking",
     "BotStoppedSpeaking",
     "CallAnswered",
@@ -108,7 +109,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 86
+    assert len(easycat.__all__) <= 87
 
 
 def test_public_api_registry_tracks_snapshot() -> None:
