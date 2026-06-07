@@ -5,6 +5,7 @@ Setup:
   export TWILIO_STREAM_URL="wss://your-public-host:8766"
   export TWILIO_ACCOUNT_SID="AC..."
   export TWILIO_AUTH_TOKEN="..."
+  export TWILIO_STREAM_TOKEN_SECRET="..."  # optional, pins stream-token signing key
   export TWILIO_VOICE_FROM="+15551234567"  # optional, enables POST /calls
   export TWILIO_TWIML_URL="https://your-public-host/twiml"
   export TWILIO_STATUS_CALLBACK_URL="https://your-public-host/status"
@@ -48,6 +49,7 @@ from easycat.telephony import (
     emit_call_status,
     validate_twilio_webhook_signature,
 )
+from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
@@ -69,6 +71,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     manager: SessionManager[int] = SessionManager()
     sessions_by_call_sid: dict[str, Any] = {}
+    stream_tokens = TwilioStreamTokenStore(
+        os.getenv("TWILIO_STREAM_TOKEN_SECRET") or twilio_auth_token or None
+    )
     outbound_bus: EventBus | None = None
     outbound_manager: OutboundCallManager | None = None
     if twilio_account_sid and twilio_auth_token and twilio_voice_from and twilio_twiml_url:
@@ -87,7 +92,10 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         from agents import Agent  # type: ignore[import-untyped]
 
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-        transport = TwilioConnectionTransport(ws)
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
+        )
         telephony = TelephonyConfig(
             enable_dtmf_aggregator=True,
             enable_voicemail_detector=True,
@@ -191,7 +199,11 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         ):
             if form.get(name):
                 parameters[name] = form[name]
-        xml = twiml_connect_stream(stream_url, parameters=parameters)
+        xml = twiml_connect_stream(
+            stream_url,
+            parameters=parameters,
+            stream_token=stream_tokens.issue(),
+        )
         return Response(content=xml, media_type="application/xml")
 
     @app.post("/status")

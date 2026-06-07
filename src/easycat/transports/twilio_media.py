@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -36,6 +40,81 @@ logger = logging.getLogger(__name__)
 MULAW_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="mulaw")
 TWILIO_PREFERRED_TTS_OUTPUT_FORMAT = PCM16_MONO_8K
 _TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
+TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
+
+
+class TwilioStreamTokenStore:
+    """Issue and consume signed one-time Twilio ``<Stream>`` tokens.
+
+    The store is intentionally in-memory: the process that emits TwiML also
+    consumes the subsequent Media Streams ``start`` event. Apps running multiple
+    replicas can provide their own validator via ``TwilioTransportConfig``.
+    """
+
+    def __init__(
+        self,
+        secret: str | bytes | None = None,
+        *,
+        ttl_s: float = 300.0,
+        now: Callable[[], float] = time.time,
+    ) -> None:
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be positive")
+        if secret is None:
+            secret = secrets.token_urlsafe(32)
+        self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
+        self._ttl_s = ttl_s
+        self._now = now
+        self._pending: dict[str, int] = {}
+
+    def issue(self) -> str:
+        """Return a signed token accepted by exactly one future ``consume``."""
+        self._prune_expired()
+        nonce = secrets.token_urlsafe(24)
+        expires_at = int(self._now() + self._ttl_s)
+        payload = f"{nonce}.{expires_at}"
+        signature = self._signature(payload)
+        self._pending[nonce] = expires_at
+        return f"{payload}.{signature}"
+
+    def issue_parameter(self) -> dict[str, str]:
+        """Return the TwiML ``<Parameter>`` mapping for a fresh token."""
+        return {TWILIO_STREAM_TOKEN_PARAMETER: self.issue()}
+
+    def consume(self, token: str) -> bool:
+        """Validate and consume a token, returning ``False`` on replay/expiry."""
+        self._prune_expired()
+        parts = token.split(".")
+        if len(parts) != 3:
+            return False
+        nonce, expires_text, signature = parts
+        try:
+            expires_at = int(expires_text)
+        except ValueError:
+            return False
+
+        payload = f"{nonce}.{expires_at}"
+        try:
+            matches_signature = hmac.compare_digest(signature, self._signature(payload))
+        except TypeError:
+            return False
+        if not matches_signature:
+            return False
+        if expires_at < self._now():
+            self._pending.pop(nonce, None)
+            return False
+        pending_expires_at = self._pending.pop(nonce, None)
+        return pending_expires_at == expires_at
+
+    def _signature(self, payload: str) -> str:
+        digest = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+    def _prune_expired(self) -> None:
+        now = self._now()
+        expired = [nonce for nonce, expires_at in self._pending.items() if expires_at < now]
+        for nonce in expired:
+            self._pending.pop(nonce, None)
 
 
 @dataclass
@@ -48,11 +127,15 @@ class TwilioTransportConfig:
     port: int = 8766
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200
+    stream_token_validator: Callable[[str], bool] | None = None
+    stream_token_parameter: str = TWILIO_STREAM_TOKEN_PARAMETER
 
 
 def _parse_twilio_start_identity(
     start: dict[str, Any],
     call_sid: str | None,
+    *,
+    excluded_parameter_names: set[str] | None = None,
 ) -> tuple[Any, str, str]:
     """Build a CallIdentity from Twilio ``start.customParameters``."""
     from easycat.session._types import CallIdentity
@@ -63,6 +146,8 @@ def _parse_twilio_start_identity(
         for key, value in raw_params.items():
             if isinstance(key, str) and isinstance(value, (str, int)):
                 params[key] = str(value)
+    for name in excluded_parameter_names or set():
+        params.pop(name, None)
 
     direction_raw = _clean_twilio_parameter(
         params.pop("Direction", "") or params.pop("direction", "")
@@ -116,6 +201,23 @@ def _clean_twilio_parameter(value: Any) -> str:
     if text.startswith("{{") and text.endswith("}}"):
         return ""
     return text
+
+
+def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportConfig) -> bool:
+    validator = config.stream_token_validator
+    if validator is None:
+        return True
+    raw_params = start.get("customParameters") or {}
+    if not isinstance(raw_params, dict):
+        return False
+    token = raw_params.get(config.stream_token_parameter)
+    if not isinstance(token, str) or not token:
+        return False
+    try:
+        return bool(validator(token))
+    except Exception:
+        logger.warning("Twilio stream token validator raised", exc_info=True)
+        return False
 
 
 async def _emit_twilio_call_ended(
@@ -489,11 +591,20 @@ class TwilioTransport(_ServerTransportBase):
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return
+        if not _twilio_stream_token_valid(start, self._config):
+            logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
+            if self._ws is not None:
+                await self._ws.close(4003, "Missing or invalid stream token")
+            return
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
-        identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
+        identity, caller, called = _parse_twilio_start_identity(
+            start,
+            self._call_sid,
+            excluded_parameter_names={self._config.stream_token_parameter},
+        )
         self._call_identity = identity
         if self._identity_sink is not None:
             try:
@@ -863,11 +974,21 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         if not isinstance(start, dict):
             logger.debug("Ignoring Twilio start with non-object payload")
             return
+        if not _twilio_stream_token_valid(start, self._config):
+            logger.warning(
+                "Rejecting Twilio connection stream start with missing or invalid stream token"
+            )
+            await self._ws.close(4003, "Missing or invalid stream token")
+            return
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
-        identity, caller, called = _parse_twilio_start_identity(start, self._call_sid)
+        identity, caller, called = _parse_twilio_start_identity(
+            start,
+            self._call_sid,
+            excluded_parameter_names={self._config.stream_token_parameter},
+        )
         self._call_identity = identity
         if self._identity_sink is not None:
             try:
@@ -960,6 +1081,7 @@ def twiml_connect_stream(
     track: str = "both",
     status_callback_url: str | None = None,
     parameters: dict[str, str] | None = None,
+    stream_token: str | None = None,
     forward_caller_id: bool = False,
 ) -> str:
     """Generate TwiML ``<Connect><Stream>`` XML for bidirectional streaming.
@@ -978,6 +1100,10 @@ def twiml_connect_stream(
         ``{"From": form["From"], "To": form["To"]}``.  Twilio forwards
         generated TwiML parameter values verbatim, so ``"{{From}}"``
         placeholders are not substituted for Python-generated XML.
+    stream_token:
+        Optional signed one-time token to pass as
+        ``EasyCatStreamToken``. Pair this with
+        ``TwilioTransportConfig(stream_token_validator=store.consume)``.
     forward_caller_id:
         Kept as a compatibility assertion.  When ``True``, at least one
         caller-ID parameter must be supplied explicitly in ``parameters``;
@@ -990,6 +1116,8 @@ def twiml_connect_stream(
         status_attr = f" statusCallback={quoteattr(status_callback_url)}"
 
     merged: dict[str, str] = dict(parameters or {})
+    if stream_token is not None:
+        merged[TWILIO_STREAM_TOKEN_PARAMETER] = stream_token
     if forward_caller_id:
         identity_names = {
             "From",
@@ -1048,6 +1176,8 @@ def twiml_stream(
     websocket_url: str,
     *,
     track: str = "inbound_track",
+    parameters: dict[str, str] | None = None,
+    stream_token: str | None = None,
 ) -> str:
     """Generate TwiML ``<Start><Stream>`` XML for one-way streaming.
 
@@ -1057,14 +1187,35 @@ def twiml_stream(
         The ``wss://`` URL of the EasyCat Twilio transport server.
     track:
         Which track to stream (``inbound_track`` or ``outbound_track``).
+    parameters:
+        Extra ``<Parameter>`` children to attach to the stream.
+    stream_token:
+        Optional signed one-time token to pass as
+        ``EasyCatStreamToken``.
     """
     from xml.sax.saxutils import quoteattr
+
+    merged: dict[str, str] = dict(parameters or {})
+    if stream_token is not None:
+        merged[TWILIO_STREAM_TOKEN_PARAMETER] = stream_token
+    if not merged:
+        stream = f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)} />"
+    else:
+        param_lines = "\n".join(
+            f"      <Parameter name={quoteattr(str(name))} value={quoteattr(str(value))}/>"
+            for name, value in merged.items()
+        )
+        stream = (
+            f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)}>\n"
+            f"{param_lines}\n"
+            "    </Stream>"
+        )
 
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         "  <Start>\n"
-        f"    <Stream url={quoteattr(websocket_url)} track={quoteattr(track)} />\n"
+        f"{stream}\n"
         "  </Start>\n"
         '  <Pause length="60" />\n'
         "</Response>"

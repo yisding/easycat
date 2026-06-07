@@ -26,7 +26,9 @@ from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, 
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
+    TWILIO_STREAM_TOKEN_PARAMETER,
     TwilioConnectionTransport,
+    TwilioStreamTokenStore,
     TwilioTransport,
     TwilioTransportConfig,
     mulaw_to_pcm16,
@@ -514,23 +516,31 @@ def _twilio_connected_msg() -> str:
     return json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"})
 
 
-def _twilio_start_msg(stream_sid: str = "MZ123", call_sid: str = "CA456") -> str:
+def _twilio_start_msg(
+    stream_sid: str = "MZ123",
+    call_sid: str = "CA456",
+    *,
+    custom_parameters: dict[str, str] | None = None,
+) -> str:
+    start = {
+        "streamSid": stream_sid,
+        "accountSid": "AC789",
+        "callSid": call_sid,
+        "tracks": ["inbound"],
+        "mediaFormat": {
+            "encoding": "audio/x-mulaw",
+            "sampleRate": 8000,
+            "channels": 1,
+        },
+    }
+    if custom_parameters is not None:
+        start["customParameters"] = custom_parameters
     return json.dumps(
         {
             "event": "start",
             "sequenceNumber": "1",
             "streamSid": stream_sid,
-            "start": {
-                "streamSid": stream_sid,
-                "accountSid": "AC789",
-                "callSid": call_sid,
-                "tracks": ["inbound"],
-                "mediaFormat": {
-                    "encoding": "audio/x-mulaw",
-                    "sampleRate": 8000,
-                    "channels": 1,
-                },
-            },
+            "start": start,
         }
     )
 
@@ -583,11 +593,108 @@ def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
 
 
 class _DummyTwilioWebSocket:
-    async def send(self, _message: str) -> None:
-        return None
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.closed_with: tuple[object, ...] | None = None
 
-    async def close(self) -> None:
-        return None
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def close(self, *args: object) -> None:
+        self.closed_with = args
+
+
+class TestTwilioStreamTokenStore:
+    def test_consumes_token_once(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        token = store.issue()
+
+        assert store.consume(token)
+        assert not store.consume(token)
+        assert not store.consume(f"{token}x")
+        assert not store.consume("nonce.123.é")
+
+    def test_rejects_expired_tokens(self) -> None:
+        current = 1000.0
+
+        def now() -> float:
+            return current
+
+        store = TwilioStreamTokenStore("secret", ttl_s=1, now=now)
+        token = store.issue()
+        current = 1002.0
+
+        assert not store.consume(token)
+
+
+class TestTwilioStreamTokenValidation:
+    @pytest.mark.asyncio
+    async def test_server_transport_consumes_token_and_hides_parameter(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        token = store.issue()
+        config = TwilioTransportConfig(stream_token_validator=store.consume)
+        transport = TwilioTransport(config)
+
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={
+                    TWILIO_STREAM_TOKEN_PARAMETER: token,
+                    "crm_account_id": "ACC-42",
+                },
+            )
+        )
+
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+        assert transport.call_identity.custom_fields == {"crm_account_id": "ACC-42"}
+
+        replay = TwilioTransport(config)
+        await replay._handle_message(
+            _twilio_start_msg(
+                "STREAM2",
+                "CALL2",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: token},
+            )
+        )
+        assert replay.stream_sid is None
+        assert replay.call_sid is None
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_rejects_missing_token(self) -> None:
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=lambda _token: True),
+        )
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert ws.closed_with == (4003, "Missing or invalid stream token")
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_accepts_valid_token(self) -> None:
+        store = TwilioStreamTokenStore("secret")
+        ws = _DummyTwilioWebSocket()
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=store.consume),
+        )
+
+        await transport._handle_message(
+            _twilio_start_msg(
+                "STREAM1",
+                "CALL1",
+                custom_parameters={TWILIO_STREAM_TOKEN_PARAMETER: store.issue()},
+            )
+        )
+
+        assert transport.stream_sid == "STREAM1"
+        assert transport.call_sid == "CALL1"
+        assert ws.closed_with is None
 
 
 @pytest.mark.integration_socket
@@ -1081,6 +1188,10 @@ class TestTwiML:
         assert 'value="ACC-42"' in xml
         assert '<Parameter name="From"' not in xml
 
+    def test_twiml_connect_stream_with_stream_token(self):
+        xml = twiml_connect_stream("wss://example.com/stream", stream_token="token-1")
+        assert f'<Parameter name="{TWILIO_STREAM_TOKEN_PARAMETER}" value="token-1"/>' in xml
+
     def test_twiml_connect_stream_explicit_caller_id_parameters(self):
         xml = twiml_connect_stream(
             "wss://example.com/stream",
@@ -1121,6 +1232,16 @@ class TestTwiML:
         assert '<Stream url="wss://example.com/stream"' in xml
         assert 'track="inbound_track"' in xml
         assert "<Pause" in xml
+
+    def test_twiml_stream_with_parameters_and_stream_token(self):
+        xml = twiml_stream(
+            "wss://example.com/stream",
+            parameters={"crm_account_id": "ACC-42"},
+            stream_token="token-1",
+        )
+        assert '<Parameter name="crm_account_id" value="ACC-42"/>' in xml
+        assert f'<Parameter name="{TWILIO_STREAM_TOKEN_PARAMETER}" value="token-1"/>' in xml
+        assert "</Stream>" in xml
 
 
 # ── Transport conformance tests ───────────────────────────────────

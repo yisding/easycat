@@ -193,7 +193,10 @@ def test_list_templates_json(cli: CliRunner) -> None:
     )
     assert "server.py" in catalog["twilio-phone"]["files"]
     assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
-    assert catalog["twilio-phone"]["optional_env"] == ["TWILIO_WS_PORT"]
+    assert catalog["twilio-phone"]["optional_env"] == [
+        "TWILIO_WS_PORT",
+        "TWILIO_STREAM_TOKEN_SECRET",
+    ]
     assert catalog["webrtc-browser"]["optional_env"] == [
         "TURN_SERVER_URL",
         "TURN_USERNAME",

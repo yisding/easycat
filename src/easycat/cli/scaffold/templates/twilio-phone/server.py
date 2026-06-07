@@ -17,6 +17,7 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
 
 
@@ -24,9 +25,13 @@ def create_app() -> FastAPI:
     require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
     manager: SessionManager[int] = SessionManager()
+    stream_tokens = TwilioStreamTokenStore(os.getenv("TWILIO_STREAM_TOKEN_SECRET") or None)
 
     async def handle_call(ws: ServerConnection) -> None:
-        transport = TwilioConnectionTransport(ws)
+        transport = TwilioConnectionTransport(
+            ws,
+            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
+        )
         config = EasyConfig(
             transport=transport,
             telephony=TelephonyConfig(
@@ -54,7 +59,7 @@ def create_app() -> FastAPI:
 
     @app.post("/twiml")
     async def twiml() -> Response:
-        xml = twiml_connect_stream(stream_url)
+        xml = twiml_connect_stream(stream_url, stream_token=stream_tokens.issue())
         return Response(content=xml, media_type="application/xml")
 
     return app

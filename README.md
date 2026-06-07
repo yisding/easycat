@@ -373,9 +373,13 @@ from urllib.parse import parse_qsl
 
 from fastapi import Request, Response
 from easycat.telephony import validate_twilio_webhook_signature
+from easycat.transports import TwilioStreamTokenStore
 from easycat.transports.twilio_media import twiml_connect_stream
 
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+stream_tokens = TwilioStreamTokenStore(
+    os.getenv("TWILIO_STREAM_TOKEN_SECRET") or TWILIO_AUTH_TOKEN or None
+)
 
 @app.post("/twiml")
 async def twiml(request: Request) -> Response:
@@ -397,6 +401,7 @@ async def twiml(request: Request) -> Response:
             "To": form.get("To", ""),
             "CallerName": form.get("CallerName", ""),
         },
+        stream_token=stream_tokens.issue(),
     )
     return Response(content=xml, media_type="application/xml")
 ```
@@ -410,6 +415,12 @@ name, and any extra fields you pass) onto
 forwards those verbatim in generated TwiML. When webhook validation is
 enabled behind a proxy, validate against the same public URL Twilio
 called, not an internal service URL.
+
+Pass the same token store to the WebSocket transport with
+`TwilioTransportConfig(stream_token_validator=stream_tokens.consume)`.
+The built-in store is in-memory and suited to a single app process. For
+multiple workers or replicas, route TwiML and WebSocket traffic to the
+same process or provide a shared validator/store.
 
 ### Outbound calls (Twilio REST)
 Enable the outbound pipeline via `EasyConfig.telephony`:

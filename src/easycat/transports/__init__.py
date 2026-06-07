@@ -20,6 +20,8 @@ _LAZY_ATTR: dict[str, str] = {
     "TwilioTransport": "easycat.transports.twilio_media",
     "TwilioTransportConfig": "easycat.transports.twilio_media",
     "TwilioConnectionTransport": "easycat.transports.twilio_media",
+    "TwilioStreamTokenStore": "easycat.transports.twilio_media",
+    "TWILIO_STREAM_TOKEN_PARAMETER": "easycat.transports.twilio_media",
     "ICEServer": "easycat.transports.webrtc",
     "WebRTCTransport": "easycat.transports.webrtc",
     "WebRTCTransportConfig": "easycat.transports.webrtc",
@@ -44,7 +46,9 @@ __all__ = sorted(_LAZY_ATTR)
 if TYPE_CHECKING:
     from easycat.transports.local import LocalTransport, LocalTransportConfig
     from easycat.transports.twilio_media import (
+        TWILIO_STREAM_TOKEN_PARAMETER,
         TwilioConnectionTransport,
+        TwilioStreamTokenStore,
         TwilioTransport,
         TwilioTransportConfig,
     )

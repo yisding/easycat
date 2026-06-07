@@ -143,8 +143,9 @@ context. Several bullets are known stale; use the current-state list above and
 - Done: WebRTC signaling now omits wildcard CORS by default, allows same-origin
   preflights, and requires explicit `cors_allowed_origins` for custom hosted
   browser clients.
-- For Twilio Media Streams, add a signed one-time stream token in TwiML and
-  validate it on connect.
+- Done: Twilio Media Streams TwiML helpers can emit signed one-time stream
+  tokens, and Twilio transports validate and consume them during the `start`
+  event.
 
 ### 0.5 Fix Documentation Drift
 

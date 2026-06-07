@@ -204,7 +204,9 @@ def test_template_env_var_collector_reads_twilio_server_code() -> None:
 
     assert required == {"OPENAI_API_KEY", "TWILIO_STREAM_URL"}
     assert "TWILIO_WS_PORT" in referenced
+    assert "TWILIO_STREAM_TOKEN_SECRET" in referenced
     assert "TWILIO_WS_PORT" not in required
+    assert "TWILIO_STREAM_TOKEN_SECRET" not in required
 
 
 def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:

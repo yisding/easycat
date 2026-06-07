@@ -33,6 +33,13 @@ agent needs parseable environment/check rows.
 Change it when another process owns that port, and keep `TWILIO_STREAM_URL`
 pointing at the public tunnel for the same listener.
 
+The generated `/twiml` route adds a signed, one-time stream token and the
+WebSocket transport consumes it during Twilio's `start` event. The built-in
+token store is in-memory and fits a single app process; for multiple workers or
+replicas, route TwiML and WebSocket traffic to the same process or replace the
+validator with shared storage. `TWILIO_STREAM_TOKEN_SECRET` optionally pins the
+signing secret for the local store.
+
 For local testing, expose the WebSocket port with a tunnel such as ngrok and
 point `TWILIO_STREAM_URL` at the public `wss://` forwarding URL.
 
