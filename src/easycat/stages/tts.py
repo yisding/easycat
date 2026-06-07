@@ -21,6 +21,7 @@ from easycat.stages.base import (
     journal_append_control_signal,
     journal_append_event,
     put_artifact,
+    stage_error_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ class TTSStage:
         ctx = self._journal_ctx(ctx)
         started = time.perf_counter()
         state_before = self.snapshot_state()
-        journal_append_event(
+        start_sequence = journal_append_event(
             ctx,
             stage=self.name,
             name="stage_start",
@@ -70,6 +71,7 @@ class TTSStage:
                 stage=self.name,
                 provider=type(self._provider).__name__.lower(),
                 elapsed_ms=elapsed_ms,
+                sequence=start_sequence,
             )
             observability.increment_counter(
                 "easycat.provider.errors.total",
@@ -86,12 +88,15 @@ class TTSStage:
                 turn_id=turn.id,
                 state_before=state_before,
                 error=str(exc),
-                data_extra={"elapsed_ms": elapsed_ms},
+                data_extra=stage_error_context(
+                    elapsed_ms=elapsed_ms,
+                    input_sequence=start_sequence,
+                ),
             )
             raise
 
         if isinstance(result, AsyncIterator) or inspect.isasyncgen(result):
-            return self._wrap_stream(result, ctx, turn.id, state_before)
+            return self._wrap_stream(result, ctx, turn.id, state_before, start_sequence)
 
         state_after = self.snapshot_state()
         journal_append_event(
@@ -110,6 +115,7 @@ class TTSStage:
         ctx: RunContext,
         turn_id: str,
         state_before: StageStateSnapshot,
+        start_sequence: int | None,
     ) -> AsyncIterator[Any]:
         """Iterate *stream*, capture audio bytes per frame, yield each event.
 
@@ -158,6 +164,7 @@ class TTSStage:
                 stage=self.name,
                 provider=type(self._provider).__name__.lower(),
                 elapsed_ms=elapsed_ms,
+                sequence=start_sequence,
             )
             observability.increment_counter(
                 "easycat.provider.errors.total",
@@ -174,7 +181,10 @@ class TTSStage:
                 turn_id=turn_id,
                 state_before=state_before,
                 error=str(exc),
-                data_extra={"elapsed_ms": elapsed_ms},
+                data_extra=stage_error_context(
+                    elapsed_ms=elapsed_ms,
+                    input_sequence=start_sequence,
+                ),
             )
             raise
         finally:

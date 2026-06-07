@@ -514,9 +514,13 @@ class TestStageExecuteRecording:
         stage_error = next(r for r in records if r.name == "stage_error")
         assert stage_error.data["stage"] == "agent"
         assert stage_error.data["elapsed_ms"] >= 0
+        assert stage_error.data["input_sequence"] == 1
+        assert stage_error.data["input_record_ref"] == "cp_1"
         notes = exc_info.value.__notes__
         assert "stage=agent" in notes
         assert "provider=agentrunner" in notes
+        assert "sequence=1" in notes
+        assert "record_key=cp_1" in notes
         assert any(note.startswith("elapsed_ms=") for note in notes)
 
     async def test_no_journal_does_not_error(self):

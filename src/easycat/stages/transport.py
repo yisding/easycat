@@ -19,6 +19,7 @@ from easycat.stages.base import (
     journal_append_control_signal,
     journal_append_event,
     put_artifact,
+    stage_error_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ class TransportStage:
             "audio_bytes": len(audio_bytes) if isinstance(audio_bytes, (bytes, bytearray)) else 0,
         }
         extra.update(audio_format_fields(input))
-        journal_append_event(
+        start_sequence = journal_append_event(
             ctx,
             stage=self.name,
             name="stage_start",
@@ -101,6 +102,7 @@ class TransportStage:
                 stage=self.name,
                 provider=type(self._provider).__name__.lower(),
                 elapsed_ms=elapsed_ms,
+                sequence=start_sequence,
             )
             observability.increment_counter(
                 "easycat.provider.errors.total",
@@ -117,7 +119,10 @@ class TransportStage:
                 turn_id=turn.id,
                 state_before=state_before,
                 error=str(exc),
-                data_extra={"elapsed_ms": elapsed_ms},
+                data_extra=stage_error_context(
+                    elapsed_ms=elapsed_ms,
+                    input_sequence=start_sequence,
+                ),
             )
             raise
         finally:

@@ -75,8 +75,9 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   journal; `debug="light"`/`debug="full"` do.
 - Error records preserve PEP 678 exception notes in `ErrorInfo.notes`. Runtime
   `Error` events attach `stage`, `provider`, `code`, `session_id`, and
-  `turn_id` when known; stage wrappers also attach `elapsed_ms` on re-raised
-  provider failures.
+  `turn_id` when known; stage wrappers also attach `elapsed_ms`, `sequence`,
+  and `record_key` on re-raised provider failures so a traceback points back
+  to the journal record that captured the failing input.
 - CLI entry points:
   `easycat bundles list`,
   `easycat bundles show <path>`,

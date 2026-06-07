@@ -27,9 +27,9 @@ Shipped:
   `stage=...`, `provider=...`, `code=...`, `session_id=...`, and
   `turn_id=...` notes before journal capture (`events.py`).
 - Stage wrappers annotate re-raised provider exceptions with PEP 678
-  `stage=...`, `provider=...`, and `elapsed_ms=...` notes and record the same
-  elapsed value on `stage_error` journal records (`stages/base.py`,
-  `stages/*.py`).
+  `stage=...`, `provider=...`, `elapsed_ms=...`, `sequence=...`, and
+  `record_key=cp_<sequence>` notes and record the same elapsed / input-record
+  context on `stage_error` journal records (`stages/base.py`, `stages/*.py`).
 - `ErrorInfo.from_exception(ExceptionGroup(...))` now preserves the grouped
   child error tree for journal, SQLite, bundle, and debugger consumers while
   retaining the flat notes summary (`runtime/records.py`, `runtime/journal.py`).
@@ -62,9 +62,8 @@ Still remaining:
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
-- Pipeline-wide `ExceptionGroup` propagation and the remaining deeper PEP 678
-  fields that require journal coordination, especially sequence and
-  captured-input record keys.
+- Pipeline-wide `ExceptionGroup` propagation and remaining exception paths
+  outside the stage wrappers.
 - Full structlog dev/prod renderer split remains; today's stdlib logger has
   the `EASYCAT_ENV=prod` JSON-renderer behavior but not structlog processors.
 - Advanced knobs promised by the plan that aren't yet config fields:

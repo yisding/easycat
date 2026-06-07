@@ -417,6 +417,9 @@ def test_observability_doc_tracks_error_note_context() -> None:
         "`provider`",
         "`turn_id`",
         "`elapsed_ms`",
+        "`sequence`",
+        "`record_key`",
+        "failing input",
     ):
         assert token in journal
 

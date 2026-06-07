@@ -201,11 +201,44 @@ def annotate_stage_exception(
     stage: str,
     provider: str | None = None,
     elapsed_ms: float | None = None,
+    sequence: int | None = None,
+    record_key: str | None = None,
 ) -> None:
     """Attach common PEP 678 context for stage-raised exceptions."""
     from easycat.events import _add_exception_notes
 
-    _add_exception_notes(exc, stage=stage, provider=provider, elapsed_ms=elapsed_ms)
+    record_key = record_key or _checkpoint_ref(sequence)
+    sequence = sequence if sequence is not None and sequence >= 0 else None
+    _add_exception_notes(
+        exc,
+        stage=stage,
+        provider=provider,
+        elapsed_ms=elapsed_ms,
+        sequence=sequence,
+        record_key=record_key,
+    )
+
+
+def stage_error_context(
+    *,
+    elapsed_ms: float,
+    input_sequence: int | None = None,
+) -> dict[str, Any]:
+    """Build shared ``stage_error`` data for provider failures."""
+    payload: dict[str, Any] = {"elapsed_ms": elapsed_ms}
+    record_ref = _checkpoint_ref(input_sequence)
+    if input_sequence is not None and input_sequence >= 0 and record_ref is not None:
+        payload["input_sequence"] = input_sequence
+        payload["input_record_ref"] = record_ref
+    return payload
+
+
+def _checkpoint_ref(sequence: int | None) -> str | None:
+    if sequence is None or sequence < 0:
+        return None
+    from easycat.debug.bundle import checkpoint_id
+
+    return checkpoint_id(sequence)
 
 
 def journal_append_event(
@@ -221,7 +254,7 @@ def journal_append_event(
     input_ref: str | None = None,
     output_ref: str | None = None,
     data_extra: dict[str, Any] | None = None,
-) -> None:
+) -> int | None:
     """Append a stage-scoped journal record.
 
     Centralises the boilerplate every stage used to duplicate: stamping
@@ -231,7 +264,7 @@ def journal_append_event(
     instead of burying them in ``data`` as strings.
     """
     if ctx.journal is None:
-        return
+        return None
     payload: dict[str, Any] = {"stage": stage}
     if state_before is not None:
         payload["state_before"] = str(state_before)
@@ -241,7 +274,7 @@ def journal_append_event(
         payload["error"] = error
     if data_extra:
         payload.update(data_extra)
-    ctx.journal.append(
+    return ctx.journal.append(
         kind=kind,
         name=name,
         session_id=ctx.session_id,
