@@ -354,9 +354,9 @@ def _next_step_run_command(template: str) -> str:
 
 
 def _next_step_check_command(template: str) -> str:
-    """Return the scaffold-local syntax check command for the success footer."""
+    """Return the scaffold-local lint/syntax check command for the success footer."""
     filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
-    return "uv run python -m py_compile " + " ".join(filenames)
+    return "uv run ruff check " + " ".join(filenames)
 
 
 def _next_step_commands(target: Path, template: str) -> list[str]:
@@ -807,7 +807,7 @@ def init(
         "  uv run easycat doctor --env-file .env --json [dim]# parseable setup checks[/]"
     )
     stderr_console.print(
-        f"  {_next_step_check_command(cfg.template)} [dim]# quick syntax check[/]"
+        f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
     )
     stderr_console.print(
         "  uv run easycat docs [dim]# find learning, maintenance, validation, "

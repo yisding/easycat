@@ -170,7 +170,7 @@ first run.
 - README tells every OpenAI-key template to run
   `uv run easycat doctor --env-file .env` during setup.
 - `easycat init` success output mirrors each template README's run and
-  syntax-check commands.
+  local lint/syntax check commands.
 - `easycat init --list-templates` includes per-template metadata
   (mode, transport, framework, best-fit guidance, base package requirement,
   base extras, required environment variables, optional environment knobs,
@@ -178,6 +178,8 @@ first run.
   post-scaffold doctor/check/docs/run commands), and `--json` exposes the same
   catalog for tooling.
 - `pyproject.toml` pins `easycat[<extra>]`.
+- `pyproject.toml` includes a `dev` dependency group with Ruff so
+  `uv run ruff check ...` works after the documented `uv sync`.
 - `.gitignore` contains no placeholders.
 
 **Backed by.** `test_init.py` (happy paths) and `test_templates.py`

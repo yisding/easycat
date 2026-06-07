@@ -41,10 +41,10 @@ Ctrl-C to quit.
 
 ## Check
 
-After editing `agent.py`, run a quick syntax check:
+After editing `agent.py`, run the local lint/syntax check:
 
 ```bash
-uv run python -m py_compile agent.py
+uv run ruff check agent.py
 ```
 
 ## Next steps

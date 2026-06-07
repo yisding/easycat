@@ -326,6 +326,8 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
     assert "version floor tracks" in test_plan
     assert "pyproject.toml" in test_plan
     assert "uv run easycat doctor --env-file .env" in test_plan
+    assert "uv run ruff check ..." in test_plan
+    assert "Ruff" in test_plan
     assert "uv run --env-file .env python agent.py" in test_plan
     assert "uv run python agent.py" not in test_plan
     for section in section_names:
@@ -400,12 +402,14 @@ def test_readme_install_section_names_rendered_base_requirement(name: str) -> No
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
-def test_readme_has_local_syntax_check(name: str) -> None:
+def test_readme_has_local_lint_check(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     check_section = readme.split("## Check", 1)[1].split("## Next steps", 1)[0]
-    expected_command = "uv run python -m py_compile " + " ".join(_template_python_filenames(name))
+    expected_command = "uv run ruff check " + " ".join(_template_python_filenames(name))
 
     assert expected_command in check_section
+    assert "local lint/syntax check" in check_section
+    assert "uv run python -m py_compile" not in check_section
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
@@ -549,12 +553,14 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     """Every template's pyproject.toml declares an easycat extras dep."""
     pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
     rendered = _render_text(pyproject, _substitutions(InitConfig(template=name), "demo"))
+    parsed = tomllib.loads(rendered)
 
     assert "easycat[" in pyproject, f"{name}/pyproject.toml must pin easycat[...]"
     assert f"easycat[{','.join(_TEMPLATE_BASE_EXTRAS[name])}]" in rendered
     assert "$EASYCAT_VERSION_FLOOR" in pyproject
     assert "$EASYCAT_VERSION_FLOOR" not in rendered
     assert _base_requirement(name) in rendered
+    assert parsed["dependency-groups"]["dev"] == ["ruff>=0.9"]
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject

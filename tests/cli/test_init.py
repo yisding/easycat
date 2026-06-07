@@ -861,8 +861,9 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run easycat doctor --env-file .env" in result.stderr
     assert "uv run easycat doctor --env-file .env --json" in result.stderr
     assert "parseable setup checks" in result.stderr
-    assert "uv run python -m py_compile agent.py" in result.stderr
-    assert "quick syntax check" in result.stderr
+    assert "uv run ruff check agent.py" in result.stderr
+    assert "lint and syntax check" in result.stderr
+    assert "uv run python -m py_compile" not in result.stderr
     assert "uv run easycat docs" in result.stderr
     assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
     assert "find learning, maintenance, and operations routes" not in normalized_stderr

@@ -166,14 +166,14 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["agent_lines"], int)
     assert isinstance(payload["git"], bool)
     assert payload["run_command"] == "uv run --env-file .env python agent.py"
-    assert payload["check_command"] == "uv run python -m py_compile agent.py"
+    assert payload["check_command"] == "uv run ruff check agent.py"
     assert payload["next_step_commands"] == [
         f"cd {shlex.quote(str(tmp_path / 'demo'))}",
         "cp .env.example .env",
         "uv sync",
         "uv run easycat doctor --env-file .env",
         "uv run easycat doctor --env-file .env --json",
-        "uv run python -m py_compile agent.py",
+        "uv run ruff check agent.py",
         "uv run easycat docs",
         "uv run easycat docs --audience app-builders",
         "uv run easycat docs --json",
@@ -231,7 +231,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
             entry["run_command"],
         ]
         assert entry["run_command"].startswith("uv run ")
-        assert entry["check_command"].startswith("uv run python -m py_compile ")
+        assert entry["check_command"].startswith("uv run ruff check ")
         assert isinstance(entry["best_for"], str)
         assert entry["best_for"]
         assert isinstance(entry["base_extras"], list)

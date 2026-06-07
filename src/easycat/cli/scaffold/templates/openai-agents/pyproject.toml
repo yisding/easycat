@@ -7,6 +7,11 @@ dependencies = [
     "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+]
+
 [tool.ruff]
 line-length = 99
 target-version = "py311"

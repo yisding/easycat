@@ -49,10 +49,10 @@ Ctrl-C to quit.
 
 ## Check
 
-After editing the scaffold, run a quick syntax check:
+After editing the scaffold, run the local lint/syntax check:
 
 ```bash
-uv run python -m py_compile agent.py server.py
+uv run ruff check agent.py server.py
 ```
 
 ## Next steps
