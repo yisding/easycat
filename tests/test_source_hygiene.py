@@ -205,6 +205,25 @@ def test_cli_test_plan_names_validation_json_lanes() -> None:
     assert "command-specific CLI suites" in json_plan
 
 
+def test_cli_test_plan_names_scaffold_artifact_hygiene() -> None:
+    """Keep the scaffold plan aligned with generated-project hygiene checks."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    scaffold_plan = plan.split("## Plan 5 — `init` template rendering", 1)[1].split("---", 1)[0]
+    normalized = " ".join(scaffold_plan.split())
+
+    assert "cache, build, coverage, docs, mutation, package metadata" in normalized
+    assert "secret-key artifacts leaking into generated projects" in normalized
+    assert ".gitignore` covers local env variants" in normalized
+    assert "local agent/tool state" in normalized
+    assert "local `.pem` / `.key` files" in normalized
+    assert "coverage files, `.egg-info` package metadata, bytecode suffixes" in normalized
+    assert "local secret suffixes" in normalized
+    assert "`easycat init --json` reports only the clean generated-project manifest" in (
+        normalized
+    )
+    assert "the real top-level `.gitignore` remains" in normalized
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

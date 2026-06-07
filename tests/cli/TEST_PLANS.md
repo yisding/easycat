@@ -155,7 +155,9 @@ place, substitutions must not leak raw `$VAR` tokens into user code.
 (`.env.example`, `.gitignore` not copied); `agent.py` line budget
 regression; README sections dropped during rendering.
 OpenAI-key templates missing the `easycat doctor` preflight before the
-first run.
+first run; copied local cache, build, coverage, docs, mutation, package
+metadata, bytecode, or secret-key artifacts leaking into generated
+projects.
 
 **Checks.**
 - For each shipped template: `init` produces agent.py, .env.example,
@@ -185,6 +187,15 @@ first run.
 - `pyproject.toml` includes a `dev` dependency group with Ruff so
   `uv run ruff check ...` works after the documented `uv sync`.
 - `.gitignore` contains no placeholders.
+- `.gitignore` covers local env variants, caches, local agent/tool state,
+  build and wheel outputs, coverage reports, docs builds, mutation-test
+  output, package metadata, bytecode, and local `.pem` / `.key` files.
+- The scaffold copier skips the same local artifact directories plus
+  coverage files, `.egg-info` package metadata, bytecode suffixes, and
+  local secret suffixes.
+- `easycat init --json` reports only the clean generated-project manifest,
+  with generated/cache/package/secret artifacts omitted while the real
+  top-level `.gitignore` remains.
 
 **Backed by.** `test_init.py` (happy paths) and `test_templates.py`
 (per-template parametrized checks).
