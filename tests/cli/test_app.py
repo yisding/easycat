@@ -437,6 +437,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "just guard-templates",
         "just guard-contributing",
         "just guard-markdown",
+        "uv run easycat docs --audience contributors",
         "uv run pytest",
         "uv run ruff check .",
         "uv run easycat validate quick",

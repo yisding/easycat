@@ -518,6 +518,10 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 def test_contributing_docs_route_matches_validation_report_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    quick_start = contributing.split("## Quick start", 1)[1].split(
+        "## The development loop",
+        1,
+    )[0]
     maintenance_section = contributing.split("## Maintaining docs and onboarding maps", 1)[
         1
     ].split("## Parallel runs and xdist safety", 1)[0]
@@ -526,6 +530,9 @@ def test_contributing_docs_route_matches_validation_report_commands() -> None:
         1,
     )[1].split("## ", 1)[0]
     route_commands = entries["CONTRIBUTING.md"].get("commands", ())
+
+    assert "uv run easycat docs --audience contributors" in quick_start
+    assert "uv run easycat docs --audience contributors" in route_commands
 
     for command in (
         "just guard-docs",

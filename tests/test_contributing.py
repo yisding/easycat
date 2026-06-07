@@ -137,9 +137,11 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     normalized = re.sub(r"\s+", " ", quick_start)
 
     assert "uv run easycat docs" in quick_start
+    assert "uv run easycat docs --audience contributors" in quick_start
     assert "uv run easycat docs --json" in quick_start
     assert "uv run easycat explain json-schema" in quick_start
     assert "maintained reader-facing map" in quick_start
+    assert "narrow the map to contributor-facing routes" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized
