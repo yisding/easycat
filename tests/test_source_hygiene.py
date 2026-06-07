@@ -181,6 +181,18 @@ def test_cli_test_plan_names_validation_json_lanes() -> None:
     assert "command-specific CLI suites" in json_plan
 
 
+def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
+    """The scaffold smoke matrix should lint with the generated project's config."""
+    source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    test_body = source.split("def test_scaffold_python_files_pass_ruff", 1)[1]
+
+    assert "cwd=project" in test_body
+    assert "path.relative_to(project)" in test_body
+    assert "str(path) for path in python_files" not in test_body
+
+
 def test_peripheral_cli_package_layout_lists_top_level_cli_modules() -> None:
     """Keep the maintainer-facing CLI layout aligned with the package tree."""
     plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")

@@ -73,7 +73,14 @@ def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, templat
     python_files = _generated_python_files(project)
 
     proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", *(str(path) for path in python_files)],
+        [
+            sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            *(str(path.relative_to(project)) for path in python_files),
+        ],
+        cwd=project,
         capture_output=True,
         text=True,
     )
