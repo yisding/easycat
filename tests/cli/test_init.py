@@ -476,7 +476,7 @@ def test_init_twilio_phone_honors_provider_shortcuts(
 def test_init_omits_cache_artifacts(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No generated path may contain a cache dir or a compiled .pyc."""
+    """No generated path may contain a cache dir or compiled bytecode."""
     monkeypatch.chdir(tmp_path)
     config = json.dumps({"schema_version": 1, "template": "openai-agents"})
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--json"])
@@ -498,13 +498,13 @@ def test_init_omits_cache_artifacts(
     for path in project.rglob("*"):
         parts = set(path.relative_to(project).parts)
         assert not (parts & forbidden), f"shipped a cache artifact: {path}"
-        assert path.suffix != ".pyc", f"shipped a compiled artifact: {path}"
+        assert path.suffix not in {".pyc", ".pyo"}, f"shipped a compiled artifact: {path}"
 
     # The reported file manifest is equally clean.
     payload = json.loads(result.stdout)
     for rel in payload["files"]:
         assert not (set(Path(rel).parts) & forbidden), rel
-        assert not rel.endswith(".pyc"), rel
+        assert not rel.endswith((".pyc", ".pyo")), rel
 
     # The legitimate top-level .gitignore is still shipped.
     assert (project / ".gitignore").exists()

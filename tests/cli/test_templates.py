@@ -31,6 +31,7 @@ from easycat.cli.diagnose.doctor import _parse_env_file
 from easycat.cli.scaffold._schema import InitConfig, available_templates
 from easycat.cli.scaffold.init import (
     _COPY_IGNORE,
+    _COPY_SUFFIX_IGNORE,
     _TEMPLATE_BASE_EXTRAS,
     _TEMPLATE_CATALOG,
     _available_template_catalog,
@@ -92,6 +93,7 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".codex/",
     "__pycache__/",
     "*.pyc",
+    "*.pyo",
     ".hypothesis/",
     ".mypy_cache/",
     ".pipecat-bench/",
@@ -918,3 +920,7 @@ def test_template_copy_filter_omits_local_artifact_directories() -> None:
     }
 
     assert expected <= _COPY_IGNORE
+
+
+def test_template_copy_filter_omits_compiled_bytecode_suffixes() -> None:
+    assert {".pyc", ".pyo"} <= _COPY_SUFFIX_IGNORE

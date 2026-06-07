@@ -8,6 +8,7 @@
 .codex/
 __pycache__/
 *.pyc
+*.pyo
 .hypothesis/
 .mypy_cache/
 .pipecat-bench/

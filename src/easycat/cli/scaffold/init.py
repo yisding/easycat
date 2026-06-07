@@ -228,7 +228,7 @@ _TRANSPORT_ALIASES: dict[str, str] = {
 # Directory names that may sit in the live template source at install time
 # (cache and local tool artifacts from running validation or coding agents
 # against the templates) but must never ship into a freshly scaffolded
-# project. ``*.pyc`` files are filtered separately by suffix.
+# project. Compiled bytecode files are filtered separately by suffix.
 _COPY_IGNORE: frozenset[str] = frozenset(
     {
         "__pycache__",
@@ -243,6 +243,7 @@ _COPY_IGNORE: frozenset[str] = frozenset(
         ".uv-cache",
     }
 )
+_COPY_SUFFIX_IGNORE: frozenset[str] = frozenset({".pyc", ".pyo"})
 
 
 def _templates_root() -> Path:
@@ -257,7 +258,9 @@ def _template_sources(template_name: str) -> list[Path]:
     for source in sorted(src_root.rglob("*")):
         if source.is_dir():
             continue
-        if any(part in _COPY_IGNORE for part in source.parts) or source.suffix == ".pyc":
+        ignored_directory = any(part in _COPY_IGNORE for part in source.parts)
+        ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
+        if ignored_directory or ignored_suffix:
             continue
         sources.append(source)
     return sources
