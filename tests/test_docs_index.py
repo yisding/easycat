@@ -656,6 +656,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run easycat doctor --env-file .env" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )
+    assert "uv run --env-file .env python examples/openai_agents_voice.py" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
     assert "uv run pytest tests/test_install_guidance.py" in entries[
         "README.md#choose-your-path"
     ].get("commands", ())
