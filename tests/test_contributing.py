@@ -232,8 +232,8 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
         "Example categories, README command hints, run commands, and docs-route hints",
         (
-            "Generated README sections, line budgets, catalog text, catalog JSON, "
-            "and catalog next-step commands"
+            "Generated README sections, line budgets, init stderr and JSON next steps, "
+            "catalog text, catalog JSON, and catalog next-step commands"
         ),
         (
             "`justfile` parity, agent guide command hints, validation lanes, "
