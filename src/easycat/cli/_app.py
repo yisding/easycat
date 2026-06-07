@@ -232,9 +232,17 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Coding agents",
         "path": "AGENTS.md",
         "audience": "coding agents",
-        "description": "Follow repo structure, development commands, and PR expectations.",
+        "description": (
+            "Follow repo structure, development commands, docs/onboarding guards, "
+            "and PR expectations."
+        ),
         "commands": (
             "uv run easycat docs",
+            "just guard-docs",
+            "just guard-examples",
+            "just guard-templates",
+            "just guard-contributing",
+            "just guard-markdown",
             "uv run easycat validate quick",
             "uv run easycat validate report .easycat/validation/latest.json",
         ),

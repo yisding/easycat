@@ -19,6 +19,11 @@ the raw commands below.
 - `just`: list every developer task.
 - `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
 - `just validate-quick`: run the deterministic local validation slice.
+- `just guard-docs`: guard root onboarding docs, `easycat docs`, and docs JSON.
+- `just guard-examples`: guard the examples chooser and docs-route hints.
+- `just guard-templates`: guard scaffold READMEs and template catalog output.
+- `just guard-contributing`: guard contributor docs, validation plan state, and route hints.
+- `just guard-markdown`: guard maintained Markdown links and anchors.
 - `uv run pytest`: run full test suite.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc.py`: run focused WebRTC transport tests.

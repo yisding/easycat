@@ -249,6 +249,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "provider registries" in result.stdout
     assert "AGENTS.md" in result.stdout
     assert "PR expectations" in result.stdout
+    assert "just guard-templates" in result.stdout
     assert "docs/public-api.md" in result.stdout
     assert "CONTRIBUTING.md" in result.stdout
     assert "docs/onboarding guards" in result.stdout
@@ -395,6 +396,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
+    assert "docs/onboarding guards" in descriptions["AGENTS.md"]
     assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]

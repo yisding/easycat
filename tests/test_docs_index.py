@@ -113,7 +113,8 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "architecture map" in normalized
     assert "provider registries" in normalized
     assert "repository agent guide" in normalized
-    assert "development commands, validation commands, and PR expectations" in normalized
+    assert "development commands, docs/onboarding guard recipes" in normalized
+    assert "validation commands, and PR expectations" in normalized
     assert "docs/onboarding guard recipes" in normalized
     for recipe in (
         "just guard-docs",
@@ -256,6 +257,26 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
     assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
+
+
+def test_coding_agents_docs_route_matches_guard_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    command_section = agents.split("## Build, Test, and Development Commands", 1)[1].split(
+        "## Coding Style",
+        1,
+    )[0]
+    route_commands = entries["AGENTS.md"].get("commands", ())
+
+    for command in (
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
+    ):
+        assert command in command_section
+        assert command in route_commands
 
 
 def test_cli_docs_command_hints_are_visible_on_target_pages() -> None:
