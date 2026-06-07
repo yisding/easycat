@@ -892,11 +892,17 @@ class TextSessionConfig(_AgentSessionConfig):
     ``create_*(config)`` shape. Audio-only fields
     (``stt``/``tts``/``vad``/``transport``/etc.) have no analogue here
     because text sessions never enter the audio pipeline.
+    ``record_to=`` mirrors :class:`EasyConfig`: when debug journaling is
+    enabled, clean teardown exports a timestamped debug bundle to that
+    directory.
 
     Validated by the same :func:`_validate_common` as :class:`EasyConfig`.
     """
 
     session_id: str | None = None
+    # Match EasyConfig(record_to=...): text sessions can auto-export a
+    # timestamped debug bundle on stop when debug journaling is enabled.
+    record_to: str | Path | None = None
 
     def __post_init__(
         self,
@@ -930,6 +936,7 @@ class TextSessionConfig(_AgentSessionConfig):
         agent_model: str | None = None,
         remote_agent_api_key: str | None = None,
         mcp_servers: list[str] | None = None,
+        record_to: str | Path | None = None,
     ) -> TextSessionConfig:
         """Resolve the config-or-loose-kwargs calling convention to one config.
 
@@ -953,6 +960,7 @@ class TextSessionConfig(_AgentSessionConfig):
                 "agent_model": (agent_model, None),
                 "remote_agent_api_key": (remote_agent_api_key, None),
                 "mcp_servers": (mcp_servers, None),
+                "record_to": (record_to, None),
             }
             supplied = [name for name, (value, default) in loose.items() if value != default]
             if supplied:
@@ -973,4 +981,5 @@ class TextSessionConfig(_AgentSessionConfig):
             agent_model=agent_model,
             remote_agent_api_key=remote_agent_api_key,
             mcp_servers=mcp_servers,
+            record_to=record_to,
         )

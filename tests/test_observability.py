@@ -427,6 +427,22 @@ def test_observability_doc_tracks_error_note_context() -> None:
         assert token in journal
 
 
+def test_observability_doc_tracks_record_to_auto_capture() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for token in (
+        '`record_to="runs"`',
+        "`EasyConfig`",
+        "`create_text_session(...)`",
+        "timestamped debug bundle",
+    ):
+        assert token in journal
+
+
 @pytest.mark.parametrize(
     "forbidden",
     ["session_id", "turn_id", "transcript", "provider_request_id", "phone_number"],

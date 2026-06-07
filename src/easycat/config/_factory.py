@@ -634,6 +634,7 @@ def create_text_session(
     agent_model: str | None = None,
     remote_agent_api_key: str | None = None,
     mcp_servers: list[str] | None = None,
+    record_to: str | Path | None = None,
 ) -> Session:
     """Create a text-only Session (no audio pipeline).
 
@@ -647,6 +648,10 @@ def create_text_session(
     request/response agent interaction without STT, TTS, VAD, or
     transport.  Useful for testing agent logic and building text-based
     UIs on the same agent adapter stack.
+
+    ``record_to=`` mirrors :class:`EasyConfig`: with ``debug="light"`` or
+    ``debug="full"``, teardown auto-exports a timestamped debug bundle into
+    that directory.
 
     Raises :class:`RuntimeError` if the caller attempts to call
     :meth:`Session.start` on a text session.
@@ -663,6 +668,7 @@ def create_text_session(
         agent_model=agent_model,
         remote_agent_api_key=remote_agent_api_key,
         mcp_servers=mcp_servers,
+        record_to=record_to,
     )
 
     agent = config.agent
@@ -675,6 +681,7 @@ def create_text_session(
     agent_model = config.agent_model
     remote_agent_api_key = config.remote_agent_api_key
     mcp_servers = config.mcp_servers
+    record_to = config.record_to
 
     sid = session_id or f"session-{uuid4().hex[:12]}"
     artifact_store = _create_artifact_store(sid, debug)
@@ -739,7 +746,10 @@ def create_text_session(
         debug=debug,
         journal_backend=journal_backend,
         journal_retention=journal_retention,
+        record_to=record_to,
     )
     session._agent_model = agent_model
     session._remote_agent_api_key = remote_agent_api_key
+    if record_to is not None:
+        _install_record_to_hook(session, Path(record_to), debug_mode=debug)
     return session

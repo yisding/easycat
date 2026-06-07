@@ -73,6 +73,8 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   arguments so a session can be faithfully replayed and debugged.
 - It is gated by `debug=` (see orthogonality below): `debug="off"` does not
   journal; `debug="light"`/`debug="full"` do.
+- `record_to="runs"` on `EasyConfig` or `create_text_session(...)` exports a
+  timestamped debug bundle on clean shutdown when journaling is enabled.
 - Error records preserve PEP 678 exception notes in `ErrorInfo.notes`. Runtime
   `Error` events attach `stage`, `provider`, `code`, `session_id`, and
   `turn_id` when known; stage wrappers also attach `elapsed_ms`, `sequence`,

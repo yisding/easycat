@@ -97,6 +97,9 @@ def test_bundles_list_empty(cli: CliRunner, tmp_path: Path) -> None:
     result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path)])
     assert result.exit_code == 0
     assert "No bundles found" in result.stderr
+    assert "EasyConfig(record_to=...)" in result.stderr
+    assert "create_text_session(record_to=...)" in result.stderr
+    assert "session.export_debug_bundle()" in result.stderr
 
 
 def test_bundles_list_empty_renders_bracketed_path_literally(

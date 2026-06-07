@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from easycat.config import EasyConfig, _install_record_to_hook
+from easycat.config import (
+    EasyConfig,
+    TextSessionConfig,
+    _install_record_to_hook,
+    create_text_session,
+)
 
 
 class _FakeSession:
@@ -142,10 +147,24 @@ async def test_record_to_export_failure_does_not_mask_shutdown(
 
 
 def test_record_to_field_accepts_path_and_str() -> None:
-    """EasyConfig accepts both str and Path for record_to."""
-    # Only a construction smoke test — we can't run create_session without
-    # providers, so this validates the dataclass contract only.
+    """Session configs accept both str and Path for record_to."""
+    # EasyConfig is construction-only here because create_session needs
+    # providers; the text-session path has an integration test below.
     cfg1 = EasyConfig(openai_api_key="sk-stub", record_to="/tmp/a")
     cfg2 = EasyConfig(openai_api_key="sk-stub", record_to=Path("/tmp/b"))
+    cfg3 = TextSessionConfig(record_to="/tmp/c")
+    cfg4 = TextSessionConfig(record_to=Path("/tmp/d"))
     assert cfg1.record_to == "/tmp/a"
     assert cfg2.record_to == Path("/tmp/b")
+    assert cfg3.record_to == "/tmp/c"
+    assert cfg4.record_to == Path("/tmp/d")
+
+
+@pytest.mark.asyncio
+async def test_text_session_record_to_exports_on_stop(tmp_path: Path) -> None:
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
+
+    await session.stop()
+
+    bundles = list(tmp_path.glob(f"{session.session_id}-*.zip"))
+    assert len(bundles) == 1

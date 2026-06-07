@@ -1304,6 +1304,14 @@ def test_create_text_session_rejects_config_plus_loose_kwargs():
         create_text_session(config, agent=_DummyAgent())
 
 
+def test_create_text_session_rejects_config_plus_loose_record_to(tmp_path):
+    from easycat.config import TextSessionConfig, create_text_session
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    with pytest.raises(ValueError, match="record_to"):
+        create_text_session(config, record_to=tmp_path)
+
+
 def test_create_text_session_config_with_default_kwargs_ok():
     from easycat.config import TextSessionConfig, create_text_session
 

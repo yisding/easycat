@@ -60,6 +60,11 @@ Shipped:
   instead of silently falling back (`_logging.py`, `docs/observability.md`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
   stop/shutdown when debug journaling is enabled (`config/_factory.py`).
+- `TextSessionConfig(record_to=...)` and
+  `create_text_session(record_to=...)` now use the same stop/shutdown bundle
+  auto-capture hook, so text-mode agent iteration can produce timestamped
+  `RunBundle`s without switching to the audio pipeline (`config/easy.py`,
+  `config/_factory.py`).
 - `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
   and loads the timestamped bundle after shutdown instead of manually calling
   `session.export_debug_bundle(...)`.
@@ -80,7 +85,7 @@ Still remaining:
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
   Provider shortcut and PydanticAI slim examples have shed duplicate key
   preflights, the debug bundle example uses `record_to=` auto-capture, and
-  scaffold debug guidance points generated-project users at `record_to=`;
+  scaffold debug guidance points all generated-project users at `record_to=`;
   broader raw line-count shrinkage remains open, especially in server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +

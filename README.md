@@ -689,7 +689,9 @@ Records carry `session_id`, `turn_id`, and monotonic sequence numbers so
 cross-system traces join cleanly.
 
 Use `debug="full"` when you need durable inspection. EasyCat writes SQLite
-journals under `.easycat/journals/`; after the run, inspect one with:
+journals under `.easycat/journals/`; pass `record_to="runs"` on `EasyConfig`
+or `create_text_session(...)` when you also want a timestamped debug bundle
+exported on shutdown. After the run, inspect a journal with:
 
 ```bash
 uv run easycat inspect .easycat/journals/<session_id>.sqlite

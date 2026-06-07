@@ -600,7 +600,8 @@ def list_bundles(
         scan_target = str(path) if path is not None else ".easycat"
         stderr_console.print(f"No bundles found under [cyan]{escape(scan_target)}[/].")
         stderr_console.print(
-            "[dim]Use [cyan]EasyConfig(record_to=...)[/] or "
+            "[dim]Use [cyan]EasyConfig(record_to=...)[/], "
+            "[cyan]create_text_session(record_to=...)[/], or "
             "[cyan]session.export_debug_bundle()[/] to capture one.[/]"
         )
         raise typer.Exit(0)
