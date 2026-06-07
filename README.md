@@ -118,8 +118,11 @@ easycat bundles export PATH # write a redacted coding-agent context pack
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat validate quick       # run deterministic local validation
+easycat validate quick --json # emit quick validation in the standard envelope
 easycat validate contracts   # run offline provider/protocol contract validation
+easycat validate contracts --json # emit contract validation in the standard envelope
 easycat validate release     # run the strict installed-wheel release gate
+easycat validate release --json # emit release validation in the standard envelope
 easycat validate report .easycat/validation/latest.json # render latest validation report
 ```
 
@@ -139,14 +142,15 @@ For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints, and `easycat explain json-schema`
 documents the standard `--json` envelope. It covers the docs route map,
 template catalog, scaffold output, doctor environment/checks output,
-validation quick/report output, bundle list/show/export, inspect, and replay
-command families, including command-specific fields such as `entries`,
-`commands`, `catalog`, `audience`, `command_note`, `base_requirement`,
-`create_command`, `repo_create_command`, `next_step_commands`,
-`pyproject_name`, `run_command`, `check_command`, `environment`, `checks`,
-`validation`, `source_path`, and `fidelity_effective`, and error fields such
-as `report_path`, `path`, and `output_path`. Replace uppercase placeholders
-in command hints, such as `PATH`, before running them.
+validation quick/contracts/release/report output, bundle list/show/export,
+inspect, and replay command families, including command-specific fields such
+as `entries`, `commands`, `catalog`, `audience`, `command_note`,
+`base_requirement`, `create_command`, `repo_create_command`,
+`next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
+`environment`, `checks`, `validation`, `source_path`, and
+`fidelity_effective`, and error fields such as `report_path`, `path`, and
+`output_path`. Replace uppercase placeholders in command hints, such as
+`PATH`, before running them.
 
 ## Validation Workflow
 
@@ -206,10 +210,14 @@ release gates through that installed environment. Use `--python`, `--extra`,
 runs, but new docs and local workflows should use
 `uv run easycat validate`.
 
-`--json` emits the standard machine-readable stdout envelope, `--report PATH`
-writes a persisted validation report JSON, and `--junit PATH` writes JUnit XML
-(available on the `quick`, `socket`, `stress`, and `contracts` lanes).
-`uv run easycat validate report .easycat/validation/latest.json --json`
+`--json` emits the standard machine-readable stdout envelope for validation
+lanes such as `quick`, `contracts`, and `release`; `--report PATH` writes a
+persisted validation report JSON, and `--junit PATH` writes JUnit XML
+(available on the `quick`, `socket`, `stress`, and `contracts` lanes). Common
+automation entry points are `uv run easycat validate quick --json`,
+`uv run easycat validate contracts --json`,
+`uv run easycat validate release --json`, and
+`uv run easycat validate report .easycat/validation/latest.json --json`, which
 re-emits the latest saved validation report inside the same envelope for
 coding-agent consumers. For the lower-level marker/direct entry points, see
 [`plan/validation/README.md`](plan/validation/README.md).

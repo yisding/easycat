@@ -343,6 +343,8 @@ def test_explain_meta_json_schema_documents_error_fix(
     for key in _debug_command_success_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in result.stdout
     assert "easycat validate quick --json" in result.stdout
+    assert "easycat validate contracts --json" in result.stdout
+    assert "easycat validate release --json" in result.stdout
     assert "easycat validate report PATH --json" in result.stdout
     assert "redacted validation report object" in stdout
     assert "easycat bundles list --json" in result.stdout
@@ -416,6 +418,8 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     for key in _debug_command_success_keys_from_cli(cli, tmp_path):
         assert f"`{key}`" in payload["body"]
     assert "easycat validate quick --json" in payload["body"]
+    assert "easycat validate contracts --json" in payload["body"]
+    assert "easycat validate release --json" in payload["body"]
     assert "easycat validate report PATH --json" in payload["body"]
     assert "redacted validation report object" in normalized_body
     assert "easycat bundles list --json" in payload["body"]

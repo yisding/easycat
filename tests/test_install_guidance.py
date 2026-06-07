@@ -460,8 +460,12 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
         "easycat init --list-templates --json": "template catalog",
         "easycat init NAME --json": "scaffold output",
         "easycat doctor --json": "doctor environment/checks output",
-        "easycat validate quick --json": "validation quick/report output",
-        "easycat validate report PATH --json": "validation quick/report output",
+        "easycat validate quick --json": "validation quick/contracts/release/report output",
+        "easycat validate contracts --json": ("validation quick/contracts/release/report output"),
+        "easycat validate release --json": ("validation quick/contracts/release/report output"),
+        "easycat validate report PATH --json": (
+            "validation quick/contracts/release/report output"
+        ),
         "easycat bundles list --json": "bundle list/show/export",
         "easycat bundles show PATH --json": "bundle list/show/export",
         "easycat bundles export PATH --output DIR --json": "bundle list/show/export",
@@ -481,7 +485,15 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
+    assert "easycat validate quick --json" in cli_section
+    assert "easycat validate contracts" in cli_section
+    assert "easycat validate contracts --json" in cli_section
+    assert "easycat validate release" in cli_section
+    assert "easycat validate release --json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json" in cli_section
+    assert "uv run easycat validate quick --json" in readme
+    assert "uv run easycat validate contracts --json" in readme
+    assert "uv run easycat validate release --json" in readme
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
     assert "easycat validate report PATH" not in readme
 

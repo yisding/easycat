@@ -146,7 +146,9 @@ entry points include:
                          `name`, `status`, and `detail`, and may include
                          `code` and `fix` when the check fails
   `validation`, `report_path`, `exit_code` -
-                         `easycat validate quick --json` and
+                         `easycat validate quick --json`,
+                         `easycat validate contracts --json`,
+                         `easycat validate release --json`, and
                          `easycat validate report PATH --json`; `validation`
                          contains the redacted validation report object
   `bundles`, `scanned` - `easycat bundles list --json`

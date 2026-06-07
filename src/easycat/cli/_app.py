@@ -379,6 +379,8 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Read provider and report vocabulary used by validation.",
         "commands": (
             "easycat validate quick --json",
+            "easycat validate contracts --json",
+            "easycat validate release --json",
             "easycat validate report .easycat/validation/latest.json --json",
         ),
     },

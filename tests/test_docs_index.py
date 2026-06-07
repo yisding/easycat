@@ -491,6 +491,8 @@ def test_validation_reference_docs_route_matches_json_commands() -> None:
 
     for command in (
         "easycat validate quick --json",
+        "easycat validate contracts --json",
+        "easycat validate release --json",
         "easycat validate report .easycat/validation/latest.json --json",
     ):
         assert command in reference

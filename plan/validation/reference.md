@@ -169,6 +169,8 @@ JSON envelope smoke check:
 
 ```bash
 easycat validate quick --json
+easycat validate contracts --json
+easycat validate release --json
 easycat validate report .easycat/validation/latest.json --json
 ```
 

@@ -386,6 +386,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
         in commands["README.md#validation-workflow"]
     )
     assert "easycat validate quick --json" in commands["plan/validation/reference.md"]
+    assert "easycat validate contracts --json" in commands["plan/validation/reference.md"]
+    assert "easycat validate release --json" in commands["plan/validation/reference.md"]
     assert (
         "easycat validate report .easycat/validation/latest.json --json"
         in commands["plan/validation/reference.md"]
