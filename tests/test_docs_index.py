@@ -17,6 +17,7 @@ from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
+CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 ONBOARDING_GUARD_COMMANDS = (
     "just guard-docs",
     "just guard-examples",
@@ -64,6 +65,18 @@ def _route_target_text(route: str) -> str:
     if path.is_dir():
         path = path / "README.md"
     return path.read_text(encoding="utf-8")
+
+
+def _root_path_chooser_command_spans() -> tuple[str, ...]:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("## Choose Your Path", 1)[1].split(
+        "## Learn the pipeline from scratch", 1
+    )[0]
+    return tuple(
+        match.group(1)
+        for match in CODE_SPAN_RE.finditer(section)
+        if match.group(1).startswith(("uv ", "easycat ", "just ", "docker "))
+    )
 
 
 def _command_hint_variants(command: str) -> set[str]:
@@ -301,6 +314,18 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run pytest tests/test_install_guidance.py" in entries[
         "README.md#choose-your-path"
     ].get("commands", ())
+
+
+def test_start_here_docs_route_tracks_root_path_chooser_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    route_commands = set(entries["README.md#choose-your-path"].get("commands", ()))
+    missing = [
+        command for command in _root_path_chooser_command_spans() if command not in route_commands
+    ]
+
+    assert not missing, (
+        "Start here docs route missing root path chooser command hints: " + ", ".join(missing)
+    )
 
 
 def test_coding_agents_docs_route_matches_guide_command_hints() -> None:

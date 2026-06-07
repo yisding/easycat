@@ -416,6 +416,8 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat init my-agent",
         "uv run easycat validate quick",
         "uv run pytest tests/test_install_guidance.py",
+        "easycat bundles list",
+        "uv sync --extra debugger --group dev",
     ]
     assert commands["README.md#cli"] == [
         "easycat init --list-templates",
