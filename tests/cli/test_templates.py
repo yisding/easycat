@@ -461,6 +461,8 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     normalized_next_steps = " ".join(next_steps.split())
 
     assert "uv run easycat docs" in next_steps
+    assert "Explore docs and routes" in next_steps
+    assert "Explore docs and examples" not in next_steps
     assert "uv run easycat docs --json" in next_steps
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps
