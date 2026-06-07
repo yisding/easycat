@@ -140,8 +140,9 @@ context. Several bullets are known stale; use the current-state list above and
   max payload size, compression, ping timeout, close timeout, and close reason.
 - Done: EasyCat-owned audio WebSocket servers pass `compression=None` by
   default.
-- For WebRTC, avoid wildcard CORS around TURN credentials and default to
-  same-origin unless configured.
+- Done: WebRTC signaling now omits wildcard CORS by default, allows same-origin
+  preflights, and requires explicit `cors_allowed_origins` for custom hosted
+  browser clients.
 - For Twilio Media Streams, add a signed one-time stream token in TwiML and
   validate it on connect.
 

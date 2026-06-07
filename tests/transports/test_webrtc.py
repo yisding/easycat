@@ -228,6 +228,7 @@ class TestWebRTCTransportConfig:
         assert config.static_dir == WebRTCTransportConfig._USE_BUNDLED
         assert len(config.ice_servers) == 1
         assert "stun:" in config.ice_servers[0].urls[0]
+        assert config.cors_allowed_origins == ()
         assert config.stats_path is None
 
     def test_stats_path_defaults_from_validation_env(self, monkeypatch):
@@ -650,7 +651,7 @@ class TestWebRTCTransportLifecycle:
                 assert data["service"] == "easycat-webrtc-signaling"
                 assert "/offer" in data["endpoints"]
                 assert "/stats" in data["endpoints"]
-                assert "Access-Control-Allow-Origin" in resp.headers
+                assert "Access-Control-Allow-Origin" not in resp.headers
 
         await transport.disconnect()
 
@@ -711,8 +712,7 @@ class TestWebRTCTransportLifecycle:
                 assert resp.status == 200
                 data = await resp.json()
                 assert data["status"] == "ok"
-                # Verify CORS headers are present.
-                assert "Access-Control-Allow-Origin" in resp.headers
+                assert "Access-Control-Allow-Origin" not in resp.headers
 
         await transport.disconnect()
 
@@ -835,7 +835,31 @@ class TestWebRTCTransportLifecycle:
         }
 
     @pytest.mark.asyncio
-    async def test_cors_preflight(self):
+    async def test_cors_preflight_allows_same_origin(self):
+        import aiohttp
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port)
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        origin = f"http://127.0.0.1:{port}"
+        async with aiohttp.ClientSession() as session:
+            async with session.options(
+                f"http://127.0.0.1:{port}/offer",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                },
+            ) as resp:
+                assert resp.status == 200
+                assert resp.headers["Access-Control-Allow-Origin"] == origin
+                assert resp.headers["Access-Control-Allow-Methods"] == "POST, GET, OPTIONS"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_denies_unknown_cross_origin_by_default(self):
         import aiohttp
 
         port = find_free_port()
@@ -844,9 +868,62 @@ class TestWebRTCTransportLifecycle:
         await transport.connect()
 
         async with aiohttp.ClientSession() as session:
-            async with session.options(f"http://127.0.0.1:{port}/offer") as resp:
+            async with session.options(
+                f"http://127.0.0.1:{port}/offer",
+                headers={
+                    "Origin": "https://evil.example",
+                    "Access-Control-Request-Method": "POST",
+                },
+            ) as resp:
                 assert resp.status == 200
-                assert "Access-Control-Allow-Origin" in resp.headers
+                assert "Access-Control-Allow-Origin" not in resp.headers
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cors_allows_configured_origin(self):
+        import aiohttp
+
+        port = find_free_port()
+        origin = "https://voice.example.com"
+        config = WebRTCTransportConfig(
+            host="127.0.0.1",
+            port=port,
+            cors_allowed_origins=(origin,),
+        )
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/config",
+                headers={"Origin": origin},
+            ) as resp:
+                assert resp.status == 200
+                assert resp.headers["Access-Control-Allow-Origin"] == origin
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_cors_wildcard_requires_explicit_opt_in(self):
+        import aiohttp
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(
+            host="127.0.0.1",
+            port=port,
+            cors_allowed_origins=("*",),
+        )
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/config",
+                headers={"Origin": "https://voice.example.com"},
+            ) as resp:
+                assert resp.status == 200
+                assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
         await transport.disconnect()
 

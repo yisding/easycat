@@ -30,6 +30,9 @@ Environment variables:
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
 
 Then open http://localhost:8080 in your browser.
+The bundled client is same-origin with the signaling server. If you host a
+custom browser UI elsewhere, pass explicit cors_allowed_origins to
+WebRTCTransportConfig instead of relying on wildcard CORS.
 
 NOTE: getUserMedia() requires a secure context.  For localhost this works
 over plain HTTP.  For remote deployments, place the server behind an HTTPS

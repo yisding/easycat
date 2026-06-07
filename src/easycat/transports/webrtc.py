@@ -49,11 +49,8 @@ _DEGRADED_NEGOTIATION_FAILED = "negotiation_failed"
 _DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
 _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
-_CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-}
+_CORS_ALLOW_METHODS = "POST, GET, OPTIONS"
+_CORS_ALLOW_HEADERS = "Content-Type"
 
 _WEBRTC_STATS_TOP_LEVEL_FIELDS = frozenset(
     {
@@ -205,6 +202,11 @@ class WebRTCTransportConfig:
         ``/config`` response.  Leave this disabled for long-lived TURN
         credentials; enable it only for trusted/internal demos, authenticated
         config endpoints, or short-lived TURN credentials.
+    cors_allowed_origins:
+        Cross-origin browser origins allowed to call the signaling API.  The
+        bundled browser client is same-origin and needs no CORS opt-in.  Use
+        exact origins such as ``"https://voice.example.com"`` for custom
+        hosted clients, or ``"*"`` only for controlled demos.
     stats_path:
         Optional JSONL file where browser clients can POST sanitized
         ``RTCPeerConnection.getStats()`` snapshots via ``/stats``.  Defaults to
@@ -224,6 +226,7 @@ class WebRTCTransportConfig:
     max_pending_chunks: int = 200
     static_dir: str | None = _USE_BUNDLED
     expose_ice_credentials: bool = False
+    cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
 
 
@@ -507,6 +510,36 @@ class WebRTCTransport(_AudioQueueMixin):
         if self._is_current_peer_generation(peer_generation):
             self._enqueue_sentinel()
 
+    def _cors_headers(self, request: Any) -> dict[str, str]:
+        origin = getattr(request, "headers", {}).get("Origin")
+        if not origin:
+            return {}
+
+        configured_origins = self._config.cors_allowed_origins
+        if isinstance(configured_origins, str):
+            configured_origins = (configured_origins,)
+        allowed = {item.rstrip("/") for item in configured_origins}
+        if "*" in allowed:
+            allowed_origin = "*"
+        elif origin.rstrip("/") in allowed or self._origin_matches_request(origin, request):
+            allowed_origin = origin
+        else:
+            return {}
+
+        return {
+            "Access-Control-Allow-Origin": allowed_origin,
+            "Access-Control-Allow-Methods": _CORS_ALLOW_METHODS,
+            "Access-Control-Allow-Headers": _CORS_ALLOW_HEADERS,
+        }
+
+    @staticmethod
+    def _origin_matches_request(origin: str, request: Any) -> bool:
+        scheme = getattr(request, "scheme", None)
+        host = getattr(request, "host", None)
+        if not scheme or not host:
+            return False
+        return origin.rstrip("/") == f"{scheme}://{host}"
+
     # ── Transport protocol ────────────────────────────────────────
 
     async def connect(self) -> None:
@@ -657,14 +690,14 @@ class WebRTCTransport(_AudioQueueMixin):
         async with self._offer_lock:
             return await self._handle_offer_locked(request)
 
-    def _unavailable_response(self) -> Any:
+    def _unavailable_response(self, request: Any) -> Any:
         """Build a 503 response for offers received while disconnected."""
         web = self._web
         return web.Response(
             status=503,
             text=json.dumps({"error": "Transport is shutting down"}),
             content_type="application/json",
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_offer_locked(self, request: Any) -> Any:
@@ -674,7 +707,7 @@ class WebRTCTransport(_AudioQueueMixin):
         # clears ``_connected`` under ``_offer_lock``, so once we hold the lock the
         # value is stable for the duration of this handler.
         if not self._connected:
-            return self._unavailable_response()
+            return self._unavailable_response(request)
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
         RTCSessionDescription = aiortc.RTCSessionDescription
@@ -688,7 +721,7 @@ class WebRTCTransport(_AudioQueueMixin):
                 status=400,
                 text=json.dumps({"error": "Invalid JSON"}),
                 content_type="application/json",
-                headers=_CORS_HEADERS,
+                headers=self._cors_headers(request),
             )
 
         sdp = params.get("sdp") if isinstance(params, dict) else None
@@ -704,7 +737,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     }
                 ),
                 content_type="application/json",
-                headers=_CORS_HEADERS,
+                headers=self._cors_headers(request),
             )
 
         # Negotiate the replacement peer against a pending generation first. Do
@@ -735,7 +768,7 @@ class WebRTCTransport(_AudioQueueMixin):
             # half-built PC is discarded if the locking changes in the future.
             if not self._connected:
                 await pc.close()
-                return self._unavailable_response()
+                return self._unavailable_response(request)
 
             # Prepare an outbound track for the new connection, but keep the
             # existing peer's source active until negotiation succeeds.
@@ -794,7 +827,7 @@ class WebRTCTransport(_AudioQueueMixin):
                 status=400,
                 text=json.dumps({"error": f"SDP negotiation failed: {exc}"}),
                 content_type="application/json",
-                headers=_CORS_HEADERS,
+                headers=self._cors_headers(request),
             )
 
         self._peer_generation = peer_generation
@@ -847,7 +880,7 @@ class WebRTCTransport(_AudioQueueMixin):
         return web.Response(
             content_type="application/json",
             text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}),
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_config(self, request: Any) -> Any:
@@ -856,8 +889,9 @@ class WebRTCTransport(_AudioQueueMixin):
         This endpoint is intentionally unauthenticated so the bundled demo
         client can bootstrap easily.  TURN usernames and credentials stay
         hidden unless ``expose_ice_credentials`` is enabled; deployments often
-        configure long-lived TURN secrets, and returning them from a public
-        CORS-enabled endpoint would allow arbitrary clients to reuse the relay.
+        configure long-lived TURN secrets, and returning them from an
+        explicitly cross-origin endpoint would allow arbitrary browser clients
+        to reuse the relay.
         """
         web = self._web
         return web.Response(
@@ -869,7 +903,7 @@ class WebRTCTransport(_AudioQueueMixin):
                     )
                 }
             ),
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_stats(self, request: Any) -> Any:
@@ -889,7 +923,7 @@ class WebRTCTransport(_AudioQueueMixin):
                 status=400,
                 text=json.dumps({"error": f"Invalid WebRTC stats payload: {exc}"}),
                 content_type="application/json",
-                headers=_CORS_HEADERS,
+                headers=self._cors_headers(request),
             )
 
         if self._config.stats_path:
@@ -901,7 +935,7 @@ class WebRTCTransport(_AudioQueueMixin):
         return web.Response(
             content_type="application/json",
             text=json.dumps({"status": "ok"}),
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_health(self, request: Any) -> Any:
@@ -909,7 +943,7 @@ class WebRTCTransport(_AudioQueueMixin):
         return web.Response(
             content_type="application/json",
             text=json.dumps({"status": "ok"}),
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_root(self, request: Any) -> Any:
@@ -934,12 +968,12 @@ class WebRTCTransport(_AudioQueueMixin):
                     ),
                 }
             ),
-            headers=_CORS_HEADERS,
+            headers=self._cors_headers(request),
         )
 
     async def _handle_cors_preflight(self, request: Any) -> Any:
         web = self._web
-        return web.Response(headers=_CORS_HEADERS)
+        return web.Response(headers=self._cors_headers(request))
 
     # ── Audio track consumer ──────────────────────────────────────
 

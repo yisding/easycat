@@ -888,7 +888,10 @@ If browser clients are remote (not localhost), run behind HTTPS and configure
 TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for NAT traversal.
 The public `/config` endpoint hides TURN credentials by default; set
 `WEBRTC_EXPOSE_ICE_CREDENTIALS=1` only for trusted demos or short-lived TURN
-credentials when browser-side relay candidates are required.
+credentials when browser-side relay candidates are required. The bundled
+browser client is served same-origin, so WebRTC signaling sends no wildcard
+CORS headers by default; if you host the browser UI elsewhere, pass explicit
+`cors_allowed_origins=("https://your-ui.example",)` to `WebRTCTransportConfig`.
 
 ## Repo layout
 - src/easycat: library code
