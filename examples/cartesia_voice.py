@@ -21,7 +21,6 @@ except ImportError as exc:
 from easycat import EasyConfig, require_env, run
 
 require_env("OPENAI_API_KEY")
-require_env("CARTESIA_API_KEY")  # consumed by the string shortcuts below
 
 # One token per stage swaps the provider. The shortcut reads
 # CARTESIA_API_KEY from the environment, and auto-align matches the TTS

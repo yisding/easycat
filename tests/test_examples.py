@@ -347,9 +347,9 @@ def _load_slim_example(
     """Import a slim example that runs ``easycat.run(...)`` at module scope.
 
     Stubs ``easycat.run`` so importing doesn't block on a real session,
-    sets any env vars the example consumes via ``require_env`` at module
-    scope, and evicts any cached copy so the fresh import sees the
-    monkeypatched ``run``.
+    sets any env vars the example consumes at module scope (via
+    ``require_env`` or EasyConfig string shortcuts), and evicts any cached
+    copy so the fresh import sees the monkeypatched ``run``.
     """
     if framework:
         pytest.importorskip(framework)
@@ -1422,6 +1422,27 @@ def test_examples_keep_easyconfig_env_first_for_openai_key():
             stale.append(path.name)
 
     assert not stale, "Examples should let EasyConfig read OPENAI_API_KEY: " + ", ".join(stale)
+
+
+def test_provider_shortcut_examples_let_easyconfig_read_provider_keys():
+    """Provider examples should not duplicate the string shortcut env lookup."""
+    stale: list[str] = []
+    checks = {
+        "cartesia_voice.py": ("CARTESIA_API_KEY",),
+        "deepgram_voice.py": ("DEEPGRAM_API_KEY",),
+        "elevenlabs_voice.py": ("ELEVENLABS_API_KEY",),
+        "combined_providers.py": ("DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"),
+    }
+
+    for name, keys in checks.items():
+        source = (REPO_ROOT / "examples" / name).read_text(encoding="utf-8")
+        for key in keys:
+            if f'require_env("{key}")' in source:
+                stale.append(f"{name}: {key}")
+
+    assert not stale, "Provider examples should let EasyConfig read provider keys: " + ", ".join(
+        stale
+    )
 
 
 def test_agent_event_subscription_example_imports():

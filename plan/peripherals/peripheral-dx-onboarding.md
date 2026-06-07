@@ -5,7 +5,7 @@
 > however, the most visible user-facing work in the overall redesign, and
 > the one the outside world will judge EasyCat on first.
 
-## Status (2026-06-06)
+## Status (2026-06-07)
 
 Shipped:
 
@@ -14,6 +14,10 @@ Shipped:
 - String-keyed provider selection (`stt="deepgram/flux"`,
   `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
   (`stt/factory.py`, `tts/factory.py`).
+- Provider shortcut examples rely on `EasyConfig` / the `stt=` and `tts=`
+  shortcut parsers to read stage-specific API keys instead of duplicating
+  `require_env(...)` checks in the visible runtime code
+  (`examples/*_voice.py`, `examples/combined_providers.py`).
 - `OPENAI_API_KEY` auto-detection → OpenAI chain default
   (`config/easy.py`).
 - Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
@@ -62,8 +66,10 @@ Still remaining:
 
 - Example visible-code budgets are CI-enforced for the canonical examples:
   `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
-  `ws_server.py` ≤15, excluding setup docstrings and import guards. Broader
-  raw line-count shrinkage remains open.
+  `ws_server.py` ≤15, excluding setup docstrings and import guards.
+  Provider shortcut examples have shed duplicate stage-key preflights;
+  broader raw line-count shrinkage remains open, especially in server and
+  protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

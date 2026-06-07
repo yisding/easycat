@@ -25,8 +25,6 @@ except ImportError as exc:
 from easycat import EasyConfig, require_env, run
 
 require_env("OPENAI_API_KEY")
-require_env("DEEPGRAM_API_KEY")  # consumed by the stt= shortcut below
-require_env("ELEVENLABS_API_KEY")  # consumed by the tts= shortcut below
 
 # Two string shortcuts, two different vendors — STT and TTS swap
 # independently. auto-align matches the TTS output to the transport's
