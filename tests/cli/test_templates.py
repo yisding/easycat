@@ -20,6 +20,7 @@ belongs in the end-to-end suite.
 from __future__ import annotations
 
 import ast
+import re
 import shlex
 import tomllib
 from pathlib import Path
@@ -35,6 +36,7 @@ from easycat.cli.scaffold.init import (
     _base_requirement,
     _easycat_version_floor,
     _next_step_commands,
+    _next_step_fix_command,
     _render_text,
     _substitutions,
     _template_file_names,
@@ -92,6 +94,7 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     "build/",
     ".easycat/",
 )
+_CODE_SPAN_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 
 
 @pytest.fixture
@@ -327,6 +330,25 @@ def _render_env_example(name: str, cfg: InitConfig) -> str:
 
 def _template_python_filenames(name: str) -> list[str]:
     return sorted(path.name for path in _template_dir(name).glob("*.py"))
+
+
+def _readme_command_hints(readme: str) -> set[str]:
+    commands: set[str] = set()
+    in_code_fence = False
+
+    for line in readme.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code_fence = not in_code_fence
+            continue
+        if in_code_fence and stripped:
+            commands.add(stripped)
+
+    for span in _CODE_SPAN_RE.findall(readme):
+        if span.startswith(("cp ", "uv ")):
+            commands.add(span)
+
+    return commands
 
 
 def _literal_string(node: ast.AST) -> str | None:
@@ -650,6 +672,22 @@ def test_readme_run_command_loads_env_file(name: str) -> None:
 
     assert "uv run --env-file .env" in primary_run
     assert "uv run python agent.py" not in primary_run
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_readme_command_hints_match_scaffold_next_steps(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    commands = _readme_command_hints(readme)
+    expected_commands = [
+        command
+        for command in _next_step_commands(Path("my-agent"), name)
+        if not command.startswith("cd ")
+    ]
+    expected_commands.append(_next_step_fix_command(name))
+
+    missing = [command for command in expected_commands if command not in commands]
+
+    assert not missing, f"{name}/README.md missing scaffold command hints: {missing}"
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
