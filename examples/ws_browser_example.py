@@ -17,6 +17,7 @@ Setup:
     export OPENAI_API_KEY="..."
     uv sync --extra openai --extra openai-agents --group dev
     uv run easycat doctor
+    uv run easycat doctor --env-file .env  # if keys live in .env
     uv run python examples/ws_browser_example.py
 
 Then open http://localhost:8080/ws_browser_client.html in your browser.

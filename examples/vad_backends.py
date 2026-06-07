@@ -17,6 +17,7 @@ Setup:
   uv sync --extra silero-vad --group dev                  # bundled Silero ONNX
   uv pip install krisp_audio                              # Krisp SDK
   uv run easycat doctor
+  uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/vad_backends.py --backend silero
   uv run python examples/vad_backends.py --backend funasr
   uv run python examples/vad_backends.py --backend ten

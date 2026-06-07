@@ -12,6 +12,7 @@ Setup:
   export TWILIO_SMS_FROM="+15551234567"  # optional, enables send_sms actions
   uv sync --extra openai --extra telephony --extra openai-agents --group dev
   uv run easycat doctor
+  uv run easycat doctor --env-file .env  # if keys live in .env
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0 --port 8000
 """
 

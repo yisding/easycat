@@ -3,6 +3,7 @@
 Setup: export OPENAI_API_KEY=...; export DEEPGRAM_API_KEY=...
        uv sync --extra quickstart --extra deepgram --group dev
        uv run easycat doctor
+       uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/deepgram_voice.py
 """
 

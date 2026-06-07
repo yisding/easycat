@@ -4,6 +4,7 @@ Setup:
   export OPENAI_API_KEY="..."
   uv sync --extra openai --extra openai-agents --group dev
   uv run easycat doctor
+  uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/ws_server.py
 
 Connect clients streaming raw PCM16 audio to ws://localhost:8765.

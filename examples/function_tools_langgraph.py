@@ -11,6 +11,7 @@ snapshot. For tools that drive the call (end, transfer, DTMF) see
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph --group dev
        uv pip install langchain-openai
        uv run easycat doctor
+       uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/function_tools_langgraph.py
 """
 

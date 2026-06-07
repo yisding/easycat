@@ -12,6 +12,7 @@ Setup: export OPENAI_API_KEY=...                       # for STT/TTS
        export EASYCAT_REMOTE_AGENT_MODEL=gpt-4o-mini
        uv sync --extra quickstart --group dev
        uv run easycat doctor
+       uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/responses_api_bridge.py
 """
 

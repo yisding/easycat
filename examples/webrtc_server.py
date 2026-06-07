@@ -8,6 +8,7 @@ Setup (local):
     export OPENAI_API_KEY="..."
     uv sync --extra openai --extra openai-agents --extra webrtc --group dev
     uv run easycat doctor
+    uv run easycat doctor --env-file .env  # if keys live in .env
     uv run python examples/webrtc_server.py
 
 Setup (EC2):

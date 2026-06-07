@@ -821,7 +821,8 @@ def test_examples_readme_env_cells_cover_referenced_env_vars() -> None:
 
 
 def test_env_examples_document_doctor_preflight() -> None:
-    stale: list[str] = []
+    missing_doctor: list[str] = []
+    missing_env_file: list[str] = []
 
     for row in _example_readme_rows():
         if row["env"].startswith("None"):
@@ -830,11 +831,17 @@ def test_env_examples_document_doctor_preflight() -> None:
         module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         doc = ast.get_docstring(module) or ""
         if "uv run easycat doctor" not in doc:
-            stale.append(row["link"])
+            missing_doctor.append(row["link"])
+        if "uv run easycat doctor --env-file .env" not in doc:
+            missing_env_file.append(row["link"])
 
-    assert not stale, (
+    assert not missing_doctor, (
         "Example docstrings with required env vars should document "
-        "`uv run easycat doctor`: " + ", ".join(stale)
+        "`uv run easycat doctor`: " + ", ".join(missing_doctor)
+    )
+    assert not missing_env_file, (
+        "Example docstrings with required env vars should document "
+        "`uv run easycat doctor --env-file .env`: " + ", ".join(missing_env_file)
     )
 
 
