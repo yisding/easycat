@@ -457,6 +457,31 @@ class Error(Event):
                 # Frozen dataclass: bypass the immutability guard to
                 # backfill the code derived from the wrapped exception.
                 object.__setattr__(self, "code", inferred)
+        _add_exception_notes(
+            self.exception,
+            stage=self.stage.value,
+            provider=self.provider,
+            code=self.code,
+            session_id=self.session_id,
+            turn_id=self.turn_id,
+        )
+
+
+def _add_exception_notes(exc: BaseException, **context: str | None) -> None:
+    """Attach deduplicated PEP 678 notes to journal-visible exceptions."""
+    existing = getattr(exc, "__notes__", None)
+    if not isinstance(existing, list):
+        existing = []
+    for key, value in context.items():
+        if not value:
+            continue
+        note = f"{key}={value}"
+        if note in existing:
+            continue
+        try:
+            exc.add_note(note)
+        except Exception:  # pragma: no cover - Python <3.11 compatibility
+            return
 
 
 # Session actions (agent-requested)

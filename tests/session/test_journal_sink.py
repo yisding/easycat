@@ -131,6 +131,7 @@ async def test_journal_sink_records_error_code() -> None:
     assert record.data["stage"] == "agent"
     assert record.error is not None
     assert record.error.type == "TimeoutError"
+    assert record.error.notes == ("stage=agent\nprovider=openai\ncode=EASYCAT_E301\nturn_id=t1")
 
 
 @pytest.mark.asyncio

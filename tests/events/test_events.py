@@ -222,6 +222,7 @@ def test_error_event():
     event = Error(exception=exc, stage=ErrorStage.STT)
     assert event.exception is exc
     assert event.stage == ErrorStage.STT
+    assert "stage=stt" in exc.__notes__
 
 
 def test_error_event_defaults_code_to_none_for_uncoded_exception():
@@ -234,6 +235,7 @@ def test_error_event_derives_code_from_exception():
 
     event = Error(exception=AgentTimeoutError(timeout=1.0), stage=ErrorStage.AGENT)
     assert event.code == "EASYCAT_E302"
+    assert "code=EASYCAT_E302" in event.exception.__notes__
 
 
 def test_error_event_explicit_code_overrides_exception_code():
@@ -241,6 +243,29 @@ def test_error_event_explicit_code_overrides_exception_code():
 
     event = Error(exception=AgentTimeoutError(timeout=1.0), code="EASYCAT_E999")
     assert event.code == "EASYCAT_E999"
+    assert "code=EASYCAT_E999" in event.exception.__notes__
+
+
+def test_error_event_notes_include_context_and_dedupe_existing_notes():
+    exc = RuntimeError("boom")
+    exc.add_note("stage=tts")
+
+    Error(
+        exception=exc,
+        stage=ErrorStage.TTS,
+        provider="openai",
+        code="EASYCAT_E999",
+        session_id="s1",
+        turn_id="t1",
+    )
+
+    assert exc.__notes__ == [
+        "stage=tts",
+        "provider=openai",
+        "code=EASYCAT_E999",
+        "session_id=s1",
+        "turn_id=t1",
+    ]
 
 
 def test_event_base_fields_are_keyword_only():

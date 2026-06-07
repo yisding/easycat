@@ -23,6 +23,9 @@ Shipped:
 - PEP 678 exception notes are captured in `ErrorInfo.notes`, so provider and
   framework diagnostics survive journal filters and debug bundle export
   (`runtime/records.py`).
+- Runtime `Error` events annotate wrapped exceptions with PEP 678
+  `stage=...`, `provider=...`, `code=...`, `session_id=...`, and
+  `turn_id=...` notes before journal capture (`events.py`).
 - `ErrorInfo.from_exception(ExceptionGroup(...))` now preserves the grouped
   child error tree for journal, SQLite, bundle, and debugger consumers while
   retaining the flat notes summary (`runtime/records.py`, `runtime/journal.py`).
@@ -52,7 +55,8 @@ Still remaining:
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
-- Pipeline-wide `ExceptionGroup` propagation and broader PEP 678 annotations.
+- Pipeline-wide `ExceptionGroup` propagation and deeper PEP 678 annotations
+  such as elapsed time, sequence, and captured-input record keys.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
 - Advanced knobs promised by the plan that aren't yet config fields:
