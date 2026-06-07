@@ -852,6 +852,7 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run python -m py_compile agent.py" in result.stderr
     assert "quick syntax check" in result.stderr
     assert "uv run easycat docs" in result.stderr
+    assert "find learning, maintenance, and operations routes" in result.stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
     assert "audience labels" in result.stderr
