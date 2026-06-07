@@ -188,6 +188,7 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
 
     assert "session_policy" in field_names
     assert "audio_processing" in field_names
+    assert "observability" in field_names
     assert {
         "greeting",
         "dnc_list",
@@ -204,11 +205,17 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
         "smart_turn",
         "smart_turn_sensitivity",
     }.isdisjoint(field_names)
+    assert {
+        "debug",
+        "journal_backend",
+        "journal_retention",
+    }.isdisjoint(field_names)
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan
     assert "`record_to=`" not in missing_knobs
     assert f"currently {field_count} top-level `EasyConfig` fields" in plan
     assert "target ≤22" in plan
+    assert field_count <= 22
     assert f"`EasyConfig` remains at {field_count} top-level fields" in plan_index
     assert "≤22 flattening target" in plan_index
 

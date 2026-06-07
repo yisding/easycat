@@ -2,7 +2,8 @@
 
 The "super easy" surface lives in :mod:`easycat.config.easy` (the
 :class:`EasyConfig` / :class:`TextSessionConfig` dataclasses plus the audio,
-policy, and telephony config helpers) and :mod:`easycat.config._factory` (the
+observability, policy, and telephony config helpers) and
+:mod:`easycat.config._factory` (the
 :func:`create_session` / :func:`create_text_session` factories). This package
 ``__init__`` is a thin re-export hub so ``easycat.config.X`` keeps working —
 it deliberately does NOT import :mod:`easycat.config._telephony_wiring` at
@@ -26,6 +27,7 @@ from .easy import (
     AudioProcessingConfig,
     EasyConfig,
     EasyConfigError,
+    ObservabilityConfig,
     OutboundCallConfig,
     SessionPolicyConfig,
     TelephonyConfig,
@@ -46,6 +48,7 @@ __all__ = [
     "AudioProcessingConfig",
     "EasyConfig",
     "EasyConfigError",
+    "ObservabilityConfig",
     "OutboundCallConfig",
     "SessionPolicyConfig",
     "TelephonyConfig",

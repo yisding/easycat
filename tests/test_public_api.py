@@ -46,6 +46,7 @@ PUBLIC_API_SNAPSHOT = (
     "MarkdownStripProcessor",
     "NoiseReducer",
     "NoiseReducerConfig",
+    "ObservabilityConfig",
     "OutboundCallConfig",
     "PCM16_MONO_16K",
     "PCM16_MONO_24K",
@@ -109,7 +110,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 87
+    assert len(easycat.__all__) <= 88
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

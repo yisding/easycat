@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from easycat.config import (
         AudioProcessingConfig,
         EasyConfig,
+        ObservabilityConfig,
         OutboundCallConfig,
         SessionPolicyConfig,
         TelephonyConfig,

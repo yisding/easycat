@@ -11,6 +11,7 @@ from easycat import (
     PCM16_MONO_24K,
     AudioProcessingConfig,
     EasyConfig,
+    ObservabilityConfig,
     SessionPolicyConfig,
     create_session,
 )
@@ -371,6 +372,30 @@ def test_browser_preset_preserves_grouped_echo_cancellation_override(
     assert config.enable_echo_cancellation is False
     assert config.echo_cancellation is not None
     assert config.echo_cancellation.enabled is False
+
+
+def test_easyconfig_observability_keeps_legacy_top_level_aliases():
+    config = EasyConfig(
+        openai_api_key="test-key",
+        observability=ObservabilityConfig(debug="light", journal_backend="libsql"),
+        debug="off",
+        journal_retention="delete",
+    )
+
+    assert config.observability == ObservabilityConfig(
+        debug="off",
+        journal_backend="libsql",
+        journal_retention="delete",
+    )
+    assert config.debug == "off"
+    assert config.journal_backend == "libsql"
+    assert config.journal_retention == "delete"
+
+    config.debug = "light"
+    config.journal_retention = "archive"
+
+    assert config.observability.debug == "light"
+    assert config.observability.journal_retention == "archive"
 
 
 @pytest.mark.asyncio
@@ -1246,6 +1271,29 @@ def test_text_session_config_validates_debug():
 
     with pytest.raises(ValueError, match="Invalid debug"):
         TextSessionConfig(agent=_DummyAgent(), debug="loud")  # type: ignore[arg-type]
+
+
+def test_text_session_config_observability_keeps_legacy_top_level_aliases():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(
+        agent=_DummyAgent(),
+        observability=ObservabilityConfig(journal_backend="libsql"),
+        debug="light",
+        journal_retention="delete",
+    )
+
+    assert config.observability == ObservabilityConfig(
+        debug="light",
+        journal_backend="libsql",
+        journal_retention="delete",
+    )
+    assert config.debug == "light"
+    assert config.journal_backend == "libsql"
+    assert config.journal_retention == "delete"
+
+    config.journal_backend = "sqlite"
+    assert config.observability.journal_backend == "sqlite"
 
 
 def test_create_text_session_rejects_config_plus_loose_kwargs():

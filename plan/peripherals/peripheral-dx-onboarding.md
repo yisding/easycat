@@ -51,7 +51,7 @@ Still remaining:
   pipeline.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
-- Config flattening pass: currently 24 top-level `EasyConfig` fields,
+- Config flattening pass: currently 22 top-level `EasyConfig` fields,
   target ≤22.
 - Advanced knobs promised by the plan that aren't yet config fields:
   `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
@@ -368,11 +368,11 @@ the `LIVEKIT_LOG_LEVEL` / `UVICORN_LOG_LEVEL` convention. Lives alongside
 
 ## Config Audit and Flattening
 
-`EasyConfig` currently has 24 dataclass fields, including inherited
-agent/journal/runtime fields. The first flattening slices grouped audio input
-knobs under `AudioProcessingConfig` and conversation/telephony policy knobs
-under `SessionPolicyConfig` while keeping legacy top-level aliases working.
-Real complexity remains in nested surfaces:
+`EasyConfig` currently has 22 dataclass fields, including inherited
+agent/runtime fields. The flattening slices grouped audio input knobs under
+`AudioProcessingConfig`, debug/journal knobs under `ObservabilityConfig`, and
+conversation/telephony policy knobs under `SessionPolicyConfig` while keeping
+legacy top-level aliases working. Real complexity remains in nested surfaces:
 `TelephonyConfig`, `TurnManagerConfig`, and `SmartTurnConfig`. Group the
 low-frequency knobs behind sensible defaults, keep common knobs obvious, and
 avoid adding new required fields. Every new config field must have a default

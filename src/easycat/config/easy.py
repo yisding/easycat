@@ -449,6 +449,21 @@ class AudioProcessingConfig:
     smart_turn_sensitivity: float | None = None
 
 
+@dataclass
+class ObservabilityConfig:
+    """Debug journal knobs shared by audio and text session configs.
+
+    New code can group lower-frequency journal backend choices under
+    ``observability=...`` while common shortcuts such as
+    ``EasyConfig(debug="full")`` and ``create_text_session(debug="light")``
+    keep working through legacy aliases.
+    """
+
+    debug: Literal["off", "light", "full"] = "off"
+    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
+    journal_retention: Literal["archive", "delete"] = "archive"
+
+
 _SESSION_POLICY_ALIAS_FIELDS = frozenset(
     {
         "greeting",
@@ -471,6 +486,14 @@ _AUDIO_PROCESSING_ALIAS_FIELDS = frozenset(
     }
 )
 
+_OBSERVABILITY_ALIAS_FIELDS = frozenset(
+    {
+        "debug",
+        "journal_backend",
+        "journal_retention",
+    }
+)
+
 
 TransportConfig = (
     LocalTransportConfig
@@ -487,11 +510,11 @@ TransportConfig = (
 
 @dataclass(kw_only=True)
 class _AgentSessionConfig:
-    """Shared agent / journal / debug fields for both session configs.
+    """Shared agent / observability fields for both session configs.
 
     Extracted so :class:`EasyConfig` (audio sessions) and
     :class:`TextSessionConfig` (text-only sessions) declare the
-    agent/journal/debug knobs once instead of copying them.
+    agent and debug-journal knobs once instead of copying them.
 
     Both this base and its subclasses are ``@dataclass(kw_only=True)``:
     a base dataclass injects its fields *before* the subclass's in the
@@ -514,10 +537,42 @@ class _AgentSessionConfig:
     # ``AgentRunner`` defaults — useful for tests and for bridges that
     # implement their own retry/timeout policy.
     wrap_agent: bool = True
-    debug: Literal["off", "light", "full"] = "off"
-    journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
-    journal_retention: Literal["archive", "delete"] = "archive"
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     mcp_servers: list[str] | None = None
+
+    # Backward-compatible aliases for fields now grouped under
+    # ``observability``.
+    debug: InitVar[Literal["off", "light", "full"] | None] = None
+    journal_backend: InitVar[Literal["sqlite", "sqlite+litestream", "libsql"] | None] = None
+    journal_retention: InitVar[Literal["archive", "delete"] | None] = None
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in _OBSERVABILITY_ALIAS_FIELDS:
+            try:
+                observability = object.__getattribute__(self, "observability")
+            except AttributeError:
+                return object.__getattribute__(self, name)
+            return getattr(observability, name)
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in _OBSERVABILITY_ALIAS_FIELDS and "observability" in self.__dict__:
+            setattr(self.observability, name, value)
+            return
+        object.__setattr__(self, name, value)
+
+    def _apply_observability_aliases(
+        self,
+        debug: Literal["off", "light", "full"] | None,
+        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
+        journal_retention: Literal["archive", "delete"] | None,
+    ) -> None:
+        if debug is not None:
+            self.debug = debug
+        if journal_backend is not None:
+            self.journal_backend = journal_backend
+        if journal_retention is not None:
+            self.journal_retention = journal_retention
 
 
 @dataclass(kw_only=True)
@@ -534,6 +589,9 @@ class EasyConfig(_AgentSessionConfig):
         audio_processing: Grouped audio input processing policies such as
             ``VADConfig``, ``NoiseReducerConfig``, ``EchoCancellationConfig``,
             ``smart_turn``, and ``smart_turn_sensitivity``.
+        observability: Grouped debug-journal settings. The shorter
+            ``debug=``, ``journal_backend=``, and ``journal_retention=``
+            aliases remain supported.
         session_policy: Grouped conversation/telephony policies such as
             greeting, opt-out auto-detection, DNC list, and caller-ID exposure.
         mcp_servers: Optional list of MCP server URIs to pass through to
@@ -598,7 +656,7 @@ class EasyConfig(_AgentSessionConfig):
             except AttributeError:
                 return object.__getattribute__(self, name)
             return getattr(policy, name)
-        return object.__getattribute__(self, name)
+        return super().__getattribute__(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in _AUDIO_PROCESSING_ALIAS_FIELDS and "audio_processing" in self.__dict__:
@@ -607,10 +665,13 @@ class EasyConfig(_AgentSessionConfig):
         if name in _SESSION_POLICY_ALIAS_FIELDS and "session_policy" in self.__dict__:
             setattr(self.session_policy, name, value)
             return
-        object.__setattr__(self, name, value)
+        super().__setattr__(name, value)
 
     def __post_init__(
         self,
+        debug: Literal["off", "light", "full"] | None,
+        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
+        journal_retention: Literal["archive", "delete"] | None,
         vad: VADConfig | VADProvider | None,
         noise_reduction: NoiseReducerConfig | NoiseReducer | None,
         echo_cancellation: EchoCancellationConfig | EchoCanceller | None,
@@ -624,6 +685,7 @@ class EasyConfig(_AgentSessionConfig):
         opt_out_phrases: tuple[str, ...] | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
+        self._apply_observability_aliases(debug, journal_backend, journal_retention)
         if vad is not None:
             self.vad = vad
         if noise_reduction is not None:
@@ -824,7 +886,7 @@ class EasyConfig(_AgentSessionConfig):
 class TextSessionConfig(_AgentSessionConfig):
     """Configuration for a text-only Session (no audio pipeline).
 
-    Mirrors the shared journal/debug/agent fields of :class:`EasyConfig`
+    Mirrors the shared observability/agent fields of :class:`EasyConfig`
     (both inherit :class:`_AgentSessionConfig`) so ``create_session`` and
     ``create_text_session`` accept a single config object of the
     ``create_*(config)`` shape. Audio-only fields
@@ -836,7 +898,13 @@ class TextSessionConfig(_AgentSessionConfig):
 
     session_id: str | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        debug: Literal["off", "light", "full"] | None,
+        journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
+        journal_retention: Literal["archive", "delete"] | None,
+    ) -> None:
+        self._apply_observability_aliases(debug, journal_backend, journal_retention)
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
