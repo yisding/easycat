@@ -2,25 +2,26 @@
 
 import re
 import shlex
-import tomllib
 from pathlib import Path
 from urllib.parse import unquote
-
-from typer.main import get_command
 
 from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _DOCS_ONBOARDING_GUARD_COMMANDS,
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-    _available_docs_audience_filters,
     _docs_entries,
-    _register_commands,
-    app,
 )
-from tests._justfile import just_recipe_commands
+from tests._command_hints import (
+    command_hint_problems as _shared_command_hint_problems,
+)
+from tests._command_hints import (
+    command_hint_variants as _shared_command_hint_variants,
+)
+from tests._command_hints import (
+    documented_commands as _documented_commands,
+)
 from tests._markdown import github_markdown_heading_anchors
-from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
@@ -89,335 +90,12 @@ def _root_path_chooser_command_spans() -> tuple[str, ...]:
     )
 
 
-def _strip_shell_comment(command: str) -> str:
-    return re.sub(r"\s+#.*$", "", command).strip()
-
-
-def _documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
-    commands: list[str] = []
-    seen: set[str] = set()
-
-    def add(raw_command: str) -> None:
-        command = _strip_shell_comment(raw_command)
-        if command.startswith(prefixes) and command not in seen:
-            seen.add(command)
-            commands.append(command)
-
-    for line in section.splitlines():
-        add(line.strip())
-    for match in CODE_SPAN_RE.finditer(section):
-        add(match.group(1).strip())
-
-    return tuple(commands)
-
-
-def _easycat_command_tree() -> dict[str, set[str] | None]:
-    _register_commands()
-    root_command = get_command(app)
-    return {
-        name: set(nested_commands) if nested_commands is not None else None
-        for name, command in root_command.commands.items()
-        for nested_commands in (getattr(command, "commands", None),)
-    }
-
-
-def _docs_audience_hint_values() -> set[str]:
-    filters = set(_available_docs_audience_filters())
-    return (
-        filters
-        | {value.replace("-", "_") for value in filters}
-        | {entry["audience"] for entry in _DOCS_LINKS}
-    )
-
-
-def _declared_optional_dependency_extras() -> set[str]:
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return set(pyproject["project"]["optional-dependencies"])
-
-
-def _declared_dependency_groups() -> set[str]:
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return set(pyproject["dependency-groups"])
-
-
-def _option_values(
-    args: list[str],
-    option: str,
-    *,
-    label: str,
-    missing_message: str,
-    problems: list[str],
-) -> list[str]:
-    values: list[str] = []
-    prefix = f"{option}="
-
-    for index, arg in enumerate(args):
-        if arg == option:
-            if index + 1 >= len(args) or args[index + 1].startswith("-"):
-                problems.append(f"{label}: {missing_message}")
-                continue
-            values.append(args[index + 1])
-        elif arg.startswith(prefix):
-            value = arg.split("=", 1)[1]
-            if not value:
-                problems.append(f"{label}: {missing_message}")
-                continue
-            values.append(value)
-
-    return values
-
-
-def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
-    valid_audiences = _docs_audience_hint_values()
-
-    for value in _option_values(
-        args,
-        "--audience",
-        label=label,
-        missing_message="docs audience hint missing value",
-        problems=problems,
-    ):
-        if value not in valid_audiences:
-            problems.append(f"{label}: unknown docs audience hint {value}")
-
-
-def _validate_env_file_values(
-    *,
-    label: str,
-    args: list[str],
-    context: str,
-    problems: list[str],
-) -> None:
-    for env_file in _option_values(
-        args,
-        "--env-file",
-        label=label,
-        missing_message=f"{context} env-file hint missing value",
-        problems=problems,
-    ):
-        if not (REPO_ROOT / env_file).parent.is_dir():
-            problems.append(f"{label}: missing {context} env-file directory {env_file}")
-
-
-def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) -> None:
-    declared_extras = _declared_optional_dependency_extras()
-    declared_groups = _declared_dependency_groups()
-
-    for extra in _option_values(
-        args,
-        "--extra",
-        label=label,
-        missing_message="uv sync extra hint missing value",
-        problems=problems,
-    ):
-        if extra not in declared_extras:
-            problems.append(f"{label}: unknown uv sync extra {extra}")
-
-    for group in _option_values(
-        args,
-        "--group",
-        label=label,
-        missing_message="uv sync group hint missing value",
-        problems=problems,
-    ):
-        if group not in declared_groups:
-            problems.append(f"{label}: unknown uv sync group {group}")
-
-
-def _validate_http_server_hint(*, label: str, args: list[str], problems: list[str]) -> None:
-    for directory in _option_values(
-        args,
-        "--directory",
-        label=label,
-        missing_message="http.server hint missing directory",
-        problems=problems,
-    ):
-        if not (REPO_ROOT / directory).is_dir():
-            problems.append(f"{label}: missing http.server directory {directory}")
-
-
-def _validate_docker_compose_hint(*, label: str, args: list[str], problems: list[str]) -> None:
-    has_compose_file_flag = any(arg == "-f" or arg.startswith("-f=") for arg in args)
-    compose_files = _option_values(
-        args,
-        "-f",
-        label=label,
-        missing_message="docker compose hint missing compose file",
-        problems=problems,
-    )
-
-    if not has_compose_file_flag:
-        problems.append(f"{label}: docker compose hint missing -f")
-
-    for compose_file in compose_files:
-        if not (REPO_ROOT / compose_file).exists():
-            problems.append(f"{label}: missing compose file {compose_file}")
-
-    for env_file in _option_values(
-        args,
-        "--env-file",
-        label=label,
-        missing_message="docker compose env-file hint missing value",
-        problems=problems,
-    ):
-        if not (REPO_ROOT / env_file).parent.is_dir():
-            problems.append(f"{label}: missing docker compose env-file directory {env_file}")
-
-
-def _uv_run_command_tokens(*, label: str, args: list[str], problems: list[str]) -> list[str]:
-    index = 0
-
-    while index < len(args):
-        arg = args[index]
-        if arg == "--env-file":
-            if index + 1 >= len(args) or args[index + 1].startswith("-"):
-                problems.append(f"{label}: uv run env-file hint missing value")
-                index += 1
-                continue
-            env_file = args[index + 1]
-            if not (REPO_ROOT / env_file).parent.is_dir():
-                problems.append(f"{label}: missing uv run env-file directory {env_file}")
-            index += 2
-            continue
-        if arg.startswith("--env-file="):
-            env_file = arg.split("=", 1)[1]
-            if not env_file:
-                problems.append(f"{label}: uv run env-file hint missing value")
-                index += 1
-                continue
-            if not (REPO_ROOT / env_file).parent.is_dir():
-                problems.append(f"{label}: missing uv run env-file directory {env_file}")
-            index += 1
-            continue
-        if arg.startswith("-"):
-            problems.append(f"{label}: unsupported uv run option {arg}")
-            return []
-        return args[index:]
-
-    problems.append(f"{label}: missing uv run command")
-    return []
-
-
-def _validate_uv_run_hint(
-    *,
-    label: str,
-    command: str,
-    command_tree: dict[str, set[str] | None],
-    args: list[str],
-    problems: list[str],
-) -> None:
-    run_tokens = _uv_run_command_tokens(label=label, args=args, problems=problems)
-    if not run_tokens:
-        return
-
-    match run_tokens:
-        case ["easycat", subcommand, *sub_args]:
-            _validate_easycat_command_hint(
-                label=label,
-                command_tree=command_tree,
-                subcommand=subcommand,
-                args=sub_args,
-                problems=problems,
-            )
-        case ["python", script, *_]:
-            if not (REPO_ROOT / script).exists():
-                problems.append(f"{label}: missing python script {script}")
-        case ["pytest", *_]:
-            problems.extend(pytest_target_problems(command, repo_root=REPO_ROOT, label=label))
-        case ["ruff", *_]:
-            return
-        case _:
-            problems.append(f"{label}: unsupported command hint {command!r}")
-
-
-def _validate_easycat_command_hint(
-    *,
-    label: str,
-    command_tree: dict[str, set[str] | None],
-    subcommand: str,
-    args: list[str],
-    problems: list[str],
-) -> None:
-    if subcommand not in command_tree:
-        problems.append(f"{label}: unknown easycat command {subcommand}")
-        return
-
-    if subcommand == "docs":
-        _validate_docs_command_hint(label=label, args=args, problems=problems)
-    if subcommand == "doctor":
-        _validate_env_file_values(
-            label=label,
-            args=args,
-            context="easycat doctor",
-            problems=problems,
-        )
-
-    nested_commands = command_tree[subcommand]
-    if nested_commands is None:
-        return
-
-    if not args or args[0].startswith("-"):
-        problems.append(f"{label}: missing easycat {subcommand} command")
-        return
-
-    nested_command = args[0]
-    if nested_command not in nested_commands:
-        problems.append(f"{label}: unknown easycat {subcommand} command {nested_command}")
-
-
 def _cli_docs_command_hint_problems(entries: list[dict[str, object]]) -> list[str]:
-    command_tree = _easycat_command_tree()
-    just_recipes = just_recipe_commands(REPO_ROOT)
-    problems: list[str] = []
-
-    for entry in entries:
-        label = str(entry["label"])
-        for command in entry.get("commands", ()):
-            tokens = shlex.split(command)
-            if not tokens:
-                problems.append(f"{label}: empty command hint")
-                continue
-            match tokens:
-                case ["easycat", subcommand, *args]:
-                    _validate_easycat_command_hint(
-                        label=label,
-                        command_tree=command_tree,
-                        subcommand=subcommand,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["uv", "run", *args]:
-                    _validate_uv_run_hint(
-                        label=label,
-                        command=command,
-                        command_tree=command_tree,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["uv", "sync", *args]:
-                    _validate_uv_sync_hint(label=label, args=args, problems=problems)
-                case ["python", "-m", "http.server", *args]:
-                    _validate_http_server_hint(label=label, args=args, problems=problems)
-                case ["just", recipe, *_]:
-                    if recipe not in just_recipes:
-                        problems.append(f"{label}: unknown just recipe {recipe}")
-                case ["docker", "compose", *args]:
-                    _validate_docker_compose_hint(label=label, args=args, problems=problems)
-                case _:
-                    problems.append(f"{label}: unsupported command hint {command!r}")
-
-    return problems
+    return _shared_command_hint_problems(entries, repo_root=REPO_ROOT)
 
 
 def _command_hint_variants(command: str) -> set[str]:
-    variants = {command, command.replace("PATH", "<path>")}
-
-    if command.startswith("easycat "):
-        variants.update(f"uv run {variant}" for variant in tuple(variants))
-    if command.startswith("uv run easycat "):
-        variants.update(variant.removeprefix("uv run ") for variant in tuple(variants))
-
-    return variants
+    return _shared_command_hint_variants(command)
 
 
 def test_docs_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) -> None:

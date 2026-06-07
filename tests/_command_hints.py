@@ -1,0 +1,399 @@
+from __future__ import annotations
+
+import re
+import shlex
+import tomllib
+from pathlib import Path
+
+from typer.main import get_command
+
+from easycat.cli._app import (
+    _DOCS_LINKS,
+    _available_docs_audience_filters,
+    _register_commands,
+    app,
+)
+from tests._justfile import just_recipe_commands
+from tests._pytest_targets import pytest_target_problems
+
+
+def strip_shell_comment(command: str) -> str:
+    return re.sub(r"\s+#.*$", "", command).strip()
+
+
+def documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    commands: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw_command: str) -> None:
+        command = strip_shell_comment(raw_command)
+        if command.startswith(prefixes) and command not in seen:
+            seen.add(command)
+            commands.append(command)
+
+    for line in section.splitlines():
+        add(line.strip())
+    for command in re.findall(r"`([^`]+)`", section):
+        add(command.strip())
+
+    return tuple(commands)
+
+
+def command_hint_variants(command: str) -> set[str]:
+    variants = {command, command.replace("PATH", "<path>")}
+
+    if command.startswith("easycat "):
+        variants.update(f"uv run {variant}" for variant in tuple(variants))
+    if command.startswith("uv run easycat "):
+        variants.update(variant.removeprefix("uv run ") for variant in tuple(variants))
+
+    return variants
+
+
+def command_hint_problems(entries: list[dict[str, object]], *, repo_root: Path) -> list[str]:
+    command_tree = _easycat_command_tree()
+    just_recipes = just_recipe_commands(repo_root)
+    problems: list[str] = []
+
+    for entry in entries:
+        label = str(entry["label"])
+        for command in entry.get("commands", ()):
+            tokens = shlex.split(command)
+            if not tokens:
+                problems.append(f"{label}: empty command hint")
+                continue
+            match tokens:
+                case ["easycat", subcommand, *args]:
+                    _validate_easycat_command_hint(
+                        label=label,
+                        repo_root=repo_root,
+                        command_tree=command_tree,
+                        subcommand=subcommand,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["uv", "run", *args]:
+                    _validate_uv_run_hint(
+                        label=label,
+                        command=command,
+                        repo_root=repo_root,
+                        command_tree=command_tree,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["uv", "sync", *args]:
+                    _validate_uv_sync_hint(
+                        label=label,
+                        repo_root=repo_root,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["python", "-m", "http.server", *args]:
+                    _validate_http_server_hint(
+                        label=label,
+                        repo_root=repo_root,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["just", recipe, *_]:
+                    if recipe not in just_recipes:
+                        problems.append(f"{label}: unknown just recipe {recipe}")
+                case ["docker", "compose", *args]:
+                    _validate_docker_compose_hint(
+                        label=label,
+                        repo_root=repo_root,
+                        args=args,
+                        problems=problems,
+                    )
+                case _:
+                    problems.append(f"{label}: unsupported command hint {command!r}")
+
+    return problems
+
+
+def _easycat_command_tree() -> dict[str, set[str] | None]:
+    _register_commands()
+    root_command = get_command(app)
+    return {
+        name: set(nested_commands) if nested_commands is not None else None
+        for name, command in root_command.commands.items()
+        for nested_commands in (getattr(command, "commands", None),)
+    }
+
+
+def _docs_audience_hint_values() -> set[str]:
+    filters = set(_available_docs_audience_filters())
+    return (
+        filters
+        | {value.replace("-", "_") for value in filters}
+        | {entry["audience"] for entry in _DOCS_LINKS}
+    )
+
+
+def _declared_optional_dependency_extras(repo_root: Path) -> set[str]:
+    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    return set(pyproject["project"]["optional-dependencies"])
+
+
+def _declared_dependency_groups(repo_root: Path) -> set[str]:
+    pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+    return set(pyproject["dependency-groups"])
+
+
+def _option_values(
+    args: list[str],
+    option: str,
+    *,
+    label: str,
+    missing_message: str,
+    problems: list[str],
+) -> list[str]:
+    values: list[str] = []
+    prefix = f"{option}="
+
+    for index, arg in enumerate(args):
+        if arg == option:
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                problems.append(f"{label}: {missing_message}")
+                continue
+            values.append(args[index + 1])
+        elif arg.startswith(prefix):
+            value = arg.split("=", 1)[1]
+            if not value:
+                problems.append(f"{label}: {missing_message}")
+                continue
+            values.append(value)
+
+    return values
+
+
+def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
+    valid_audiences = _docs_audience_hint_values()
+
+    for value in _option_values(
+        args,
+        "--audience",
+        label=label,
+        missing_message="docs audience hint missing value",
+        problems=problems,
+    ):
+        if value not in valid_audiences:
+            problems.append(f"{label}: unknown docs audience hint {value}")
+
+
+def _validate_env_file_values(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    context: str,
+    problems: list[str],
+) -> None:
+    for env_file in _option_values(
+        args,
+        "--env-file",
+        label=label,
+        missing_message=f"{context} env-file hint missing value",
+        problems=problems,
+    ):
+        if not (repo_root / env_file).parent.is_dir():
+            problems.append(f"{label}: missing {context} env-file directory {env_file}")
+
+
+def _validate_uv_sync_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    declared_extras = _declared_optional_dependency_extras(repo_root)
+    declared_groups = _declared_dependency_groups(repo_root)
+
+    for extra in _option_values(
+        args,
+        "--extra",
+        label=label,
+        missing_message="uv sync extra hint missing value",
+        problems=problems,
+    ):
+        if extra not in declared_extras:
+            problems.append(f"{label}: unknown uv sync extra {extra}")
+
+    for group in _option_values(
+        args,
+        "--group",
+        label=label,
+        missing_message="uv sync group hint missing value",
+        problems=problems,
+    ):
+        if group not in declared_groups:
+            problems.append(f"{label}: unknown uv sync group {group}")
+
+
+def _validate_http_server_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    for directory in _option_values(
+        args,
+        "--directory",
+        label=label,
+        missing_message="http.server hint missing directory",
+        problems=problems,
+    ):
+        if not (repo_root / directory).is_dir():
+            problems.append(f"{label}: missing http.server directory {directory}")
+
+
+def _validate_docker_compose_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    has_compose_file_flag = any(arg == "-f" or arg.startswith("-f=") for arg in args)
+    compose_files = _option_values(
+        args,
+        "-f",
+        label=label,
+        missing_message="docker compose hint missing compose file",
+        problems=problems,
+    )
+
+    if not has_compose_file_flag:
+        problems.append(f"{label}: docker compose hint missing -f")
+
+    for compose_file in compose_files:
+        if not (repo_root / compose_file).exists():
+            problems.append(f"{label}: missing compose file {compose_file}")
+
+    for env_file in _option_values(
+        args,
+        "--env-file",
+        label=label,
+        missing_message="docker compose env-file hint missing value",
+        problems=problems,
+    ):
+        if not (repo_root / env_file).parent.is_dir():
+            problems.append(f"{label}: missing docker compose env-file directory {env_file}")
+
+
+def _uv_run_command_tokens(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> list[str]:
+    index = 0
+
+    while index < len(args):
+        arg = args[index]
+        if arg == "--env-file":
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                problems.append(f"{label}: uv run env-file hint missing value")
+                index += 1
+                continue
+            env_file = args[index + 1]
+            if not (repo_root / env_file).parent.is_dir():
+                problems.append(f"{label}: missing uv run env-file directory {env_file}")
+            index += 2
+            continue
+        if arg.startswith("--env-file="):
+            env_file = arg.split("=", 1)[1]
+            if not env_file:
+                problems.append(f"{label}: uv run env-file hint missing value")
+                index += 1
+                continue
+            if not (repo_root / env_file).parent.is_dir():
+                problems.append(f"{label}: missing uv run env-file directory {env_file}")
+            index += 1
+            continue
+        if arg.startswith("-"):
+            problems.append(f"{label}: unsupported uv run option {arg}")
+            return []
+        return args[index:]
+
+    problems.append(f"{label}: missing uv run command")
+    return []
+
+
+def _validate_uv_run_hint(
+    *,
+    label: str,
+    command: str,
+    repo_root: Path,
+    command_tree: dict[str, set[str] | None],
+    args: list[str],
+    problems: list[str],
+) -> None:
+    run_tokens = _uv_run_command_tokens(
+        label=label,
+        repo_root=repo_root,
+        args=args,
+        problems=problems,
+    )
+    if not run_tokens:
+        return
+
+    match run_tokens:
+        case ["easycat", subcommand, *sub_args]:
+            _validate_easycat_command_hint(
+                label=label,
+                repo_root=repo_root,
+                command_tree=command_tree,
+                subcommand=subcommand,
+                args=sub_args,
+                problems=problems,
+            )
+        case ["python", script, *_]:
+            if not (repo_root / script).exists():
+                problems.append(f"{label}: missing python script {script}")
+        case ["pytest", *_]:
+            problems.extend(pytest_target_problems(command, repo_root=repo_root, label=label))
+        case ["ruff", *_]:
+            return
+        case _:
+            problems.append(f"{label}: unsupported command hint {command!r}")
+
+
+def _validate_easycat_command_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    command_tree: dict[str, set[str] | None],
+    subcommand: str,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if subcommand not in command_tree:
+        problems.append(f"{label}: unknown easycat command {subcommand}")
+        return
+
+    if subcommand == "docs":
+        _validate_docs_command_hint(label=label, args=args, problems=problems)
+    if subcommand == "doctor":
+        _validate_env_file_values(
+            label=label,
+            repo_root=repo_root,
+            args=args,
+            context="easycat doctor",
+            problems=problems,
+        )
+
+    nested_commands = command_tree[subcommand]
+    if nested_commands is None:
+        return
+
+    if not args or args[0].startswith("-"):
+        problems.append(f"{label}: missing easycat {subcommand} command")
+        return
+
+    nested_command = args[0]
+    if nested_command not in nested_commands:
+        problems.append(f"{label}: unknown easycat {subcommand} command {nested_command}")

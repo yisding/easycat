@@ -12,6 +12,7 @@ from easycat.cli._app import (
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
 )
 from easycat.cli.diagnose._codes import META_ENTRIES
+from tests._command_hints import command_hint_problems, documented_commands
 from tests._justfile import just_recipe_names
 from tests._pytest_targets import pytest_target_problems
 
@@ -475,6 +476,30 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "`fix_command`, `environment`, `checks`, `validation`" in normalized_readme
     assert "`source_path`, and `fidelity_effective`" in normalized_readme
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
+
+
+def test_readme_cli_command_examples_are_locally_valid() -> None:
+    cli_section = _readme_cli_section()
+    commands = documented_commands(
+        cli_section,
+        prefixes=("easycat ", "uv run easycat "),
+    )
+
+    problems = command_hint_problems(
+        [
+            {
+                "label": "README.md CLI",
+                "path": "README.md#cli",
+                "audience": "app builders",
+                "description": "Root README CLI command examples.",
+                "commands": commands,
+            }
+        ],
+        repo_root=REPO_ROOT,
+    )
+
+    assert commands
+    assert not problems, "README.md CLI command examples are stale:\n" + "\n".join(problems)
 
 
 def test_readme_json_guidance_covers_schema_command_families() -> None:
