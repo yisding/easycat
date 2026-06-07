@@ -131,7 +131,10 @@ def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     docs_plan = plan.split("## Plan 4 — `docs` route map", 1)[1].split("---", 1)[0]
     normalized_docs_plan = " ".join(docs_plan.split())
 
-    assert "| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` |" in plan
+    assert (
+        "| 4 | `docs` route map | "
+        "`test_app.py` + `tests/test_docs_index.py` + `test_json_schema.py` |"
+    ) in plan
     assert "easycat docs" in docs_plan
     assert "easycat docs --json" in docs_plan
     assert (

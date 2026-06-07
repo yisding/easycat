@@ -11,7 +11,7 @@ first, debug second, safety net third, and infrastructure last.
 | 1 | CLI boot integrity | `test_app.py` + E2E §1 |
 | 2 | `explain` catalog completeness | `test_explain.py` + `test_errors.py` |
 | 3 | `explain` fuzzy + meta paths | `test_explain.py` |
-| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` |
+| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` + `test_json_schema.py` |
 | 5 | `init` template rendering | `test_init.py` + `test_templates.py` |
 | 6 | `init` schema rejection paths | `test_init.py` |
 | 7 | `init` overwrite safety | `test_init.py` |
@@ -140,7 +140,8 @@ route order stops putting onboarding paths first.
   first lesson, examples, architecture, and coding-agent routes on the first
   screen.
 
-**Backed by.** `tests/cli/test_app.py` and `tests/test_docs_index.py`.
+**Backed by.** `tests/cli/test_app.py`, `tests/test_docs_index.py`, and
+`tests/cli/test_json_schema.py`.
 
 ---
 
