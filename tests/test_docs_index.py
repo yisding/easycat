@@ -342,6 +342,24 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
     assert "easycat validate report .easycat/validation/latest.json" not in route_commands
 
 
+def test_public_api_docs_route_matches_contract_guard_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    contract = (REPO_ROOT / "docs" / "public-api.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/public-api.md"].get("commands", ())
+
+    for command in (
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
+        "uv run pytest tests/test_public_api.py",
+        "just guard-docs",
+    ):
+        assert command in contract
+        assert command in route_commands
+
+    assert "easycat docs --json" not in route_commands
+
+
 def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     observability = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")

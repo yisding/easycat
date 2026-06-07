@@ -127,6 +127,11 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     assert "PUBLIC_API_SNAPSHOT" in doc
     assert "Reader-facing snippets in the root README" in doc
     assert "scaffold templates must use this allowlist" in doc
+    assert "uv run easycat docs" in doc
+    assert "uv run easycat docs --json" in doc
+    assert "uv run easycat explain json-schema" in doc
+    assert "uv run pytest tests/test_public_api.py" in doc
+    assert "just guard-docs" in doc
 
 
 def test_public_api_contract_doc_has_unique_allowlist_entries() -> None:

@@ -3,6 +3,11 @@
 This page defines what `from easycat import ...` means for application code.
 The exact top-level allowlist is also pinned in `tests/test_public_api.py`, so
 changes to this page and the snapshot should be reviewed together.
+This page is also listed in the maintained docs map; run `uv run easycat docs`
+to confirm it remains discoverable, or `uv run easycat docs --json` when a
+script or coding agent needs the route entry and command hints. Use
+`uv run easycat explain json-schema` for the standard JSON envelope and
+command-specific fields.
 
 ## Rules
 
@@ -26,7 +31,8 @@ changes to this page and the snapshot should be reviewed together.
 - The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
   CI parses this section rather than accepting incidental mentions elsewhere.
 - After changing top-level exports, run
-  `uv run pytest tests/test_public_api.py` before opening the PR.
+  `uv run pytest tests/test_public_api.py` and `just guard-docs` before
+  opening the PR.
 
 ## Preferred Imports
 

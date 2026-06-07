@@ -50,7 +50,8 @@ command hints, such as `PATH`, before running them.
   commands, docs/onboarding guard recipes, validation commands, and PR
   expectations.
 - Maintaining public imports: review the
-  [public API contract](public-api.md) before changing `easycat.__all__`.
+  [public API contract](public-api.md) before changing `easycat.__all__`;
+  it points to the docs route map, focused public API test, and docs guard.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,

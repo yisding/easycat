@@ -267,7 +267,13 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/public-api.md",
         "audience": "maintainers",
         "description": "Review the stable import surface before changing exports.",
-        "commands": ("uv run pytest tests/test_public_api.py",),
+        "commands": (
+            "uv run easycat docs",
+            "uv run easycat docs --json",
+            "uv run easycat explain json-schema",
+            "uv run pytest tests/test_public_api.py",
+            "just guard-docs",
+        ),
     },
     {
         "label": "Contributing",
