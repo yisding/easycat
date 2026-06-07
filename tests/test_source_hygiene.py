@@ -579,8 +579,9 @@ def test_focused_transport_tests_use_pytest_port_factory() -> None:
 
 
 def test_session_integration_tests_use_pytest_port_factory() -> None:
-    """Keep small session integration tests off bind-close port helpers."""
+    """Keep session integration tests off bind-close port helpers where feasible."""
     for path in (
+        REPO_ROOT / "tests" / "integration" / "test_session_lifecycle_e2e.py",
         REPO_ROOT / "tests" / "integration" / "test_twilio_session_integration.py",
         REPO_ROOT / "tests" / "integration" / "test_websocket_session_integration.py",
     ):

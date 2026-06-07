@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -23,7 +24,6 @@ from .harness import (
     RecordingTTS,
     ScriptedSTT,
     ScriptedVAD,
-    find_free_port,
     make_chunk,
     make_test_config,
     patch_provider_factories,
@@ -36,6 +36,19 @@ FAST_TURN_MS = 1
 _HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 _HAS_AIORTC = importlib.util.find_spec("aiortc") is not None
 _HAS_WEBRTC_DEPS = _HAS_AIORTC and _HAS_AIOHTTP
+
+_unused_tcp_port_factory: Callable[[], int] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _set_unused_tcp_port_factory(unused_tcp_port_factory: Callable[[], int]) -> None:
+    global _unused_tcp_port_factory
+    _unused_tcp_port_factory = unused_tcp_port_factory
+
+
+def _unused_port() -> int:
+    assert _unused_tcp_port_factory is not None
+    return _unused_tcp_port_factory()
 
 
 # ── Agent helpers ──────────────────────────────────────────────────
@@ -72,7 +85,7 @@ async def test_is_running_becomes_false_after_disconnect(
 
     from easycat.turn_manager import TurnManagerConfig
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -126,7 +139,7 @@ async def test_poll_is_running_then_stop(
 
     from easycat.turn_manager import TurnManagerConfig
 
-    port = find_free_port()
+    port = _unused_port()
     session_stopped = asyncio.Event()
 
     async def handler(ws) -> None:
@@ -175,7 +188,7 @@ async def test_stop_completes_after_slow_agent_disconnect(
 
     from easycat.turn_manager import TurnManagerConfig
 
-    port = find_free_port()
+    port = _unused_port()
     stop_result: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     handler_done = asyncio.Event()
 
@@ -230,7 +243,7 @@ async def test_session_double_stop_is_safe(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     stop_results: list[str] = []
     handler_done = asyncio.Event()
 
@@ -283,7 +296,7 @@ async def test_session_stop_then_shutdown_is_safe(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     results: list[str] = []
     handler_done = asyncio.Event()
 
@@ -336,7 +349,7 @@ async def test_session_shutdown_without_stop(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     handler_done = asyncio.Event()
 
     async def handler(ws) -> None:
@@ -384,7 +397,7 @@ async def test_webrtc_offer_with_empty_sdp_rejected() -> None:
 
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
     await transport.connect()
@@ -418,7 +431,7 @@ async def test_webrtc_offer_with_wrong_type_rejected() -> None:
 
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
     await transport.connect()
@@ -442,7 +455,7 @@ async def test_webrtc_offer_with_array_body_rejected() -> None:
 
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
     await transport.connect()
@@ -464,7 +477,7 @@ async def test_webrtc_disconnect_without_peer_connected() -> None:
     """disconnect() without a peer connection should clean up the HTTP server."""
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
 
@@ -488,7 +501,7 @@ async def test_webrtc_send_audio_without_peer_is_noop() -> None:
     """send_audio without a connected peer should be silently ignored."""
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
     await transport.connect()
@@ -507,7 +520,7 @@ async def test_webrtc_clear_audio_without_peer() -> None:
     """clear_audio without a peer should not raise."""
     from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebRTCTransportConfig(host="127.0.0.1", port=port)
     transport = WebRTCTransport(config)
     await transport.connect()
