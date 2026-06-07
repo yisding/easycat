@@ -41,6 +41,7 @@ class ErrorInfo:
     message: str = ""
     traceback: str | None = None
     notes: str | None = None  # additional context (e.g. retry count, affected stage)
+    children: tuple[ErrorInfo, ...] = ()
 
     @staticmethod
     def from_exception(exc: BaseException, *, notes: str | None = None) -> ErrorInfo:
@@ -74,6 +75,7 @@ class ErrorInfo:
             message=str(exc),
             traceback="".join(collapsed),
             notes=combined_notes,
+            children=_exception_children(exc),
         )
 
 
@@ -94,6 +96,12 @@ def _exception_notes(exc: BaseException) -> list[str]:
         for child in exc.exceptions:
             notes.extend(_exception_notes(child))
     return notes
+
+
+def _exception_children(exc: BaseException) -> tuple[ErrorInfo, ...]:
+    if not isinstance(exc, BaseExceptionGroup):
+        return ()
+    return tuple(ErrorInfo.from_exception(child) for child in exc.exceptions)
 
 
 @dataclass(frozen=True)

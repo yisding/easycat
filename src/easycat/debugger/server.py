@@ -359,11 +359,18 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
         out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
     error = getattr(record, "error", None)
     if error is not None:
-        out["error"] = {
-            "type": getattr(error, "type", None),
-            "message": getattr(error, "message", None),
-        }
+        out["error"] = _error_to_dict(error)
     return out
+
+
+def _error_to_dict(error: Any) -> dict[str, Any]:
+    return {
+        "type": getattr(error, "type", None),
+        "message": getattr(error, "message", None),
+        "traceback": getattr(error, "traceback", None),
+        "notes": getattr(error, "notes", None),
+        "children": [_error_to_dict(child) for child in getattr(error, "children", ())],
+    }
 
 
 # ── Pure helpers (record filtering / rollups) ────────────────────

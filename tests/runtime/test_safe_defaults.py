@@ -174,6 +174,13 @@ class TestApplyWriteFilter:
                 message="Authorization: Bearer sk-testsecret123456",
                 traceback="/Users/alice/project failed with tok-secret123456",
                 notes="provider id req_abcdef123456",
+                children=(
+                    ErrorInfo(
+                        type="ValueError",
+                        message="child leaked sk-childsecret123456",
+                        notes="child request req_bcdef1234567",
+                    ),
+                ),
             ),
         )
 
@@ -189,6 +196,9 @@ class TestApplyWriteFilter:
         assert "/Users/alice" not in (filtered.error.traceback or "")
         assert "tok-secret123456" not in (filtered.error.traceback or "")
         assert filtered.error.notes == f"provider id {REDACTED_REQUEST_ID}"
+        assert len(filtered.error.children) == 1
+        assert filtered.error.children[0].message == f"child leaked {REDACTED_SECRET}"
+        assert filtered.error.children[0].notes == f"child request {REDACTED_REQUEST_ID}"
 
 
 class TestAllowlistCompleteness:

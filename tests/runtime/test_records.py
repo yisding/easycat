@@ -66,6 +66,7 @@ class TestErrorInfo:
         assert e.type == ""
         assert e.message == ""
         assert e.traceback is None
+        assert e.children == ()
 
     def test_with_values(self):
         e = ErrorInfo(type="ValueError", message="bad input", traceback="line 1\nline 2")
@@ -103,6 +104,27 @@ class TestErrorInfo:
 
         assert info.type == "ExceptionGroup"
         assert info.notes == "turn_id=turn-123\nstage=stt\nprovider=openai"
+        assert [child.type for child in info.children] == ["ValueError", "RuntimeError"]
+        assert info.children[0].message == "bad input"
+        assert info.children[0].notes == "stage=stt"
+        assert info.children[1].message == "provider failed"
+        assert info.children[1].notes == "provider=openai"
+
+    def test_from_exception_captures_nested_exception_group_children(self):
+        inner_left = ValueError("bad input")
+        inner_right = RuntimeError("provider failed")
+        nested = ExceptionGroup("nested failed", [inner_left, inner_right])
+        top = ExceptionGroup("pipeline failed", [TimeoutError("turn timed out"), nested])
+
+        info = ErrorInfo.from_exception(top)
+
+        assert info.type == "ExceptionGroup"
+        assert [child.type for child in info.children] == ["TimeoutError", "ExceptionGroup"]
+        assert info.children[1].message == "nested failed (2 sub-exceptions)"
+        assert [child.type for child in info.children[1].children] == [
+            "ValueError",
+            "RuntimeError",
+        ]
 
 
 class TestSentinelRecords:

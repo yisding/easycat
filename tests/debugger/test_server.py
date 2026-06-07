@@ -38,7 +38,7 @@ from easycat.events import (  # noqa: E402
 from easycat.noise_reduction import PassthroughNoiseReducer  # noqa: E402
 from easycat.runtime.artifacts import InMemoryArtifactStore  # noqa: E402
 from easycat.runtime.journal import InMemoryRingBuffer  # noqa: E402
-from easycat.runtime.records import JournalRecordKind  # noqa: E402
+from easycat.runtime.records import ErrorInfo, JournalRecordKind  # noqa: E402
 from easycat.session._session import Session  # noqa: E402
 from easycat.session._types import SessionConfig  # noqa: E402
 from easycat.turn_manager import TurnManagerConfig  # noqa: E402
@@ -340,8 +340,20 @@ def test_debugger_source_session_adapts_live_journal():
     assert source.records() == []
     # Adding a record makes it visible on the next records() call —
     # this is the polling contract live sources rely on.
-    journal.append(kind=JournalRecordKind.EVENT, name="test", session_id="stub-1")
-    assert any(r["name"] == "test" for r in source.records())
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="test",
+        session_id="stub-1",
+        error=ErrorInfo(
+            type="ExceptionGroup",
+            message="pipeline failed",
+            children=(ErrorInfo(type="ValueError", message="bad input"),),
+        ),
+    )
+    records = source.records()
+    record = next(r for r in records if r["name"] == "test")
+    assert record["error"]["children"][0]["type"] == "ValueError"
+    assert record["error"]["children"][0]["message"] == "bad input"
 
 
 def test_journal_view_exposes_latest_sequence():

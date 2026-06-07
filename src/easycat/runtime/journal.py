@@ -672,7 +672,8 @@ CREATE TABLE IF NOT EXISTS journal (
     error_notes  TEXT,
     input_ref    TEXT,
     output_ref   TEXT,
-    tags         TEXT    NOT NULL DEFAULT ''
+    tags         TEXT    NOT NULL DEFAULT '',
+    error_children TEXT
 );
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -694,8 +695,8 @@ _JOURNAL_INSERT_SQL = (
     "INSERT INTO journal "
     "(sequence, session_id, kind, name, wall_ns, mono_ns, cpu_ns, "
     "turn_id, data, error_type, error_msg, error_tb, error_notes, "
-    "input_ref, output_ref, tags) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "input_ref, output_ref, tags, error_children) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -716,6 +717,11 @@ def _encode_journal_row(
     output_ref: str | None,
 ) -> tuple[Any, ...]:
     """Build the column-order value tuple for ``_JOURNAL_INSERT_SQL``."""
+    error_children = (
+        json.dumps([_error_info_to_dict(child) for child in error.children], default=str)
+        if error is not None and error.children
+        else None
+    )
     return (
         sequence,
         session_id,
@@ -733,7 +739,43 @@ def _encode_journal_row(
         input_ref,
         output_ref,
         ",".join(sorted(tags)) if tags else "",
+        error_children,
     )
+
+
+def _error_info_to_dict(error: ErrorInfo) -> dict[str, Any]:
+    return {
+        "type": error.type,
+        "message": error.message,
+        "traceback": error.traceback,
+        "notes": error.notes,
+        "children": [_error_info_to_dict(child) for child in error.children],
+    }
+
+
+def _error_info_from_dict(value: Any) -> ErrorInfo | None:
+    if not isinstance(value, dict):
+        return None
+    children: list[ErrorInfo] = []
+    raw_children = value.get("children")
+    if isinstance(raw_children, list):
+        for child_value in raw_children:
+            child = _error_info_from_dict(child_value)
+            if child is not None:
+                children.append(child)
+    return ErrorInfo(
+        type=str(value.get("type") or ""),
+        message=str(value.get("message") or ""),
+        traceback=value.get("traceback") if isinstance(value.get("traceback"), str) else None,
+        notes=value.get("notes") if isinstance(value.get("notes"), str) else None,
+        children=tuple(children),
+    )
+
+
+def _ensure_journal_schema(conn: Any) -> None:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal)").fetchall()}
+    if "error_children" not in columns:
+        conn.execute("ALTER TABLE journal ADD COLUMN error_children TEXT")
 
 
 def _journal_record_for_append(
@@ -966,6 +1008,10 @@ class _SqlJournalBase:
 
     @staticmethod
     def _row_to_record(row: tuple[Any, ...]) -> JournalRecord:
+        if len(row) == 16:
+            row = (*row, None)
+        elif len(row) != 17:
+            raise ValueError(f"Unexpected journal row shape with {len(row)} columns.")
         (
             sequence,
             session_id,
@@ -983,7 +1029,16 @@ class _SqlJournalBase:
             input_ref,
             output_ref,
             tags_str,
+            error_children_str,
         ) = row
+        data = json.loads(data_str) if data_str else {}
+        error_children: list[ErrorInfo] = []
+        raw_error_children = json.loads(error_children_str) if error_children_str else None
+        if isinstance(raw_error_children, list):
+            for child_value in raw_error_children:
+                child = _error_info_from_dict(child_value)
+                if child is not None:
+                    error_children.append(child)
         error = None
         if error_type:
             error = ErrorInfo(
@@ -991,10 +1046,10 @@ class _SqlJournalBase:
                 message=error_msg or "",
                 traceback=error_tb,
                 notes=error_notes,
+                children=tuple(error_children),
             )
         tag_set = frozenset(tags_str.split(",")) if tags_str else frozenset()
         kind = JournalRecordKind(kind_str)
-        data = json.loads(data_str) if data_str else {}
         common = dict(
             sequence=sequence,
             session_id=session_id,
@@ -1070,6 +1125,7 @@ class SqliteJournal(_SqlJournalBase):
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA wal_autocheckpoint=0")
         self._conn.executescript(_SQLITE_SCHEMA)
+        _ensure_journal_schema(self._conn)
 
         # Detect unclean shutdown: file existed but clean_close marker absent.
         if existed:
@@ -1637,6 +1693,7 @@ class LibsqlJournal(_SqlJournalBase):
 
         self._conn = libsql.connect(**connect_kwargs)
         self._conn.executescript(_SQLITE_SCHEMA)
+        _ensure_journal_schema(self._conn)
 
         # Handle session-id reuse: mirror only SqliteJournal's *clean-reuse*
         # truncation.  libSQL does NOT implement crash recovery — there is no

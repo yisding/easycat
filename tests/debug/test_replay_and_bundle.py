@@ -359,7 +359,11 @@ class TestBundleExport:
                 "nested": {"kind": JournalRecordKind.EVENT},
                 "mixed_set": {1, "a"},
             },
-            error=ErrorInfo(type="RuntimeError", message="boom"),
+            error=ErrorInfo(
+                type="ExceptionGroup",
+                message="boom",
+                children=(ErrorInfo(type="ValueError", message="bad input"),),
+            ),
             tags=frozenset({"debug", "runtime"}),
         )
         session = _FakeSession(debug="light", journal=_FakeJournal([record]))
@@ -376,10 +380,19 @@ class TestBundleExport:
         assert exported["data"]["nested"]["kind"] == "event"
         assert exported["data"]["mixed_set"] == ["a", 1]
         assert exported["error"] == {
-            "type": "RuntimeError",
+            "type": "ExceptionGroup",
             "message": "boom",
             "traceback": None,
             "notes": None,
+            "children": [
+                {
+                    "type": "ValueError",
+                    "message": "bad input",
+                    "traceback": None,
+                    "notes": None,
+                    "children": [],
+                }
+            ],
         }
         assert exported["tags"] == ["debug", "runtime"]
 

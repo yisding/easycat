@@ -17,6 +17,7 @@ import pytest
 from easycat.runtime.journal import (
     JournalView,
     LitestreamSqliteJournal,
+    ReadonlySqliteJournal,
     SqliteJournal,
     create_journal,
     run_retention,
@@ -158,6 +159,71 @@ class TestSqliteJournalBasics:
         assert rec.error.type == "ValueError"
         assert rec.error.message == "bad"
         assert rec.error.traceback == "line 1"
+
+    def test_error_info_children_roundtrip_without_polluting_data(self, journal):
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="pipeline_fail",
+            session_id="test-session",
+            data={"stage": "pipeline"},
+            error=ErrorInfo(
+                type="ExceptionGroup",
+                message="pipeline failed",
+                children=(
+                    ErrorInfo(type="ValueError", message="bad input", notes="stage=stt"),
+                    ErrorInfo(type="RuntimeError", message="provider failed", notes="stage=tts"),
+                ),
+            ),
+        )
+
+        rec = journal.read()[0]
+
+        assert rec.data == {"stage": "pipeline"}
+        assert rec.error is not None
+        assert [child.type for child in rec.error.children] == ["ValueError", "RuntimeError"]
+        assert rec.error.children[0].notes == "stage=stt"
+        assert rec.error.children[1].message == "provider failed"
+
+    def test_readonly_journal_loads_old_error_info_rows_without_children_column(self, tmp_path):
+        db_path = tmp_path / "old.sqlite"
+        conn = sqlite3.connect(db_path)
+        conn.executescript(
+            """
+            CREATE TABLE journal (
+                sequence     INTEGER PRIMARY KEY,
+                session_id   TEXT    NOT NULL,
+                kind         TEXT    NOT NULL,
+                name         TEXT    NOT NULL DEFAULT '',
+                wall_ns      INTEGER NOT NULL DEFAULT 0,
+                mono_ns      INTEGER NOT NULL DEFAULT 0,
+                cpu_ns       INTEGER NOT NULL DEFAULT 0,
+                turn_id      TEXT,
+                data         TEXT    NOT NULL DEFAULT '{}',
+                error_type   TEXT,
+                error_msg    TEXT,
+                error_tb     TEXT,
+                error_notes  TEXT,
+                input_ref    TEXT,
+                output_ref   TEXT,
+                tags         TEXT    NOT NULL DEFAULT ''
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO journal "
+            "(sequence, session_id, kind, name, data, error_type, error_msg) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "old-session", "event", "fail", '{"stage": "stt"}', "ValueError", "bad"),
+        )
+        conn.commit()
+        conn.close()
+
+        rec = ReadonlySqliteJournal(db_path).read()[0]
+
+        assert rec.data == {"stage": "stt"}
+        assert rec.error is not None
+        assert rec.error.type == "ValueError"
+        assert rec.error.children == ()
 
     def test_tags_roundtrip(self, journal):
         journal.append(

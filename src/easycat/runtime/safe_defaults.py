@@ -210,6 +210,11 @@ def _redact_error(error: ErrorInfo | None) -> ErrorInfo | None:
         message=redact_text(error.message),
         traceback=redact_text(error.traceback) if error.traceback is not None else None,
         notes=redact_text(error.notes) if error.notes is not None else None,
+        children=tuple(
+            child
+            for child in (_redact_error(child) for child in error.children)
+            if child is not None
+        ),
     )
     return error if redacted == error else redacted
 

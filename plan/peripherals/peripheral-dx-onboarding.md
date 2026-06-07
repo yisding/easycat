@@ -23,6 +23,9 @@ Shipped:
 - PEP 678 exception notes are captured in `ErrorInfo.notes`, so provider and
   framework diagnostics survive journal filters and debug bundle export
   (`runtime/records.py`).
+- `ErrorInfo.from_exception(ExceptionGroup(...))` now preserves the grouped
+  child error tree for journal, SQLite, bundle, and debugger consumers while
+  retaining the flat notes summary (`runtime/records.py`, `runtime/journal.py`).
 - `debug="light" | "full"`, `export_debug_bundle()` (`config/easy.py`,
   `src/easycat/session/_session.py::export_debug_bundle`).
 - `async with session:` context-manager support
@@ -38,6 +41,8 @@ Shipped:
 - `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to
   `SmartTurnConfig(enabled=True, threshold=1-sensitivity)` so common endpoint
   tuning does not require importing the lower-level config class.
+- Config flattening pass meets the target: currently 22 top-level `EasyConfig` fields
+  against the target ≤22.
 
 Still remaining:
 
@@ -47,12 +52,9 @@ Still remaining:
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
-- `ExceptionGroup` support and broader PEP 678 annotations across the
-  pipeline.
+- Pipeline-wide `ExceptionGroup` propagation and broader PEP 678 annotations.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
   only.
-- Config flattening pass: currently 22 top-level `EasyConfig` fields,
-  target ≤22.
 - Advanced knobs promised by the plan that aren't yet config fields:
   `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
 
