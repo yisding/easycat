@@ -336,6 +336,15 @@ def test_observability_doc_lists_journal_cli_entry_points() -> None:
     assert "parseable summary" in journal
 
 
+def test_observability_doc_points_operators_to_filtered_docs_route() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    intro = doc.split("## The four layers", 1)[0]
+
+    assert "uv run easycat docs --audience operators" in intro
+    assert "operator-facing route slice" in intro
+    assert "deployment, observability, and journal durability" in intro
+
+
 def test_observability_doc_lists_debugger_ui_entry_points() -> None:
     doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
     journal = doc.split("### C — ExecutionJournal", 1)[1].split(

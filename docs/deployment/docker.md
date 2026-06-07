@@ -4,6 +4,8 @@ This guide packages the WebSocket example (`examples/ws_server.py`) as a
 container.  Silero VAD and Smart-Turn ONNX models ship inside
 `src/easycat/models/`, so they are embedded in the image — nothing is
 fetched at first-request time besides the calls to OpenAI.
+From this repository, run `uv run easycat docs --audience operators` for the
+operator-facing route slice covering deployment, observability, and journal durability.
 
 ## Quickstart
 

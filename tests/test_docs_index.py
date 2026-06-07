@@ -427,6 +427,7 @@ def test_deployment_docs_route_matches_docker_commands() -> None:
     route_commands = entries["docs/deployment/docker.md"].get("commands", ())
 
     for command in (
+        "uv run easycat docs --audience operators",
         "docker compose -f docker/compose.yaml up --build",
         "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
         "docker compose -f docker/compose.yaml down",
@@ -446,6 +447,8 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     )[0]
     route_commands = entries["docs/observability.md"].get("commands", ())
 
+    assert "uv run easycat docs --audience operators" in observability
+    assert "uv run easycat docs --audience operators" in route_commands
     for command in (
         "easycat bundles list",
         "easycat bundles list --json",

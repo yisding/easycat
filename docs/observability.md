@@ -6,6 +6,8 @@ guarantees. Reach for the wrong one and you will either lose data, leak PII, or
 accidentally couple your application logic to a diagnostic sink.
 
 This guide is the "which layer do I use when" map.
+From this repository, run `uv run easycat docs --audience operators` to see
+the full operator-facing route slice, including deployment, observability, and journal durability.
 
 ## The four layers
 

@@ -360,6 +360,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "operators",
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
+            "uv run easycat docs --audience operators",
             "docker compose -f docker/compose.yaml up --build",
             "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
             "docker compose -f docker/compose.yaml down",
@@ -371,6 +372,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "operators",
         "description": "Inspect journals, debug bundles, the debugger UI, metrics, and traces.",
         "commands": (
+            "uv run easycat docs --audience operators",
             "easycat bundles list",
             "easycat bundles list --json",
             "easycat bundles show PATH",
