@@ -373,7 +373,12 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "src/easycat/runtime/DURABILITY.md",
         "audience": "operators and maintainers",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
-        "commands": ("uv run pytest tests/runtime/test_sqlite_journal.py",),
+        "commands": (
+            "uv run pytest tests/runtime/test_sqlite_journal.py",
+            "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
+            "uv run easycat inspect .easycat/journals/<session_id>.sqlite --json",
+            "uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json",
+        ),
     },
     {
         "label": "Validation",

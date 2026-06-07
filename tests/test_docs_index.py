@@ -454,6 +454,25 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     assert "easycat bundles export <path>" not in route_commands
 
 
+def test_journal_durability_docs_route_matches_inspection_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    durability = (REPO_ROOT / "src" / "easycat" / "runtime" / "DURABILITY.md").read_text(
+        encoding="utf-8"
+    )
+    route_commands = entries["src/easycat/runtime/DURABILITY.md"].get("commands", ())
+
+    for command in (
+        "uv run pytest tests/runtime/test_sqlite_journal.py",
+        "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
+        "uv run easycat inspect .easycat/journals/<session_id>.sqlite --json",
+        "uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json",
+    ):
+        assert command in durability
+        assert command in route_commands
+
+    assert "uv run easycat inspect PATH" not in route_commands
+
+
 def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")

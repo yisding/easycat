@@ -4,6 +4,12 @@ Maintenance check: after changing journal persistence, recovery, storage
 layout, or teardown semantics, run
 `uv run pytest tests/runtime/test_sqlite_journal.py`.
 
+Operator inspection: after a run, inspect a live SQLite journal with
+`uv run easycat inspect .easycat/journals/<session_id>.sqlite`; use
+`uv run easycat inspect .easycat/journals/<session_id>.sqlite --json` when a
+script or coding agent needs a parseable summary. Inspect promoted crash dumps
+with `uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json`.
+
 ## Application-crash durability (default)
 
 The SQLite journal backend (`debug="full"`) survives:
