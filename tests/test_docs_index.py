@@ -1044,6 +1044,10 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
         assert command in maintenance_section
         assert command in route_commands
 
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in contributing
+        assert command in route_commands
+
     for command in validation_commands:
         assert command in validation_section
         assert command in route_commands

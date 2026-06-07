@@ -413,6 +413,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "just guard-templates",
             "just guard-contributing",
             "just guard-markdown",
+            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat docs --audience contributors",
             "uv run pytest",
             "uv run ruff check .",
