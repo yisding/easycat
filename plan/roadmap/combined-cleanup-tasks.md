@@ -129,12 +129,11 @@ context. Several bullets are known stale; use the current-state list above and
 ### 0.4 Harden Transport Defaults
 
 - Done: `WebSocketTransportConfig.host`, `WebSocketSessionServerConfig.host`,
-  and debugger surfaces default to `127.0.0.1`; debugger surfaces require
-  `allow_remote=True` for non-loopback hosts. Docker compose explicitly opts
-  the container process into `EASYCAT_WS_HOST=0.0.0.0` while publishing only on
-  host loopback.
-- Change library server defaults to loopback where possible:
-  `WebRTCTransportConfig.host` should default to `127.0.0.1`.
+  `WebRTCTransportConfig.host`, and debugger surfaces default to `127.0.0.1`;
+  debugger surfaces require `allow_remote=True` for non-loopback hosts. Docker
+  compose explicitly opts the container process into `EASYCAT_WS_HOST=0.0.0.0`
+  while publishing only on host loopback. EC2 WebRTC deployment scripts
+  explicitly opt signaling into `SIGNALING_HOST=0.0.0.0`.
 - For surfaces that commonly need remote access, require explicit
   `allow_remote=True` or equivalent.
 - Add a shared `ConnectionPolicy` covering origin, path, query/session token,

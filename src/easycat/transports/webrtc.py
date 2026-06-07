@@ -215,7 +215,7 @@ class WebRTCTransportConfig:
     _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
     _USE_BUNDLED: ClassVar[str] = "__USE_BUNDLED__"
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8080
     ice_servers: list[ICEServer] = field(
         default_factory=lambda: [ICEServer(urls="stun:stun.l.google.com:19302")]

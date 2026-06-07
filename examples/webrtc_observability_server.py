@@ -85,7 +85,7 @@ def multiply_numbers(a: float, b: float) -> float:
 async def main() -> None:
     require_env("OPENAI_API_KEY")
 
-    signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
+    signaling_host = os.getenv("SIGNALING_HOST", "127.0.0.1")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
     debugger_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     debugger_port = int(os.getenv("DASHBOARD_PORT", "8090"))

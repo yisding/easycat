@@ -105,6 +105,7 @@ def test_browser_preset_uses_webrtc_transport_and_aec(
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     cfg = EasyConfig.browser()
     assert isinstance(cfg.transport, WebRTCTransportConfig)
+    assert cfg.transport.host == "127.0.0.1"
     assert cfg.echo_cancellation is not None
     assert cfg.echo_cancellation.enabled is True
 

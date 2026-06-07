@@ -221,7 +221,7 @@ def _install_fake_webrtc_modules(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestWebRTCTransportConfig:
     def test_defaults(self):
         config = WebRTCTransportConfig()
-        assert config.host == "0.0.0.0"
+        assert config.host == "127.0.0.1"
         assert config.port == 8080
         assert config.audio_format == PCM16_MONO_16K
         assert config.max_pending_chunks == 200
@@ -578,6 +578,24 @@ class TestWebRTCTransportLifecycle:
 
         await transport.disconnect()
         assert not transport.is_connected
+
+    @pytest.mark.asyncio
+    async def test_default_host_serves_health_on_loopback(self):
+        import aiohttp
+
+        port = find_free_port()
+        config = WebRTCTransportConfig(port=port, static_dir=None)
+        transport = WebRTCTransport(config)
+
+        await transport.connect()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://127.0.0.1:{port}/health") as resp:
+                    assert resp.status == 200
+                    data = await resp.json()
+                    assert data["status"] == "ok"
+        finally:
+            await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):

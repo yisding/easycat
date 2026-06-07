@@ -26,7 +26,7 @@ Environment variables:
     WEBRTC_EXPOSE_ICE_CREDENTIALS — Optional. Set to 1 to return TURN
                                     credentials from /config. Use only with
                                     trusted demos or short-lived credentials.
-    SIGNALING_HOST        — Optional.  Bind address (default 0.0.0.0).
+    SIGNALING_HOST        — Optional.  Bind address (default 127.0.0.1).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
 
 Then open http://localhost:8080 in your browser.
@@ -85,7 +85,7 @@ async def main() -> None:
         instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
-    signaling_host = os.getenv("SIGNALING_HOST", "0.0.0.0")
+    signaling_host = os.getenv("SIGNALING_HOST", "127.0.0.1")
     signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
     expose_ice_credentials = _env_flag("WEBRTC_EXPOSE_ICE_CREDENTIALS")
 

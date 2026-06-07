@@ -1374,6 +1374,19 @@ def test_webrtc_observability_debugger_url_is_validated():
     assert "const url = override ||" not in html
 
 
+def test_webrtc_examples_default_signaling_to_loopback():
+    server = (REPO_ROOT / "examples" / "webrtc_server.py").read_text(encoding="utf-8")
+    observability = (REPO_ROOT / "examples" / "webrtc_observability_server.py").read_text(
+        encoding="utf-8"
+    )
+    deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' in server
+    assert "Bind address (default 127.0.0.1)" in server
+    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' in observability
+    assert "SIGNALING_HOST=0.0.0.0" in deploy
+
+
 def test_push_to_talk_example_imports():
     import examples.push_to_talk as push_to_talk
 
