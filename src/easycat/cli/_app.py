@@ -346,6 +346,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
             "docker compose -f docker/compose.yaml up --build",
+            "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
             "docker compose -f docker/compose.yaml down",
         ),
     },

@@ -244,6 +244,9 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "easycat doctor --json" in result.stdout
     assert "easycat doctor --env-file .env --json" in result.stdout
     assert "docker compose -f docker/compose.yaml up --build" in result.stdout
+    assert "docker compose --env-file docker/.env -f docker/compose.yaml up --build" in (
+        result.stdout
+    )
     assert "easycat validate report .easycat/validation/latest.json" in result.stdout
     assert "docs/README.md" in result.stdout
     assert "docs/teaching" in result.stdout

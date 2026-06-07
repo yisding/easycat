@@ -409,6 +409,22 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
     assert "easycat validate contracts" not in route_commands
 
 
+def test_deployment_docs_route_matches_docker_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    deployment = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/deployment/docker.md"].get("commands", ())
+
+    for command in (
+        "docker compose -f docker/compose.yaml up --build",
+        "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
+        "docker compose -f docker/compose.yaml down",
+    ):
+        assert command in deployment
+        assert command in route_commands
+
+    assert "docker compose up --build" not in route_commands
+
+
 def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     observability = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
