@@ -184,6 +184,10 @@ just guard-contributing  # contributor guidance, validation plan, route hints
 just guard-markdown      # maintained Markdown links and anchors
 ```
 
+If `just` is not installed, use the raw command table in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop) for the equivalent
+`uv run pytest ...` command behind each guard.
+
 The quick validation lane runs deterministic local tests only: no live
 credentials, no localhost socket lane, no slow tests, and no flaky quarantine.
 Each run writes an isolated report under
