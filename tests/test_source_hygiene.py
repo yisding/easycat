@@ -22,6 +22,14 @@ STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
 
 
+def test_gitignore_covers_local_agent_tool_state() -> None:
+    """Keep contributor-local automation state out of routine git status."""
+    patterns = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+    for pattern in (".codex", ".codex/", ".claude/"):
+        assert pattern in patterns
+
+
 def test_library_source_does_not_reference_internal_planning_labels() -> None:
     """Keep maintainer-facing source comments tied to behavior, not old plans."""
     stale: list[str] = []

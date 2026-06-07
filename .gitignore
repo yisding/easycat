@@ -8,8 +8,11 @@ build/
 .pytest_cache/
 .ruff_cache/
 .easycat/
+
+# Local coding-agent/tool state
 .codex
 .codex/
+.claude/
 .pipecat-bench/
 
 # Secrets
@@ -19,8 +22,6 @@ build/
 *.pem
 *.key
 
-# Claude Code transient scheduler lock
-.claude/scheduled_tasks.lock
 site/
 
 # Coverage
