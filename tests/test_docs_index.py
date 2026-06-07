@@ -2,6 +2,7 @@
 
 import re
 import shlex
+import tomllib
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -124,6 +125,11 @@ def _docs_audience_hint_values() -> set[str]:
     )
 
 
+def _declared_optional_dependency_extras() -> set[str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return set(pyproject["project"]["optional-dependencies"])
+
+
 def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
     valid_audiences = _docs_audience_hint_values()
 
@@ -140,6 +146,24 @@ def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[s
 
         if value not in valid_audiences:
             problems.append(f"{label}: unknown docs audience hint {value}")
+
+
+def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) -> None:
+    declared_extras = _declared_optional_dependency_extras()
+
+    for index, arg in enumerate(args):
+        if arg == "--extra":
+            if index + 1 >= len(args):
+                problems.append(f"{label}: uv sync extra hint missing value")
+                return
+            extra = args[index + 1]
+        elif arg.startswith("--extra="):
+            extra = arg.split("=", 1)[1]
+        else:
+            continue
+
+        if extra not in declared_extras:
+            problems.append(f"{label}: unknown uv sync extra {extra}")
 
 
 def _validate_easycat_command_hint(
@@ -209,8 +233,10 @@ def _cli_docs_command_hint_problems(entries: list[dict[str, object]]) -> list[st
                     for path in paths:
                         if not path.startswith("-") and not (REPO_ROOT / path).exists():
                             problems.append(f"{label}: missing pytest target {path}")
-                case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
+                case ["uv", "run", "ruff", *_]:
                     continue
+                case ["uv", "sync", *args]:
+                    _validate_uv_sync_hint(label=label, args=args, problems=problems)
                 case ["python", "-m", "http.server", *_args]:
                     if "--directory" in tokens:
                         directory_index = tokens.index("--directory") + 1
@@ -856,6 +882,28 @@ def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
 
     assert "Broken docs audience hints: unknown docs audience hint time-travelers" in problems
     assert "Broken docs audience hints: docs audience hint missing value" in problems
+
+
+def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken uv sync hints",
+                "path": "README.md#install",
+                "audience": "new users",
+                "description": "Regression fixture for optional dependency validation.",
+                "commands": (
+                    "uv sync --extra not-a-real-extra --group dev",
+                    "uv sync --extra=another-fake-extra --group dev",
+                    "uv sync --extra",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken uv sync hints: unknown uv sync extra not-a-real-extra" in problems
+    assert "Broken uv sync hints: unknown uv sync extra another-fake-extra" in problems
+    assert "Broken uv sync hints: uv sync extra hint missing value" in problems
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
