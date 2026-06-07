@@ -336,11 +336,17 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
         "uv sync --extra quickstart --group dev",
         "uv run easycat doctor",
         "uv run python docs/teaching/00-hello-audio/main.py",
+        "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
     ):
         assert command in teaching_readme
         assert command in route_commands
 
     assert "uv run pytest tests/teaching/test_ladder_index.py" not in route_commands
+    assert "easycat validate quick" not in route_commands
+    assert "easycat validate report .easycat/validation/latest.json" not in route_commands
 
 
 def test_examples_docs_route_matches_examples_fast_path() -> None:

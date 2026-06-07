@@ -30,6 +30,19 @@ repository root:
 uv run python docs/teaching/00-hello-audio/main.py
 ```
 
+After editing a chapter, changing its copied code, or using one as a starting
+point, run the repository validation lane from the root:
+
+```bash
+uv run easycat validate quick
+uv run easycat validate quick --json
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+Use the JSON forms when a script or coding agent needs validation run/report
+payloads inside the standard CLI envelope.
+
 ## Choose a starting point
 
 | You have | Start with | Why |

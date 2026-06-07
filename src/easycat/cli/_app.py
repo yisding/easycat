@@ -200,6 +200,10 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
             "uv run python docs/teaching/00-hello-audio/main.py",
+            "uv run easycat validate quick",
+            "uv run easycat validate quick --json",
+            "uv run easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
         ),
     },
     {

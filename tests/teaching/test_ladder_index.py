@@ -115,6 +115,13 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat doctor --env-file .env --json" in readme
     assert "script or coding agent needs parseable first-run environment checks" in normalized
     assert "script or coding agent needs the same environment/check rows" in normalized
+    assert "uv run easycat validate quick" in readme
+    assert "uv run easycat validate quick --json" in readme
+    assert "uv run easycat validate report .easycat/validation/latest.json" in readme
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
+    assert "repository validation lane from the root" in normalized
+    assert "script or coding agent needs validation run/report payloads" in normalized
+    assert "standard CLI envelope" in normalized
 
 
 def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> None:
