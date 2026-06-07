@@ -83,9 +83,10 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "JSON catalog next_step_commands previews the my-agent post-create sequence" in (
         result.stdout
     )
-    assert "Doctor, Check, Fix, Docs, and Run after cd are run inside the scaffolded project" in (
-        result.stdout
-    )
+    assert (
+        "Doctor, Doctor JSON, Check, Fix, Docs, Docs JSON, JSON schema, and Run after cd "
+        "are run inside the scaffolded project"
+    ) in result.stdout
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
         result.stdout
     )
@@ -93,6 +94,9 @@ def test_list_templates(cli: CliRunner) -> None:
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
         assert "Doctor after cd: uv run easycat doctor --env-file .env" in result.stdout
+        assert (
+            "Doctor JSON after cd: uv run easycat doctor --env-file .env --json" in result.stdout
+        )
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
         assert f"Fix if needed after cd: {_template_readme_fix_command(template)}" in (
             result.stdout
@@ -102,6 +106,8 @@ def test_list_templates(cli: CliRunner) -> None:
             "App-builder docs after cd: uv run easycat docs --audience app-builders"
             in result.stdout
         )
+        assert "Docs JSON after cd: uv run easycat docs --json" in result.stdout
+        assert "JSON schema after cd: uv run easycat explain json-schema" in result.stdout
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 
 

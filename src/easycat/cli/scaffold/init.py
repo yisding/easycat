@@ -184,14 +184,18 @@ _INIT_COMMAND_NOTE = (
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "JSON catalog next_step_commands previews the my-agent post-create sequence; "
-    "Doctor, Check, Fix, Docs, and Run after cd are run inside the scaffolded project."
+    "Doctor, Doctor JSON, Check, Fix, Docs, Docs JSON, JSON schema, and Run after cd "
+    "are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"
 )
 _NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
+_NEXT_STEP_DOCTOR_JSON_COMMAND = "uv run easycat doctor --env-file .env --json"
 _NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
 _NEXT_STEP_APP_BUILDER_DOCS_COMMAND = "uv run easycat docs --audience app-builders"
+_NEXT_STEP_DOCS_JSON_COMMAND = "uv run easycat docs --json"
+_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND = "uv run easycat explain json-schema"
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -337,11 +341,14 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"
             f"  [dim]Doctor after cd:[/] {escape(_NEXT_STEP_DOCTOR_COMMAND)}\n"
+            f"  [dim]Doctor JSON after cd:[/] {escape(_NEXT_STEP_DOCTOR_JSON_COMMAND)}\n"
             f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
             f"  [dim]Fix if needed after cd:[/] {escape(entry['fix_command'])}\n"
             f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
             f"  [dim]App-builder docs after cd:[/] "
             f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_COMMAND)}\n"
+            f"  [dim]Docs JSON after cd:[/] {escape(_NEXT_STEP_DOCS_JSON_COMMAND)}\n"
+            f"  [dim]JSON schema after cd:[/] {escape(_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND)}\n"
             f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
         )
     return (
@@ -375,12 +382,12 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         "cp .env.example .env",
         "uv sync",
         _NEXT_STEP_DOCTOR_COMMAND,
-        "uv run easycat doctor --env-file .env --json",
+        _NEXT_STEP_DOCTOR_JSON_COMMAND,
         _next_step_check_command(template),
         _NEXT_STEP_DOCS_COMMAND,
         _NEXT_STEP_APP_BUILDER_DOCS_COMMAND,
-        "uv run easycat docs --json",
-        "uv run easycat explain json-schema",
+        _NEXT_STEP_DOCS_JSON_COMMAND,
+        _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND,
         _next_step_run_command(template),
     ]
 
@@ -815,10 +822,8 @@ def init(
     stderr_console.print(f"  cd {escape(shlex.quote(name))}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
     stderr_console.print("  uv sync")
-    stderr_console.print("  uv run easycat doctor --env-file .env [dim]# verify your setup[/]")
-    stderr_console.print(
-        "  uv run easycat doctor --env-file .env --json [dim]# parseable setup checks[/]"
-    )
+    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_COMMAND} [dim]# verify your setup[/]")
+    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_JSON_COMMAND} [dim]# parseable setup checks[/]")
     stderr_console.print(
         f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
     )
@@ -827,17 +832,18 @@ def init(
         "[dim]# auto-fix Ruff issues if the check reports them[/]"
     )
     stderr_console.print(
-        "  uv run easycat docs [dim]# find learning, maintenance, validation, "
+        f"  {_NEXT_STEP_DOCS_COMMAND} [dim]# find learning, maintenance, validation, "
         "and operations routes[/]"
     )
     stderr_console.print(
-        "  uv run easycat docs --audience app-builders [dim]# app-builder routes only[/]"
+        f"  {_NEXT_STEP_APP_BUILDER_DOCS_COMMAND} [dim]# app-builder routes only[/]"
     )
     stderr_console.print(
-        "  uv run easycat docs --json [dim]# route map with command hints and audience labels[/]"
+        f"  {_NEXT_STEP_DOCS_JSON_COMMAND} "
+        "[dim]# route map with command hints and audience labels[/]"
     )
     stderr_console.print(
-        "  uv run easycat explain json-schema [dim]# JSON envelope and field contract[/]"
+        f"  {_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND} [dim]# JSON envelope and field contract[/]"
     )
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
 
