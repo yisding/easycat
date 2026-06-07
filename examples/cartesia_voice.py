@@ -4,6 +4,7 @@ Setup: export OPENAI_API_KEY=...; export CARTESIA_API_KEY=...
        uv sync --extra quickstart --extra cartesia --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
+       uv run easycat doctor --env-file .env --json  # for parseable checks
 Run:   uv run python examples/cartesia_voice.py
        uv run --env-file .env python examples/cartesia_voice.py  # if keys live in .env
 """

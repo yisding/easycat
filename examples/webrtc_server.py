@@ -9,6 +9,7 @@ Setup (local):
     uv sync --extra openai --extra openai-agents --extra webrtc --group dev
     uv run easycat doctor
     uv run easycat doctor --env-file .env  # if keys live in .env
+    uv run easycat doctor --env-file .env --json  # for parseable checks
     uv run python examples/webrtc_server.py
     uv run --env-file .env python examples/webrtc_server.py  # if keys live in .env
 

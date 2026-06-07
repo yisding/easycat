@@ -125,7 +125,8 @@ payloads inside the standard CLI envelope.
   chapter code. If the keys live in a project `.env`, run
   `uv run easycat doctor --env-file .env`; use
   `uv run easycat doctor --env-file .env --json` when a script or coding agent
-  needs the same environment/check rows.
+  needs the same environment/check rows. When running a chapter script from
+  `.env`, add `--env-file .env` after `uv run` in the command you run.
 
 Each chapter's README lists its own prerequisites up front.
 

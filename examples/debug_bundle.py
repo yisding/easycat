@@ -12,6 +12,7 @@ Setup:
   uv sync --extra quickstart --group dev
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
+  uv run easycat doctor --env-file .env --json  # for parseable checks
   uv run python examples/debug_bundle.py
   uv run --env-file .env python examples/debug_bundle.py  # if keys live in .env
 """

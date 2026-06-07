@@ -14,6 +14,7 @@ Setup:
   uv sync --extra quickstart --group dev
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
+  uv run easycat doctor --env-file .env --json  # for parseable checks
   uv run python examples/push_to_talk.py
   uv run --env-file .env python examples/push_to_talk.py  # if keys live in .env
 """

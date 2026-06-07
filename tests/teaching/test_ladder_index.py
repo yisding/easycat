@@ -13,6 +13,7 @@ _CHAPTER_ROW_RE = re.compile(
 )
 _API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
 _UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
+_ENV_FILE_RUN_HINT = "add `--env-file .env` after `uv run`"
 
 
 def _chapter_dirs() -> list[Path]:
@@ -57,6 +58,10 @@ def _python_docstring_and_key_literals(path: Path) -> tuple[str, set[str]]:
             keys.update(_API_KEY_RE.findall(node.value))
 
     return doc, keys
+
+
+def _has_env_file_run_hint(text: str) -> bool:
+    return _ENV_FILE_RUN_HINT in text.replace("``", "`").lower()
 
 
 def test_teaching_ladder_index_matches_chapter_directories() -> None:
@@ -115,6 +120,7 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --json" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
+    assert _has_env_file_run_hint(normalized)
     assert "script or coding agent needs parseable first-run environment checks" in normalized
     assert "script or coding agent needs the same environment/check rows" in normalized
     assert "uv run easycat validate quick" in readme
@@ -287,9 +293,26 @@ def test_teaching_chapter_key_prerequisites_document_env_file_doctor() -> None:
     )
 
 
+def test_teaching_chapter_key_prerequisites_document_env_file_runtime() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        prerequisites = _chapter_prerequisites(readme)
+        if not _API_KEY_RE.search(prerequisites):
+            continue
+        if not _has_env_file_run_hint(prerequisites):
+            stale.append(chapter_dir.name)
+
+    assert not stale, "Teaching chapter key prerequisites missing .env runtime hint: " + ", ".join(
+        stale
+    )
+
+
 def test_teaching_script_key_docstrings_run_doctor() -> None:
     missing_doctor: list[str] = []
     missing_env_file: list[str] = []
+    missing_env_run: list[str] = []
 
     for chapter_dir in _chapter_dirs():
         for script in sorted(chapter_dir.glob("*.py")):
@@ -301,12 +324,17 @@ def test_teaching_script_key_docstrings_run_doctor() -> None:
                 missing_doctor.append(path)
             if "uv run easycat doctor --env-file .env" not in doc:
                 missing_env_file.append(path)
+            if not _has_env_file_run_hint(doc):
+                missing_env_run.append(path)
 
     assert not missing_doctor, "Teaching script key setup missing doctor preflight: " + ", ".join(
         missing_doctor
     )
     assert not missing_env_file, (
         "Teaching script key setup missing .env doctor preflight: " + ", ".join(missing_env_file)
+    )
+    assert not missing_env_run, (
+        "Teaching script key setup missing .env runtime hint: " + ", ".join(missing_env_run)
     )
 
 

@@ -6,6 +6,7 @@ For telephony actions (transfer, DTMF, SMS) see ``examples/twilio_app.py``.
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
+       uv run easycat doctor --env-file .env --json  # for parseable checks
 Run:   uv run python examples/session_actions_pydantic.py
        uv run --env-file .env python examples/session_actions_pydantic.py  # if keys live in .env
 """

@@ -12,6 +12,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langgraph -
        uv pip install langchain-openai
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
+       uv run easycat doctor --env-file .env --json  # for parseable checks
 Run:   uv run python examples/function_tools_langgraph.py
        uv run --env-file .env python examples/function_tools_langgraph.py  # if keys live in .env
 """

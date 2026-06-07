@@ -13,6 +13,7 @@ Setup:
   uv sync --extra openai --extra telephony --extra openai-agents --group dev
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
+  uv run easycat doctor --env-file .env --json  # for parseable checks
   uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
   uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
 """

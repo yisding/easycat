@@ -7,6 +7,7 @@ directly. Reuses the weather/time tools so tool events actually fire.
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
+       uv run easycat doctor --env-file .env --json  # for parseable checks
 Run:   uv run python examples/agent_event_subscription.py
        uv run --env-file .env python examples/agent_event_subscription.py  # if keys live in .env
 """

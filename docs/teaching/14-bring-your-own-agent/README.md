@@ -12,6 +12,8 @@
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- If keys live in `.env`, also add `--env-file .env` after `uv run`
+  in the chapter command you run.
 
 > **Minimum to skip the ladder:** chapter 6 (the streaming-agent
 > surface — that's the concept the bridge layer abstracts).

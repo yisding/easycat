@@ -12,6 +12,8 @@
   wants `OPENAI_API_KEY`; before running it, run
   `uv run easycat doctor` from the repo root. If the key lives in `.env`, run
   `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- If the key lives in `.env`, also add `--env-file .env` after `uv run`
+  in the chapter command you run.
 
 > **Minimum to skip the ladder:** chapter 11 (journal queries).
 > The metrics work on any bundle that follows the teaching shape

@@ -823,6 +823,7 @@ def test_examples_readme_env_cells_cover_referenced_env_vars() -> None:
 def test_env_examples_document_doctor_preflight() -> None:
     missing_doctor: list[str] = []
     missing_env_file: list[str] = []
+    missing_env_file_json: list[str] = []
     missing_env_run: list[str] = []
 
     for row in _example_readme_rows():
@@ -836,6 +837,8 @@ def test_env_examples_document_doctor_preflight() -> None:
             missing_doctor.append(row["link"])
         if "uv run easycat doctor --env-file .env" not in doc:
             missing_env_file.append(row["link"])
+        if "uv run easycat doctor --env-file .env --json" not in doc:
+            missing_env_file_json.append(row["link"])
         if env_run not in doc:
             missing_env_run.append(f"{row['link']}: `{env_run}`")
 
@@ -846,6 +849,10 @@ def test_env_examples_document_doctor_preflight() -> None:
     assert not missing_env_file, (
         "Example docstrings with required env vars should document "
         "`uv run easycat doctor --env-file .env`: " + ", ".join(missing_env_file)
+    )
+    assert not missing_env_file_json, (
+        "Example docstrings with required env vars should document "
+        "`uv run easycat doctor --env-file .env --json`: " + ", ".join(missing_env_file_json)
     )
     assert not missing_env_run, (
         "Example docstrings with required env vars should document the `.env` run command: "

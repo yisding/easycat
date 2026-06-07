@@ -9,6 +9,7 @@ Dependencies:
     uv run easycat doctor
     uv run easycat doctor --env-file .env         # if keys live in .env
     uv run easycat doctor --env-file .env --json  # for parseable checks
+    Add `--env-file .env` after `uv run` on script commands if keys live in `.env`.
 """
 
 from __future__ import annotations
