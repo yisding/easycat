@@ -155,6 +155,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
+            "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run --env-file .env python examples/openai_agents_voice.py",
@@ -174,6 +175,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
+            "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run python examples/openai_agents_voice.py",
@@ -220,6 +222,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv sync --extra local --group dev",
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
+            "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run easycat docs --audience learners",
@@ -250,6 +253,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat init my-agent",
             "uv run easycat init --list-templates --json",
             "uv run easycat doctor",
+            "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run python examples/journal_demo.py",

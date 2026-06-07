@@ -682,6 +682,23 @@ def test_cli_docs_env_file_doctor_hints_include_json_variant() -> None:
     )
 
 
+def test_cli_docs_plain_doctor_hints_include_json_variant() -> None:
+    missing: list[str] = []
+
+    for entry in _docs_entries():
+        commands = set(entry.get("commands", ()))
+        for command in commands:
+            if not command.endswith("easycat doctor"):
+                continue
+            json_command = f"{command} --json"
+            if json_command not in commands:
+                missing.append(f"{entry['label']} ({entry['path']}): {json_command}")
+
+    assert not missing, (
+        "Docs routes with doctor hints should expose parseable variants:\n" + "\n".join(missing)
+    )
+
+
 def test_start_here_docs_route_tracks_root_path_chooser_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     route_commands = set(entries["README.md#choose-your-path"].get("commands", ()))
