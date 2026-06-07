@@ -419,7 +419,6 @@ from easycat import (
 )
 
 config = EasyConfig(
-    openai_api_key="…",
     agent=your_agent,
     greeting="Hi, this is Lucy from Example Health.",
     telephony=TelephonyConfig(
@@ -526,7 +525,6 @@ does via `EasyConfig.caller_id_exposure`:
 
 ```python
 config = EasyConfig(
-    openai_api_key="…",
     agent=your_agent,
     caller_id_exposure="system_message",
 )

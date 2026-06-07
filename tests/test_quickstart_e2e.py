@@ -444,6 +444,7 @@ def test_readme_python_snippets_do_not_embed_placeholder_api_keys() -> None:
 
     assert 'export OPENAI_API_KEY="your-api-key"' in readme
     assert 'openai_api_key="your-api-key"' not in readme
+    assert 'openai_api_key="…"' not in readme
 
 
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
