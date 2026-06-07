@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests._command_hints import documented_commands
+from tests._command_hints import documented_command_lines, documented_commands
 
 
 def test_documented_commands_handles_fences_and_inline_spans() -> None:
@@ -21,3 +21,17 @@ Ignore `not a command`.
         "uv run easycat doctor --json",
         "uv run easycat explain json-schema",
     )
+
+
+def test_documented_command_lines_ignores_inline_prose() -> None:
+    section = """
+Use the `uv run easycat validate` command family.
+
+```bash
+uv run easycat validate quick  # Comment
+```
+"""
+
+    commands = documented_command_lines(section, prefixes=("uv run easycat ",))
+
+    assert commands == ("uv run easycat validate quick",)

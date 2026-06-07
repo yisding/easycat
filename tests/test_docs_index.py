@@ -19,6 +19,9 @@ from tests._command_hints import (
     command_hint_variants as _shared_command_hint_variants,
 )
 from tests._command_hints import (
+    documented_command_lines as _documented_command_lines,
+)
+from tests._command_hints import (
     documented_commands as _documented_commands,
 )
 from tests._markdown import github_markdown_heading_anchors
@@ -700,6 +703,31 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     assert "easycat validate quick" not in route_commands
     assert "easycat validate report .easycat/validation/latest.json" not in route_commands
     assert "easycat validate report .easycat/validation/latest.json --json" not in route_commands
+
+
+def test_validation_workflow_command_hints_are_locally_valid() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+    commands = _documented_command_lines(
+        validation_section,
+        prefixes=("just ", "uv run easycat ", "uv run pytest "),
+    )
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "README.md validation workflow",
+                "path": "README.md#validation-workflow",
+                "audience": "contributors",
+                "description": "Root README validation workflow commands.",
+                "commands": commands,
+            }
+        ]
+    )
+
+    assert commands
+    assert not problems, "README.md validation workflow commands are stale:\n" + "\n".join(
+        problems
+    )
 
 
 def test_contributing_docs_route_matches_validation_lane_commands() -> None:

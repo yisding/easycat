@@ -23,7 +23,7 @@ def strip_shell_comment(command: str) -> str:
     return re.sub(r"\s+#.*$", "", command).strip()
 
 
-def documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
+def documented_command_lines(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
     commands: list[str] = []
     seen: set[str] = set()
 
@@ -35,6 +35,20 @@ def documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str
 
     for line in section.splitlines():
         add(line.strip())
+
+    return tuple(commands)
+
+
+def documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    commands = list(documented_command_lines(section, prefixes=prefixes))
+    seen = set(commands)
+
+    def add(raw_command: str) -> None:
+        command = strip_shell_comment(raw_command)
+        if command.startswith(prefixes) and command not in seen:
+            seen.add(command)
+            commands.append(command)
+
     for command in INLINE_CODE_RE.findall(section):
         add(command.strip())
 
