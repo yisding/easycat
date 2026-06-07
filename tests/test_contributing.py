@@ -352,6 +352,8 @@ def test_contributing_provider_section_points_to_contract_map() -> None:
         "schema fingerprints",
         "bridge event grammar",
         "uv run easycat validate contracts",
+        "uv run easycat validate contracts --json",
+        "standard CLI envelope",
         "uv run pytest tests/contracts",
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ):

@@ -272,7 +272,10 @@ EasyCat uses **registries**, not inheritance. To add a provider:
 6. **Tests**: contract tests under `tests/contracts/` plus unit tests under
    `tests/stt/` or `tests/tts/`. Mark provider/surface pairs correctly (see
    the pairing rule above). If the protocol is replayable, add a cassette. Run
-   `uv run easycat validate contracts`, `uv run pytest tests/contracts`, and
+   `uv run easycat validate contracts`,
+   `uv run easycat validate contracts --json` when a script or coding agent
+   needs the contract run inside the standard CLI envelope,
+   `uv run pytest tests/contracts`, and
    `uv run pytest tests/integration/test_provider_contract_matrix.py`.
 
 ## What's expected on a PR
