@@ -109,17 +109,18 @@
 
 ## Journal highlights
 
-- `tool_call_started` records with the tool name and args — the
-  names match the EventBus subscriptions in `session/_session.py`
-  (`_sub(ToolCallStarted, ...)`, `_sub(ToolCallDelta, ...)`,
-  `_sub(ToolCallResult, ...)`)
+- `tool_call_started` records with the tool name and call id — in
+  production, `src/easycat/session/_journal_sink.py::SessionJournalSink`
+  subscribes to `ToolCallStarted`, `ToolCallDelta`, and
+  `ToolCallResult` on the `EventBus` and maps them to journal
+  records.
 - A measurable gap between `tool_call_started` and
   `tool_call_result` — this is the "filler window"
 - `tool_call_delta` records between the two for providers that
   stream partial tool output
 - `tool_call_result` records — the raw `result` payload is copied
   straight into the journal event data (see
-  `Session._subscribe_journal_sink`). Tool outputs are *not*
+  `SessionJournalSink._make_event_handler`). Tool outputs are *not*
   redacted by default, so anything the tool returns lands verbatim
   in the bundle. Treat bundles as sensitive and read
   `../../peripherals/peripheral-redaction.md` for the planned policy layer.

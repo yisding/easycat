@@ -145,3 +145,37 @@ def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:
     assert '"tool_result"' in plan
     assert "_legacy_types.AgentStreamEventType" not in plan
     assert "AgentStreamEventType." not in plan
+
+
+def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
+    """Keep the tools chapter plan aligned with production tool-call journaling."""
+    plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
+        encoding="utf-8"
+    )
+    journal_sink = (ROOT / "src" / "easycat" / "session" / "_journal_sink.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "SessionJournalSink" in plan
+    assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
+    assert "ToolCallStarted" in journal_sink
+    assert "ToolCallDelta" in journal_sink
+    assert "ToolCallResult" in journal_sink
+    expected_tool_started_sub = (
+        'self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))'
+    )
+    assert expected_tool_started_sub in journal_sink
+    assert "tool name and call id" in plan
+    assert "tool name and args" not in plan
+    assert "session/_session.py" not in plan
+    assert "_sub(ToolCallStarted" not in plan
+    assert "Session._subscribe_journal_sink" not in plan
+
+    action_events = (
+        "SessionActionRequested",
+        "SessionActionStarted",
+        "SessionActionCompleted",
+        "SessionActionFailed",
+    )
+    assert all(event not in journal_sink for event in action_events)
+    assert "*not* currently journaled" in plan
