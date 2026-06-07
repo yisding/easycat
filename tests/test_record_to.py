@@ -2,63 +2,120 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 
+from easycat.audio_format import AudioChunk
 from easycat.config import (
     EasyConfig,
     TextSessionConfig,
-    _install_record_to_hook,
+    create_session,
     create_text_session,
 )
 
 
-class _FakeSession:
-    """Stand-in that mimics the narrow Session surface the hook touches.
+class _DummyAgent:
+    async def run(self, text: str) -> str:
+        return text
 
-    Mirrors the real ``Session`` contract: ``stop`` is keyword-only
-    ``force``-aware and ``shutdown`` delegates to ``stop(force=True)``
-    (see ``Session.shutdown``). The hook only wraps ``stop``; ``shutdown``
-    must therefore route through the wrapped ``stop`` to export.
-    """
 
-    def __init__(self) -> None:
-        self.session_id = "session-abc123"
-        self.exported: list[str] = []
-        self.stop_calls = 0
-        self.forced: list[bool] = []
+class _CustomSTT:
+    async def start_stream(self) -> None:
+        pass
 
-    async def stop(self, *, force: bool = False) -> None:
-        self.stop_calls += 1
-        self.forced.append(force)
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        pass
 
-    async def shutdown(self) -> None:
-        # Real Session.shutdown is a thin alias for stop(force=True). It must
-        # resolve ``self.stop`` dynamically so the record_to wrapper is hit.
-        await self.stop(force=True)
+    async def commit_segment(self) -> bool:
+        return False
 
-    def export_debug_bundle(self, path: str) -> None:
-        self.exported.append(path)
+    async def end_stream(self) -> None:
+        pass
 
-    async def __aenter__(self) -> _FakeSession:
-        return self
+    async def events(self):
+        if False:
+            yield None
 
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        await self.stop(force=True)
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "custom-stt"}
+
+
+class _CustomTTS:
+    supports_ssml = False
+
+    async def synthesize(self, payload):
+        if False:
+            yield None
+
+    async def stop(self) -> None:
+        pass
+
+    async def cancel(self) -> None:
+        pass
+
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "custom-tts"}
+
+
+class _CustomVAD:
+    def configure(self, **kwargs) -> None:
+        pass
+
+    async def process(self, chunk: AudioChunk):
+        if False:
+            yield None
+
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "custom-vad"}
+
+
+class _CustomTransport:
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def receive_audio(self):
+        if False:
+            yield None
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        return True
+
+    def version_info(self) -> dict[str, str]:
+        return {"provider": "custom-transport"}
+
+
+def _bundles(path: Path, session_id: str) -> list[Path]:
+    return list(path.glob(f"{session_id}-*.zip"))
+
+
+@pytest.fixture
+def _restore_easycat_logger():
+    logger = logging.getLogger("easycat")
+    handlers = logger.handlers[:]
+    level = logger.level
+    propagate = logger.propagate
+    try:
+        yield
+    finally:
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
 
 
 @pytest.mark.asyncio
 async def test_record_to_exports_on_stop(tmp_path: Path) -> None:
-    session = _FakeSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="light")
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
     await session.stop()
 
-    assert session.stop_calls == 1
-    assert session.forced == [False]
-    assert len(session.exported) == 1
-    exported_path = Path(session.exported[0])
+    bundles = _bundles(tmp_path, session.session_id)
+    assert len(bundles) == 1
+    exported_path = bundles[0]
     assert exported_path.parent == tmp_path
     # Timestamp suffix keeps multiple runs from colliding in one dir.
     assert session.session_id in exported_path.name
@@ -67,52 +124,45 @@ async def test_record_to_exports_on_stop(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_record_to_forwards_force_flag(tmp_path: Path) -> None:
-    """The wrapper must preserve the keyword-only ``force`` argument."""
-    session = _FakeSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="light")
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
     await session.stop(force=True)
 
-    assert session.stop_calls == 1
-    assert session.forced == [True]
-    assert len(session.exported) == 1
+    assert len(_bundles(tmp_path, session.session_id)) == 1
 
 
 @pytest.mark.asyncio
 async def test_record_to_exports_on_shutdown(tmp_path: Path) -> None:
-    session = _FakeSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="full")
+    session = create_text_session(agent=None, debug="full", record_to=tmp_path)
 
     await session.shutdown()
-    # shutdown() delegates to the wrapped stop(force=True).
-    assert session.stop_calls == 1
-    assert session.forced == [True]
-    assert len(session.exported) == 1
+    assert len(_bundles(tmp_path, session.session_id)) == 1
 
 
 @pytest.mark.asyncio
 async def test_record_to_exports_via_async_with(tmp_path: Path) -> None:
     """``async with session:`` exits through stop(force=True) and must record."""
-    session = _FakeSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="light")
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
     async with session:
         pass
 
-    # __aexit__ -> stop(force=True) -> export, with no TypeError.
-    assert session.stop_calls == 1
-    assert session.forced == [True]
-    assert len(session.exported) == 1
+    assert len(_bundles(tmp_path, session.session_id)) == 1
 
 
 @pytest.mark.asyncio
-async def test_record_to_is_noop_when_debug_off(tmp_path: Path) -> None:
-    """With debug='off' there is no journal, so the hook must not wrap."""
-    session = _FakeSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="off")
+async def test_record_to_is_noop_when_debug_off(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """With debug='off' there is no journal, so recording is skipped."""
+    target = tmp_path / "runs"
+    with caplog.at_level(logging.WARNING):
+        session = create_text_session(agent=None, debug="off", record_to=target)
 
     await session.stop()
-    assert session.exported == []
+    assert not target.exists()
+    assert "debug journaling is disabled" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -120,30 +170,35 @@ async def test_record_to_creates_missing_dir(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "recordings"
     assert not target.exists()
 
-    session = _FakeSession()
-    _install_record_to_hook(session, target, debug_mode="light")
+    session = create_text_session(agent=None, debug="light", record_to=target)
     await session.stop()
 
     assert target.exists()
-    assert len(session.exported) == 1
+    assert len(_bundles(target, session.session_id)) == 1
 
 
 @pytest.mark.asyncio
 async def test_record_to_export_failure_does_not_mask_shutdown(
     tmp_path: Path,
 ) -> None:
-    """If the export raises, the wrapped shutdown must still complete normally."""
+    """If the export raises, teardown must still complete normally."""
 
-    class _BadSession(_FakeSession):
-        def export_debug_bundle(self, path: str) -> None:  # type: ignore[override]
-            raise RuntimeError("bundle write failed")
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
-    session = _BadSession()
-    _install_record_to_hook(session, tmp_path, debug_mode="light")
+    def _fail_export(path: str) -> None:
+        raise RuntimeError("bundle write failed")
 
-    # Should not raise — the broad except in the hook swallows export errors.
+    session.export_debug_bundle = _fail_export  # type: ignore[method-assign]
+
+    # Should not raise — record_to export failures do not mask teardown.
     await session.shutdown()
-    assert session.stop_calls == 1
+
+
+def test_record_to_keeps_session_teardown_methods_unpatched(tmp_path: Path) -> None:
+    session = create_text_session(agent=None, debug="light", record_to=tmp_path)
+
+    assert "stop" not in vars(session)
+    assert "shutdown" not in vars(session)
 
 
 def test_record_to_field_accepts_path_and_str() -> None:
@@ -166,5 +221,26 @@ async def test_text_session_record_to_exports_on_stop(tmp_path: Path) -> None:
 
     await session.stop()
 
-    bundles = list(tmp_path.glob(f"{session.session_id}-*.zip"))
-    assert len(bundles) == 1
+    assert len(_bundles(tmp_path, session.session_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_easyconfig_record_to_exports_on_stop(
+    tmp_path: Path,
+    _restore_easycat_logger: None,
+) -> None:
+    session = create_session(
+        EasyConfig(
+            stt=_CustomSTT(),
+            tts=_CustomTTS(),
+            vad=_CustomVAD(),
+            transport=_CustomTransport(),
+            agent=_DummyAgent(),
+            debug="light",
+            record_to=tmp_path,
+        )
+    )
+
+    await session.stop()
+
+    assert len(_bundles(tmp_path, session.session_id)) == 1

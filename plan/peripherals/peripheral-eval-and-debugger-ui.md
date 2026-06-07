@@ -34,7 +34,7 @@ Shipped:
   `debugger.server.serve_in_background()`).
 - `EasyConfig(record_to=".easycat/recordings/")` — session
   auto-captures a timestamped bundle on stop/shutdown
-  (`src/easycat/config/_factory.py::_install_record_to_hook`).
+  (`src/easycat/session/_session.py` lifecycle hook).
 - `checkpoint_id` (`cp_<sequence>`) vocabulary helpers —
   `easycat.debug.bundle.checkpoint_id`, `parse_checkpoint_id`,
   `CommittableCheckpoint.checkpoint_id`, and

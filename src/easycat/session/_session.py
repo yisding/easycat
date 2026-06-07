@@ -12,6 +12,8 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -191,6 +193,17 @@ class Session:
             JournalView(self._journal) if self._journal is not None else None
         )
         self._artifact_store = cfg.artifact_store
+        self._record_to: Path | None = None
+        self._record_to_exported = False
+        if cfg.record_to is not None:
+            if self._journal is None:
+                logger.warning(
+                    "record_to=%r requested but debug journaling is disabled; "
+                    "set debug='light' or 'full' to enable recording.",
+                    str(cfg.record_to),
+                )
+            else:
+                self._record_to = Path(cfg.record_to)
 
         # ── Outbound audio queue config (queue built by the builder) ─
         self._outbound_queue_external = cfg.outbound_queue is not None
@@ -603,6 +616,21 @@ class Session:
             overwrite=overwrite,
         )
 
+    def _record_debug_bundle(self) -> None:
+        """Auto-export a timestamped bundle for ``record_to=`` sessions."""
+        record_to = self._record_to
+        if record_to is None or self._record_to_exported:
+            return
+        self._record_to_exported = True
+        try:
+            record_to.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = record_to / f"{self.session_id}-{stamp}.zip"
+            self.export_debug_bundle(str(path))
+            logger.info("Recorded debug bundle to %s", path)
+        except Exception:
+            logger.exception("Failed to record debug bundle to %s", record_to)
+
     @property
     def agent(self) -> Agent:
         """Current agent provider.
@@ -958,7 +986,10 @@ class Session:
         Prefer the ``async with session:`` context manager, which calls
         this for you on exit.
         """
-        if self._closed or self._stopping:
+        if self._closed:
+            self._record_debug_bundle()
+            return
+        if self._stopping:
             return
         self._stopping = True
         self._is_running = False
@@ -1078,6 +1109,7 @@ class Session:
             self._stopping = False
             self._mark_observability_inactive()
             self._reset_session_log_context()
+            self._record_debug_bundle()
 
     def _reset_session_log_context(self) -> None:
         """Restore this task's pre-session logging correlation binding."""

@@ -1,10 +1,9 @@
 """Session-building factories: :func:`create_session` / :func:`create_text_session`.
 
 This module owns everything that needs the :class:`Session` class — the two
-public factories plus the Session-coupled helpers (transport building, journal
-provider-version emission, the ``record_to`` auto-export hook). The
-provider-factory names that tests monkeypatch (``create_vad``,
-``create_noise_reducer``, …) are bound here at module scope so a
+public factories plus the Session-coupled helpers (transport building and
+journal provider-version emission). The provider-factory names that tests
+monkeypatch (``create_vad``, ``create_noise_reducer``, …) are bound here so a
 ``monkeypatch.setattr("easycat.config._factory.create_vad", ...)`` lands in the
 same globals :func:`create_session` resolves them from.
 
@@ -21,7 +20,6 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -483,6 +481,7 @@ def create_session(config: EasyConfig) -> Session:
                 timeout_config=config.timeouts,
                 journal=journal,
                 artifact_store=artifact_store,
+                record_to=config.record_to,
                 session_id=session_id,
                 telephony_helpers=telephony_helpers,
                 enable_vad=enable_vad,
@@ -553,72 +552,12 @@ def create_session(config: EasyConfig) -> Session:
 
     event_bus.subscribe(_CallInitiatedEv, _on_outbound_initiated)
 
-    if config.record_to is not None:
-        _install_record_to_hook(session, Path(config.record_to), debug_mode=config.debug)
-
     if config.debug == "full":
         from easycat.debugger._autolaunch import maybe_launch_debugger_ui
 
         maybe_launch_debugger_ui(session)
 
     return session
-
-
-def _install_record_to_hook(
-    session: Session,
-    record_to: Path,
-    *,
-    debug_mode: Literal["off", "light", "full"],
-) -> None:
-    """Wire session stop/shutdown to auto-export a timestamped bundle.
-
-    ``record_to`` is a no-op when ``debug="off"`` because the journal
-    isn't created in that mode — we warn once and skip rather than
-    silently export an empty bundle.  The export runs *after* the
-    normal shutdown completes (so the journal already has the final
-    records) and is wrapped in a broad try/except so a bundle-write
-    failure never masks the real shutdown outcome.
-    """
-    if debug_mode == "off":
-        logger.warning(
-            "EasyConfig(record_to=%r) requested but debug='off' — no journal will "
-            "be captured. Set debug='light' or 'full' to enable recording.",
-            str(record_to),
-        )
-        return
-
-    original_stop = session.stop
-    already_exported = False
-
-    async def _export_bundle() -> None:
-        # ``Session.stop`` is idempotent (repeat calls from SessionManager
-        # teardown, the ``async with`` exit, and an explicit caller all no-op
-        # after the first), so guard the export too — otherwise each repeat
-        # stop() writes a duplicate timestamped bundle.
-        nonlocal already_exported
-        if already_exported:
-            return
-        already_exported = True
-        try:
-            record_to.mkdir(parents=True, exist_ok=True)
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            path = record_to / f"{session.session_id}-{stamp}.zip"
-            session.export_debug_bundle(str(path))
-            logger.info("Recorded debug bundle to %s", path)
-        except Exception:
-            logger.exception("Failed to record debug bundle to %s", record_to)
-
-    async def _wrapped_stop(*, force: bool = False) -> None:
-        try:
-            await original_stop(force=force)
-        finally:
-            await _export_bundle()
-
-    # ``shutdown()`` already delegates to ``stop(force=True)``, so wrapping
-    # ``stop`` alone covers every teardown path (``stop``, ``shutdown``, and
-    # the ``async with`` exit). The wrapper preserves the keyword-only
-    # ``force`` parameter so the graceful-vs-force distinction survives.
-    session.stop = _wrapped_stop  # type: ignore[method-assign]
 
 
 def create_text_session(
@@ -729,6 +668,7 @@ def create_text_session(
                 event_bus=event_bus,
                 journal=journal,
                 artifact_store=artifact_store,
+                record_to=record_to,
                 session_id=sid,
                 runtime_mode="text_session",
                 mcp_servers=tuple(_mcp),
@@ -750,6 +690,4 @@ def create_text_session(
     )
     session._agent_model = agent_model
     session._remote_agent_api_key = remote_agent_api_key
-    if record_to is not None:
-        _install_record_to_hook(session, Path(record_to), debug_mode=debug)
     return session

@@ -60,12 +60,13 @@ Shipped:
   non-Rich `text` from Rich-capable `human`, and rejects unknown values instead
   of silently falling back (`_logging.py`, `docs/observability.md`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
-  stop/shutdown when debug journaling is enabled (`config/_factory.py`).
+  stop/shutdown when debug journaling is enabled through the Session-owned
+  lifecycle hook (`session/_session.py`).
 - `TextSessionConfig(record_to=...)` and
-  `create_text_session(record_to=...)` now use the same stop/shutdown bundle
-  auto-capture hook, so text-mode agent iteration can produce timestamped
+  `create_text_session(record_to=...)` now use the same Session-owned
+  stop/shutdown lifecycle hook, so text-mode agent iteration can produce timestamped
   `RunBundle`s without switching to the audio pipeline (`config/easy.py`,
-  `config/_factory.py`).
+  `config/_factory.py`, `session/_session.py`).
 - `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
   and loads the timestamped bundle after shutdown instead of manually calling
   `session.export_debug_bundle(...)`.

@@ -16,7 +16,6 @@ from __future__ import annotations
 from ._factory import (
     _create_transport,
     _emit_provider_versions,
-    _install_record_to_hook,
     _safe_config_ns,
     _transport_factories,
     create_session,

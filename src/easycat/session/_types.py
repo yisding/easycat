@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from easycat._bounded_queue import BoundedAudioQueue
@@ -136,6 +137,9 @@ class SessionConfig:
     timeout_config: TimeoutConfig | None = None
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
+    # Auto-export a timestamped debug bundle to this directory during stop().
+    # No-op when the session has no debug journal.
+    record_to: str | Path | None = None
     session_id: str | None = None
     # Override the played-back (TTS -> transport) audio queue. The default
     # Session queue uses ``DropPolicy.DROP_NEWEST`` (max_size 200) so that,

@@ -343,7 +343,7 @@ def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
     for stale_phrase in (
         "2026-06-05 snapshot",
         "Static inspection on 2026-05-21",
-        "roughly 1,390 lines",
+        "roughly 1,358 lines",
         "roughly 1,773 lines",
         "`src/easycat/__init__.py` is now 280 lines",
         "Session is **~1,770 lines** after Phase 5",

@@ -21,11 +21,11 @@ stale, or not worth doing as written are called out at the end.
 
 Some important April findings have since changed:
 
-- `src/easycat/session/_session.py` is now roughly 1,358 lines, not 2,961.
+- `src/easycat/session/_session.py` is now roughly 1,390 lines, not 2,961.
   Session decomposition collaborators exist for audio routing, STT commits,
   TTS scheduling, cancellation, turn running, and journal sinking.
-- `src/easycat/__init__.py` is now 156 lines, not 578.
-- The top-level lazy export list is now 85 symbols, not 195.
+- `src/easycat/__init__.py` is now 159 lines, not 578.
+- The top-level lazy export list is now 88 symbols, not 195.
 - `tests/test_public_api.py` pins the exact top-level allowlist, and
   `docs/public-api.md` documents the public API contract.
 - Cartesia, TEN VAD license wording, and quickstart/TEN wording are reflected
@@ -176,7 +176,7 @@ context. Several bullets are known stale; use the current-state list above and
   to an advanced/internal module.
 - Add `Session.from_providers(...)` for users who truly need raw provider
   wiring, rather than asking them to construct `SessionConfig`.
-- Replace `record_to` monkey-patching of `session.stop` and
+- Done: replace `record_to` monkey-patching of `session.stop` and
   `session.shutdown` with a real lifecycle hook owned by `Session`.
 
 ### 1.2 Curate The Top-Level Namespace
