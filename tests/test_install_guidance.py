@@ -650,16 +650,37 @@ uv run pytest tests/cli/test_app.py::test_docs_command_json  # Comment
     ]
 
 
-def test_agent_guide_command_examples_are_current() -> None:
-    from easycat.cli import _app
+def test_agent_guide_easycat_command_validator_checks_nested_commands() -> None:
+    command_section = """
+- `uv run easycat validate not-a-lane`.
 
-    _app._register_commands()
-    registered_easycat_commands = {
-        command.name for command in _app.app.registered_commands if command.name is not None
-    }
-    registered_easycat_commands.update(
-        group.name for group in _app.app.registered_groups if group.name is not None
+```bash
+uv run easycat docs --audience time-travelers  # Comment
+```
+"""
+    commands = documented_commands(
+        command_section,
+        prefixes=("uv run easycat ", "easycat "),
     )
+
+    problems = command_hint_problems(
+        [
+            {
+                "label": "Broken agent guide",
+                "path": "AGENTS.md",
+                "audience": "coding agents",
+                "description": "Regression fixture for guide command validation.",
+                "commands": commands,
+            }
+        ],
+        repo_root=REPO_ROOT,
+    )
+
+    assert "Broken agent guide: unknown easycat validate command not-a-lane" in problems
+    assert "Broken agent guide: unknown docs audience hint time-travelers" in problems
+
+
+def test_agent_guide_command_examples_are_current() -> None:
     just_recipes = just_recipe_names(REPO_ROOT)
     command_sections = {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
@@ -724,12 +745,25 @@ def test_agent_guide_command_examples_are_current() -> None:
             )
 
     stale_easycat_commands: list[str] = []
-    easycat_command_re = re.compile(r"\b(?:uv run\s+)?easycat\s+(?P<command>[A-Za-z0-9_-]+)\b")
     for filename, command_section in command_sections.items():
-        for match in easycat_command_re.finditer(command_section):
-            command_name = match.group("command")
-            if command_name not in registered_easycat_commands:
-                stale_easycat_commands.append(f"{filename}: easycat {command_name}")
+        commands = documented_commands(
+            command_section,
+            prefixes=("uv run easycat ", "easycat "),
+        )
+        stale_easycat_commands.extend(
+            command_hint_problems(
+                [
+                    {
+                        "label": filename,
+                        "path": filename,
+                        "audience": "coding agents",
+                        "description": "Agent guide command examples.",
+                        "commands": commands,
+                    }
+                ],
+                repo_root=REPO_ROOT,
+            )
+        )
 
     assert not stale_recipes, "Agent guide just examples point at missing recipes: " + ", ".join(
         stale_recipes
@@ -737,9 +771,8 @@ def test_agent_guide_command_examples_are_current() -> None:
     assert not stale_pytest_targets, "Agent guide pytest examples are stale:\n" + "\n".join(
         stale_pytest_targets
     )
-    assert not stale_easycat_commands, (
-        "Agent guide easycat examples point at missing commands: "
-        + ", ".join(stale_easycat_commands)
+    assert not stale_easycat_commands, "Agent guide easycat examples are stale:\n" + "\n".join(
+        stale_easycat_commands
     )
 
 
