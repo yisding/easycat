@@ -589,6 +589,10 @@ def test_agent_guide_command_examples_are_current() -> None:
         )
         assert "tests/test_metrics.py" not in command_section, filename
 
+    agents_commands = command_sections["AGENTS.md"]
+    assert "architecture and maintenance" in agents_commands
+    assert "examples, teaching, validation, and operations" not in agents_commands
+
     stale_recipes: list[str] = []
     for filename, command_section in command_sections.items():
         for match in GUIDE_JUST_COMMAND_RE.finditer(command_section):

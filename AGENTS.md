@@ -28,7 +28,7 @@ the raw commands below.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc.py`: run focused WebRTC transport tests.
 - `uv run easycat docs`: show the maintained docs map for quickstart,
-  examples, teaching, validation, and operations.
+  examples, teaching, architecture and maintenance, validation, and operations.
 - `uv run easycat docs --json`: emit the same route map with audience labels
   and command hints for automation.
 - `uv run easycat doctor --json`: emit parseable first-run environment checks.
