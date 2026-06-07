@@ -48,6 +48,11 @@ def _contributing_provider_section() -> str:
     )[0]
 
 
+def _contributing_pr_expectations_section() -> str:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    return contributing.split("## What's expected on a PR", 1)[1]
+
+
 def _contributing_docs_onboarding_section() -> str:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     return contributing.split("## Maintaining docs and onboarding maps", 1)[1].split(
@@ -446,6 +451,18 @@ def test_contributing_provider_section_points_to_contract_map() -> None:
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ):
         assert phrase in normalized
+
+
+def test_contributing_pr_expectations_point_to_raw_command_fallbacks() -> None:
+    section = _contributing_pr_expectations_section()
+    rows = {row["recipe"]: row["raw"] for row in _development_loop_rows()}
+
+    assert "If `just` is not installed" in section
+    assert "[the development loop](#the-development-loop)" in section
+    assert "matching raw command" in section
+    for recipe in ("check", "typecheck", "typecheck-all", "typecheck-fast", "cov"):
+        assert f"`just {recipe}`" in section
+        assert rows[recipe], f"CONTRIBUTING.md missing raw command for just {recipe}"
 
 
 def test_validation_plan_matches_contributor_quick_command() -> None:

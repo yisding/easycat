@@ -289,6 +289,10 @@ EasyCat uses **registries**, not inheritance. To add a provider:
 
 ## What's expected on a PR
 
+These bullets name the `just` recipes reviewers expect. If `just` is not installed,
+use the matching raw command from
+[the development loop](#the-development-loop).
+
 - `just check` is green (format + lint + tests).
 - New code is typed (Python `>=3.11`, typing-first). `mypy` is the
   authoritative type checker: `just typecheck` gates the clean core
