@@ -1031,10 +1031,15 @@ class TestWebTransportServerWiring:
             max_concurrent_sessions=2,
         )
         handler_started = asyncio.Event()
+        release_handlers = asyncio.Event()
+        handler_start_count = 0
 
         async def _handler(_t: WebTransportConnectionTransport) -> None:
-            handler_started.set()
-            await asyncio.sleep(10)  # hold the slot
+            nonlocal handler_start_count
+            handler_start_count += 1
+            if handler_start_count == 2:
+                handler_started.set()
+            await release_handlers.wait()
 
         server = WebTransportServer(cfg, _handler)
 
@@ -1050,7 +1055,7 @@ class TestWebTransportServerWiring:
         accepted = [_make_transport() for _ in range(2)]
         for t, _proto in accepted:
             server._dispatch_session(t)  # noqa: SLF001 — exercise the real path
-        await asyncio.sleep(0)
+        await asyncio.wait_for(handler_started.wait(), timeout=1.0)
         assert len(server._handler_tasks) == 2  # noqa: SLF001
 
         # Third session is over the cap → force-closed, handler not invoked.
@@ -1059,8 +1064,7 @@ class TestWebTransportServerWiring:
         assert overflow_proto.close_calls == [(0, "session cap reached")]
         assert len(server._handler_tasks) == 2  # noqa: SLF001 — unchanged
 
-        for task in list(server._handler_tasks):  # noqa: SLF001
-            task.cancel()
+        release_handlers.set()
         await asyncio.gather(*server._handler_tasks, return_exceptions=True)  # noqa: SLF001
 
     @pytest.mark.asyncio
@@ -1079,14 +1083,18 @@ class TestWebTransportServerWiring:
         server = WebTransportServer(cfg, _noop)
         assert server._can_accept_session() is True  # noqa: SLF001
 
-        held = [asyncio.create_task(asyncio.sleep(10)) for _ in range(2)]
+        release_slots = asyncio.Event()
+
+        async def hold_slot() -> None:
+            await release_slots.wait()
+
+        held = [asyncio.create_task(hold_slot()) for _ in range(2)]
         server._handler_tasks.update(held)  # noqa: SLF001
         try:
             # At the cap → the protocol would send 503 and create no transport.
             assert server._can_accept_session() is False  # noqa: SLF001
         finally:
-            for task in held:
-                task.cancel()
+            release_slots.set()
             await asyncio.gather(*held, return_exceptions=True)
             server._handler_tasks.difference_update(held)  # noqa: SLF001
         assert server._can_accept_session() is True  # noqa: SLF001 — slots freed

@@ -603,6 +603,8 @@ context. Several bullets are known stale; use the current-state list above and
   for intentionally pending work instead of long sleeps.
 - Done: LangChain and LangGraph timeout tests use cancellation-friendly event
   waits instead of 999-second sleeps.
+- Done: WebTransport slot-cap tests hold synthetic handler slots with release
+  events instead of long sleeps.
 - Done: the shared integration polling helper was removed after replacing its
   call sites with event-backed waits.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound

@@ -770,6 +770,19 @@ def test_langchain_langgraph_tests_use_events_for_never_complete_tasks() -> None
     assert "await asyncio.sleep(999)" not in combined
 
 
+def test_webtransport_wiring_tests_use_events_for_held_slots() -> None:
+    """WebTransport slot-cap tests should hold slots with release events."""
+    source = (REPO_ROOT / "tests" / "transports" / "test_webtransport.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "release_handlers.wait()" in source
+    assert "release_slots.wait()" in source
+    assert "handler_started.wait()" in source
+    assert "await asyncio.sleep(10)" not in source
+    assert "asyncio.create_task(asyncio.sleep(10))" not in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(
