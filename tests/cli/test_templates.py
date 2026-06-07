@@ -20,6 +20,7 @@ belongs in the end-to-end suite.
 from __future__ import annotations
 
 import ast
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -168,6 +169,101 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert entry["check_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
         assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
+
+
+def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
+    name = str(entry["name"])
+    files = set(entry["files"])
+    next_step_commands = list(entry["next_step_commands"])
+    problems: list[str] = []
+
+    expected_create = ["easycat", "init", "my-agent", "--template", name]
+    create_tokens = shlex.split(str(entry["create_command"]))
+    repo_create_tokens = shlex.split(str(entry["repo_create_command"]))
+    if create_tokens != expected_create:
+        problems.append(f"{name}: create_command is not installed CLI form")
+    if repo_create_tokens != ["uv", "run", *expected_create]:
+        problems.append(f"{name}: repo_create_command is not repo-local CLI form")
+
+    expected_prefix = [
+        "cd my-agent",
+        "cp .env.example .env",
+        "uv sync",
+        "uv run easycat doctor --env-file .env",
+        "uv run easycat doctor --env-file .env --json",
+    ]
+    expected_middle = [
+        str(entry["check_command"]),
+        "uv run easycat docs",
+        "uv run easycat docs --audience app-builders",
+        "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
+    ]
+    expected_sequence = expected_prefix + expected_middle + [str(entry["run_command"])]
+    if next_step_commands != expected_sequence:
+        problems.append(f"{name}: next_step_commands are not the canonical post-create sequence")
+
+    check_tokens = shlex.split(str(entry["check_command"]))
+    if check_tokens[:4] != ["uv", "run", "ruff", "check"]:
+        problems.append(f"{name}: check_command is not a repo-local ruff check")
+    for target in check_tokens[4:]:
+        if target not in files:
+            problems.append(f"{name}: check_command target {target} is not generated")
+
+    run_tokens = shlex.split(str(entry["run_command"]))
+    if run_tokens[:4] != ["uv", "run", "--env-file", ".env"]:
+        problems.append(f"{name}: run_command does not load .env through uv")
+        return problems
+
+    app_tokens = run_tokens[4:]
+    if app_tokens[:1] == ["python"]:
+        script = app_tokens[1] if len(app_tokens) > 1 else ""
+        if script not in files:
+            problems.append(
+                f"{name}: run_command Python target {script or '<missing>'} is not generated"
+            )
+    elif app_tokens[:1] == ["uvicorn"]:
+        target = app_tokens[1] if len(app_tokens) > 1 else ""
+        module_name = target.partition(":")[0]
+        module_file = f"{module_name}.py" if module_name else ""
+        if module_file not in files:
+            problems.append(
+                f"{name}: run_command ASGI target {target or '<missing>'} is not generated"
+            )
+    else:
+        command = app_tokens[0] if app_tokens else "<missing>"
+        problems.append(f"{name}: run_command uses unsupported app command {command}")
+
+    return problems
+
+
+def test_template_catalog_commands_are_copyable_and_resolve() -> None:
+    problems: list[str] = []
+
+    for entry in _available_template_catalog():
+        problems.extend(_catalog_command_problems(entry))
+
+    assert not problems, "Template catalog command hints are stale:\n" + "\n".join(problems)
+
+
+def test_template_catalog_command_validator_checks_generated_targets() -> None:
+    broken_entry = {
+        "name": "broken",
+        "files": ("agent.py", "pyproject.toml"),
+        "create_command": "uv run easycat init my-agent --template broken",
+        "repo_create_command": "easycat init my-agent --template broken",
+        "next_step_commands": ("cd my-agent", "uv sync"),
+        "check_command": "uv run ruff check missing.py",
+        "run_command": "uv run --env-file .env python missing.py",
+    }
+
+    problems = _catalog_command_problems(broken_entry)
+
+    assert "broken: create_command is not installed CLI form" in problems
+    assert "broken: repo_create_command is not repo-local CLI form" in problems
+    assert "broken: next_step_commands are not the canonical post-create sequence" in problems
+    assert "broken: check_command target missing.py is not generated" in problems
+    assert "broken: run_command Python target missing.py is not generated" in problems
 
 
 def test_scaffold_dependency_floor_tracks_project_version() -> None:
