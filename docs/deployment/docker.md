@@ -70,6 +70,9 @@ It also excludes common local tool caches and coding-agent state such as
 `.uv-cache/`, `.agents/`, `.codex`, `.codex/`, `.claude/`, and
 `.pipecat-bench/` so local generated state is not uploaded as part of
 `docker compose ... up --build`.
+Generated reports and docs sites such as `.coverage`, `.coverage.*`,
+`coverage.xml`, `htmlcov/`, `site/`, `mutants/`, and `.mutmut-cache` are
+excluded for the same reason.
 
 Never use `ARG OPENAI_API_KEY=...` in the Dockerfile: build args are
 recoverable from image history.

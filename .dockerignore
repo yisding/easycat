@@ -19,6 +19,15 @@ build/
 .uv-cache/
 .easycat/
 
+# Generated reports and docs sites
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+site/
+mutants/
+.mutmut-cache
+
 # Local coding-agent/tool state
 .agents/
 .codex

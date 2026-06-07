@@ -114,19 +114,27 @@ if [ -d "$REPO_ROOT/src/easycat" ]; then
         --exclude='./.agents' \
         --exclude='./.claude' \
         --exclude='./.codex' \
+        --exclude='./.coverage' \
+        --exclude='./.coverage.*' \
         --exclude='./.easycat' \
         --exclude='./.env' \
         --exclude='./.env.*' \
         --exclude='./.git' \
         --exclude='./.hypothesis' \
         --exclude='./.mypy_cache' \
+        --exclude='./.mutmut-cache' \
         --exclude='./.pipecat-bench' \
         --exclude='./.pytest_cache' \
         --exclude='./.ruff_cache' \
         --exclude='./.uv-cache' \
         --exclude='./.venv' \
+        --exclude='./coverage.xml' \
+        --exclude='./htmlcov' \
+        --exclude='./mutants' \
+        --exclude='./site' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \
+        --exclude='*.pyo' \
         -cf - . | sudo tar -C "$INSTALL_DIR" -xf -
 else
     echo "  Place the easycat repository at $INSTALL_DIR"

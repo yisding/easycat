@@ -493,19 +493,27 @@ def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
         "./.agents",
         "./.claude",
         "./.codex",
+        "./.coverage",
+        "./.coverage.*",
         "./.easycat",
         "./.env",
         "./.env.*",
         "./.git",
         "./.hypothesis",
         "./.mypy_cache",
+        "./.mutmut-cache",
         "./.pipecat-bench",
         "./.pytest_cache",
         "./.ruff_cache",
         "./.uv-cache",
         "./.venv",
+        "./coverage.xml",
+        "./htmlcov",
+        "./mutants",
+        "./site",
         "__pycache__",
         "*.pyc",
+        "*.pyo",
     ):
         assert f"--exclude='{excluded}'" in deploy
 
@@ -1221,11 +1229,19 @@ def test_dockerignore_excludes_local_cache_and_agent_state() -> None:
         ".codex/",
         ".claude/",
         ".pipecat-bench/",
+        ".coverage",
+        ".coverage.*",
+        "coverage.xml",
+        "htmlcov/",
+        "site/",
+        "mutants/",
+        ".mutmut-cache",
     ):
         assert pattern in dockerignore
         assert f"`{pattern}`" in guide
 
     assert "local generated state is not uploaded" in guide
+    assert "Generated reports and docs sites" in guide
 
 
 def test_docker_guide_tracks_default_dockerfile_extras() -> None:
