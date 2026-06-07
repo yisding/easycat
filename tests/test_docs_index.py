@@ -842,6 +842,8 @@ def test_public_api_docs_route_matches_contract_guard_commands() -> None:
         assert command in contract
         assert command in route_commands
 
+    assert "If `just` is not installed" in contract
+    assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in contract
     assert "easycat docs --json" not in route_commands
 
 

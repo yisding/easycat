@@ -132,6 +132,8 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     assert "uv run easycat explain json-schema" in doc
     assert "uv run pytest tests/test_public_api.py" in doc
     assert "just guard-docs" in doc
+    assert "If `just` is not installed" in doc
+    assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in doc
 
 
 def test_public_api_contract_doc_has_unique_allowlist_entries() -> None:
