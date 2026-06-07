@@ -57,11 +57,35 @@ def test_every_registered_stt_tts_provider_surface_has_contract_row_or_exclusion
 def test_wiring_matrix_scope_is_documented_separately_from_protocol_contracts() -> None:
     wiring_matrix = Path("tests/integration/test_provider_contract_matrix.py").read_text()
     contract_readme = Path("tests/contracts/README.md").read_text()
+    normalized_readme = " ".join(contract_readme.split())
 
     assert "wiring seam" in wiring_matrix
     assert "protocol cassette" not in wiring_matrix.lower()
     assert "factory/session wiring" in contract_readme
     assert "protocol contracts" in contract_readme
+    for command in (
+        "uv run easycat validate contracts",
+        "uv run pytest tests/contracts",
+        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+    ):
+        assert command in contract_readme
+    for linked_file in (
+        "[`provider_surface_matrix.py`](provider_surface_matrix.py)",
+        "[`test_stt_provider_contracts.py`](test_stt_provider_contracts.py)",
+        "[`test_tts_provider_contracts.py`](test_tts_provider_contracts.py)",
+        "[`test_vad_provider_contracts.py`](test_vad_provider_contracts.py)",
+        "[`test_transport_contracts.py`](test_transport_contracts.py)",
+        "[`test_agent_bridge_contracts.py`](test_agent_bridge_contracts.py)",
+    ):
+        assert linked_file in contract_readme
+    for phrase in (
+        "required extra",
+        "credential env var",
+        "cassette status",
+        "contract path",
+        "Refresh cassettes or schema fingerprints only when the provider protocol shape changes",
+    ):
+        assert phrase in normalized_readme
 
 
 def test_validation_tasks_v31_current_state_tracks_contract_matrix_layout() -> None:

@@ -1,15 +1,31 @@
 # Provider And Protocol Contracts
 
-`tests/integration/test_provider_contract_matrix.py` is the
-factory/session wiring check. It proves every registered STT and TTS config
-can be dispatched, injected with required runtime dependencies, and driven
-through a scripted session.
+[`tests/integration/test_provider_contract_matrix.py`](../integration/test_provider_contract_matrix.py)
+is the factory/session wiring check. It proves every registered STT and TTS
+config can be dispatched, injected with required runtime dependencies, and
+driven through a scripted session.
 
 `tests/contracts/` owns provider protocol contracts. These tests stay offline
 by default and cover normalized provider behavior, protocol cassette replay,
 schema drift fingerprints, and bridge event grammar. A provider surface must
-have a row in `provider_surface_matrix.py` or an explicit exclusion with a
-reason before it can be considered covered.
+have a row in [`provider_surface_matrix.py`](provider_surface_matrix.py) or an
+explicit exclusion with a reason before it can be considered covered.
+
+When adding or changing provider behavior:
+
+1. Update the relevant row in
+   [`provider_surface_matrix.py`](provider_surface_matrix.py), including the
+   surface, adapter, protocol, required extra, credential env var, cassette
+   status, and contract path.
+2. Update the focused contract file for the changed surface:
+   [`test_stt_provider_contracts.py`](test_stt_provider_contracts.py),
+   [`test_tts_provider_contracts.py`](test_tts_provider_contracts.py),
+   [`test_vad_provider_contracts.py`](test_vad_provider_contracts.py),
+   [`test_transport_contracts.py`](test_transport_contracts.py), or
+   [`test_agent_bridge_contracts.py`](test_agent_bridge_contracts.py).
+3. Refresh cassettes or schema fingerprints only when the provider protocol
+   shape changes; keep the factory/session wiring assertions in the integration
+   matrix separate from protocol contract assertions.
 
 From the repository root, run `uv run easycat validate contracts` for the
 offline provider, protocol, and bridge contract lane. Use
