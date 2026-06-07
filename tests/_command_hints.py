@@ -74,57 +74,116 @@ def command_hint_problems(entries: list[dict[str, object]], *, repo_root: Path) 
     for entry in entries:
         label = str(entry["label"])
         for command in entry.get("commands", ()):
-            tokens = shlex.split(command)
-            if not tokens:
-                problems.append(f"{label}: empty command hint")
-                continue
-            match tokens:
-                case ["easycat", subcommand, *args]:
-                    _validate_easycat_command_hint(
-                        label=label,
-                        repo_root=repo_root,
-                        command_tree=command_tree,
-                        subcommand=subcommand,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["uv", "run", *args]:
-                    _validate_uv_run_hint(
-                        label=label,
-                        command=command,
-                        repo_root=repo_root,
-                        command_tree=command_tree,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["uv", "sync", *args]:
-                    _validate_uv_sync_hint(
-                        label=label,
-                        repo_root=repo_root,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["python", "-m", "http.server", *args]:
-                    _validate_http_server_hint(
-                        label=label,
-                        repo_root=repo_root,
-                        args=args,
-                        problems=problems,
-                    )
-                case ["just", recipe, *_]:
-                    if recipe not in just_recipes:
-                        problems.append(f"{label}: unknown just recipe {recipe}")
-                case ["docker", "compose", *args]:
-                    _validate_docker_compose_hint(
-                        label=label,
-                        repo_root=repo_root,
-                        args=args,
-                        problems=problems,
-                    )
-                case _:
-                    problems.append(f"{label}: unsupported command hint {command!r}")
+            for tokens in _command_hint_token_parts(str(command), label=label, problems=problems):
+                if not tokens:
+                    problems.append(f"{label}: empty command hint")
+                    continue
+                command_part = shlex.join(tokens)
+                _validate_command_hint_tokens(
+                    label=label,
+                    command=command_part,
+                    repo_root=repo_root,
+                    command_tree=command_tree,
+                    just_recipes=just_recipes,
+                    tokens=tokens,
+                    problems=problems,
+                )
 
     return problems
+
+
+def _command_hint_token_parts(
+    command: str,
+    *,
+    label: str,
+    problems: list[str],
+) -> list[list[str]]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError as exc:
+        problems.append(f"{label}: invalid command hint {command!r}: {exc}")
+        return []
+
+    if "&&" not in tokens:
+        return [tokens]
+
+    parts: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token == "&&":
+            if not current:
+                problems.append(f"{label}: empty command before && in {command!r}")
+            else:
+                parts.append(current)
+            current = []
+            continue
+        current.append(token)
+
+    if current:
+        parts.append(current)
+    else:
+        problems.append(f"{label}: empty command after && in {command!r}")
+
+    return parts
+
+
+def _validate_command_hint_tokens(
+    *,
+    label: str,
+    command: str,
+    repo_root: Path,
+    command_tree: dict[str, set[str] | None],
+    just_recipes: dict[str, str],
+    tokens: list[str],
+    problems: list[str],
+) -> None:
+    match tokens:
+        case ["easycat", subcommand, *args]:
+            _validate_easycat_command_hint(
+                label=label,
+                repo_root=repo_root,
+                command_tree=command_tree,
+                subcommand=subcommand,
+                args=args,
+                problems=problems,
+            )
+        case ["uvx", "ty", "check", *args]:
+            _validate_ty_check_hint(label=label, repo_root=repo_root, args=args, problems=problems)
+        case ["uv", "run", *args]:
+            _validate_uv_run_hint(
+                label=label,
+                command=command,
+                repo_root=repo_root,
+                command_tree=command_tree,
+                args=args,
+                problems=problems,
+            )
+        case ["uv", "sync", *args]:
+            _validate_uv_sync_hint(
+                label=label,
+                repo_root=repo_root,
+                args=args,
+                problems=problems,
+            )
+        case ["python", "-m", "http.server", *args]:
+            _validate_http_server_hint(
+                label=label,
+                repo_root=repo_root,
+                args=args,
+                problems=problems,
+            )
+        case ["just", recipe, *_]:
+            if recipe not in just_recipes:
+                problems.append(f"{label}: unknown just recipe {recipe}")
+        case ["docker", "compose", *args]:
+            _validate_docker_compose_hint(
+                label=label,
+                repo_root=repo_root,
+                args=args,
+                problems=problems,
+            )
+        case _:
+            problems.append(f"{label}: unsupported command hint {command!r}")
 
 
 def _easycat_command_tree() -> dict[str, set[str] | None]:
@@ -299,6 +358,149 @@ def _validate_docker_compose_hint(
             problems.append(f"{label}: missing docker compose env-file directory {env_file}")
 
 
+def _path_targets(args: list[str], *, options_with_values: set[str]) -> list[str]:
+    targets: list[str] = []
+    skip_next = False
+
+    for index, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--":
+            targets.extend(args[index + 1 :])
+            break
+        if arg in options_with_values:
+            skip_next = True
+            continue
+        if any(arg.startswith(f"{option}=") for option in options_with_values):
+            continue
+        if arg.startswith("-"):
+            continue
+        targets.append(arg)
+
+    return targets
+
+
+def _validate_repo_path_targets(
+    *,
+    label: str,
+    repo_root: Path,
+    context: str,
+    targets: list[str],
+    problems: list[str],
+) -> None:
+    for target in targets:
+        if target in {"PATH", "DIR", "FILE"} or (target.startswith("<") and target.endswith(">")):
+            continue
+        if not (repo_root / target).exists():
+            problems.append(f"{label}: missing {context} target {target}")
+
+
+def _validate_ruff_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if not args:
+        problems.append(f"{label}: missing ruff command")
+        return
+
+    command, *command_args = args
+    if command not in {"check", "format"}:
+        problems.append(f"{label}: unsupported ruff command {command}")
+        return
+
+    targets = _path_targets(
+        command_args,
+        options_with_values={
+            "--config",
+            "--exclude",
+            "--extend-exclude",
+            "--ignore",
+            "--line-length",
+            "--output-format",
+            "--select",
+            "--stdin-filename",
+            "--target-version",
+        },
+    )
+    _validate_repo_path_targets(
+        label=label,
+        repo_root=repo_root,
+        context=f"ruff {command}",
+        targets=targets,
+        problems=problems,
+    )
+
+
+def _validate_mypy_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    targets = _path_targets(
+        args,
+        options_with_values={
+            "--cache-dir",
+            "--command",
+            "--config-file",
+            "--follow-imports",
+            "--module",
+            "--package",
+            "--python-version",
+            "-c",
+            "-m",
+            "-p",
+        },
+    )
+    _validate_repo_path_targets(
+        label=label,
+        repo_root=repo_root,
+        context="mypy",
+        targets=targets,
+        problems=problems,
+    )
+
+
+def _validate_ty_check_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    targets = _path_targets(
+        args,
+        options_with_values={"--config", "--python", "--python-platform", "--python-version"},
+    )
+    _validate_repo_path_targets(
+        label=label,
+        repo_root=repo_root,
+        context="ty check",
+        targets=targets,
+        problems=problems,
+    )
+
+
+def _validate_pre_commit_hint(
+    *,
+    label: str,
+    repo_root: Path,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if not args or args[0] != "run":
+        command = shlex.join(["pre-commit", *args])
+        problems.append(f"{label}: unsupported pre-commit command {command!r}")
+        return
+    if not (repo_root / ".pre-commit-config.yaml").exists():
+        problems.append(f"{label}: missing pre-commit config .pre-commit-config.yaml")
+
+
 def _uv_run_command_tokens(
     *,
     label: str,
@@ -381,7 +583,18 @@ def _validate_uv_run_hint(
         case ["pytest", *_]:
             problems.extend(pytest_target_problems(command, repo_root=repo_root, label=label))
         case ["ruff", *_]:
-            return
+            _validate_ruff_hint(
+                label=label, repo_root=repo_root, args=run_tokens[1:], problems=problems
+            )
+        case ["mypy", *args]:
+            _validate_mypy_hint(label=label, repo_root=repo_root, args=args, problems=problems)
+        case ["pre-commit", *args]:
+            _validate_pre_commit_hint(
+                label=label,
+                repo_root=repo_root,
+                args=args,
+                problems=problems,
+            )
         case _:
             problems.append(f"{label}: unsupported command hint {command!r}")
 

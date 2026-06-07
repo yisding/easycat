@@ -9,6 +9,7 @@ from easycat.cli._app import (
     _DOCS_ONBOARDING_GUARD_COMMANDS,
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
 )
+from tests._command_hints import command_hint_problems
 from tests._justfile import just_recipe_commands
 from tests._pytest_targets import pytest_target_problems
 
@@ -300,6 +301,27 @@ def test_contributing_development_loop_pytest_targets_resolve() -> None:
         )
 
     assert not problems, "CONTRIBUTING.md pytest targets are stale:\n" + "\n".join(problems)
+
+
+def test_contributing_development_loop_command_hints_are_locally_valid() -> None:
+    commands = tuple(row["raw"] for row in _development_loop_rows())
+    problems = command_hint_problems(
+        [
+            {
+                "label": "CONTRIBUTING.md development loop",
+                "path": "CONTRIBUTING.md#the-development-loop",
+                "audience": "contributors",
+                "description": "Copyable raw development-loop commands.",
+                "commands": commands,
+            }
+        ],
+        repo_root=REPO_ROOT,
+    )
+
+    assert commands
+    assert not problems, "CONTRIBUTING.md development-loop commands are stale:\n" + "\n".join(
+        problems
+    )
 
 
 def test_contributing_pytest_target_validator_checks_node_ids() -> None:

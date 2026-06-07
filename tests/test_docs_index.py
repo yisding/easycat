@@ -865,6 +865,28 @@ def test_cli_docs_command_hint_validator_checks_pytest_node_ids() -> None:
     )
 
 
+def test_cli_docs_command_hint_validator_checks_tool_path_targets() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken tool path hints",
+                "path": "CONTRIBUTING.md#the-development-loop",
+                "audience": "contributors",
+                "description": "Regression fixture for maintenance command target validation.",
+                "commands": (
+                    "uv run ruff check missing.py",
+                    "uv run mypy missing/package",
+                    "uvx ty check missing/package",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken tool path hints: missing ruff check target missing.py" in problems
+    assert "Broken tool path hints: missing mypy target missing/package" in problems
+    assert "Broken tool path hints: missing ty check target missing/package" in problems
+
+
 def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
     problems = _cli_docs_command_hint_problems(
         [
