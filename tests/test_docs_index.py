@@ -130,6 +130,11 @@ def _declared_optional_dependency_extras() -> set[str]:
     return set(pyproject["project"]["optional-dependencies"])
 
 
+def _declared_dependency_groups() -> set[str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return set(pyproject["dependency-groups"])
+
+
 def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
     valid_audiences = _docs_audience_hint_values()
 
@@ -150,6 +155,7 @@ def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[s
 
 def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) -> None:
     declared_extras = _declared_optional_dependency_extras()
+    declared_groups = _declared_dependency_groups()
 
     for index, arg in enumerate(args):
         if arg == "--extra":
@@ -159,6 +165,19 @@ def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) 
             extra = args[index + 1]
         elif arg.startswith("--extra="):
             extra = arg.split("=", 1)[1]
+        elif arg == "--group":
+            if index + 1 >= len(args):
+                problems.append(f"{label}: uv sync group hint missing value")
+                return
+            group = args[index + 1]
+            if group not in declared_groups:
+                problems.append(f"{label}: unknown uv sync group {group}")
+            continue
+        elif arg.startswith("--group="):
+            group = arg.split("=", 1)[1]
+            if group not in declared_groups:
+                problems.append(f"{label}: unknown uv sync group {group}")
+            continue
         else:
             continue
 
@@ -904,6 +923,28 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
     assert "Broken uv sync hints: unknown uv sync extra not-a-real-extra" in problems
     assert "Broken uv sync hints: unknown uv sync extra another-fake-extra" in problems
     assert "Broken uv sync hints: uv sync extra hint missing value" in problems
+
+
+def test_cli_docs_command_hint_validator_checks_uv_sync_groups() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken uv sync groups",
+                "path": "README.md#install",
+                "audience": "new users",
+                "description": "Regression fixture for dependency group validation.",
+                "commands": (
+                    "uv sync --extra quickstart --group not-a-real-group",
+                    "uv sync --extra quickstart --group=another-fake-group",
+                    "uv sync --group",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken uv sync groups: unknown uv sync group not-a-real-group" in problems
+    assert "Broken uv sync groups: unknown uv sync group another-fake-group" in problems
+    assert "Broken uv sync groups: uv sync group hint missing value" in problems
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
