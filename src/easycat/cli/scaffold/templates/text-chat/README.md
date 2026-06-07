@@ -45,6 +45,9 @@ After editing `agent.py`, run the local lint/syntax check:
 uv run ruff check agent.py
 ```
 
+If Ruff reports an auto-fixable issue, run
+`uv run ruff check --fix agent.py` and then re-run the check.
+
 ## Next steps
 
 - **Change the agent's personality:** edit `instructions=...` in `agent.py`.

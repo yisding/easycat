@@ -592,10 +592,15 @@ def test_readme_install_section_names_rendered_base_requirement(name: str) -> No
 def test_readme_has_local_lint_check(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     check_section = readme.split("## Check", 1)[1].split("## Next steps", 1)[0]
-    expected_command = "uv run ruff check " + " ".join(_template_python_filenames(name))
+    python_filenames = " ".join(_template_python_filenames(name))
+    expected_command = f"uv run ruff check {python_filenames}"
+    expected_fix_command = f"uv run ruff check --fix {python_filenames}"
 
     assert expected_command in check_section
+    assert expected_fix_command in check_section
     assert "local lint/syntax check" in check_section
+    assert "auto-fixable issue" in check_section
+    assert "re-run the check" in check_section
     assert "uv run python -m py_compile" not in check_section
 
 
