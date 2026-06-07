@@ -62,6 +62,7 @@ jobs:
         run: |
           "$RELEASE_VENV/bin/python" - <<'PY'
           import pathlib
+          import re
           import easycat
 
           package_path = pathlib.Path(easycat.__file__).resolve()
@@ -69,12 +70,25 @@ jobs:
           print(package_path)
           assert "site-packages" in str(package_path)
           assert not package_path.is_relative_to(workspace)
+          section = (
+              (workspace / "docs" / "public-api.md")
+              .read_text(encoding="utf-8")
+              .split("## Top-Level Allowlist", 1)[1]
+          )
+          documented = tuple(re.findall(r"^- `([^`]+)`", section, flags=re.MULTILINE))
+          assert documented
+          assert set(documented) == set(easycat.__all__)
+          for name in documented:
+              getattr(easycat, name)
           PY
       - name: Run installed wheel smoke tests
         working-directory: ${{ runner.temp }}
         env:
           PYTHONPATH: ""
         run: |
+          "$RELEASE_VENV/bin/easycat" --help
+          "$RELEASE_VENV/bin/python" -m easycat
+          "$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-scaffold-smoke" --template text-chat --no-git --json
           "$RELEASE_VENV/bin/easycat" doctor --json
           "$RELEASE_VENV/bin/python" -m pytest "$GITHUB_WORKSPACE/tests/cli/test_app.py" -q
       - name: Run installed wheel quick validation

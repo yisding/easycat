@@ -954,6 +954,10 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
         "release.venv",
         "release.install",
         "release.import-smoke",
+        "release.public-api-smoke",
+        "release.help-smoke",
+        "release.module-smoke",
+        "release.init-smoke",
         "release.doctor",
         "release.cli-smoke",
         "release.quick",
@@ -977,6 +981,11 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
         for command in commands
     )
     assert any(command[:2] == ["uv", "venv"] and "--python" in command for command in commands)
+    assert any(command[-1] == "--help" for command in commands)
+    assert any(command[-2:] == ["-m", "easycat"] for command in commands)
+    assert any(
+        "init" in command and "--no-git" in command and "--json" in command for command in commands
+    )
     assert any("doctor" in command for command in commands)
     assert any(
         "-m" in command

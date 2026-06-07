@@ -91,6 +91,26 @@ print(package_path)
 assert "site-packages" in str(package_path), package_path
 assert not package_path.is_relative_to(source_root), package_path
 """
+_RELEASE_PUBLIC_API_SMOKE = """
+import os
+import pathlib
+import re
+
+import easycat
+
+source_root = pathlib.Path(os.environ["EASYCAT_RELEASE_SOURCE_ROOT"]).resolve()
+doc_path = source_root / "docs" / "public-api.md"
+section = doc_path.read_text(encoding="utf-8").split("## Top-Level Allowlist", 1)[1]
+documented = tuple(re.findall(r"^- `([^`]+)`", section, flags=re.MULTILINE))
+assert documented, "docs/public-api.md has no top-level allowlist entries"
+missing = sorted(set(easycat.__all__) - set(documented))
+extra = sorted(set(documented) - set(easycat.__all__))
+assert not missing, "docs/public-api.md missing exports: " + ", ".join(missing)
+assert not extra, "docs/public-api.md lists non-exported names: " + ", ".join(extra)
+for name in documented:
+    getattr(easycat, name)
+print(f"validated {len(documented)} documented public API exports")
+"""
 
 
 @dataclass(frozen=True)
@@ -982,6 +1002,38 @@ def run_release_validation(
             env=outside_env,
             cwd=outside_dir,
         )
+        public_api_ok = record_command(
+            "release.public-api-smoke",
+            [str(venv_python), "-c", _RELEASE_PUBLIC_API_SMOKE],
+            env=outside_env,
+            cwd=outside_dir,
+        )
+        help_ok = record_command(
+            "release.help-smoke",
+            [str(venv_easycat), "--help"],
+            env=outside_env,
+            cwd=outside_dir,
+        )
+        module_ok = record_command(
+            "release.module-smoke",
+            [str(venv_python), "-m", "easycat"],
+            env=outside_env,
+            cwd=outside_dir,
+        )
+        init_ok = record_command(
+            "release.init-smoke",
+            [
+                str(venv_easycat),
+                "init",
+                str(outside_dir / "easycat-scaffold-smoke"),
+                "--template",
+                "text-chat",
+                "--no-git",
+                "--json",
+            ],
+            env=outside_env,
+            cwd=outside_dir,
+        )
         doctor_ok = record_command(
             "release.doctor",
             [str(venv_easycat), "doctor", "--json"],
@@ -994,7 +1046,15 @@ def run_release_validation(
             env=outside_env,
             cwd=outside_dir,
         )
-        smoke_ok = import_ok and doctor_ok and cli_smoke_ok
+        smoke_ok = (
+            import_ok
+            and public_api_ok
+            and help_ok
+            and module_ok
+            and init_ok
+            and doctor_ok
+            and cli_smoke_ok
+        )
 
     def child_command_runner(command: list[str], *, env: Mapping[str, str]) -> CommandResult:
         child_env = {

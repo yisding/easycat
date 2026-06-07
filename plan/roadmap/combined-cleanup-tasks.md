@@ -165,8 +165,8 @@ context. Several bullets are known stale; use the current-state list above and
   workspaces rather than source.
 - Decide whether `plan/` is release packaging input. If not, move planning
   docs to `rfcs/`, `.github/workstreams/`, or exclude them from package builds.
-- Add a wheel/sdist contents denylist for caches, local artifacts, plan drafts,
-  `.easycat/`, and generated template junk.
+- Done: wheel and sdist contents denylist rejects caches, local artifacts, plan
+  drafts, `.easycat/`, generated template junk, and local secret-key files.
 
 ## Phase 1: Public API, Config, And Onboarding
 
@@ -570,22 +570,22 @@ context. Several bullets are known stale; use the current-state list above and
 
 ### 7.2 CI Matrix And Type Checking
 
-- Test Python 3.11 because `requires-python` is `>=3.11`.
-- Keep 3.12 and 3.14, and add 3.13 if CI time allows.
+- Done: quick validation CI tests Python 3.11, 3.12, 3.13, and 3.14.
+- Done: CI runs an advisory full-repo `mypy` report plus a gated clean-core
+  `mypy` slice.
 - Add pyright or basedpyright because the package ships `py.typed`.
 - Add `pyright --verifytypes easycat` only after the public API is curated.
 
 ### 7.3 Packaging Smoke Tests
 
-- Build wheel and sdist in CI.
-- Install the wheel in a clean virtualenv.
-- Run:
-  - `easycat --help`;
-  - `easycat init`;
-  - `python -m easycat`;
-  - import of documented top-level API only.
-- Add a package contents denylist for caches, local workspaces, generated
-  artifacts, stale templates, and unreleased planning docs.
+- Done: CI and release validation build wheel and sdist artifacts.
+- Done: release validation installs the wheel in a clean virtualenv outside
+  the source tree with `PYTHONPATH` cleared.
+- Done: installed-wheel smoke runs `easycat --help`, `easycat init`,
+  `python -m easycat`, and documented top-level public API imports.
+- Done: package contents denylist covers wheel and sdist caches, local
+  workspaces, generated artifacts, stale templates, and unreleased planning
+  docs.
 
 ### 7.4 Test Reliability
 
@@ -615,8 +615,8 @@ This sequence is the April audit order. Items 2, 3, 5, 6, and parts of 1, 4,
 8, and 10 have since landed. Re-plan from the active gaps in
 `current-code-status.md` before opening work.
 
-1. Documentation and hygiene: remaining release metadata, root LICENSE,
-   package metadata, and wheel/sdist contents.
+1. Documentation and hygiene: remaining root LICENSE decision and release-bar
+   status docs.
 2. Public API snapshot and top-level export cull.
 3. `VoiceAgentConfig` rename plus internal `_SessionConfig`/provider wiring
    path, if the team still wants that breaking change.

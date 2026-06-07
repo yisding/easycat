@@ -10,14 +10,14 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 180 tracked Python files.
+- `src/easycat/` contains 181 tracked Python files.
 - `tests/` contains 202 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
   validation, coverage, socket validation, build smoke, and manual
-  live-provider tests. Quick validation runs on Python 3.11, 3.12, and 3.14;
-  socket validation runs on Python 3.12.
+  live-provider tests. Quick validation runs on Python 3.11, 3.12, 3.13, and
+  3.14; socket validation runs on Python 3.12.
 - CLI support includes `init`, `doctor`, `docs`, `explain`,
   `bundles list/show/export`, `inspect`, and `replay`; `init` ships
   `openai-agents`, `pydantic-ai`,
@@ -86,13 +86,13 @@ with the codebase. Counts below come from tracked files and exclude
   1,433 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
   159 lines, with the lazy-export registry isolated in `easycat._public_api`.
-  The public surface is still broad at 88 lazy top-level exports, but it is
+  The public surface is still broad at 90 lazy top-level exports, but it is
   pinned by a golden snapshot and documented in `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now
-  includes author, keywords, classifiers, and project URLs, and wheel packaging
-  tests guard against local/generated/secret artifacts leaking into release wheels.
-  CI now runs `uv build`, and release validation exercises an installed
-  package through the public CLI.
+  includes author, keywords, classifiers, and project URLs, and packaging tests
+  guard against local/generated/secret artifacts leaking into release artifacts.
+  CI now runs `uv build`, and release validation exercises an installed package
+  through the public CLI and documented top-level API.
 - Broader connection-policy hardening and deeper live/cassette provider
   validation remain cleanup backlog items. Provider WebSocket reconnect policy
   now rejects unsafe retry/backoff values before they can create busy loops or

@@ -23,7 +23,7 @@ first, debug second, safety net third, and infrastructure last.
 | 13 | `validate` command and report rendering | `test_validate.py` |
 | 14 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 15 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
-| 16 | Packaging — wheel ships template dotfiles, metadata, and clean contents | `test_packaging.py` (integration) |
+| 16 | Packaging — wheel and sdist ship template dotfiles, metadata, and clean contents | `test_packaging.py` (integration) |
 | 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
 
 Plans 1-10 are fast unit tests. Plans 11-15 add coverage for cross-
@@ -464,7 +464,7 @@ through as a valid key.
 
 ---
 
-## Plan 16 — Packaging — wheel ships template dotfiles, metadata, and clean contents
+## Plan 16 — Packaging — wheel and sdist ship template dotfiles, metadata, and clean contents
 
 **Concern.** `uvx easycat init my-agent` from a PyPI-installed
 `easycat` must get the full template catalog, including `.env.example`
@@ -478,18 +478,18 @@ secret-key artifacts that happen to exist under `src/`.
 subdir missing from the wheel; files copied under a different tree
 structure than the source; missing author/project/classifier metadata
 on PyPI; ignored cache, coverage, docs, mutation, package metadata,
-bytecode, or local secret-key artifacts leaking into the wheel.
+bytecode, or local secret-key artifacts leaking into release artifacts.
 
 **Checks.**
-- `uv build --wheel` succeeds on a clean checkout.
+- `uv build --wheel` and `uv build --sdist` succeed on a clean checkout.
 - The built wheel contains
   `easycat/cli/scaffold/templates/<name>/{agent.py, pyproject.toml,
   README.md, .env.example, .gitignore}` for each shipped scaffold
   template.
 - Wheel metadata includes the package name, Python requirement, author,
   project URLs, keywords, and core classifiers.
-- Wheel contents reject cache, local-tool, test, build, coverage, docs,
-  mutation, VCS, virtualenv, and package metadata artifacts, including
+- Wheel and sdist contents reject cache, local-tool, test, build, coverage,
+  docs, mutation, VCS, virtualenv, and package metadata artifacts, including
   ignored `.ruff_cache`, `.uv-cache`, `.agents`, `.codex`,
   `.coverage`, `.egg-info`, bytecode, or local `.pem` / `.key` files
   under `src/`.

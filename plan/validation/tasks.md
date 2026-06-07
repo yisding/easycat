@@ -1531,8 +1531,9 @@ Current verified state:
   `pytest`, `pytest-asyncio`, and `hypothesis`.
 - Installed-package checks run from `${{ runner.temp }}` with `PYTHONPATH: ""`;
   they assert `easycat.__file__` resolves into `site-packages` and outside the
-  GitHub workspace, then run `easycat doctor --json` and
-  `tests/cli/test_app.py`.
+  GitHub workspace, assert `docs/public-api.md` still matches
+  `easycat.__all__`, then run `easycat --help`, `python -m easycat`,
+  `easycat init`, `easycat doctor --json`, and `tests/cli/test_app.py`.
 - The installed wheel runs `validate quick`, `validate stress`, flaky
   collection with `-m flaky`, strict
   `validate live --release --provider openai --surface stt --surface tts`, and
@@ -1546,9 +1547,11 @@ Current verified state:
   `run_release_validation(...)` implementation used by
   `easycat validate release`; it records `release.build`, `release.metadata`,
   `release.venv`, `release.install`,
-  `release.install-test-tools`, `release.import-smoke`, `release.doctor`,
-  `release.cli-smoke`, `release.quick`, `release.stress`, `release.contracts`,
-  `release.live`, and `release.latency.<mode>` checks.
+  `release.install-test-tools`, `release.import-smoke`,
+  `release.public-api-smoke`, `release.help-smoke`, `release.module-smoke`,
+  `release.init-smoke`, `release.doctor`, `release.cli-smoke`,
+  `release.quick`, `release.stress`, `release.contracts`, `release.live`, and
+  `release.latency.<mode>` checks.
 - The release runner clears `PYTHONPATH`, executes child validation slices from
   an out-of-source working directory, uses the installed wheel pytest command
   through `EASYCAT_VALIDATION_PYTEST_COMMAND`, requires latency samples, and

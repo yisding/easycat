@@ -176,7 +176,12 @@ def test_release_validation_workflow_skeleton_exists() -> None:
     assert "EASYCAT_VALIDATION_TEST_ROOT: ${{ github.workspace }}/tests" in text
     assert "site-packages" in text
     assert "not package_path.is_relative_to(workspace)" in text
+    assert "public-api.md" in text
+    assert "set(documented) == set(easycat.__all__)" in text
     assert "tests/cli/test_app.py" in text
+    assert '"$RELEASE_VENV/bin/easycat" --help' in text
+    assert '"$RELEASE_VENV/bin/python" -m easycat' in text
+    assert '"$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-scaffold-smoke"' in text
     assert '"$RELEASE_VENV/bin/easycat" doctor --json' in text
     assert '"$RELEASE_VENV/bin/easycat" validate quick' in text
     assert '"$RELEASE_VENV/bin/easycat" validate stress' in text
@@ -217,6 +222,11 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         'PYTHONPATH: ""',
         "site-packages",
         "not package_path.is_relative_to(workspace)",
+        "public-api.md",
+        "set(documented) == set(easycat.__all__)",
+        '"$RELEASE_VENV/bin/easycat" --help',
+        '"$RELEASE_VENV/bin/python" -m easycat',
+        '"$RELEASE_VENV/bin/easycat" init "$RUNNER_TEMP/easycat-scaffold-smoke"',
         '"$RELEASE_VENV/bin/easycat" doctor --json',
         '"$RELEASE_VENV/bin/easycat" validate quick',
         '"$RELEASE_VENV/bin/easycat" validate stress',
@@ -238,6 +248,10 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "release.install",
         "release.install-test-tools",
         "release.import-smoke",
+        "release.public-api-smoke",
+        "release.help-smoke",
+        "release.module-smoke",
+        "release.init-smoke",
         "release.doctor",
         "release.cli-smoke",
         'RELEASE_SLICES = ("quick", "stress", "contracts")',
@@ -288,6 +302,11 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         'PYTHONPATH: ""',
         "easycat.__file__",
         "site-packages",
+        "docs/public-api.md",
+        "easycat.__all__",
+        "easycat --help",
+        "python -m easycat",
+        "easycat init",
         "easycat doctor --json",
         "tests/cli/test_app.py",
         "validate quick",
@@ -310,6 +329,10 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "release.install",
         "release.install-test-tools",
         "release.import-smoke",
+        "release.public-api-smoke",
+        "release.help-smoke",
+        "release.module-smoke",
+        "release.init-smoke",
         "release.doctor",
         "release.cli-smoke",
         "release.quick",

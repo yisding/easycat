@@ -277,7 +277,7 @@ def test_cli_test_plan_describes_integration_local_marker_selection() -> None:
         assert stale_phrase not in combined
 
 
-def test_roadmap_current_code_status_tracks_inventory_and_wheel_hygiene() -> None:
+def test_roadmap_current_code_status_tracks_inventory_and_artifact_hygiene() -> None:
     """Keep the current-code snapshot aligned with tracked files and release hygiene."""
     from easycat._public_api import LAZY_EXPORTS
 
@@ -305,7 +305,7 @@ def test_roadmap_current_code_status_tracks_inventory_and_wheel_hygiene() -> Non
         in normalized
     )
     assert "cache/workspace artifacts" not in status
-    assert "local/generated/secret artifacts leaking into release wheels" in status
+    assert "local/generated/secret artifacts leaking into release artifacts" in status
 
 
 def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
@@ -480,17 +480,19 @@ def test_cli_test_plan_names_scaffold_artifact_hygiene() -> None:
 
 
 def test_cli_test_plan_names_packaging_artifact_hygiene() -> None:
-    """Keep the packaging plan aligned with wheel artifact rejection checks."""
+    """Keep the packaging plan aligned with release artifact rejection checks."""
     plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
     packaging_plan = plan.split(
-        "## Plan 16 — Packaging — wheel ships template dotfiles, metadata, and clean contents",
+        "## Plan 16 — Packaging — wheel and sdist ship template dotfiles, metadata, "
+        "and clean contents",
         1,
     )[1].split("---", 1)[0]
     normalized = " ".join(packaging_plan.split())
 
     assert "cache, generated report/build output, package metadata" in normalized
     assert "cache, coverage, docs, mutation, package metadata" in normalized
-    assert "bytecode, or local secret-key artifacts leaking into the wheel" in normalized
+    assert "bytecode, or local secret-key artifacts leaking into release artifacts" in (normalized)
+    assert "`uv build --wheel` and `uv build --sdist` succeed" in normalized
     assert "build, coverage, docs, mutation, VCS, virtualenv" in normalized
     assert "package metadata artifacts" in normalized
     for token in (

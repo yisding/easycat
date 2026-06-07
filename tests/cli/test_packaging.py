@@ -1,4 +1,4 @@
-"""Plan 16 — wheel packaging ships template dotfiles, metadata, and clean contents.
+"""Plan 16 — wheel and sdist packaging ship clean release contents.
 
 Run with ``pytest -m integration_local tests/cli/test_packaging.py`` to select
 it directly. The marker lets validation lanes filter heavier wheel-build checks;
@@ -12,6 +12,7 @@ from __future__ import annotations
 import email
 import shutil
 import subprocess
+import tarfile
 import zipfile
 from email.message import Message
 from pathlib import Path
@@ -45,6 +46,34 @@ _EXPECTED_FILES: tuple[str, ...] = (
     ".env.example",
     ".gitignore",
 )
+_FORBIDDEN_RELEASE_ARTIFACT_PARTS = {
+    ".easycat",
+    ".coverage",
+    ".agents",
+    ".claude",
+    ".codex",
+    ".git",
+    ".github",
+    ".hypothesis",
+    ".mypy_cache",
+    ".mutmut-cache",
+    ".pipecat-bench",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".uv-cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "coverage.xml",
+    "dist",
+    "docs",
+    "htmlcov",
+    "mutants",
+    "plan",
+    "site",
+    "tests",
+}
+_FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES = (".key", ".pem", ".pyc", ".pyo")
 
 
 @pytest.fixture(scope="module")
@@ -68,9 +97,35 @@ def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return wheels[0]
 
 
+@pytest.fixture(scope="module")
+def built_sdist(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build easycat's sdist once and return its path."""
+    uv = shutil.which("uv")
+    if uv is None:  # pragma: no cover — CI without uv is out of scope
+        pytest.skip("`uv` binary not on PATH")
+    out_dir = tmp_path_factory.mktemp("sdist")
+    root = _project_root()
+    proc = subprocess.run(
+        [uv, "build", "--sdist", "-o", str(out_dir)],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:  # pragma: no cover — diagnostic path
+        pytest.skip(f"`uv build` failed:\n{proc.stderr}")
+    sdists = list(out_dir.glob("easycat-*.tar.gz"))
+    assert len(sdists) == 1, f"expected one sdist, got {sdists}"
+    return sdists[0]
+
+
 def _wheel_members(wheel_path: Path) -> list[str]:
     with zipfile.ZipFile(wheel_path) as zf:
         return zf.namelist()
+
+
+def _sdist_members(sdist_path: Path) -> list[str]:
+    with tarfile.open(sdist_path, "r:gz") as tf:
+        return tf.getnames()
 
 
 def _wheel_metadata(wheel_path: Path) -> Message:
@@ -79,6 +134,19 @@ def _wheel_metadata(wheel_path: Path) -> Message:
             name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
         )
         return email.message_from_bytes(zf.read(metadata_name))
+
+
+def _release_artifact_offenders(members: list[str]) -> list[str]:
+    offenders = []
+    for member in members:
+        parts = set(Path(member).parts)
+        if (
+            parts & _FORBIDDEN_RELEASE_ARTIFACT_PARTS
+            or member.endswith(_FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES)
+            or any(part.endswith(".egg-info") for part in parts)
+        ):
+            offenders.append(member)
+    return offenders
 
 
 @pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)
@@ -146,41 +214,18 @@ def test_wheel_metadata_is_useful_for_package_indexes(built_wheel: Path) -> None
 def test_wheel_does_not_ship_local_generated_or_secret_artifacts(built_wheel: Path) -> None:
     """Ignored local artifacts under ``src/`` must not leak into release wheels."""
     members = _wheel_members(built_wheel)
-    forbidden_parts = {
-        ".easycat",
-        ".coverage",
-        ".agents",
-        ".claude",
-        ".codex",
-        ".git",
-        ".github",
-        ".hypothesis",
-        ".mypy_cache",
-        ".mutmut-cache",
-        ".pipecat-bench",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".uv-cache",
-        ".venv",
-        "__pycache__",
-        "build",
-        "coverage.xml",
-        "dist",
-        "htmlcov",
-        "mutants",
-        "site",
-        "tests",
-    }
-    offenders = []
-    for member in members:
-        parts = set(Path(member).parts)
-        if (
-            parts & forbidden_parts
-            or member.endswith((".key", ".pem", ".pyc", ".pyo"))
-            or any(part.endswith(".egg-info") for part in parts)
-        ):
-            offenders.append(member)
+    offenders = _release_artifact_offenders(members)
 
     assert not offenders, "wheel should not ship cache/workspace/generated/secret artifacts: " + (
+        ", ".join(offenders)
+    )
+
+
+def test_sdist_does_not_ship_local_generated_or_secret_artifacts(built_sdist: Path) -> None:
+    """Ignored local artifacts must not leak into source distributions."""
+    members = _sdist_members(built_sdist)
+    offenders = _release_artifact_offenders(members)
+
+    assert not offenders, "sdist should not ship cache/workspace/generated/secret artifacts: " + (
         ", ".join(offenders)
     )
