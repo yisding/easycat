@@ -560,7 +560,6 @@ from easycat import (
 )
 
 config = EasyConfig(
-    openai_api_key="your-api-key",
     output_processors=[
         # Replace names/terms with pronunciation-friendly spellings.
         # e.g. "Siobhan" -> "shi-vawn"
@@ -591,7 +590,6 @@ Or use the convenience helper for the common pronunciation + phone-number stack:
 from easycat import EasyConfig, create_session, default_pronunciation_processors
 
 config = EasyConfig(
-    openai_api_key="your-api-key",
     output_processors=default_pronunciation_processors(
         name_pronunciations={"Siobhan": "shi-vawn", "Nguyen": "win"},
         phone_pause_ms=140,
@@ -670,7 +668,7 @@ async def tail(session, stop_tailing: asyncio.Event) -> None:
 
 
 async def main() -> None:
-    config = EasyConfig(openai_api_key="your-api-key", debug="light")
+    config = EasyConfig(debug="light")
     async with create_session(config) as session:
         stop_tailing = asyncio.Event()
         tail_task = asyncio.create_task(tail(session, stop_tailing))
@@ -724,7 +722,6 @@ agent = Agent(
 )
 
 config = EasyConfig(
-    openai_api_key="your-api-key",
     agent=agent,
 )
 session = create_session(config)
@@ -742,7 +739,6 @@ pydantic_agent = PydanticAgent(
 )
 
 config = EasyConfig(
-    openai_api_key="your-api-key",
     agent=pydantic_agent,
 )
 session = create_session(config)
@@ -777,7 +773,6 @@ class BookingWorkflow:
 workflow = BookingWorkflow()
 
 config = EasyConfig(
-    openai_api_key="your-api-key",
     agent=workflow,  # auto-adapted to GenericWorkflowBridge
 )
 session = create_session(config)
@@ -833,7 +828,6 @@ class GreetingWorkflow(Workflow):
 
 session = create_session(
     EasyConfig(
-        openai_api_key="your-api-key",
         agent=GreetingWorkflow(),
     )
 )

@@ -379,13 +379,13 @@ def test_readme_agent_framework_snippets_use_easyconfig_auto_adapt_surface() -> 
 
         for term in (
             "from easycat import EasyConfig, create_session",
-            'openai_api_key="your-api-key"',
             "session = create_session(config)",
             *expected_terms,
         ):
             assert term in section
 
         for stale_term in (
+            'openai_api_key="your-api-key"',
             "from easycat import Session, SessionConfig",
             "OpenAIAgentsBridge",
             "PydanticAIBridge",
@@ -422,13 +422,13 @@ def test_readme_llama_agents_local_snippet_uses_easyconfig_auto_adapt() -> None:
 
     for term in (
         "from easycat import EasyConfig, create_session",
-        'openai_api_key="your-api-key"',
         "agent=GreetingWorkflow()",
         "session = create_session(",
     ):
         assert term in local_snippet
 
     for stale_term in (
+        'openai_api_key="your-api-key"',
         "from easycat.integrations.agents import LlamaAgentsBridge",
         'input_key="message"',
         "LlamaAgentsBridge(workflow=GreetingWorkflow()",
@@ -436,6 +436,14 @@ def test_readme_llama_agents_local_snippet_uses_easyconfig_auto_adapt() -> None:
         assert stale_term not in local_snippet
 
     assert "LlamaAgentsBridge(base_url=" in section
+
+
+def test_readme_python_snippets_do_not_embed_placeholder_api_keys() -> None:
+    """README code should rely on the documented OPENAI_API_KEY setup."""
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert 'export OPENAI_API_KEY="your-api-key"' in readme
+    assert 'openai_api_key="your-api-key"' not in readme
 
 
 def test_readme_cli_section_lists_registered_top_level_commands() -> None:
