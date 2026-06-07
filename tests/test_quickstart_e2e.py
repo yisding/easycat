@@ -241,7 +241,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         ),
         "Operate or debug sessions": (
             "[Observability](docs/observability.md)",
-            "journals, bundles, metrics, and traces",
+            "easycat bundles list",
         ),
     }
 
@@ -259,6 +259,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
     ):
         assert (REPO_ROOT / route.rstrip("/")).exists()
     assert "uv sync --extra quickstart --group dev" in section
+    assert "uv sync --extra debugger --group dev" in section
     assert "easycat init my-agent" in section
 
 

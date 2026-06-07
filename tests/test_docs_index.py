@@ -157,6 +157,9 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "script or coding agent needs validation output inside the standard CLI envelope" in (
         normalized
     )
+    assert "journal CLI commands, the debugger UI, metrics, and traces" in normalized
+    assert "Start with `easycat bundles list`" in normalized
+    assert "uv sync --extra debugger --group dev" in text
 
 
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:

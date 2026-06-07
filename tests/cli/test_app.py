@@ -464,6 +464,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
+    assert "debugger UI" in descriptions["docs/observability.md"]
     assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]
     urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
     assert urls["README.md#choose-your-path"] == (

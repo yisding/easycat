@@ -14,7 +14,7 @@ LlamaAgents, Remote Responses API, or your own async workflow.
 | Scaffold a new app | [CLI and scaffolds](#cli) | `easycat init --list-templates` before `easycat init my-agent` |
 | Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](#validation-workflow) | `uv run easycat validate quick` |
 | Maintain architecture or package boundaries | [Architecture map](CLAUDE.md) | Review provider registries, session lifecycle, and `uv run pytest tests/test_install_guidance.py` |
-| Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Inspect journals, bundles, metrics, and traces |
+| Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Run `easycat bundles list`; add `uv sync --extra debugger --group dev` for the UI |
 
 ## Learn the pipeline from scratch
 

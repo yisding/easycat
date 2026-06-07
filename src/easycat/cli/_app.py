@@ -354,7 +354,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Observability",
         "path": "docs/observability.md",
         "audience": "operators",
-        "description": "Inspect journals, debug bundles, metrics, and traces.",
+        "description": "Inspect journals, debug bundles, the debugger UI, metrics, and traces.",
         "commands": (
             "easycat bundles list",
             "easycat bundles list --json",

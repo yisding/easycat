@@ -68,7 +68,9 @@ command hints, such as `PATH`, before running them.
   checklist.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
-  [observability](observability.md), then review the
+  [observability](observability.md) for journal CLI commands, the debugger UI,
+  metrics, and traces. Start with `easycat bundles list`; from this repo, add
+  `uv sync --extra debugger --group dev` when you need the UI. Then review the
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout.
 - Validating a change: run `uv run easycat validate quick`, inspect
