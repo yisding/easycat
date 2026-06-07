@@ -373,6 +373,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv run easycat docs --audience operators",
             "docker compose -f docker/compose.yaml up --build",
+            "python -m http.server 8080 --directory examples",
             "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
             "docker compose -f docker/compose.yaml down",
         ),

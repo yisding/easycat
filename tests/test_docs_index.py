@@ -506,6 +506,7 @@ def test_deployment_docs_route_matches_docker_commands() -> None:
     for command in (
         "uv run easycat docs --audience operators",
         "docker compose -f docker/compose.yaml up --build",
+        "python -m http.server 8080 --directory examples",
         "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
         "docker compose -f docker/compose.yaml down",
     ):
@@ -699,6 +700,19 @@ def test_cli_docs_command_hints_are_locally_valid() -> None:
                             problems.append(f"{entry['label']}: missing pytest target {path}")
                 case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
                     continue
+                case ["python", "-m", "http.server", *_args]:
+                    if "--directory" in tokens:
+                        directory_index = tokens.index("--directory") + 1
+                        if directory_index >= len(tokens):
+                            problems.append(
+                                f"{entry['label']}: http.server hint missing directory"
+                            )
+                            continue
+                        directory = tokens[directory_index]
+                        if not (REPO_ROOT / directory).is_dir():
+                            problems.append(
+                                f"{entry['label']}: missing http.server directory {directory}"
+                            )
                 case ["just", recipe, *_]:
                     if recipe not in just_recipes:
                         problems.append(f"{entry['label']}: unknown just recipe {recipe}")
