@@ -133,6 +133,22 @@ def test_teaching_plan_source_path_mentions_resolve() -> None:
     )
 
 
+def test_teaching_materials_use_current_beginner_config_name() -> None:
+    """Keep teaching materials aligned with the public EasyConfig surface."""
+    docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))
+    plans = sorted((ROOT / "plan" / "teaching" / "chapter-plans").glob("*.md"))
+    stale: list[str] = []
+
+    for doc in docs + plans:
+        for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            if "EasyCatConfig" in line:
+                stale.append(f"{doc.relative_to(ROOT).as_posix()}:{line_number}: {line.strip()}")
+
+    assert not stale, "Teaching materials should say EasyConfig, not EasyCatConfig:\n" + "\n".join(
+        stale
+    )
+
+
 def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:
     """Keep the tools chapter plan aligned with the current bridge event surface."""
     plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(

@@ -18,7 +18,7 @@
 
 ## Learning objectives
 
-1. Configure `EasyCatConfig` and `SessionConfig` for arbitrary
+1. Configure `EasyConfig` and `SessionConfig` for arbitrary
    provider combinations.
 2. Swap the **transport** (Local → WebRTC → Twilio) without
    changing the agent or any provider, and feel the Protocol
@@ -104,7 +104,7 @@ exercises rather than core presets, to keep the chapter focused.)
 
 ## Key concepts
 
-- `easycat.config.EasyCatConfig` (simple, auto-wires) vs
+- `easycat.config.EasyConfig` (simple, auto-wires) vs
   `SessionConfig` (explicit providers)
 - `easycat.create_session()` factory wiring
 - `easycat.providers.Transport` Protocol — the second axis of
