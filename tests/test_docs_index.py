@@ -328,6 +328,24 @@ def test_start_here_docs_route_tracks_root_path_chooser_commands() -> None:
     )
 
 
+def test_quickstart_docs_route_matches_install_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    route_commands = set(entries["README.md#install"].get("commands", ()))
+    install_section = (
+        _route_target_text("README.md#install").split("## Install", 1)[1].split("## CLI", 1)[0]
+    )
+    install_commands = [
+        match.group(1)
+        for match in CODE_SPAN_RE.finditer(install_section)
+        if match.group(1).startswith(("uv sync ", "uv run "))
+    ]
+    missing = [command for command in install_commands if command not in route_commands]
+
+    assert not missing, "Quickstart docs route missing install command hints: " + ", ".join(
+        missing
+    )
+
+
 def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -670,6 +688,9 @@ def test_cli_docs_command_hints_are_locally_valid() -> None:
                     if subcommand not in registered_commands:
                         problems.append(f"{entry['label']}: unknown easycat command {subcommand}")
                 case ["uv", "run", "python", script, *_]:
+                    if not (REPO_ROOT / script).exists():
+                        problems.append(f"{entry['label']}: missing python script {script}")
+                case ["uv", "run", "--env-file", _env_file, "python", script, *_]:
                     if not (REPO_ROOT / script).exists():
                         problems.append(f"{entry['label']}: missing python script {script}")
                 case ["uv", "run", "pytest", *paths]:

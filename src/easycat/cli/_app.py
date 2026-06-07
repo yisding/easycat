@@ -173,6 +173,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor",
             "uv run easycat doctor --env-file .env",
             "uv run python examples/openai_agents_voice.py",
+            "uv run --env-file .env python examples/openai_agents_voice.py",
         ),
     },
     {
