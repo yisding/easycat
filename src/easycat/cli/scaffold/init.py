@@ -190,7 +190,7 @@ _INIT_MACHINE_READABLE_HINT = (
 )
 _NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
 _NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
-_NEXT_STEP_APP_BUILDER_DOCS_COMMAND = 'uv run easycat docs --audience "app builders"'
+_NEXT_STEP_APP_BUILDER_DOCS_COMMAND = "uv run easycat docs --audience app-builders"
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -814,7 +814,7 @@ def init(
         "and operations routes[/]"
     )
     stderr_console.print(
-        '  uv run easycat docs --audience "app builders" [dim]# app-builder routes only[/]'
+        "  uv run easycat docs --audience app-builders [dim]# app-builder routes only[/]"
     )
     stderr_console.print(
         "  uv run easycat docs --json [dim]# route map with command hints and audience labels[/]"

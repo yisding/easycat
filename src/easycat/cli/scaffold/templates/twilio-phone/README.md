@@ -70,7 +70,7 @@ uv run python -m py_compile agent.py server.py
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
-  `uv run easycat docs --audience "app builders"` to narrow the map to
+  `uv run easycat docs --audience app-builders` to narrow the map to
   app-building routes, or `uv run easycat docs --json` when a script or coding
   agent needs the route map with command hints and audience labels. If this is
   not the right starter, run `uv run easycat init --list-templates`; use
