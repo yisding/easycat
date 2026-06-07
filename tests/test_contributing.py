@@ -226,7 +226,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Contributor and validation guidance",
         "Markdown links in maintained docs",
         (
-            "Root onboarding links, README command hints, command-hint extraction, "
+            "Root onboarding links, README CLI command families, command-hint extraction, "
             "`easycat docs`, and JSON route entries"
         ),
         "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",

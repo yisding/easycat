@@ -69,9 +69,9 @@ typecheck-fast:
 cov:
     uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
 
-# Guard root onboarding docs, README command hints, docs route map, and docs CLI JSON.
+# Guard root onboarding docs, README CLI command families, docs routes, and docs CLI JSON.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_command_hints.py tests/test_install_guidance.py::test_readme_cli_command_examples_are_locally_valid tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
+    uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_quickstart_e2e.py::test_readme_cli_section_lists_registered_top_level_commands tests/test_quickstart_e2e.py::test_readme_cli_section_does_not_advertise_stale_bundle_commands tests/test_quickstart_e2e.py::test_readme_cli_section_does_not_advertise_stale_top_level_commands tests/test_command_hints.py tests/test_install_guidance.py::test_readme_cli_explain_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_command_examples_are_locally_valid tests/test_install_guidance.py::test_readme_json_guidance_covers_schema_command_families tests/test_install_guidance.py::test_readme_cli_debug_json_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_validate_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_doctor_documents_env_file_option tests/test_install_guidance.py::test_cli_init_examples_name_target_directory tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
