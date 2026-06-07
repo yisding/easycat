@@ -470,7 +470,8 @@ through as a valid key.
 and `.gitignore`. Build backends have been known to strip dotfiles
 silently. The release artifact also needs useful package-index
 metadata before users read the README, and it must not include local
-cache or workspace artifacts that happen to exist under `src/`.
+cache, generated report/build output, package metadata, bytecode, or
+secret-key artifacts that happen to exist under `src/`.
 
 **Risks.** `uv_build` / hatchling excluding dotfiles; a templates
 subdir missing from the wheel; files copied under a different tree

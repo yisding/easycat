@@ -232,6 +232,7 @@ def test_cli_test_plan_names_packaging_artifact_hygiene() -> None:
     )[1].split("---", 1)[0]
     normalized = " ".join(packaging_plan.split())
 
+    assert "cache, generated report/build output, package metadata" in normalized
     assert "cache, coverage, docs, mutation, package metadata" in normalized
     assert "bytecode, or local secret-key artifacts leaking into the wheel" in normalized
     assert "build, coverage, docs, mutation, VCS, virtualenv" in normalized

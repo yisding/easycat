@@ -143,7 +143,7 @@ def test_wheel_metadata_is_useful_for_package_indexes(built_wheel: Path) -> None
     } <= classifiers
 
 
-def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> None:
+def test_wheel_does_not_ship_local_generated_or_secret_artifacts(built_wheel: Path) -> None:
     """Ignored local artifacts under ``src/`` must not leak into release wheels."""
     members = _wheel_members(built_wheel)
     forbidden_parts = {
@@ -181,6 +181,6 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
         ):
             offenders.append(member)
 
-    assert not offenders, "wheel should not ship cache/workspace artifacts: " + ", ".join(
-        offenders
+    assert not offenders, "wheel should not ship cache/workspace/generated/secret artifacts: " + (
+        ", ".join(offenders)
     )
