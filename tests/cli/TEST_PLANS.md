@@ -127,6 +127,9 @@ route order stops putting onboarding paths first.
   `audience_alias_note`; maintainer and coding-agent routes include
   docs-map, parseable doctor/schema/validation-report commands, and
   onboarding guard commands.
+- Audience filters accept exact labels with hyphen/underscore aliases,
+  include broad `operators` / `maintainers` role filters for compound
+  labels, and reject partial fragments such as `maint` or `agent`.
 - Provider contract routes include the focused contract validation and
   factory/session wiring commands that appear in `tests/contracts/README.md`.
 - Routes are unique, resolve to local sources, and match GitHub

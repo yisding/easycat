@@ -137,6 +137,9 @@ def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     assert (
         "route fields, audience filter metadata, `command_note`, or online" in normalized_docs_plan
     )
+    assert "exact labels with hyphen/underscore aliases" in normalized_docs_plan
+    assert "broad `operators` / `maintainers` role filters" in normalized_docs_plan
+    assert "reject partial fragments such as `maint` or `agent`" in normalized_docs_plan
     for field in (
         "source_url",
         "command_note",
