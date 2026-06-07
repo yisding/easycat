@@ -1205,6 +1205,14 @@ def test_ws_server_example_imports():
     assert callable(ws_server.main)
 
 
+def test_ws_server_uses_config_server_helper() -> None:
+    source = (REPO_ROOT / "examples" / "ws_server.py").read_text(encoding="utf-8")
+
+    assert "run_websocket_config_server" in source
+    assert "create_session" not in source
+    assert 'require_env("OPENAI_API_KEY")' not in source
+
+
 def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch):
     from easycat.transports.websocket import websocket_session_server_config_from_env
 

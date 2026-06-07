@@ -68,6 +68,11 @@ Shipped:
   stop/shutdown lifecycle hook, so text-mode agent iteration can produce timestamped
   `RunBundle`s without switching to the audio pipeline (`config/easy.py`,
   `config/_factory.py`, `session/_session.py`).
+- `run_websocket_config_server(...)` lets the canonical WebSocket server
+  example hand back an `EasyConfig` from a per-connection transport instead of
+  manually constructing `WebSocketConnectionTransport`, `create_session(...)`,
+  env-derived server config, and `asyncio.run(...)`
+  (`transports/websocket.py`, `examples/ws_server.py`).
 - `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
   and loads the timestamped bundle after shutdown instead of manually calling
   `session.export_debug_bundle(...)`.
@@ -87,10 +92,11 @@ Still remaining:
   `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
   Provider shortcut and PydanticAI slim examples have shed duplicate key
-  preflights, the debug bundle example uses `record_to=` auto-capture, and
-  scaffold debug guidance points all generated-project users at `record_to=`;
-  broader raw line-count shrinkage remains open, especially in server and
-  protocol-heavy examples.
+  preflights, the canonical WebSocket server uses the config-server helper, the
+  debug bundle example uses `record_to=` auto-capture, and scaffold debug
+  guidance points all generated-project users at `record_to=`; broader raw
+  line-count shrinkage remains open in non-canonical server and protocol-heavy
+  examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

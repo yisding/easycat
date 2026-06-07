@@ -14,24 +14,18 @@ For non-local deployments, set EASYCAT_WS_TOKEN and send it as:
   Authorization: Bearer <token>
 """
 
-import asyncio
-
-import easycat.transports
-from easycat import EasyConfig, create_session, require_env
+from easycat import EasyConfig
+from easycat.transports import run_websocket_config_server
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
-
-    def session(ws):
+    def config(transport):
         from agents import Agent  # type: ignore[import-untyped]
 
         agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-        transport = easycat.transports.WebSocketConnectionTransport(ws)
-        return create_session(EasyConfig(transport=transport, agent=agent))
+        return EasyConfig(transport=transport, agent=agent)
 
-    config = easycat.transports.websocket_session_server_config_from_env()
-    asyncio.run(easycat.transports.serve_websocket_sessions(session, config))
+    run_websocket_config_server(config)
 
 
 if __name__ == "__main__":

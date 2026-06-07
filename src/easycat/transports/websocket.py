@@ -16,7 +16,7 @@ import signal
 from dataclasses import dataclass, field
 from hmac import compare_digest
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
 
 import websockets
@@ -176,6 +176,64 @@ async def serve_websocket_sessions(
         server.close()
         await server.wait_closed()
         await manager.stop_all()
+
+
+async def serve_websocket_config_sessions(
+    config_factory: Callable[[WebSocketConnectionTransport], Any],
+    config: WebSocketSessionServerConfig | None = None,
+    *,
+    transport_config: WebSocketTransportConfig | None = None,
+    stop_event: asyncio.Event | None = None,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+) -> None:
+    """Serve one EasyCat session per connection using an EasyConfig factory.
+
+    ``config_factory`` receives a per-client
+    :class:`WebSocketConnectionTransport` and returns the app config passed to
+    :func:`easycat.create_session`. Use :func:`serve_websocket_sessions` when
+    callers need to construct or own the ``Session`` object directly.
+    """
+    from easycat.config import create_session
+
+    def session_factory(ws: ServerConnection) -> Session:
+        transport = WebSocketConnectionTransport(ws, transport_config)
+        return create_session(config_factory(transport))
+
+    await serve_websocket_sessions(
+        session_factory,
+        config,
+        stop_event=stop_event,
+        runtime_feedback=runtime_feedback,
+        announce=announce,
+    )
+
+
+def run_websocket_config_server(
+    config_factory: Callable[[WebSocketConnectionTransport], Any],
+    config: WebSocketSessionServerConfig | None = None,
+    *,
+    transport_config: WebSocketTransportConfig | None = None,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+) -> None:
+    """Run a WebSocket server using ``EASYCAT_WS_*`` env defaults.
+
+    This synchronous wrapper is the shortest path for examples and starter
+    apps. It reads ``EASYCAT_WS_HOST``, ``EASYCAT_WS_PORT``,
+    ``EASYCAT_WS_TOKEN``, and ``EASYCAT_WS_MAX_SESSIONS`` when *config* is not
+    supplied, then delegates to :func:`serve_websocket_config_sessions`.
+    """
+    settings = config or websocket_session_server_config_from_env()
+    asyncio.run(
+        serve_websocket_config_sessions(
+            config_factory,
+            settings,
+            transport_config=transport_config,
+            runtime_feedback=runtime_feedback,
+            announce=announce,
+        )
+    )
 
 
 def _install_shutdown_handlers(stop_event: asyncio.Event) -> None:

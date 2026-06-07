@@ -6,7 +6,10 @@ import pytest
 import websockets
 
 from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
+    WebSocketTransportConfig,
+    serve_websocket_config_sessions,
     serve_websocket_sessions,
 )
 
@@ -63,6 +66,55 @@ async def test_serve_websocket_sessions_manages_session_lifecycle() -> None:
             assert sessions
             await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
         await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_serve_websocket_config_sessions_builds_connection_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.config as config_module
+
+    port = find_free_port()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+    configs: list[dict[str, object]] = []
+    transports: list[WebSocketConnectionTransport] = []
+    transport_config = WebSocketTransportConfig(max_pending_chunks=3)
+
+    def create_session(config: dict[str, object]) -> _FakeSession:
+        configs.append(config)
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    def config_factory(transport: WebSocketConnectionTransport) -> dict[str, object]:
+        transports.append(transport)
+        assert transport.audio_format == transport_config.audio_format
+        return {"transport": transport, "agent": object()}
+
+    monkeypatch.setattr(config_module, "create_session", create_session)
+
+    task = asyncio.create_task(
+        serve_websocket_config_sessions(
+            config_factory,
+            WebSocketSessionServerConfig(port=port),
+            transport_config=transport_config,
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        ws = await _connect_with_retry(f"ws://127.0.0.1:{port}")
+        async with ws:
+            assert sessions
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+            assert len(configs) == 1
+            assert configs[0]["transport"] is transports[0]
+            assert "agent" in configs[0]
     finally:
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
