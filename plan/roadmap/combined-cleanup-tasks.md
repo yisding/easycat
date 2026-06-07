@@ -597,9 +597,9 @@ context. Several bullets are known stale; use the current-state list above and
 - Prefer event-driven waits over sleeps and polling.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound
   port and reads it back from the live server socket.
-- Replace bind-close-reuse free-port helpers with
-  `unused_tcp_port_factory` where possible, or keep sockets bound until server
-  startup.
+- Done: bind-close-reuse free-port helpers were removed from shared test
+  helpers; migrated socket tests now use `unused_tcp_port_factory` or bind the
+  server first and read back the live port.
 
 ### 7.5 Provider And Performance Testing
 

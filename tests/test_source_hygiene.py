@@ -565,6 +565,16 @@ def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
 
 def test_test_helper_modules_do_not_define_bind_close_port_helpers() -> None:
     """Shared helpers should not expose bind-close-reuse port helpers."""
+    reliability = (REPO_ROOT / "plan/roadmap/combined-cleanup-tasks.md").read_text(
+        encoding="utf-8"
+    )
+    reliability_section = reliability.split("### 7.4 Test Reliability", 1)[1].split(
+        "### 7.5 Provider And Performance Testing",
+        1,
+    )[0]
+
+    assert "Done: bind-close-reuse free-port helpers were removed" in reliability_section
+
     for path in (
         REPO_ROOT / "tests" / "integration" / "harness.py",
         REPO_ROOT / "tests" / "transports" / "conftest.py",
