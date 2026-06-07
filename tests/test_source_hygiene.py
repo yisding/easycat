@@ -635,6 +635,26 @@ def test_integration_tests_do_not_use_shared_polling_wait_helper() -> None:
     assert not stale, "Integration tests use wait_for_condition: " + ", ".join(stale)
 
 
+def test_twilio_transport_e2e_uses_event_waits_for_transport_lifecycle() -> None:
+    """Twilio transport e2e tests should not sleep while waiting for start/stop events."""
+    source = (REPO_ROOT / "tests" / "integration" / "test_twilio_transport_e2e.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CallAnswered" in source
+    assert "CallEnded" in source
+    assert source.count("asyncio.sleep(") == 1
+    assert "await asyncio.sleep(0.05)" in source
+    for stale_phrase in (
+        "Wait for start to be processed",
+        "Wait for first start to be processed",
+        "Wait for second start",
+        "Wait for start + stop to be processed",
+        "Wait for start message",
+    ):
+        assert stale_phrase not in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

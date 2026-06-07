@@ -23,6 +23,9 @@ from easycat.events import (
     DTMF,
     AgentFinal,
     BotStartedSpeaking,
+    CallAnswered,
+    CallEnded,
+    EventBus,
     Interruption,
     STTFinal,
 )
@@ -356,10 +359,8 @@ async def test_twilio_send_audio_before_start_is_noop() -> None:
     server = await websockets.serve(handler, "127.0.0.1", port)
     try:
         async with websockets.connect(f"ws://127.0.0.1:{port}"):
-            # Don't send start message
-            await asyncio.sleep(0.2)
-
-        result = await asyncio.wait_for(send_result, timeout=2.0)
+            # Don't send start message.
+            result = await asyncio.wait_for(send_result, timeout=2.0)
         assert result is True
     finally:
         server.close()
@@ -376,9 +377,12 @@ async def test_twilio_mark_auto_naming() -> None:
     marks_future: asyncio.Future[list] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
-        transport = TwilioConnectionTransport(ws)
+        event_bus = EventBus()
+        collector = EventCollector(event_bus)
+        collector.subscribe(CallAnswered)
+        transport = TwilioConnectionTransport(ws, event_bus=event_bus)
         await transport.connect()
-        await asyncio.sleep(0.1)  # Wait for start to be processed
+        await collector.wait_for(CallAnswered, timeout=2.0)
         names = []
         names.append(await transport.send_mark())
         names.append(await transport.send_mark())
@@ -446,13 +450,12 @@ async def test_twilio_dtmf_during_session(
         session.event_bus.subscribe(DTMF, on_dtmf)
 
         collector = EventCollector(session.event_bus)
-        collector.subscribe(AgentFinal)
+        collector.subscribe(AgentFinal, DTMF)
 
         await session.start()
         try:
             final = await collector.wait_for(AgentFinal, timeout=3.0)
-            # Small delay for DTMF events to be processed
-            await asyncio.sleep(0.1)
+            await collector.wait_for_count(DTMF, 2, timeout=2.0)
             if not result_future.done():
                 result_future.set_result({"text": final.text, "digits": list(dtmf_digits)})
         except BaseException as exc:
@@ -597,9 +600,7 @@ async def test_twilio_stop_before_media_ends_receive(
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
             await ws.send(twilio_start())
             await ws.send(twilio_stop())
-            await asyncio.sleep(0.1)
-
-        await asyncio.wait_for(receive_ended.wait(), timeout=2.0)
+            await asyncio.wait_for(receive_ended.wait(), timeout=2.0)
     finally:
         server.close()
         await server.wait_closed()
@@ -618,17 +619,26 @@ async def test_twilio_multiple_start_messages() -> None:
     ready_for_stop = asyncio.Event()
 
     async def handler(ws) -> None:
-        transport = TwilioConnectionTransport(ws)
+        event_bus = EventBus()
+        collector = EventCollector(event_bus)
+        collector.subscribe(CallAnswered)
+        transport = TwilioConnectionTransport(ws, event_bus=event_bus)
         await transport.connect()
 
-        # Wait for first start to be processed
-        await asyncio.sleep(0.1)
-        sids_seen.append(transport._stream_sid)
+        await collector.wait_for(
+            CallAnswered,
+            predicate=lambda event: event.call_sid == "CA111",
+            timeout=2.0,
+        )
+        sids_seen.append(transport.stream_sid)
         ready_for_second_start.set()
 
-        # Wait for second start
-        await asyncio.sleep(0.2)
-        sids_seen.append(transport._stream_sid)
+        await collector.wait_for(
+            CallAnswered,
+            predicate=lambda event: event.call_sid == "CA999",
+            timeout=2.0,
+        )
+        sids_seen.append(transport.stream_sid)
         ready_for_stop.set()
 
         chunks = []
@@ -647,9 +657,7 @@ async def test_twilio_multiple_start_messages() -> None:
             await asyncio.wait_for(ready_for_stop.wait(), timeout=2.0)
 
             await ws.send(twilio_stop("MZ999"))
-            await asyncio.sleep(0.1)
-
-        await asyncio.wait_for(receive_ended.wait(), timeout=2.0)
+            await asyncio.wait_for(receive_ended.wait(), timeout=2.0)
     finally:
         server.close()
         await server.wait_closed()
@@ -665,9 +673,13 @@ async def test_twilio_send_audio_after_stop_is_noop() -> None:
     send_ok: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
-        transport = TwilioConnectionTransport(ws)
+        event_bus = EventBus()
+        collector = EventCollector(event_bus)
+        collector.subscribe(CallAnswered, CallEnded)
+        transport = TwilioConnectionTransport(ws, event_bus=event_bus)
         await transport.connect()
-        await asyncio.sleep(0.2)  # Wait for start + stop to be processed
+        await collector.wait_for(CallAnswered, timeout=2.0)
+        await collector.wait_for(CallEnded, timeout=2.0)
 
         # After stop, stream_sid is None, so send_audio should be a no-op
         chunk = make_chunk(640)
@@ -681,9 +693,7 @@ async def test_twilio_send_audio_after_stop_is_noop() -> None:
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
             await ws.send(twilio_start())
             await ws.send(twilio_stop())
-            await asyncio.sleep(0.3)
-
-        result = await asyncio.wait_for(send_ok, timeout=2.0)
+            result = await asyncio.wait_for(send_ok, timeout=2.0)
         assert result is True
     finally:
         server.close()
@@ -697,12 +707,15 @@ async def test_twilio_connection_transport_disconnect_cleanup() -> None:
     cleanup_ok: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
-        transport = TwilioConnectionTransport(ws)
+        event_bus = EventBus()
+        collector = EventCollector(event_bus)
+        collector.subscribe(CallAnswered)
+        transport = TwilioConnectionTransport(ws, event_bus=event_bus)
         await transport.connect()
-        await asyncio.sleep(0.1)  # Wait for start message
+        await collector.wait_for(CallAnswered, timeout=2.0)
 
-        assert transport._stream_sid == "MZ123"
-        assert transport._call_sid == "CA456"
+        assert transport.stream_sid == "MZ123"
+        assert transport.call_sid == "CA456"
 
         await transport.disconnect()
 
