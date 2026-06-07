@@ -783,6 +783,19 @@ def test_webtransport_wiring_tests_use_events_for_held_slots() -> None:
     assert "asyncio.create_task(asyncio.sleep(10))" not in source
 
 
+def test_agent_runner_and_ivr_tests_use_events_for_timeout_sentinels() -> None:
+    """AgentRunner and IVR timeout tests should avoid long sentinel sleeps."""
+    agent_runner = (REPO_ROOT / "tests" / "agents" / "test_agent_runner.py").read_text(
+        encoding="utf-8"
+    )
+    ivr = (REPO_ROOT / "tests" / "telephony" / "test_ivr.py").read_text(encoding="utf-8")
+
+    assert "await asyncio.Event().wait()" in agent_runner
+    assert "await never_released.wait()" in ivr
+    assert "await asyncio.sleep(999)" not in agent_runner
+    assert "await asyncio.sleep(10)" not in ivr
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

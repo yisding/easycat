@@ -170,12 +170,13 @@ class TestIVRAgentDecision:
         actions: list[IVRAction] = []
         bus.subscribe(IVRAction, actions.append)
         call_count = 0
+        never_released = asyncio.Event()
 
         async def slow_then_fast_agent(ctx: dict) -> dict:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                await asyncio.sleep(10)  # Will be interrupted by timeout.
+                await never_released.wait()
             return {"action": "dtmf", "digits": "1"}
 
         cfg = IVRNavigatorConfig(agent_timeout_s=0.05)

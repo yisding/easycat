@@ -64,7 +64,7 @@ class FailingAgent:
 
 class HangingAgent:
     async def run(self, text: str) -> str:
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
         return "never"
 
 
@@ -264,7 +264,7 @@ class _HangingBridge:
     COMMITTABLE_BOUNDARIES: dict = {}
 
     async def invoke(self, turn_input, recorder, cancel_token=None):
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
         yield AgentBridgeEvent(kind="done", text="never")  # pragma: no cover
 
     def snapshot_state(self):
@@ -308,7 +308,7 @@ class _SucceedThenHangBridge:
             yield AgentBridgeEvent(kind="text_delta", text="ok")
             yield AgentBridgeEvent(kind="done", text="ok")
             return
-        await asyncio.sleep(999)
+        await asyncio.Event().wait()
         yield AgentBridgeEvent(kind="done", text="never")  # pragma: no cover
 
     def snapshot_state(self):
