@@ -465,7 +465,8 @@ Run easycat explain json-schema for CLI JSON.
   `uv run easycat doctor --env-file .env --json` when both apply.
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
-  chapters, deployment, observability, and validation reference material.
+  chapters, architecture and maintenance guides, deployment, observability,
+  and validation reference material.
   Use `uv run easycat docs --json` when a coding agent or script needs the
   same route map with command hints and audience labels; replace uppercase
   placeholders such as `PATH` before running those hints.

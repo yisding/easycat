@@ -337,6 +337,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "same template catalog and post-scaffold command previews" in normalized_cli_section
     assert "same route map with command hints" in normalized_cli_section
     assert "audience labels" in normalized_cli_section
+    assert "architecture and maintenance guides" in normalized_cli_section
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized_cli_section
     )
