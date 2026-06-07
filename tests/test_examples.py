@@ -15,6 +15,7 @@ import pytest
 from websockets.datastructures import Headers
 
 from easycat import EasyConfig, WebSocketTransportConfig, create_session
+from tests._command_hints import command_hint_problems, documented_commands
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _EXAMPLE_README_ROW_RE = re.compile(
@@ -551,6 +552,29 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     )
     assert current_run_phrase in normalized_fast_path
     assert "re-emit the saved report in that same envelope" in normalized_fast_path
+
+
+def test_examples_readme_command_hints_are_locally_valid() -> None:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    commands = documented_commands(
+        readme,
+        prefixes=("uv run ", "uv sync ", "easycat "),
+    )
+    problems = command_hint_problems(
+        [
+            {
+                "label": "examples/README.md",
+                "path": "examples/README.md",
+                "audience": "app builders",
+                "description": "Example README setup, preflight, validation, and run commands.",
+                "commands": commands,
+            }
+        ],
+        repo_root=REPO_ROOT,
+    )
+
+    assert commands
+    assert not problems, "examples/README.md command hints are stale:\n" + "\n".join(problems)
 
 
 def test_examples_readme_choose_example_table_tracks_matrix() -> None:

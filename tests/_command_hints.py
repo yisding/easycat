@@ -370,6 +370,14 @@ def _validate_uv_run_hint(
         case ["python", script, *_]:
             if not (repo_root / script).exists():
                 problems.append(f"{label}: missing python script {script}")
+        case ["uvicorn", target, *_]:
+            module_name = target.partition(":")[0]
+            if not module_name:
+                problems.append(f"{label}: missing uvicorn module target")
+                return
+            module_path = repo_root / Path(*module_name.split(".")).with_suffix(".py")
+            if not module_path.exists():
+                problems.append(f"{label}: missing uvicorn module target {target}")
         case ["pytest", *_]:
             problems.extend(pytest_target_problems(command, repo_root=repo_root, label=label))
         case ["ruff", *_]:

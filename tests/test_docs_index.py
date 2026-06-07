@@ -940,6 +940,29 @@ def test_cli_docs_command_hint_validator_checks_uv_run_env_file_values() -> None
     assert "Broken uv run env-file hints: missing uv run command" in problems
 
 
+def test_cli_docs_command_hint_validator_checks_uvicorn_targets() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken uvicorn hints",
+                "path": "examples/README.md",
+                "audience": "app builders",
+                "description": "Regression fixture for ASGI example command validation.",
+                "commands": (
+                    "uv run uvicorn examples.missing:create_app --factory",
+                    "uv run uvicorn :create_app --factory",
+                ),
+            }
+        ]
+    )
+
+    assert (
+        "Broken uvicorn hints: missing uvicorn module target examples.missing:create_app"
+        in problems
+    )
+    assert "Broken uvicorn hints: missing uvicorn module target" in problems
+
+
 def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
     problems = _cli_docs_command_hint_problems(
         [
