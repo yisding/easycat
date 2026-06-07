@@ -23,13 +23,13 @@ just                             # List every task
 just check                       # Format check + lint + full serial tests
 just test-one tests/stt/test_stt_openai.py  # Run one test file
 just validate-quick              # Deterministic local validation slice
-just guard-docs                  # Guard root onboarding docs and docs route map
+just guard-docs                  # Guard root onboarding docs, command hints, and docs route map
 just guard-teaching              # Guard teaching ladder chapters and generated blocks
 just guard-examples              # Guard examples chooser, README command hints, and route hints
 just guard-templates             # Guard scaffold READMEs and template catalog
 just guard-contributing          # Guard contributor docs, agent commands, and validation state
 just guard-markdown              # Guard maintained Markdown links
-uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json  # Raw fallback for just guard-docs
+uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_command_hints.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json  # Raw fallback for just guard-docs
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras  # Raw fallback for just guard-teaching
 uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path  # Raw fallback for just guard-examples
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json  # Raw fallback for just guard-templates

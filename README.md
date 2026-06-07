@@ -176,7 +176,7 @@ For docs and onboarding-only edits, run the narrower guard that owns the
 surface first, then run quick validation before a PR:
 
 ```bash
-just guard-docs          # root README chooser, docs route map, docs CLI JSON
+just guard-docs          # root README chooser, command hints, docs route map
 just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples chooser, README command hints, docs-route hints
 just guard-templates     # scaffold template READMEs and template catalog
@@ -190,7 +190,7 @@ If `just` is not installed, use the raw command table in
 directly:
 
 ```bash
-uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
+uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_command_hints.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json

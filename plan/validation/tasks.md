@@ -351,11 +351,12 @@ Current verified state:
   contracts, stress, latency, live, release, and report commands so
   contributors can choose the narrowest useful validation lane before a PR.
 - The docs/onboarding maintenance map tells contributors which targeted guard
-  to run when editing the root README chooser, docs route map, examples matrix,
-  teaching ladder, generated teaching blocks, scaffold templates, contributor
-  guide, validation docs, or maintained Markdown links; the named `just`
-  recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
-  `guard-templates`, `guard-contributing`, and `guard-markdown`.
+  to run when editing the root README chooser, command-hint extraction, docs
+  route map, examples matrix, teaching ladder, generated teaching blocks,
+  scaffold templates, contributor guide, validation docs, or maintained
+  Markdown links; the named `just` recipes are `guard-docs`,
+  `guard-teaching`, `guard-examples`, `guard-templates`,
+  `guard-contributing`, and `guard-markdown`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,
   provider/surface pairing, flaky quarantine metadata, and the rule that
   validation slices deselect `flaky`.
