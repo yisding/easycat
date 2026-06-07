@@ -20,9 +20,7 @@ except ImportError as exc:
         "uv sync --extra quickstart --extra pydantic-ai --group dev"
     ) from exc
 
-from easycat import EasyConfig, require_env, run
-
-require_env("OPENAI_API_KEY")
+from easycat import EasyConfig, run
 
 run(
     EasyConfig.mic(

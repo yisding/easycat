@@ -22,10 +22,8 @@ except ImportError as exc:
         "uv sync --extra quickstart --extra pydantic-ai --group dev"
     ) from exc
 
-from easycat import EasyConfig, SessionActions, require_env, run
+from easycat import EasyConfig, SessionActions, run
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
-
-require_env("OPENAI_API_KEY")
 
 
 @dataclass

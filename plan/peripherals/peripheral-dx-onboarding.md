@@ -20,6 +20,10 @@ Shipped:
   (`examples/*_voice.py`, `examples/combined_providers.py`).
 - `OPENAI_API_KEY` auto-detection → OpenAI chain default
   (`config/easy.py`).
+- PydanticAI slim examples rely on `EasyConfig.mic(...)` to validate the
+  default OpenAI provider key instead of carrying a separate
+  `require_env("OPENAI_API_KEY")` preflight
+  (`examples/pydantic_ai*.py`, `examples/*_pydantic.py`).
 - Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
   related (`errors.py`).
 - Third-party traceback frame collapse
@@ -67,9 +71,9 @@ Still remaining:
 - Example visible-code budgets are CI-enforced for the canonical examples:
   `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
-  Provider shortcut examples have shed duplicate stage-key preflights;
-  broader raw line-count shrinkage remains open, especially in server and
-  protocol-heavy examples.
+  Provider shortcut and PydanticAI slim examples have shed duplicate key
+  preflights; broader raw line-count shrinkage remains open, especially in
+  server and protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

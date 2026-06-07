@@ -1445,6 +1445,25 @@ def test_provider_shortcut_examples_let_easyconfig_read_provider_keys():
     )
 
 
+def test_pydantic_ai_examples_let_easyconfig_validate_openai_key():
+    """PydanticAI slim examples should use EasyConfig's default OpenAI validation."""
+    stale: list[str] = []
+
+    for name in (
+        "pydantic_ai_voice.py",
+        "function_tools_pydantic.py",
+        "session_actions_pydantic.py",
+        "pydantic_ai_workflow_voice.py",
+    ):
+        source = (REPO_ROOT / "examples" / name).read_text(encoding="utf-8")
+        if 'require_env("OPENAI_API_KEY")' in source:
+            stale.append(name)
+
+    assert not stale, "PydanticAI examples should let EasyConfig validate OPENAI_API_KEY: " + (
+        ", ".join(stale)
+    )
+
+
 def test_agent_event_subscription_example_imports():
     pytest.importorskip("agents")
     import examples.agent_event_subscription as agent_event_subscription
