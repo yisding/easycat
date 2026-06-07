@@ -35,6 +35,9 @@ uv run easycat docs --json       # Docs route map with audiences and command hin
 uv run easycat doctor --json     # Parseable first-run environment checks
 uv run easycat doctor --env-file .env --json  # Parseable checks with project .env loaded
 uv run easycat explain json-schema  # CLI JSON envelope and field contract
+uv run easycat bundles show PATH --json  # Parseable bundle/journal summary
+uv run easycat bundles export PATH --output DIR --json  # Redacted context pack metadata
+uv run easycat replay PATH --json  # Parseable replay summary
 uv run easycat validate quick    # Repo-local validation CLI
 uv run easycat validate quick --json  # JSON quick validation envelope
 uv run easycat validate contracts --json  # JSON contract validation envelope

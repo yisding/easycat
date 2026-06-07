@@ -611,6 +611,9 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "uv run easycat doctor --json" in command_section
         assert "uv run easycat doctor --env-file .env --json" in command_section
         assert "uv run easycat explain json-schema" in command_section
+        assert "uv run easycat bundles show PATH --json" in command_section
+        assert "uv run easycat bundles export PATH --output DIR --json" in command_section
+        assert "uv run easycat replay PATH --json" in command_section
         assert "uv run easycat validate quick" in command_section
         assert "uv run easycat validate report .easycat/validation/latest.json" in (
             command_section

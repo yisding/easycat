@@ -36,6 +36,12 @@ the raw commands below.
   loading project `.env` keys.
 - `uv run easycat explain json-schema`: inspect the CLI JSON envelope and
   command-specific fields.
+- `uv run easycat bundles show PATH --json`: emit a parseable debug
+  bundle/journal summary.
+- `uv run easycat bundles export PATH --output DIR --json`: write a redacted
+  coding-agent context pack and emit export metadata.
+- `uv run easycat replay PATH --json`: replay a bundle or journal and emit a
+  parseable replay summary.
 - `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
 - `uv run easycat validate quick --json`: emit the quick lane in the standard CLI JSON envelope.
 - `uv run easycat validate contracts --json`: emit contract validation in the standard CLI JSON envelope.
