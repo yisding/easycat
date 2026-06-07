@@ -166,8 +166,10 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "command-specific fields" in normalized
     assert "CLI and scaffold commands" in quick_start
     assert "uv run easycat doctor" in quick_start
+    assert "uv run easycat doctor --env-file .env" in quick_start
     assert "uv run easycat doctor --json" in quick_start
     assert "uv run easycat doctor --env-file .env --json" in quick_start
+    assert "when those keys live in a project `.env`" in normalized
     assert "script or coding agent needs parseable environment/check rows" in normalized
     assert "before debugging tests or examples" in quick_start
 
@@ -542,6 +544,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
         "uv run easycat doctor --json",
         "uv run easycat doctor --env-file .env --json",
         "uv run easycat validate quick --json",

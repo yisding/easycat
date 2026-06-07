@@ -335,7 +335,8 @@ Current verified state:
 - `CONTRIBUTING.md` is the contributor entry point. Its quick start uses
   `uv sync --group dev`, `just`, `just check`, `uv run easycat docs`,
   `uv run easycat docs --json`, `uv run easycat explain json-schema`,
-  `uv run easycat doctor`, `uv run easycat doctor --json`, and
+  `uv run easycat doctor`, `uv run easycat doctor --env-file .env`,
+  `uv run easycat doctor --json`, and
   `uv run easycat doctor --env-file .env --json`.
 - The development-loop table maps every public `justfile` recipe to its raw
   command, including test, lint, format, type, coverage, validation, report,

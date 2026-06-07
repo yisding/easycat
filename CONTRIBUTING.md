@@ -24,6 +24,8 @@ those hints. Use
 command-specific fields.
 For local audio or provider work, set the relevant environment variables and
 run `uv run easycat doctor` before debugging tests or examples. Use
+`uv run easycat doctor --env-file .env` when those keys live in a project
+`.env`. Use
 `uv run easycat doctor --json` when a script or coding agent needs parseable
 environment/check rows; use
 `uv run easycat doctor --env-file .env --json` when those checks should load
