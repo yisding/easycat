@@ -154,7 +154,12 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "uv run pytest tests/test_install_guidance.py -k "
         "'agent_guide or agent_guides or claude_'"
     ),
-    "uv run pytest tests/test_markdown_links.py",
+    (
+        "uv run pytest "
+        "tests/test_markdown_links.py "
+        "tests/test_docs_index.py::test_cli_docs_routes_resolve_locally "
+        "tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources"
+    ),
 )
 
 

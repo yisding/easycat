@@ -242,6 +242,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "
             "validation lanes, docs-route hints, and plan current-state evidence"
         ),
+        "Local links, anchors, and docs-route Markdown targets",
     ):
         assert phrase in section
 

@@ -89,9 +89,9 @@ guard-templates:
 guard-contributing:
     uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 
-# Guard maintained Markdown links and anchors.
+# Guard maintained Markdown links, anchors, and docs-route Markdown targets.
 guard-markdown:
-    uv run pytest tests/test_markdown_links.py
+    uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 
 # Deterministic local validation slice (what CI's quick job runs).
 validate-quick:

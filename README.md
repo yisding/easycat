@@ -181,7 +181,7 @@ just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples README, support files, script smoke, docs route
 just guard-templates     # scaffold templates, init flows, schema rejection
 just guard-contributing  # contributor guidance, agent guide contracts, validation state
-just guard-markdown      # maintained Markdown links and anchors
+just guard-markdown      # maintained Markdown links, anchors, docs-route targets
 ```
 
 If `just` is not installed, use the raw command table in
@@ -195,7 +195,7 @@ uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py
 uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
-uv run pytest tests/test_markdown_links.py
+uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 ```
 
 The quick validation lane runs deterministic local tests only: no live
