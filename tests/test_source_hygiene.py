@@ -563,6 +563,17 @@ def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
     assert "_bound_server_port(server)" in start_ws_server
 
 
+def test_test_helper_modules_do_not_define_bind_close_port_helpers() -> None:
+    """Shared helpers should not expose bind-close-reuse port helpers."""
+    for path in (
+        REPO_ROOT / "tests" / "integration" / "harness.py",
+        REPO_ROOT / "tests" / "transports" / "conftest.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+
+        assert "def find_free_port" not in source
+
+
 def test_focused_transport_tests_use_pytest_port_factory() -> None:
     """Keep focused transport tests off bind-close port helpers where feasible."""
     for path in (

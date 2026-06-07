@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import socket
 from collections.abc import AsyncIterator, Iterable, Sequence
 from typing import Any
 
@@ -18,12 +17,6 @@ from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 
 FAST_TURN_CONFIG = TurnManagerConfig(end_of_turn_silence_ms=1)
-
-
-def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
 
 
 def make_chunk(n_bytes: int = 640) -> AudioChunk:
