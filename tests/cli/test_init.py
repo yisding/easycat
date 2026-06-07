@@ -845,6 +845,7 @@ def test_init_next_steps_load_env_for_doctor(
     monkeypatch.chdir(tmp_path)
     config = json.dumps({"schema_version": 1, "template": "text-chat"})
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    normalized_stderr = " ".join(result.stderr.split())
     assert result.exit_code == 0, result.stderr
     assert "uv run easycat doctor --env-file .env" in result.stderr
     assert "uv run easycat doctor --env-file .env --json" in result.stderr
@@ -852,7 +853,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run python -m py_compile agent.py" in result.stderr
     assert "quick syntax check" in result.stderr
     assert "uv run easycat docs" in result.stderr
-    assert "find learning, maintenance, and operations routes" in result.stderr
+    assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
+    assert "find learning, maintenance, and operations routes" not in normalized_stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
     assert "audience labels" in result.stderr

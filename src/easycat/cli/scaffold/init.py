@@ -802,7 +802,8 @@ def init(
         f"  {_next_step_check_command(cfg.template)} [dim]# quick syntax check[/]"
     )
     stderr_console.print(
-        "  uv run easycat docs [dim]# find learning, maintenance, and operations routes[/]"
+        "  uv run easycat docs [dim]# find learning, maintenance, validation, "
+        "and operations routes[/]"
     )
     stderr_console.print(
         "  uv run easycat docs --json [dim]# route map with command hints and audience labels[/]"
