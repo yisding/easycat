@@ -132,8 +132,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_install_guidance.py "
         "tests/test_docs_index.py "
         "tests/test_public_api.py "
-        "tests/cli/test_app.py::test_docs_command "
-        "tests/cli/test_app.py::test_docs_command_json "
+        "tests/cli/test_app.py "
         "tests/cli/test_json_schema.py"
     ),
     (

@@ -35,7 +35,7 @@ command-specific fields.
   `uv run pytest tests/test_public_api.py`. If `just` is not installed, use the
   raw command table in
   [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop), or run
-  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py`.
+  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py`.
 
 ## Preferred Imports
 

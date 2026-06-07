@@ -50,7 +50,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
-| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py` |
+| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
 | Guard teaching docs | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |

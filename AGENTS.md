@@ -29,7 +29,7 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just guard-contracts`: guard provider contract docs, offline contract suite, and provider wiring matrix.
 - `just guard-ops`: guard operator docs, deployment guide, observability docs, journal CLI, and durability.
 - `just guard-markdown`: guard maintained Markdown links, anchors, and docs-route targets.
-- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py`.
+- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py`.
 - Raw fallback for `just guard-teaching`: `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras`.
 - Raw fallback for `just guard-examples`: `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path`.
 - Raw fallback for `just guard-templates`: `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py`.
