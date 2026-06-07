@@ -242,6 +242,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "README.md#choose-your-path" in result.stdout
     assert "right first route" in result.stdout
     assert "uv run python examples/openai_agents_voice.py" in result.stdout
+    assert "uv run easycat init --list-templates" in result.stdout
     assert "easycat init --list-templates" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "easycat doctor --json" in result.stdout
@@ -410,7 +411,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert commands["README.md#choose-your-path"] == [
         "uv sync --extra quickstart --group dev",
         "uv run easycat doctor",
-        "easycat init --list-templates",
+        "uv run easycat init --list-templates",
         "uv run easycat validate quick",
         "uv run pytest tests/test_install_guidance.py",
     ]
@@ -490,6 +491,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "copyable create/preflight/check/docs/run commands" in descriptions["README.md#cli"]
     assert "right first route" in descriptions["README.md#choose-your-path"]
     assert "maintenance" in descriptions["README.md#choose-your-path"]
+    assert "uv run easycat init --list-templates" in commands["README.md#choose-your-path"]
     assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]

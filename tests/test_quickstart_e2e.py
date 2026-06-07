@@ -229,7 +229,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         ),
         "Scaffold a new app": (
             "[CLI and scaffolds](#cli)",
-            "easycat init --list-templates",
+            "uv run easycat init --list-templates",
         ),
         "Contribute or validate a change": (
             "[Contributing](CONTRIBUTING.md)",
@@ -260,7 +260,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         assert (REPO_ROOT / route.rstrip("/")).exists()
     assert "uv sync --extra quickstart --group dev" in section
     assert "uv sync --extra debugger --group dev" in section
-    assert "easycat init my-agent" in section
+    assert "uv run easycat init my-agent" in section
 
 
 def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:

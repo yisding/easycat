@@ -11,7 +11,7 @@ LlamaAgents, Remote Responses API, or your own async workflow.
 | Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor` |
 | Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
 | Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
-| Scaffold a new app | [CLI and scaffolds](#cli) | `easycat init --list-templates` before `easycat init my-agent` |
+| Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |
 | Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](#validation-workflow) | `uv run easycat validate quick` |
 | Maintain architecture or package boundaries | [Architecture map](CLAUDE.md) | Review provider registries, session lifecycle, and `uv run pytest tests/test_install_guidance.py` |
 | Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Run `easycat bundles list`; add `uv sync --extra debugger --group dev` for the UI |
