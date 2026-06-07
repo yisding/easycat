@@ -394,12 +394,25 @@ def test_teaching_provider_key_setup_names_required_extras() -> None:
 
 
 def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
-    """``quickstart`` already includes common local extras; avoid redundant setup."""
+    """``quickstart`` already includes several extras; avoid redundant setup."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
-    bundled_extras = ("local", "rnnoise", "smart-turn")
-    for extra in bundled_extras:
-        assert set(extras[extra]).issubset(set(extras["quickstart"]))
+    quickstart_deps = set(extras["quickstart"])
+    bundled_extras = tuple(
+        sorted(
+            name
+            for name, deps in extras.items()
+            if name not in {"all", "quickstart"} and deps and set(deps).issubset(quickstart_deps)
+        )
+    )
+    assert {
+        "local",
+        "openai",
+        "openai-agents",
+        "rnnoise",
+        "silero-vad",
+        "smart-turn",
+    }.issubset(bundled_extras)
 
     redundant: list[str] = []
     extra_pattern = "|".join(re.escape(extra) for extra in bundled_extras)
