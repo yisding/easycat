@@ -413,6 +413,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert commands["README.md#choose-your-path"] == [
         "uv sync --extra quickstart --group dev",
         "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
         "uv run easycat init --list-templates",
         "uv run easycat init my-agent",
         "uv run easycat validate quick",
