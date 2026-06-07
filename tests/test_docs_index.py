@@ -165,8 +165,8 @@ def test_cli_docs_routes_are_unique() -> None:
     )
 
 
-def test_cli_docs_routes_keep_onboarding_order() -> None:
-    """Keep the first screen of ``easycat docs`` useful for new users."""
+def test_cli_docs_routes_keep_primary_reader_order() -> None:
+    """Keep the first screen of ``easycat docs`` useful for primary readers."""
     labels = [entry["label"] for entry in _DOCS_LINKS]
 
     expected_prefix = [
@@ -177,6 +177,8 @@ def test_cli_docs_routes_keep_onboarding_order() -> None:
         "Teaching ladder",
         "First lesson",
         "Examples",
+        "Architecture",
+        "Coding agents",
     ]
     expected_suffix = ["Validation", "Validation reference"]
 

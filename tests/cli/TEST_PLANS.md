@@ -128,7 +128,8 @@ order stops putting onboarding paths first.
 - Command hints are valid local commands, appear on their target pages,
   and use repo-local `uv run` form where appropriate.
 - The route order keeps quickstart, CLI/scaffolds, docs map, teaching,
-  first lesson, and examples on the first screen.
+  first lesson, examples, architecture, and coding-agent routes on the first
+  screen.
 
 **Backed by.** `tests/cli/test_app.py` and `tests/test_docs_index.py`.
 
