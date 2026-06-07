@@ -1,8 +1,8 @@
 """Plan 16 — wheel packaging ships template dotfiles, metadata, and clean contents.
 
-Run with ``pytest -m integration_local tests/cli/test_packaging.py``.
-Skipped by default to keep the fast test suite fast; the wheel build
-takes a few seconds.
+Run with ``pytest -m integration_local tests/cli/test_packaging.py`` to select
+it directly. The marker lets validation lanes filter heavier wheel-build checks;
+bare pytest still collects it unless the caller supplies a marker expression.
 
 See ``TEST_PLANS.md`` §16.
 """

@@ -27,8 +27,9 @@ first, debug second, safety net third, and infrastructure last.
 | 17 | End-to-end scaffold-and-invoke | `tests/cli/e2e/test_scaffold_smoke.py` (integration) |
 
 Plans 1-10 are fast unit tests. Plans 11-15 add coverage for cross-
-cutting contracts. Plans 16-17 are marked `integration_local` so they
-run in CI but not on every `pytest` invocation.
+cutting contracts. Plans 16-17 are marked `integration_local` so validation
+lanes and maintainers can select or filter them explicitly; bare `pytest`
+still collects them unless the caller supplies a marker expression.
 
 ---
 
@@ -494,8 +495,8 @@ bytecode, or local secret-key artifacts leaking into the wheel.
   under `src/`.
 
 **Backed by.** `tests/cli/test_packaging.py` (marked
-`integration_local` to keep the wheel build out of the fast test
-suite).
+`integration_local` so heavier wheel-build checks can be selected or
+filtered explicitly).
 
 ---
 

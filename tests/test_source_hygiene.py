@@ -143,6 +143,28 @@ def test_cli_test_plan_avoids_brittle_test_count_claims() -> None:
     assert not stale, "CLI test plan contains brittle stale-count language:\n" + "\n".join(stale)
 
 
+def test_cli_test_plan_describes_integration_local_marker_selection() -> None:
+    """Keep integration_local docs aligned with pytest's actual marker behavior."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    packaging_source = (REPO_ROOT / "tests" / "cli" / "test_packaging.py").read_text(
+        encoding="utf-8"
+    )
+    combined = "\n".join((plan, packaging_source))
+    normalized_plan = " ".join(plan.split())
+
+    assert "bare `pytest` still collects them unless the caller supplies a marker expression" in (
+        normalized_plan
+    )
+    assert "bare pytest still collects it unless the caller supplies a marker expression" in (
+        packaging_source
+    )
+    for stale_phrase in (
+        "run in CI but not on every `pytest` invocation",
+        "Skipped by default to keep the fast test suite fast",
+    ):
+        assert stale_phrase not in combined
+
+
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     """Keep the onboarding docs command visible in the CLI coverage map."""
     plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
