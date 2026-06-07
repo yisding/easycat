@@ -26,7 +26,7 @@ just validate-quick              # Deterministic local validation slice
 just guard-docs                  # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes
 just guard-teaching              # Guard teaching ladder chapters and generated blocks
 just guard-examples              # Guard examples README, support files, script smoke, and route hints
-just guard-templates             # Guard scaffold templates, init flows, and generated project smoke
+just guard-templates             # Guard scaffold templates, init flows, generated project smoke, and secret/artifact hygiene
 just guard-contributing          # Guard contributor docs, agent guide contracts, and validation state
 just guard-validation            # Guard validation workflow, reference docs, and validate CLI behavior
 just guard-contracts             # Guard provider contracts, cassettes, matrix, and bridge grammar

@@ -244,7 +244,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         (
             "Generated README sections, line budgets, init happy paths, overwrite safety, "
             "schema rejection paths, catalog text, catalog JSON, next-step commands, "
-            "and generated project smoke"
+            "generated project smoke, and generated project secret/artifact hygiene"
         ),
         (
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "

@@ -181,7 +181,7 @@ surface first, then run quick validation before a PR:
 just guard-docs          # root README e2e, install guidance, docs map, public API docs, CLI JSON envelopes
 just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples README, support files, script smoke, docs route
-just guard-templates     # scaffold templates, init flows, generated project smoke
+just guard-templates     # scaffold templates, init flows, generated project smoke, secret/artifact hygiene
 just guard-contributing  # contributor guidance, agent guide contracts, validation state
 just guard-validation    # validation workflow, reference docs, validate CLI behavior
 just guard-contracts     # provider contracts, cassettes, matrix, bridge grammar

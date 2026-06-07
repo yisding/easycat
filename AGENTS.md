@@ -23,7 +23,7 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just guard-docs`: guard root onboarding docs, install guidance, `easycat docs`, public API docs, and CLI JSON envelopes.
 - `just guard-teaching`: guard teaching ladder chapters and generated README blocks.
 - `just guard-examples`: guard examples README, support files, script smoke checks, and docs-route hints.
-- `just guard-templates`: guard scaffold templates, init flows, catalog output, and generated project smoke.
+- `just guard-templates`: guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
 - `just guard-contributing`: guard contributor docs, agent guide contracts, validation state, and route hints.
 - `just guard-validation`: guard validation workflow docs, validation reference docs, and validate CLI behavior.
 - `just guard-contracts`: guard provider contract docs, offline contract suite, and provider wiring matrix.
