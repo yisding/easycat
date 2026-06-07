@@ -603,6 +603,25 @@ def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
     assert all("maintainers" in audience for audience in audiences)
 
 
+def test_docs_command_filters_json_operator_routes_by_broad_role(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "operators", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    labels = {entry["label"] for entry in payload["entries"]}
+    audiences = {entry["audience"] for entry in payload["entries"]}
+
+    assert payload["status"] == "ok"
+    assert payload["audience_filter"] == "operators"
+    assert "operators" in payload["available_audience_filters"]
+    assert "operators-and-maintainers" in payload["available_audience_filters"]
+    assert "Deployment" in labels
+    assert "Observability" in labels
+    assert "Journal durability" in labels
+    assert "Validation reference" not in labels
+    assert audiences == {"operators", "operators and maintainers"}
+
+
 def test_docs_command_accepts_underscored_json_audience_filter(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs", "--audience", "provider_maintainers", "--json"])
 
@@ -611,6 +630,17 @@ def test_docs_command_accepts_underscored_json_audience_filter(cli: CliRunner) -
     assert payload["audience_filter"] == "provider_maintainers"
     assert [entry["label"] for entry in payload["entries"]] == ["Provider contracts"]
     assert payload["entries"][0]["audience"] == "provider maintainers"
+
+
+def test_docs_command_accepts_release_maintainers_json_filter(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "release-maintainers", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["audience_filter"] == "release-maintainers"
+    assert "release-maintainers" in payload["available_audience_filters"]
+    assert [entry["label"] for entry in payload["entries"]] == ["Validation reference"]
+    assert payload["entries"][0]["audience"] == "release maintainers"
 
 
 def test_docs_command_rejects_partial_audience_filters(cli: CliRunner) -> None:
