@@ -98,21 +98,6 @@ def voice_fixtures(voice_fixtures_dir: pathlib.Path) -> dict[str, pathlib.Path]:
 
 
 # ---------------------------------------------------------------------------
-# Free port helper
-# ---------------------------------------------------------------------------
-
-
-def find_free_port() -> int:
-    import socket
-
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-# ---------------------------------------------------------------------------
 # WebSocket and Twilio server handles
 # ---------------------------------------------------------------------------
 
@@ -130,6 +115,13 @@ class WSServerHandle:
 SessionBuilder = Callable[[Any], Awaitable[Any]]
 
 
+def _bound_server_port(server: Any) -> int:
+    sockets = getattr(server, "sockets", None)
+    if not sockets:
+        raise RuntimeError("websocket test server did not expose a bound socket")
+    return int(sockets[0].getsockname()[1])
+
+
 async def _start_ws_server(session_builder: SessionBuilder) -> WSServerHandle:
     """Start a real localhost ws:// server that invokes ``session_builder``
     for each incoming connection. The builder is given the websocket and
@@ -138,8 +130,7 @@ async def _start_ws_server(session_builder: SessionBuilder) -> WSServerHandle:
     disconnects."""
     import websockets
 
-    port = find_free_port()
-    handle = WSServerHandle(port=port, url=f"ws://127.0.0.1:{port}")
+    handle = WSServerHandle(port=0, url="")
 
     sessions_to_stop: list[Any] = []
     handle._sessions_to_stop = sessions_to_stop  # type: ignore[attr-defined]
@@ -158,7 +149,10 @@ async def _start_ws_server(session_builder: SessionBuilder) -> WSServerHandle:
             handle.exception = exc
             raise
 
-    server = await websockets.serve(on_connect, "127.0.0.1", port, max_size=None)
+    server = await websockets.serve(on_connect, "127.0.0.1", 0, max_size=None)
+    port = _bound_server_port(server)
+    handle.port = port
+    handle.url = f"ws://127.0.0.1:{port}"
     handle.server = server
     return handle
 

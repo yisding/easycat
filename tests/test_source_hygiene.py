@@ -529,6 +529,19 @@ def test_pytest_timeout_is_configured_as_suite_safety_net() -> None:
     assert "Done: `pytest-timeout`" in reliability_section
 
 
+def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
+    """The shared e2e WebSocket fixture should not bind-close-reuse a port."""
+    source = (REPO_ROOT / "tests" / "e2e" / "conftest.py").read_text(encoding="utf-8")
+    start_ws_server = source.split("async def _start_ws_server", 1)[1].split(
+        "async def _stop_ws_server",
+        1,
+    )[0]
+
+    assert "def find_free_port" not in source
+    assert 'websockets.serve(on_connect, "127.0.0.1", 0' in start_ws_server
+    assert "_bound_server_port(server)" in start_ws_server
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(
