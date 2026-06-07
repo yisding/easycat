@@ -182,7 +182,7 @@ Verified in journal records and asserted in CI via the eval module in
 | Stage | P50 | P90 | Notes |
 |---|---|---|---|
 | STT TTFT | < 120ms | < 200ms | Streaming partial, `deepgram/flux` or `deepgram/nova-3` baseline |
-| Endpointing | < 30ms | < 80ms | Smart Turn v3.1 (12ms CPU) or Flux native endpointing |
+| Endpointing | < 30ms | < 80ms | Smart Turn v3.2 (12ms CPU) or Flux native endpointing |
 | LLM TTFT | < 250ms | < 400ms | Framework call → first token |
 | TTS TTFB | < 60ms | < 120ms | Cartesia Sonic 3 (~90ms TTFA) default; `sonic-turbo` hits ~40ms |
 | **E2E (chained)** | **< 1.0s** | **< 1.6s** | user stop → bot start |
@@ -224,7 +224,7 @@ armed to emit turns:
 
 - Open STT and TTS provider WebSockets (or equivalents) and complete
   the handshake.
-- Load and warm ONNX models (Smart Turn v3.1, Silero VAD) with a
+- Load and warm ONNX models (Smart Turn v3.2, Silero VAD) with a
   single dummy inference.
 - Run a zero-byte TTS request against the TTS provider to prime the
   TLS session and token bucket.

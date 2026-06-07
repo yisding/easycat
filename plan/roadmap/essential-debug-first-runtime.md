@@ -34,7 +34,7 @@
 >   guarantee, output contract, error UX. Library-wrapper commands
 >   (`run`, `dev`, `test`, `cost`) are deferred.
 > - `../peripherals/peripheral-provider-ecosystem.md` — Deepgram Flux STT adapter,
->   Smart Turn v3.1 promotion (Pipecat wrapper), backchannel filter.
+>   Smart Turn v3.2 support/promotion, backchannel filter.
 > - `../peripherals/peripheral-redaction.md` — `RedactionPolicy` write filter,
 >   `SafeConfigSnapshot` / `SafeEnvironmentSnapshot`, export-time
 >   redaction pass, ready-to-use `development` / `production` /
@@ -530,7 +530,7 @@ Out of scope for this plan (and some also out of scope for EasyCat entirely):
 - `--for=claude-code` bundle export
 - Forked replay / time-travel
 - Latency budget CI enforcement, warmup stage
-- Smart Turn v3.1 promotion, backchannel filter
+- Smart Turn v3.2 support/promotion, backchannel filter
 - Offline preset, template ecosystem
 - **LangChain and LangGraph bridges** — deferred, not excluded.
   Both frameworks fit cleanly onto the existing

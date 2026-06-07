@@ -43,7 +43,7 @@ Still remaining:
   `ws_server.py` ≤15, excluding setup docstrings and import guards. Broader
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
-  Whisper-small + Smart Turn v3.1 wiring).
+  Whisper-small + Smart Turn v3.2 wiring).
 - `ExceptionGroup` support and broader PEP 678 annotations across the
   pipeline.
 - Full structlog dev/prod renderer split; today the logger is stdlib-
@@ -66,7 +66,7 @@ ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
 >   wraps; that file owns the CLI product.
 > - `peripheral-redaction.md` — `RedactionPolicy` write filter, safe
 >   snapshots, export-time redaction pass, ready-to-use policies
-> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn v3.1
+> - `peripheral-provider-ecosystem.md` — Deepgram Flux, Smart Turn v3.2
 >   promotion, backchannel filter
 > - `peripheral-observability-and-cost.md` — OTel export, cost modeling
 >   with pricing source, latency budgets, warmup stage
@@ -280,7 +280,7 @@ scaffolded code to explicit config without a rewrite.
 The strongest possible ease-of-use pitch is "git clone → working voice
 agent with zero API keys." 2026 makes this viable: Kyutai Pocket TTS
 (100M params, CPU real-time, Jan 2026) and Whisper-small run locally on
-any laptop; Smart Turn v3.1 runs on CPU.
+any laptop; the bundled Smart Turn v3.2 model runs on CPU.
 
 ```python
 run(EasyConfig.offline(
@@ -292,7 +292,7 @@ Semantics:
 
 - STT: Whisper-small via `faster-whisper`
 - TTS: Kyutai Pocket TTS
-- Turn detection: Smart Turn v3.1
+- Turn detection: Smart Turn v3.2
 - First-run downloads ~350MB to `~/.cache/easycat/models/` with a
   progress bar; cached forever after
 - First-run message: "Downloading models for offline mode (~350MB). This
@@ -301,7 +301,7 @@ Semantics:
   unless a local-LLM-compatible agent is passed, in which case zero keys.
 
 The nuclear "I just want to see it work" option. Depends on the Smart
-Turn v3.1 promotion tracked in `peripheral-provider-ecosystem.md`.
+Turn v3.2 promotion tracked in `peripheral-provider-ecosystem.md`.
 
 ## Error Diagnostics
 

@@ -23,8 +23,8 @@
 >   Judge, forked replay, interactive debugger UI, dev waterfall
 >
 > **In scope (this file):** Deepgram Flux STT adapter (conversational
-> STT that collapses VAD + STT + endpointing), Smart Turn v3.1 promotion
-> wrapping Pipecat's `LocalSmartTurnAnalyzerV3`, backchannel filter
+> STT that collapses VAD + STT + endpointing), bundled Smart Turn v3.2
+> support and top-level promotion, backchannel filter
 > (ML-based false-interruption detection).
 >
 > **Permanently out of scope (guardrail, see essential plan):**
@@ -81,7 +81,7 @@ Integration notes:
   captured session replays deterministically even though the decision
   itself came from the provider.
 
-### Smart Turn v3.1 Promotion
+### Smart Turn v3.2 Support And Promotion
 
 Currently `SmartTurnConfig.enabled=False` in EasyCat
 (`src/easycat/smart_turn.py`) and the bundled model is v3.2. Promote to
@@ -95,7 +95,7 @@ Depend on `pipecat-ai[smart-turn]` as an optional extra. The existing
 EasyCat SmartTurn path stays as a fallback for environments where the
 Pipecat extra cannot be installed.
 
-Why Smart Turn v3.1 is the 2026 standard:
+Why Smart Turn is the 2026 local endpointing baseline:
 
 - Whisper Tiny backbone + linear classifier, ~8M parameters
 - 8MB int8 quantized
@@ -130,22 +130,23 @@ comparison goes to LiveKit.
 | Item | Depends on |
 |---|---|
 | Deepgram Flux STT adapter | stage model (essential Phase 3) for clean integration |
-| Smart Turn v3.1 promotion (Pipecat wrapper) | stage model (Phase 3) |
+| Smart Turn v3.2 support and top-level promotion | stage model (Phase 3) |
 | Backchannel filter | `InterruptionController` (Phase 3) |
 
 ## Suggested Sequencing
 
 1. **In parallel with essential Phase 3**: Deepgram Flux adapter, Smart
-   Turn v3.1 promotion, backchannel filter. All three exercise the new
+   Turn support/promotion, backchannel filter. All three exercise the new
    stage model; landing them together stress-tests it.
 
 ## Competitive Context
 
 - **Deepgram Flux** (Q1 2026): conversational STT that fuses VAD + STT +
   endpointing into a single streaming API. ~260ms p50 end-of-turn.
-- **Pipecat Smart Turn v3.1** (Apache 2.0): industry-standard endpoint
-  detector in 2026. Whisper Tiny + linear classifier, ~8M params, 8MB
-  int8, 12ms CPU inference, 23 languages. Pipecat ships the wrapper as
+- **Smart Turn** (Apache 2.0): industry-standard endpoint detector in
+  2026. EasyCat bundles a v3.2 ONNX model; the model family uses a
+  Whisper Tiny + linear classifier shape, ~8M params, 8MB int8, 12ms CPU
+  inference, and 23 languages. Pipecat ships the wrapper as
   `LocalSmartTurnAnalyzerV3` (≥ 0.0.85).
 - **LiveKit Agents 1.5**: ML-based backchannel / false-interruption
   detection default-on.
@@ -155,8 +156,8 @@ comparison goes to LiveKit.
   (`CartesiaSTT` / `CartesiaTTS`); sets the default choice for
   latency-sensitive templates.
 - **AssemblyAI research**: falling pitch at sentence end is a stronger
-  signal than silence duration. Smart Turn v3.1 already combines
-  prosodic and semantic features, which is why it has displaced older
+  signal than silence duration. Smart Turn already combines prosodic and
+  semantic features, which is why it has displaced older
   alternatives.
 - **OpenAI Realtime and Gemini Live** (2026): voice-to-voice /
   speech-to-speech realtime APIs. Out of EasyCat's scope by design —

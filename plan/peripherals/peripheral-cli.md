@@ -471,7 +471,7 @@ prompts. Target ≤ 17 lines is met.
 - **Voice-to-voice / realtime speech-to-speech.** Permanently out
   of scope. See "Chained Only" in `../roadmap/essential-debug-first-runtime.md`.
 - **Offline-only template.** Deferred to a future milestone gated on
-  Smart Turn v3.1 promotion (`peripheral-provider-ecosystem.md`)
+  Smart Turn v3.2 support/promotion (`peripheral-provider-ecosystem.md`)
   and Kyutai Pocket TTS integration. When it ships, it will be the
   `offline` template.
 - **"Blank" template.** Every template has a personality. A blank
@@ -955,7 +955,7 @@ Connects scaffolded projects to production debugging.
 
 - `easycat replay --fork-at` (depends on forked_replay fidelity in
   `peripheral-eval-and-debugger-ui.md`)
-- `offline` template (depends on Smart Turn v3.1 + Kyutai Pocket
+- `offline` template (depends on Smart Turn v3.2 + Kyutai Pocket
   TTS; `peripheral-provider-ecosystem.md`)
 - The library-wrapper commands moved to a future extended CLI plan
 

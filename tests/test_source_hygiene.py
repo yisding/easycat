@@ -21,6 +21,7 @@ TEST_PLAN_TABLE_ROW_RE = re.compile(
 TEST_PLAN_HEADING_RE = re.compile(r"^## Plan (?P<number>\d+) — (?P<title>.+)$", re.MULTILINE)
 STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
+BUNDLED_SMART_TURN_RE = re.compile(r"smart-turn-v(?P<version>[0-9.]+)-cpu\.onnx")
 
 
 def _tracked_file_count(*patterns: str) -> int:
@@ -253,6 +254,31 @@ def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
         "Session is **~1,770 lines** after Phase 5",
     ):
         assert stale_phrase not in combined_text
+
+
+def test_current_plan_docs_track_bundled_smart_turn_version() -> None:
+    """Keep current-facing planning docs aligned with the bundled ONNX model."""
+    smart_turn_source = (SOURCE_ROOT / "smart_turn.py").read_text(encoding="utf-8")
+    match = BUNDLED_SMART_TURN_RE.search(smart_turn_source)
+    assert match is not None
+    version = match.group("version")
+    current_plan_text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "plan").glob("**/*.md"))
+    )
+
+    assert f"Smart Turn v{version}" in current_plan_text
+    for stale_phrase in (
+        "Smart Turn v3.1 promotion",
+        "Smart Turn v3.1 wiring",
+        "Smart Turn v3.1 runs on CPU",
+        "Turn detection: Smart Turn v3.1",
+        "Smart Turn v3.1 + Kyutai",
+        "Why Smart Turn v3.1",
+        "Pipecat Smart Turn v3.1",
+        "Smart Turn v3.1 already combines",
+        "Smart Turn v3.1 (12ms CPU)",
+    ):
+        assert stale_phrase not in current_plan_text
 
 
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
