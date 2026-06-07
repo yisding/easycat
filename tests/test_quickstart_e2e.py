@@ -464,7 +464,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat doctor           # check API keys, optional extras, provider reachability",
         "easycat doctor --json    # emit machine-readable environment checks",
         "easycat doctor --env-file .env --json # emit checks with project .env loaded",
-        "easycat docs             # show docs for learning, validation, operations",
+        "easycat docs             # show docs for learning, maintenance, validation, operations",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
@@ -479,6 +479,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     stale_cli_lines = (
         "easycat doctor           # check API keys, Python version, optional extras",
         "easycat docs             # show documentation entry points",
+        "easycat docs             # show docs for learning, validation, operations",
         "easycat docs             # show quickstart, examples, validation, operations",
         "easycat docs             # show quickstart, examples, and teaching routes",
         "easycat explain E102     # look up an EasyCat error code",

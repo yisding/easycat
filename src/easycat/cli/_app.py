@@ -29,7 +29,7 @@ def _easycat_version() -> str:
 
 _CLI_HINTS: tuple[tuple[str, str], ...] = (
     ("easycat <command> --help", "command-specific options."),
-    ("easycat docs", "learning, validation, and operations routes."),
+    ("easycat docs", "learning, maintenance, validation, and operations routes."),
     ("easycat docs --json", "machine-readable docs routes, audiences, and command hints."),
     ("easycat explain <code>", "errors."),
     ("easycat explain json-schema", "CLI JSON."),
@@ -92,8 +92,8 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         journey="Run validation checks and inspect validation reports",
     ),
     "docs": _CommandText(
-        help="Show docs for learning, validation, and operations.",
-        journey="Show docs for learning, validation, and operations",
+        help="Show docs for learning, maintenance, validation, and operations.",
+        journey="Show docs for learning, maintenance, validation, and operations",
     ),
 }
 
@@ -422,7 +422,7 @@ def docs_command(
         help="Emit the machine-readable docs route map with audiences and command hints.",
     ),
 ) -> None:
-    """Show docs for learning, validation, and operations."""
+    """Show docs for learning, maintenance, validation, and operations."""
     if json_output:
         emit_json(
             json_envelope(

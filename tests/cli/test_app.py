@@ -80,12 +80,14 @@ def test_help_renders(cli: CliRunner) -> None:
 
     assert result.exit_code == 0
     assert "EasyCat" in result.stdout
-    assert "Run easycat docs for learning, validation, and operations routes" in normalized
+    assert "Run easycat docs for learning, maintenance, validation, and operations routes" in (
+        normalized
+    )
     assert "Run easycat docs --json for machine-readable docs routes" in normalized
     assert "Run easycat explain json-schema for CLI JSON" in normalized
     assert "Check API keys, optional extras, and provider reachability" in result.stdout
     assert "Run validation checks and inspect validation reports" in result.stdout
-    assert "Show docs for learning, validation, and operations" in result.stdout
+    assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
     missing = sorted(
         command_name
@@ -192,7 +194,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Check API keys, optional extras, and provider reachability" in result.stdout
     assert "Check API keys, extras, and provider reachability" not in result.stdout
     assert "Check environment and provider reachability" not in result.stdout
-    assert "Show docs for learning, validation, and operations" in result.stdout
+    assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "Show documentation entry points" not in result.stdout
     assert "Look up errors and CLI schema topics" in result.stdout
     assert "cargo --explain" not in result.stdout
@@ -202,7 +204,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Run validation checks and inspect reports" not in result.stdout
     assert "easycat docs" in result.stdout
     assert "easycat docs --json" in result.stdout
-    assert "learning, validation, and operations routes" in result.stdout
+    assert "learning, maintenance, validation, and operations routes" in result.stdout
     assert "machine-readable docs routes, audiences, and command hints" in normalized
     assert "easycat explain json-schema" in result.stdout
     missing = sorted(
@@ -301,7 +303,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     help_text = re.sub(r"\W+", " ", result.stdout)
 
     assert result.exit_code == 0
-    assert "Show docs for learning, validation, and operations" in result.stdout
+    assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "--json" in result.stdout
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
