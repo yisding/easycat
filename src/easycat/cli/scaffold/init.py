@@ -720,7 +720,7 @@ def init(
         "--list-templates",
         help=(
             "Show template guidance, base package requirements, extras, env vars, files, "
-            "and preflight/check/fix/docs/run commands."
+            "and preflight/check/fix/docs/json-schema/run commands."
         ),
     ),
     force: bool = typer.Option(

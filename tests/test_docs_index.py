@@ -489,7 +489,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "required environment variables" in normalized
     assert "optional environment knobs" in normalized
     assert "generated files" in normalized
-    assert "copyable create/preflight/check/fix/docs/run commands" in normalized
+    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in normalized
     assert "architecture map" in normalized
     assert "provider registries" in normalized
     assert "repository agent guide" in normalized

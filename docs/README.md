@@ -32,7 +32,7 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat init --list-templates` to compare templates with best-fit
   guidance, base `easycat[...]` package requirements and extras, required
   environment variables, optional environment knobs, generated files, and
-  copyable create/preflight/check/fix/docs/run commands. Use
+  copyable create/preflight/check/fix/docs/json-schema/run commands. Use
   `uv run easycat init --list-templates --json` when a script or coding agent
   needs the same template catalog and post-scaffold command previews, then use
   the CLI commands documented in the [root README](../README.md#cli).

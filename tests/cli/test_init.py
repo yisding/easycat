@@ -43,7 +43,7 @@ def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
     assert "extras" in help_text
     assert "env vars" in help_text
     assert "files" in help_text
-    assert "preflight check fix docs run commands" in help_words
+    assert "preflight check fix docs json schema run commands" in help_words
     assert "explain" in help_text
     assert "init-schema" in help_text
 

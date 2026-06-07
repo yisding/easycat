@@ -415,7 +415,7 @@ def test_template_list_guidance_points_to_catalog_json() -> None:
         text = path.read_text(encoding="utf-8")
         if "easycat init --list-templates" not in text:
             continue
-        if "copyable create/preflight/check/fix/docs/run commands" not in text:
+        if "copyable create/preflight/check/fix/docs/json-schema/run commands" not in text:
             continue
         if "easycat init --list-templates --json" not in text:
             missing.append(path.relative_to(REPO_ROOT).as_posix())
@@ -557,14 +557,18 @@ def test_cli_init_examples_name_target_directory() -> None:
     assert "required environment variables" in normalized_readme
     assert "optional environment knobs" in normalized_readme
     assert "generated files" in normalized_readme
-    assert "copyable create/preflight/check/fix/docs/run commands" in normalized_readme
+    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
+        normalized_readme
+    )
     assert "`uv run easycat init my-agent`" in production_chapter
     assert "`uv run easycat init --list-templates`" in production_chapter
     assert "base `easycat[...]` package requirements and extras" in normalized_production_chapter
     assert "required environment variables" in normalized_production_chapter
     assert "optional environment knobs" in normalized_production_chapter
     assert "generated files" in normalized_production_chapter
-    assert "copyable create/preflight/check/fix/docs/run commands" in normalized_production_chapter
+    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
+        normalized_production_chapter
+    )
     assert "**`uv run easycat init`**" not in production_chapter
 
 

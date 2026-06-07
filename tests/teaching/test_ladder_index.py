@@ -406,7 +406,9 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "required environment variables" in normalized_cli_section
     assert "optional environment knobs" in normalized_cli_section
     assert "generated files" in normalized_cli_section
-    assert "copyable create/preflight/check/fix/docs/run commands" in normalized_cli_section
+    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
+        normalized_cli_section
+    )
     assert "same template catalog and post-scaffold command previews" in normalized_cli_section
     assert "same route map with command hints" in normalized_cli_section
     assert "audience labels" in normalized_cli_section

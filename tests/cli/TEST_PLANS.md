@@ -175,8 +175,8 @@ first run.
   (mode, transport, framework, best-fit guidance, base package requirement,
   base extras, required environment variables, optional environment knobs,
   generated files, description, and copyable create commands plus
-  post-scaffold doctor/check/fix/docs/run commands), and `--json` exposes the same
-  catalog for tooling.
+  post-scaffold doctor/check/fix/docs/json-schema/run commands), and `--json`
+  exposes the same catalog for tooling.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `pyproject.toml` includes a `dev` dependency group with Ruff so
   `uv run ruff check ...` works after the documented `uv sync`.

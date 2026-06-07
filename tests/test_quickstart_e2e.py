@@ -456,13 +456,15 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     assert "required environment variables" in normalized_cli_section
     assert "optional environment knobs" in normalized_cli_section
     assert "generated files" in normalized_cli_section
-    assert "copyable create/preflight/check/fix/docs/run commands" in normalized_cli_section
+    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in (
+        normalized_cli_section
+    )
     assert "uv run easycat doctor" in cli_section
     assert "easycat doctor --env-file .env" in cli_section
     expected_cli_lines = (
         (
             "easycat init --list-templates # compare templates, base package requirements, "
-            "env vars, files, preflight/check/fix/docs/run commands"
+            "env vars, files, preflight/check/fix/docs/json-schema/run commands"
         ),
         "easycat init --list-templates --json # emit the machine-readable template catalog",
         "easycat doctor           # check API keys, optional extras, provider reachability",
