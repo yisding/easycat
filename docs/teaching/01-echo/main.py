@@ -4,7 +4,7 @@ Mic → speaker, continuously, through EasyCat's ``Transport`` protocol.
 Runs until Ctrl-C.
 
 Dependency:
-    uv sync --extra quickstart --group dev
+    uv sync --extra local --group dev
 """
 
 from __future__ import annotations

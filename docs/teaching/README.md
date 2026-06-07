@@ -31,10 +31,9 @@ repository root:
 uv run python docs/teaching/00-hello-audio/main.py
 ```
 
-For only Chapter 0, its README uses the smaller
+For Chapters 0 and 1, their READMEs use the smaller
 `uv sync --extra local --group dev` setup. Use the full `quickstart`
-prerequisites below when you want to continue through the provider-backed
-chapters.
+prerequisites below when you continue into provider-backed chapters.
 
 After editing a chapter, changing its copied code, or using one as a starting
 point, run the repository validation lane from the root:
@@ -101,10 +100,12 @@ payloads inside the standard CLI envelope.
 ## Prerequisites
 
 - Python 3.11+.
-- `uv sync --extra quickstart --group dev` from the repo root.
-  The `quickstart` extra bundles mic I/O, OpenAI, NumPy, and
-  ONNX Runtime — enough for chapters 0-2 and 11-12. Chapters 3-10
-  use Deepgram streaming STT by default, so run
+- Chapters 0-1 only need `uv sync --extra local --group dev` from
+  the repo root.
+- From chapter 2 onward, use `uv sync --extra quickstart --group dev`
+  from the repo root. The `quickstart` extra bundles mic I/O,
+  OpenAI, NumPy, and ONNX Runtime. Chapters 3-10 use Deepgram
+  streaming STT by default, so run
   `uv sync --extra quickstart --extra deepgram --group dev` for
   those chapters. Chapter 10 gets RNNoise from `quickstart`; add
   `--extra aec` for real echo cancellation. Chapter 13's

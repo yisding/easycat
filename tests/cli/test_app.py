@@ -431,6 +431,10 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat doctor --env-file .env --json",
         "easycat explain json-schema",
     ]
+    assert commands["docs/teaching/"][:2] == [
+        "uv sync --extra local --group dev",
+        "uv sync --extra quickstart --group dev",
+    ]
     assert commands["docs/teaching/00-hello-audio/"] == [
         "uv sync --extra local --group dev",
         "uv run python docs/teaching/00-hello-audio/main.py",

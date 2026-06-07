@@ -6,7 +6,7 @@
 ## Prerequisites
 
 - [Chapter 0](../00-hello-audio/)
-- `uv sync --extra quickstart --group dev`
+- `uv sync --extra local --group dev`
 - A mic and speakers. **Use headphones, or put the mic far from
   the speaker** — otherwise you will get a feedback loop the
   instant you press play.
@@ -40,7 +40,7 @@
 +Runs until Ctrl-C.
  
  Dependency:
-     uv sync --extra quickstart --group dev
+     uv sync --extra local --group dev
 @@ -10,100 +9,42 @@
  
  from __future__ import annotations

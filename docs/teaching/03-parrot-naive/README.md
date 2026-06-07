@@ -57,9 +57,9 @@ personally heard this fail on your own voice.
 +    export OPENAI_API_KEY=...      # OpenAI TTS
 +    export DEEPGRAM_API_KEY=...    # mid-speech STT partials
      uv run easycat doctor
- """
- 
-@@ -21,53 +24,91 @@
+     uv run easycat doctor --env-file .env         # if keys live in .env
+     uv run easycat doctor --env-file .env --json  # for parseable checks
+@@ -23,53 +26,91 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -177,7 +177,7 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -78,16 +119,15 @@
+@@ -80,16 +121,15 @@
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -198,7 +198,7 @@ personally heard this fail on your own voice.
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
-@@ -98,4 +138,7 @@
+@@ -100,4 +140,7 @@
  
  
  if __name__ == "__main__":

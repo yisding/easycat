@@ -171,6 +171,11 @@ def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> 
     assert "sounddevice" in chapters["00-hello-audio"]
     assert "numpy" in chapters["00-hello-audio"]
     assert "A working microphone and speakers" in chapters["00-hello-audio"]
+    assert "uv sync --extra local --group dev" in chapters["01-echo"]
+    assert "uv sync --extra quickstart --group dev" not in _chapter_prerequisites(
+        chapters["01-echo"]
+    )
+    assert "A mic and speakers" in chapters["01-echo"]
     assert "OPENAI_API_KEY" in chapters["02-transcribe"]
     assert "or any other provider" in _chapter_prerequisites(chapters["02-transcribe"])
     for chapter in (

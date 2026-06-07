@@ -214,6 +214,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "learners",
         "description": "Learn voice pipelines chapter by chapter.",
         "commands": (
+            "uv sync --extra local --group dev",
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
             "uv run easycat doctor --env-file .env",

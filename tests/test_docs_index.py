@@ -746,6 +746,7 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     first_lesson_commands = entries["docs/teaching/00-hello-audio/"].get("commands", ())
 
     for command in (
+        "uv sync --extra local --group dev",
         "uv sync --extra quickstart --group dev",
         "uv run easycat doctor",
         "uv run easycat doctor --env-file .env",

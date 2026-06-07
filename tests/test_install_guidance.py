@@ -272,11 +272,12 @@ def test_teaching_ladder_prerequisites_run_doctor_after_setup() -> None:
     readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
     prerequisites = readme.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0]
 
+    local_index = prerequisites.index("uv sync --extra local --group dev")
     sync_index = prerequisites.index("uv sync --extra quickstart --group dev")
     key_index = prerequisites.index("OPENAI_API_KEY")
     doctor_index = prerequisites.index("uv run easycat doctor")
 
-    assert sync_index < key_index < doctor_index
+    assert local_index < sync_index < key_index < doctor_index
 
 
 def test_teaching_chapter_key_prerequisites_run_doctor() -> None:

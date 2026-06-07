@@ -51,7 +51,7 @@
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-@@ -29,24 +31,28 @@
+@@ -31,24 +33,28 @@
  from easycat.events import (
      EventBus,
      STTEventType,
@@ -83,7 +83,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -70,35 +76,109 @@
+@@ -72,35 +78,109 @@
                  self._preroll.append(chunk)
  
  
@@ -216,7 +216,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -109,55 +189,26 @@
+@@ -111,55 +191,26 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -286,7 +286,7 @@
  
  
  async def main() -> None:
-@@ -169,6 +220,9 @@
+@@ -171,6 +222,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
@@ -296,7 +296,7 @@
  
      def stt_factory():
          return create_stt_provider(
-@@ -180,10 +234,9 @@
+@@ -182,10 +236,9 @@
          )
  
      await transport.connect()
@@ -308,7 +308,7 @@
          stt = None
          async for tag, chunk in detector.frames(transport.receive_audio()):
              if tag == "speech_started":
-@@ -195,7 +248,7 @@
+@@ -197,7 +250,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()

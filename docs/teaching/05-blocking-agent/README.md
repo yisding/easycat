@@ -32,7 +32,7 @@ build movement (chapters 6-9) exists to close this gap.
 ```diff
 --- docs/teaching/04-vad-preroll/main.py
 +++ docs/teaching/05-blocking-agent/main.py
-@@ -1,22 +1,19 @@
+@@ -1,16 +1,14 @@
 -"""Chapter 4 — VAD + pre-roll.
 -
 -Replace chapter 3's fixed silence timeout with a real voice-activity
@@ -55,7 +55,9 @@ build movement (chapters 6-9) exists to close this gap.
 +    export OPENAI_API_KEY=...
 +    export DEEPGRAM_API_KEY=...
      uv run easycat doctor
- """
+     uv run easycat doctor --env-file .env         # if keys live in .env
+     uv run easycat doctor --env-file .env --json  # for parseable checks
+@@ -18,7 +16,6 @@
  
  from __future__ import annotations
  
@@ -63,7 +65,7 @@ build movement (chapters 6-9) exists to close this gap.
  import asyncio
  import collections
  import os
-@@ -24,10 +21,17 @@
+@@ -26,10 +23,17 @@
  import types
  from pathlib import Path
  
@@ -82,7 +84,7 @@ build movement (chapters 6-9) exists to close this gap.
  from easycat.quick import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
-@@ -35,25 +39,14 @@
+@@ -37,25 +41,14 @@
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
  
@@ -112,7 +114,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -63,122 +56,157 @@
+@@ -65,122 +58,157 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -371,7 +373,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L84-L93)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L86-L95)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->

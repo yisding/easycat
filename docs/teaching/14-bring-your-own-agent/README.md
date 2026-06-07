@@ -41,7 +41,7 @@
 ```diff
 --- docs/teaching/13-swap-providers-and-transports/main.py
 +++ docs/teaching/14-bring-your-own-agent/main.py
-@@ -1,136 +1,157 @@
+@@ -1,37 +1,26 @@
 -"""Chapter 13 — swap providers AND transports.
 +"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
  
@@ -94,7 +94,9 @@
 -    TWIML/Twilio credentials (for twilio transport)
 +    export OPENAI_API_KEY=...
      uv run easycat doctor
- """
+     uv run easycat doctor --env-file .env         # if keys live in .env
+     uv run easycat doctor --env-file .env --json  # for parseable checks
+@@ -39,100 +28,132 @@
  
  from __future__ import annotations
  
@@ -281,7 +283,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
-@@ -139,4 +160,7 @@
+@@ -141,4 +162,7 @@
  
  
  if __name__ == "__main__":
