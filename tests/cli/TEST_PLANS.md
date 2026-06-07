@@ -111,20 +111,22 @@ must point to current docs, expose useful command hints, and keep the
 human output and JSON route map in sync.
 
 **Risks.** A docs route points at a removed file or stale anchor; the
-JSON payload drops `audience`, `commands`, `command_note`, or online
-URLs; command hints drift away from target pages; placeholders such as
-`PATH` are emitted without explaining how to replace them; the route
-order stops putting onboarding paths first.
+JSON payload drops route fields, audience filter metadata, `command_note`,
+or online URLs; command hints drift away from target pages; placeholders
+such as `PATH` are emitted without explaining how to replace them; the
+route order stops putting onboarding paths first.
 
 **Checks.**
 - Human `easycat docs` output includes every maintained route, audience
   label, description, command hint, online URL, and the machine-readable
   command note.
-- `easycat docs --json` emits a standard envelope with every route,
-  including `label`, `path`, `audience`, `description`, `commands`,
-  `url`, `source_url`, and `command_note`; maintainer and coding-agent
-  routes include docs-map, parseable doctor/schema/validation-report
-  commands, and onboarding guard commands.
+- `easycat docs --json` emits a standard envelope with every route entry,
+  including `label`, `path`, `audience`, `description`, `commands`, and
+  `url`, plus top-level `source_url`, `command_note`, `audience_filter`,
+  `available_audiences`, `available_audience_filters`, and
+  `audience_alias_note`; maintainer and coding-agent routes include
+  docs-map, parseable doctor/schema/validation-report commands, and
+  onboarding guard commands.
 - Provider contract routes include the focused contract validation and
   factory/session wiring commands that appear in `tests/contracts/README.md`.
 - Routes are unique, resolve to local sources, and match GitHub

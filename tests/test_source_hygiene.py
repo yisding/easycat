@@ -134,7 +134,18 @@ def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     assert "| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` |" in plan
     assert "easycat docs" in docs_plan
     assert "easycat docs --json" in docs_plan
-    assert "`audience`, `commands`, `command_note`, or online" in docs_plan
+    assert (
+        "route fields, audience filter metadata, `command_note`, or online" in normalized_docs_plan
+    )
+    for field in (
+        "source_url",
+        "command_note",
+        "audience_filter",
+        "available_audiences",
+        "available_audience_filters",
+        "audience_alias_note",
+    ):
+        assert f"`{field}`" in docs_plan
     assert "parseable doctor/schema/validation-report commands" in normalized_docs_plan
     assert "Provider contract routes" in docs_plan
     assert "tests/contracts/README.md" in docs_plan
