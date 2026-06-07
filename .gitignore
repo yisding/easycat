@@ -13,6 +13,7 @@ build/
 .easycat/
 
 # Local coding-agent/tool state
+.agents/
 .codex
 .codex/
 .claude/

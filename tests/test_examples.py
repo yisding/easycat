@@ -497,6 +497,12 @@ def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
         "./.env",
         "./.env.*",
         "./.git",
+        "./.hypothesis",
+        "./.mypy_cache",
+        "./.pipecat-bench",
+        "./.pytest_cache",
+        "./.ruff_cache",
+        "./.uv-cache",
         "./.venv",
         "__pycache__",
         "*.pyc",
@@ -1198,6 +1204,28 @@ def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     assert "**/.env" in dockerignore
     assert "**/.env.*" in dockerignore
     assert "!**/.env.example" in dockerignore
+
+
+def test_dockerignore_excludes_local_cache_and_agent_state() -> None:
+    guide = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    for pattern in (
+        ".hypothesis/",
+        ".mypy_cache/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".uv-cache/",
+        ".agents/",
+        ".codex",
+        ".codex/",
+        ".claude/",
+        ".pipecat-bench/",
+    ):
+        assert pattern in dockerignore
+        assert f"`{pattern}`" in guide
+
+    assert "local generated state is not uploaded" in guide
 
 
 def test_docker_guide_tracks_default_dockerfile_extras() -> None:

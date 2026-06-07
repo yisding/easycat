@@ -12,10 +12,19 @@ dist/
 build/
 
 # Tooling caches
+.hypothesis/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
 .easycat/
+
+# Local coding-agent/tool state
+.agents/
+.codex
+.codex/
+.claude/
+.pipecat-bench/
 
 # Not needed inside the image
 tests/

@@ -32,6 +32,7 @@ def test_gitignore_covers_local_generated_state() -> None:
         ".pytest_cache/",
         ".ruff_cache/",
         ".uv-cache/",
+        ".agents/",
         ".codex",
         ".codex/",
         ".claude/",

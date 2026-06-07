@@ -118,9 +118,12 @@ if [ -d "$REPO_ROOT/src/easycat" ]; then
         --exclude='./.env' \
         --exclude='./.env.*' \
         --exclude='./.git' \
+        --exclude='./.hypothesis' \
         --exclude='./.mypy_cache' \
+        --exclude='./.pipecat-bench' \
         --exclude='./.pytest_cache' \
         --exclude='./.ruff_cache' \
+        --exclude='./.uv-cache' \
         --exclude='./.venv' \
         --exclude='__pycache__' \
         --exclude='*.pyc' \

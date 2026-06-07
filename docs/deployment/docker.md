@@ -65,6 +65,11 @@ The repo's `.dockerignore` excludes `.env` and `.env.*` files at any depth
 from the build context as a second line of defence while still allowing
 `.env.example` templates — if you fork the Dockerfile to use a wildcard
 `COPY . /app`, secrets still won't ship.
+It also excludes common local tool caches and coding-agent state such as
+`.hypothesis/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`,
+`.uv-cache/`, `.agents/`, `.codex`, `.codex/`, `.claude/`, and
+`.pipecat-bench/` so local generated state is not uploaded as part of
+`docker compose ... up --build`.
 
 Never use `ARG OPENAI_API_KEY=...` in the Dockerfile: build args are
 recoverable from image history.
