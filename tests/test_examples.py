@@ -512,6 +512,8 @@ def test_ec2_webrtc_deploy_does_not_copy_local_secret_or_cache_dirs() -> None:
         "./mutants",
         "./site",
         "__pycache__",
+        "*.key",
+        "*.pem",
         "*.pyc",
         "*.pyo",
     ):
@@ -1212,6 +1214,9 @@ def test_docker_env_secret_file_is_ignored_but_templates_are_allowed():
     assert "**/.env" in dockerignore
     assert "**/.env.*" in dockerignore
     assert "!**/.env.example" in dockerignore
+    assert "**/*.pem" in dockerignore
+    assert "**/*.key" in dockerignore
+    assert "`**/*.pem` and `**/*.key`" in guide
 
 
 def test_dockerignore_excludes_local_cache_and_agent_state() -> None:

@@ -133,6 +133,8 @@ if [ -d "$REPO_ROOT/src/easycat" ]; then
         --exclude='./mutants' \
         --exclude='./site' \
         --exclude='__pycache__' \
+        --exclude='*.key' \
+        --exclude='*.pem' \
         --exclude='*.pyc' \
         --exclude='*.pyo' \
         -cf - . | sudo tar -C "$INSTALL_DIR" -xf -

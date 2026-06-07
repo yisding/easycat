@@ -228,7 +228,7 @@ _TRANSPORT_ALIASES: dict[str, str] = {
 # Directory names that may sit in the live template source at install time
 # (cache and local tool artifacts from running validation or coding agents
 # against the templates) but must never ship into a freshly scaffolded
-# project. Compiled bytecode files are filtered separately by suffix.
+# project. Bytecode and local secret files are filtered separately by suffix.
 _COPY_IGNORE: frozenset[str] = frozenset(
     {
         "__pycache__",
@@ -253,7 +253,7 @@ _COPY_IGNORE: frozenset[str] = frozenset(
 _COPY_FILE_IGNORE: frozenset[str] = frozenset({".coverage", "coverage.xml"})
 _COPY_FILE_PREFIX_IGNORE: tuple[str, ...] = (".coverage.",)
 _COPY_PART_SUFFIX_IGNORE: tuple[str, ...] = (".egg-info",)
-_COPY_SUFFIX_IGNORE: frozenset[str] = frozenset({".pyc", ".pyo"})
+_COPY_SUFFIX_IGNORE: frozenset[str] = frozenset({".key", ".pem", ".pyc", ".pyo"})
 
 
 def _templates_root() -> Path:

@@ -90,6 +90,8 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".env",
     ".env.*",
     "!.env.example",
+    "*.pem",
+    "*.key",
     ".venv/",
     "*.egg-info/",
     ".agents/",
@@ -952,6 +954,10 @@ def test_template_copy_filter_omits_compiled_bytecode_suffixes() -> None:
     assert {".pyc", ".pyo"} <= _COPY_SUFFIX_IGNORE
 
 
+def test_template_copy_filter_omits_local_secret_suffixes() -> None:
+    assert {".pem", ".key"} <= _COPY_SUFFIX_IGNORE
+
+
 def test_template_sources_skip_generated_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -974,6 +980,8 @@ def test_template_sources_skip_generated_artifacts(
         ".coverage",
         ".coverage.worker",
         "coverage.xml",
+        "cert.pem",
+        "private.key",
         "optimized.pyo",
     ):
         path = template / rel

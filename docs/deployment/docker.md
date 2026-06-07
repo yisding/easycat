@@ -65,6 +65,8 @@ The repo's `.dockerignore` excludes `.env` and `.env.*` files at any depth
 from the build context as a second line of defence while still allowing
 `.env.example` templates — if you fork the Dockerfile to use a wildcard
 `COPY . /app`, secrets still won't ship.
+It also excludes local TLS certificate and private-key files matching
+`**/*.pem` and `**/*.key`.
 It also excludes common local tool caches and coding-agent state such as
 `.hypothesis/`, `.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`,
 `.uv-cache/`, `.agents/`, `.codex`, `.codex/`, `.claude/`, and

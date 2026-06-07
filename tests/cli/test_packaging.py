@@ -176,7 +176,7 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
         parts = set(Path(member).parts)
         if (
             parts & forbidden_parts
-            or member.endswith((".pyc", ".pyo"))
+            or member.endswith((".key", ".pem", ".pyc", ".pyo"))
             or any(part.endswith(".egg-info") for part in parts)
         ):
             offenders.append(member)

@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 .venv/
 *.egg-info/
 .agents/
