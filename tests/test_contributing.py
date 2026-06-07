@@ -166,9 +166,16 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
     normalized = re.sub(r"\s+", " ", contributing)
 
     assert "uv run easycat validate report .easycat/validation/latest.json" in contributing
+    assert "uv run easycat validate quick --json" in contributing
+    assert "uv run easycat validate contracts --json" in contributing
+    assert "uv run easycat validate release --json" in contributing
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in contributing
     assert "renders the latest saved report" in normalized
-    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
+    current_run_phrase = (
+        "script or coding agent needs the current validation run inside the standard CLI envelope"
+    )
+    assert current_run_phrase in normalized
+    assert "script or coding agent needs a saved report re-emitted inside that envelope" in (
         normalized
     )
     assert ".easycat/validation/runs/<run_id>/report.json" in contributing
@@ -390,6 +397,9 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "uv run easycat doctor",
         "uv run easycat doctor --json",
         "uv run easycat doctor --env-file .env --json",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ):

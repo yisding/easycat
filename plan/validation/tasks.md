@@ -342,6 +342,9 @@ Current verified state:
   pre-PR, and pre-commit tasks.
 - The validation-slices table lists the current public `easycat validate` lanes
   with repo-local `uv run easycat validate` commands, including
+  `uv run easycat validate quick --json`,
+  `uv run easycat validate contracts --json`,
+  `uv run easycat validate release --json`,
   `uv run easycat validate report .easycat/validation/latest.json` and
   `uv run easycat validate report .easycat/validation/latest.json --json`.
 - The validation chooser table maps common change types to quick, socket,

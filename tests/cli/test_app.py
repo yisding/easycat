@@ -397,6 +397,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "just guard-contributing",
         "just guard-markdown",
         "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ]
@@ -421,6 +424,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run pytest",
         "uv run ruff check .",
         "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ]

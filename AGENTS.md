@@ -37,6 +37,9 @@ the raw commands below.
 - `uv run easycat explain json-schema`: inspect the CLI JSON envelope and
   command-specific fields.
 - `uv run easycat validate quick`: run the same deterministic validation lane without `just`.
+- `uv run easycat validate quick --json`: emit the quick lane in the standard CLI JSON envelope.
+- `uv run easycat validate contracts --json`: emit contract validation in the standard CLI JSON envelope.
+- `uv run easycat validate release --json`: emit release validation in the standard CLI JSON envelope.
 - `uv run easycat validate report .easycat/validation/latest.json`: inspect the
   latest saved validation report.
 - `uv run easycat validate report .easycat/validation/latest.json --json`: emit

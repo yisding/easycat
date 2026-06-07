@@ -137,8 +137,12 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 
 `uv run easycat validate report .easycat/validation/latest.json` renders the
 latest saved report. Use
+`uv run easycat validate quick --json`,
+`uv run easycat validate contracts --json`, or
+`uv run easycat validate release --json` when a script or coding agent needs
+the current validation run inside the standard CLI envelope. Use
 `uv run easycat validate report .easycat/validation/latest.json --json` when a
-script or coding agent needs the saved report inside the standard CLI envelope.
+script or coding agent needs a saved report re-emitted inside that envelope.
 Use `.easycat/validation/runs/<run_id>/report.json` when you need a specific
 older run.
 

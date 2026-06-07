@@ -30,6 +30,9 @@ AGENT_GUIDE_MACHINE_COMMANDS = (
     "uv run easycat doctor --env-file .env --json",
     "uv run easycat explain json-schema",
     "uv run easycat validate quick",
+    "uv run easycat validate quick --json",
+    "uv run easycat validate contracts --json",
+    "uv run easycat validate release --json",
     "uv run easycat validate report .easycat/validation/latest.json",
     "uv run easycat validate report .easycat/validation/latest.json --json",
 )
@@ -442,6 +445,9 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 
     for command in (
         "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ):
@@ -477,6 +483,9 @@ def test_contributing_docs_route_matches_validation_report_commands() -> None:
 
     for command in (
         "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ):
