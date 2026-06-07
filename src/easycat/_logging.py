@@ -111,17 +111,20 @@ class _JsonFormatter(logging.Formatter):
 def _make_handler() -> logging.Handler:
     """Build the console handler.
 
-    ``EASYCAT_LOG_FORMAT=json`` selects the structured formatter regardless of
-    TTY/color.  When the format is not explicit, ``EASYCAT_ENV=prod`` selects
-    JSON for log pipelines while ``dev``/unset keeps the human renderer.
-    Otherwise a :class:`rich.logging.RichHandler` is used on a color-capable
-    stderr and a plain :class:`logging.StreamHandler` falls back everywhere
-    else.  The color decision is the shared policy in :mod:`easycat._console`.
+    ``EASYCAT_LOG_FORMAT=json`` selects the structured formatter,
+    ``text`` selects plain non-Rich text, and ``human`` selects the
+    Rich-capable interactive renderer.  When the format is not explicit,
+    ``EASYCAT_ENV=prod`` selects JSON for log pipelines while ``dev``/unset
+    keeps the human renderer.  The color decision is the shared policy in
+    :mod:`easycat._console`.
     """
-    if _wants_json_logs():
+    log_format = _resolve_log_format()
+    if log_format == "json":
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(_JsonFormatter())
         return handler
+    if log_format == "text":
+        return _plain_text_handler()
 
     from easycat._console import color_enabled
 
@@ -139,17 +142,27 @@ def _make_handler() -> logging.Handler:
         # message column so the interactive color path stays correlated too.
         handler.setFormatter(logging.Formatter(_RICH_LOG_FORMAT))
         return handler
+    return _plain_text_handler()
+
+
+def _plain_text_handler() -> logging.StreamHandler:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     return handler
 
 
 def _wants_json_logs() -> bool:
+    return _resolve_log_format() == "json"
+
+
+def _resolve_log_format() -> str:
     log_format = os.getenv("EASYCAT_LOG_FORMAT", "").strip().lower()
     if log_format:
         if log_format not in _LOG_FORMAT_VALUES:
             raise ValueError(
                 f"Unknown EASYCAT_LOG_FORMAT: {log_format!r}. Use 'json', 'text', or 'human'."
             )
-        return log_format == "json"
-    return os.getenv("EASYCAT_ENV", "").strip().lower() in {"prod", "production"}
+        return log_format
+    if os.getenv("EASYCAT_ENV", "").strip().lower() in {"prod", "production"}:
+        return "json"
+    return "human"

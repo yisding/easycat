@@ -30,6 +30,7 @@ from easycat._logging import (
     _coerce_level,
     _JsonFormatter,
     _make_handler,
+    _resolve_log_format,
     _wants_json_logs,
     enable_console_logging,
     set_easycat_log_level,
@@ -451,6 +452,7 @@ def test_make_handler_uses_json_formatter_in_prod_env(monkeypatch: pytest.Monkey
 def test_explicit_log_format_overrides_prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYCAT_LOG_FORMAT", "text")
     monkeypatch.setenv("EASYCAT_ENV", "prod")
+    assert _resolve_log_format() == "text"
     assert _wants_json_logs() is False
 
 
@@ -458,6 +460,36 @@ def test_log_format_rejects_unknown_value(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("EASYCAT_LOG_FORMAT", "jsn")
     with pytest.raises(ValueError, match="Unknown EASYCAT_LOG_FORMAT: 'jsn'"):
         _wants_json_logs()
+
+
+def test_explicit_text_log_format_forces_plain_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EASYCAT_LOG_FORMAT", "text")
+    monkeypatch.setenv("EASYCAT_ENV", "dev")
+    monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
+
+    handler = _make_handler()
+
+    assert isinstance(handler, logging.StreamHandler)
+    assert not isinstance(handler.formatter, _JsonFormatter)
+    assert handler.formatter is not None
+    assert handler.formatter._fmt == (
+        "%(asctime)s [%(session_id)s/%(turn_id)s] %(name)s %(levelname)s %(message)s"
+    )
+
+
+def test_explicit_human_log_format_uses_rich_when_color_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rich.logging import RichHandler
+
+    monkeypatch.setenv("EASYCAT_LOG_FORMAT", "human")
+    monkeypatch.setenv("EASYCAT_ENV", "prod")
+    monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
+
+    assert _resolve_log_format() == "human"
+    assert isinstance(_make_handler(), RichHandler)
 
 
 def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPatch) -> None:

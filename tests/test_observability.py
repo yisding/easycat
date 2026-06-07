@@ -399,6 +399,8 @@ def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
         missing_json_fields
     )
     assert "`EASYCAT_LOG_FORMAT=json|text|human`" in config
+    assert "`text` renders plain non-Rich text" in config
+    assert "`human` renders the Rich-capable interactive formatter" in config
     assert "`EASYCAT_ENV=dev|prod`" in config
     assert "`prod` / `production` uses single-line JSON" in config
     assert "`exc`" in config
