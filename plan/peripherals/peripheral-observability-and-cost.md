@@ -236,7 +236,7 @@ armed to emit turns:
 ### Defaults and Escape Hatch
 
 - `warmup=True` by default.
-- `EasyCatConfig(warmup=False)` skips for batch workloads where the
+- `EasyConfig(warmup=False)` skips for batch workloads where the
   first turn does not need to be fast.
 - When running with `debug="full"`, the library prints a single line
   of output while warmup runs so the user knows why the first

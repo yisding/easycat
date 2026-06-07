@@ -76,7 +76,7 @@ hard-coded guardrail, documented in
 Safety Default":
 
 - The journal and artifact store MUST NOT inline
-  `EasyCatConfig.__dict__` wholesale or `os.environ` wholesale.
+  `EasyConfig.__dict__` wholesale or `os.environ` wholesale.
 - A small hard-coded allowlist captures the narrow set of config
   fields needed for debugging (provider role identifiers, model
   names, runtime mode, timeouts).
@@ -154,7 +154,7 @@ typed, user-extensible policy.
 
 Rules:
 
-- never serialize raw `EasyCatConfig.__dict__`
+- never serialize raw `EasyConfig.__dict__`
 - never serialize raw environment variables wholesale
 - include only fields explicitly marked safe for persistence
 - hash, redact, or drop secrets such as API keys, bearer tokens,

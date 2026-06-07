@@ -339,15 +339,26 @@ def test_current_plan_docs_track_bundled_smart_turn_version() -> None:
         assert stale_phrase not in current_plan_text
 
 
-def test_langchain_langgraph_peripheral_plan_uses_current_config_surface() -> None:
-    """Keep copy-pastable bridge examples on the current EasyConfig API."""
-    plan_path = REPO_ROOT / "plan" / "peripherals" / "peripheral-langchain-langgraph-bridge.md"
-    plan = plan_path.read_text(encoding="utf-8")
+def test_peripheral_plans_use_current_config_surface_name() -> None:
+    """Keep peripheral backlog docs aligned with the current EasyConfig API."""
+    stale: list[str] = []
 
-    assert "from easycat import EasyConfig, LocalTransportConfig, create_session" in plan
-    assert "EasyConfig(" in plan
-    assert "EasyConfig(mcp_servers=[...])" in plan
-    assert "EasyCatConfig" not in plan
+    for plan_path in sorted((REPO_ROOT / "plan" / "peripherals").glob("*.md")):
+        for line_number, line in enumerate(plan_path.read_text(encoding="utf-8").splitlines(), 1):
+            if "EasyCatConfig" in line:
+                stale.append(f"{plan_path.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}")
+
+    assert not stale, "Peripheral plans should say EasyConfig, not EasyCatConfig:\n" + "\n".join(
+        stale
+    )
+
+    langchain_plan = (
+        REPO_ROOT / "plan" / "peripherals" / "peripheral-langchain-langgraph-bridge.md"
+    ).read_text(encoding="utf-8")
+
+    assert "from easycat import EasyConfig, LocalTransportConfig, create_session" in langchain_plan
+    assert "EasyConfig(" in langchain_plan
+    assert "EasyConfig(mcp_servers=[...])" in langchain_plan
 
 
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
