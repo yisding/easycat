@@ -210,6 +210,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-contracts",
         "guard-ops",
         "guard-markdown",
     )
@@ -225,6 +226,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Examples chooser or command matrix",
         "Scaffold templates or template catalog",
         "Contributor and validation guidance",
+        "Provider protocols, cassettes, contract matrix, or bridge event grammar",
         "Operator deployment, observability, or journal durability docs",
         "Markdown links in maintained docs",
         (
@@ -245,6 +247,11 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         (
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "
             "validation lanes, docs-route hints, and plan current-state evidence"
+        ),
+        (
+            "Provider contract docs-route hints, contributor provider guidance, "
+            "offline contract suite, cassette redaction/replay, schema fingerprints, "
+            "bridge contracts, and provider wiring matrix"
         ),
         (
             "Docker deployment guide, operator docs-route hints, journal CLI entry points, "
@@ -300,6 +307,7 @@ def test_docs_route_guard_commands_match_contributing_table() -> None:
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-contracts",
         "guard-ops",
         "guard-markdown",
     )
@@ -554,6 +562,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-contracts",
         "guard-ops",
         "guard-markdown",
     ):
@@ -571,6 +580,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "teaching ladder",
         "examples matrix",
         "scaffold templates",
+        "provider contract docs",
         "operator docs",
         "maintained Markdown links",
         "strict pytest markers",

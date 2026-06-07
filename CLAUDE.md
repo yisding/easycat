@@ -28,6 +28,7 @@ just guard-teaching              # Guard teaching ladder chapters and generated 
 just guard-examples              # Guard examples README, support files, script smoke, and route hints
 just guard-templates             # Guard scaffold templates, init flows, and generated project smoke
 just guard-contributing          # Guard contributor docs, agent guide contracts, and validation state
+just guard-contracts             # Guard provider contracts, cassettes, matrix, and bridge grammar
 just guard-ops                   # Guard operator docs, deployment, observability, journal CLI, and durability
 just guard-markdown              # Guard maintained Markdown links, anchors, and docs-route targets
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py  # Raw fallback for just guard-docs
@@ -35,6 +36,7 @@ uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path  # Raw fallback for just guard-examples
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py  # Raw fallback for just guard-templates
 uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'  # Raw fallback for just guard-contributing
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/integration/test_provider_contract_matrix.py  # Raw fallback for just guard-contracts
 uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py  # Raw fallback for just guard-ops
 uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources  # Raw fallback for just guard-markdown
 uv run pytest                    # Run full test suite
