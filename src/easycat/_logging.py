@@ -21,6 +21,7 @@ _LOG_FORMAT = "%(asctime)s [%(session_id)s/%(turn_id)s] %(name)s %(levelname)s %
 # RichHandler renders time/level/logger in its own columns, so the Rich format
 # only needs to prepend the correlation ids to the message column.
 _RICH_LOG_FORMAT = "[%(session_id)s/%(turn_id)s] %(message)s"
+_LOG_FORMAT_VALUES = frozenset({"json", "text", "human"})
 
 
 def enable_console_logging(level: int | str | None = None, *, force: bool = False) -> None:
@@ -146,5 +147,9 @@ def _make_handler() -> logging.Handler:
 def _wants_json_logs() -> bool:
     log_format = os.getenv("EASYCAT_LOG_FORMAT", "").strip().lower()
     if log_format:
+        if log_format not in _LOG_FORMAT_VALUES:
+            raise ValueError(
+                f"Unknown EASYCAT_LOG_FORMAT: {log_format!r}. Use 'json', 'text', or 'human'."
+            )
         return log_format == "json"
     return os.getenv("EASYCAT_ENV", "").strip().lower() in {"prod", "production"}

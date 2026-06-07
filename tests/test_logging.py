@@ -454,6 +454,12 @@ def test_explicit_log_format_overrides_prod_env(monkeypatch: pytest.MonkeyPatch)
     assert _wants_json_logs() is False
 
 
+def test_log_format_rejects_unknown_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASYCAT_LOG_FORMAT", "jsn")
+    with pytest.raises(ValueError, match="Unknown EASYCAT_LOG_FORMAT: 'jsn'"):
+        _wants_json_logs()
+
+
 def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     from rich.logging import RichHandler
 

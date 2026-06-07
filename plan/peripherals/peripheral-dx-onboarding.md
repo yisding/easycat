@@ -48,7 +48,8 @@ Shipped:
 - `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
 - `EASYCAT_ENV=prod|production` selects the single-line JSON console logger by
   default while `dev`/unset keeps the human renderer; explicit
-  `EASYCAT_LOG_FORMAT` still wins (`_logging.py`, `docs/observability.md`).
+  `EASYCAT_LOG_FORMAT=json|text|human` still wins and rejects unknown values
+  instead of silently falling back (`_logging.py`, `docs/observability.md`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
   stop/shutdown when debug journaling is enabled (`config/_factory.py`).
 - `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to

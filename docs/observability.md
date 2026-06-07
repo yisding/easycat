@@ -154,9 +154,9 @@ There are three independent knobs, and they control different things:
   resolves the level; the default is `INFO`, and `DEBUG` is used only when you
   explicitly request it. It has the same single meaning in `easycat.run()` and
   in `debug="light"`/`debug="full"`.
-- **`EASYCAT_LOG_FORMAT=json`** — switches layer A's console handler from the
-  human/Rich format to single-line JSON. This is an **explicit opt-in**: a TTY
-  toggles *color* only, never JSON.
+- **`EASYCAT_LOG_FORMAT=json|text|human`** — switches layer A's console handler.
+  `json` renders single-line JSON; `text` / `human` force the human renderer.
+  This is an **explicit opt-in**: a TTY toggles *color* only, never JSON.
 
   The JSON field set is a **semi-public UNSTABLE schema** — do not build hard
   dependencies on it yet. Current fields:
