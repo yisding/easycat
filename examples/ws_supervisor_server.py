@@ -249,7 +249,13 @@ async def main() -> None:
             recv_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await recv_task
+            dropped_frames = broadcaster.dropped_frames_for(listener_id)
             broadcaster.unsubscribe(listener_id)
+            logger.info(
+                "Supervisor detached from %s (dropped_frames=%s)",
+                session_id,
+                dropped_frames,
+            )
 
     caller_server = await websockets.serve(handle_caller, "0.0.0.0", CALLER_WS_PORT)
     supervisor_server = await websockets.serve(

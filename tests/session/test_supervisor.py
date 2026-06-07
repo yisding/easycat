@@ -69,7 +69,8 @@ async def test_session_audio_broadcaster_fans_out_caller_and_assistant_audio() -
 async def test_session_audio_broadcaster_drops_slow_listener_frames_and_closes_cleanly() -> None:
     session = _DummySession()
     broadcaster = SessionAudioBroadcaster(session, max_listener_queue=1)
-    _listener_id, queue = broadcaster.subscribe()
+    listener_id, queue = broadcaster.subscribe()
+    fast_listener_id, fast_queue = broadcaster.subscribe(max_queue_size=2)
 
     first = _chunk(3)
     second = _chunk(4)
@@ -80,10 +81,19 @@ async def test_session_audio_broadcaster_drops_slow_listener_frames_and_closes_c
     queued = queue.get_nowait()
     assert queued is not None
     assert queued.chunk is first
+    assert fast_queue.qsize() == 2
     assert broadcaster.dropped_frames == 1
+    assert broadcaster.dropped_frames_for(listener_id) == 1
+    assert broadcaster.dropped_frames_for(fast_listener_id) == 0
+    assert broadcaster.dropped_frames_by_listener == {
+        listener_id: 1,
+        fast_listener_id: 0,
+    }
 
     broadcaster.close()
     assert broadcaster.listener_count == 0
+    assert broadcaster.dropped_frames == 1
+    assert broadcaster.dropped_frames_by_listener == {}
 
     sentinel = queue.get_nowait()
     assert sentinel is None

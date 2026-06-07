@@ -51,6 +51,7 @@ class SessionAudioBroadcaster:
         self._session = session
         self._max_listener_queue = max(1, max_listener_queue)
         self._listeners: dict[int, asyncio.Queue[SupervisorAudioFrame | None]] = {}
+        self._listener_dropped_frames: dict[int, int] = {}
         self._next_listener_id = 0
         self._closed = False
         self._dropped_frames = 0
@@ -66,6 +67,15 @@ class SessionAudioBroadcaster:
     def dropped_frames(self) -> int:
         return self._dropped_frames
 
+    @property
+    def dropped_frames_by_listener(self) -> dict[int, int]:
+        """Return dropped frame counts for currently subscribed listeners."""
+        return dict(self._listener_dropped_frames)
+
+    def dropped_frames_for(self, listener_id: int) -> int:
+        """Return the dropped frame count for one active listener."""
+        return self._listener_dropped_frames.get(listener_id, 0)
+
     def subscribe(
         self,
         *,
@@ -80,11 +90,13 @@ class SessionAudioBroadcaster:
         queue_size = self._max_listener_queue if max_queue_size is None else max(1, max_queue_size)
         queue: asyncio.Queue[SupervisorAudioFrame | None] = asyncio.Queue(maxsize=queue_size)
         self._listeners[listener_id] = queue
+        self._listener_dropped_frames[listener_id] = 0
         return listener_id, queue
 
     def unsubscribe(self, listener_id: int) -> None:
         """Detach one listener and terminate its queue."""
         queue = self._listeners.pop(listener_id, None)
+        self._listener_dropped_frames.pop(listener_id, None)
         if queue is None:
             return
         self._terminate_queue(queue)
@@ -100,6 +112,7 @@ class SessionAudioBroadcaster:
 
         listeners = list(self._listeners.values())
         self._listeners.clear()
+        self._listener_dropped_frames.clear()
         for queue in listeners:
             self._terminate_queue(queue)
 
@@ -129,12 +142,15 @@ class SessionAudioBroadcaster:
                 queue.put_nowait(frame)
             except asyncio.QueueFull:
                 self._dropped_frames += 1
-                if self._dropped_frames == 1 or self._dropped_frames % 100 == 0:
+                listener_dropped = self._listener_dropped_frames.get(listener_id, 0) + 1
+                self._listener_dropped_frames[listener_id] = listener_dropped
+                if listener_dropped == 1 or listener_dropped % 100 == 0:
                     logger.warning(
                         "Dropping supervisor audio frame for listener %s on session %s "
-                        "(dropped=%s)",
+                        "(listener_dropped=%s total_dropped=%s)",
                         listener_id,
                         self._session.session_id,
+                        listener_dropped,
                         self._dropped_frames,
                     )
 
