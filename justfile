@@ -81,9 +81,9 @@ guard-teaching:
 guard-examples:
     uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 
-# Guard scaffold templates, init flows, schema rejection paths, and catalog output.
+# Guard scaffold templates, init flows, catalog output, and generated project smoke.
 guard-templates:
-    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py
+    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:

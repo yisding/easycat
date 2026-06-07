@@ -179,7 +179,7 @@ surface first, then run quick validation before a PR:
 just guard-docs          # root README e2e, install guidance, docs map
 just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples README, support files, script smoke, docs route
-just guard-templates     # scaffold templates, init flows, schema rejection
+just guard-templates     # scaffold templates, init flows, generated project smoke
 just guard-contributing  # contributor guidance, agent guide contracts, validation state
 just guard-markdown      # maintained Markdown links, anchors, docs-route targets
 ```
@@ -193,7 +193,7 @@ directly:
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
 uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 ```

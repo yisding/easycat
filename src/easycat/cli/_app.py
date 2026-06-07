@@ -145,7 +145,12 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_examples.py "
         "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path"
     ),
-    ("uv run pytest tests/cli/test_templates.py tests/cli/test_init.py"),
+    (
+        "uv run pytest "
+        "tests/cli/test_templates.py "
+        "tests/cli/test_init.py "
+        "tests/cli/e2e/test_scaffold_smoke.py"
+    ),
     (
         "uv run pytest "
         "tests/test_contributing.py "

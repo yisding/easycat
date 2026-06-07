@@ -53,7 +53,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json` |
 | Guard teaching docs | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
-| Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py` |
+| Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |
 | Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'` |
 | Guard Markdown links | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
@@ -93,7 +93,7 @@ surface before the broader validation lane:
 | Root README chooser or docs route map | `just guard-docs` | Root onboarding links, README e2e coverage, install guidance, command-hint extraction, `easycat docs`, and JSON route entries |
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
 | Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
-| Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, and next-step commands |
+| Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, and generated project smoke |
 | Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, docs-route hints, and plan current-state evidence |
 | Markdown links in maintained docs | `just guard-markdown` | Local links, anchors, and docs-route Markdown targets |
 
