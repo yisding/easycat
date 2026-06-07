@@ -122,7 +122,8 @@ order stops putting onboarding paths first.
   note.
 - `easycat docs --json` emits a standard envelope with every route,
   including `label`, `path`, `audience`, `description`, `commands`,
-  `url`, `source_url`, and `command_note`.
+  `url`, `source_url`, and `command_note`; maintainer and coding-agent
+  routes include docs/onboarding guard commands.
 - Routes are unique, resolve to local sources, and match GitHub
   heading anchors for fragments.
 - Command hints are valid local commands, appear on their target pages,
