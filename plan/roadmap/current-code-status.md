@@ -2,7 +2,7 @@
 
 Status: current snapshot.
 
-Snapshot date: 2026-06-06.
+Snapshot date: 2026-06-07.
 
 This is a static inspection snapshot used to keep the planning folder aligned
 with the codebase. Counts below come from tracked files and exclude
@@ -10,8 +10,8 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 179 tracked Python files.
-- `tests/` contains 199 tracked `test_*.py` files.
+- `src/easycat/` contains 180 tracked Python files.
+- `tests/` contains 202 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
@@ -90,7 +90,7 @@ with the codebase. Counts below come from tracked files and exclude
   pinned by a golden snapshot and documented in `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now
   includes author, keywords, classifiers, and project URLs, and wheel packaging
-  tests guard against cache/workspace artifacts leaking into release wheels.
+  tests guard against local/generated/secret artifacts leaking into release wheels.
   CI now runs `uv build`, and release validation exercises an installed
   package through the public CLI.
 - Broader connection-policy hardening and deeper live/cassette provider

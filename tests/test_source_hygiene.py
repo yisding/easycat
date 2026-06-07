@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,17 @@ TEST_PLAN_TABLE_ROW_RE = re.compile(
 TEST_PLAN_HEADING_RE = re.compile(r"^## Plan (?P<number>\d+) — (?P<title>.+)$", re.MULTILINE)
 STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
+
+
+def _tracked_file_count(*patterns: str) -> int:
+    result = subprocess.run(
+        ["git", "ls-files", *patterns],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return len([line for line in result.stdout.splitlines() if line])
 
 
 def test_gitignore_covers_local_generated_state() -> None:
@@ -163,6 +175,20 @@ def test_cli_test_plan_describes_integration_local_marker_selection() -> None:
         "Skipped by default to keep the fast test suite fast",
     ):
         assert stale_phrase not in combined
+
+
+def test_roadmap_current_code_status_tracks_inventory_and_wheel_hygiene() -> None:
+    """Keep the current-code snapshot aligned with tracked files and release hygiene."""
+    status = (REPO_ROOT / "plan" / "roadmap" / "current-code-status.md").read_text(
+        encoding="utf-8"
+    )
+    source_count = _tracked_file_count("src/easycat/**/*.py", "src/easycat/*.py")
+    test_count = _tracked_file_count("tests/**/test_*.py", "tests/test_*.py")
+
+    assert f"`src/easycat/` contains {source_count} tracked Python files." in status
+    assert f"`tests/` contains {test_count} tracked `test_*.py` files." in status
+    assert "cache/workspace artifacts" not in status
+    assert "local/generated/secret artifacts leaking into release wheels" in status
 
 
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
