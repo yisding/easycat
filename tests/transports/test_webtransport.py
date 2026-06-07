@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import struct
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,6 @@ from easycat.transports.webtransport import (
     _get_protocol_class,
     _WebTransportSession,
 )
-
-from .conftest import find_free_port
 
 
 def _audio_frame(pcm: bytes, rate: int = 16000) -> bytes:
@@ -1536,9 +1535,13 @@ class TestWebTransportServerLoopback:
             result_audio.set_result(bytes(audio_buf[5 : 5 + len(pcm_in)]))
 
     @pytest.mark.asyncio
-    async def test_two_concurrent_clients(self, tmp_path: Path) -> None:
+    async def test_two_concurrent_clients(
+        self,
+        tmp_path: Path,
+        unused_tcp_port_factory: Callable[[], int],
+    ) -> None:
         cert_path, key_path = _write_self_signed_pair(tmp_path)
-        port = find_free_port()
+        port = unused_tcp_port_factory()
 
         # Track handlers and their per-client transports.
         client_pcms: list[bytes] = []

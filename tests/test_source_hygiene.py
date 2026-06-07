@@ -563,14 +563,16 @@ def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
     assert "_bound_server_port(server)" in start_ws_server
 
 
-def test_websocket_session_server_tests_use_pytest_port_factory() -> None:
-    """Keep focused WebSocket session-server tests off bind-close port helpers."""
-    source = (REPO_ROOT / "tests" / "transports" / "test_websocket_session_server.py").read_text(
-        encoding="utf-8"
-    )
+def test_focused_transport_tests_use_pytest_port_factory() -> None:
+    """Keep focused transport tests off bind-close port helpers where feasible."""
+    for path in (
+        REPO_ROOT / "tests" / "transports" / "test_websocket_session_server.py",
+        REPO_ROOT / "tests" / "transports" / "test_webtransport.py",
+    ):
+        source = path.read_text(encoding="utf-8")
 
-    assert "find_free_port" not in source
-    assert "unused_tcp_port_factory" in source
+        assert "find_free_port" not in source
+        assert "unused_tcp_port_factory" in source
 
 
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
