@@ -702,6 +702,22 @@ def test_session_smoke_waits_for_pipeline_completion_event() -> None:
     assert "BotStoppedSpeaking" in source
 
 
+def test_session_tests_use_events_for_never_complete_tasks() -> None:
+    """Tests that keep a task pending should wait on events, not long sleeps."""
+    files = (
+        REPO_ROOT / "tests" / "session" / "test_audio_router.py",
+        REPO_ROOT / "tests" / "session" / "test_session.py",
+        REPO_ROOT / "tests" / "session" / "test_tts_scheduler.py",
+    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    assert "await never_released.wait()" in combined
+    assert "await asyncio.sleep(5)" not in combined
+    assert "await asyncio.sleep(10)" not in combined
+    assert "await asyncio.sleep(10.0)" not in combined
+    assert "yield to allow the task to start" not in combined
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

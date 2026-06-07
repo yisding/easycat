@@ -435,10 +435,14 @@ async def test_aec_reference_failure_does_not_abort_delivery():
 
 @pytest.mark.asyncio
 async def test_start_and_stop_ingress_cancels_task():
+    ingress_started = asyncio.Event()
+    never_released = asyncio.Event()
+
     # Transport that never yields so the loop blocks until cancelled.
     class _StalledTransport(_FakeTransport):
         async def receive_audio(self) -> AsyncIterator[AudioChunk]:
-            await asyncio.sleep(10)
+            ingress_started.set()
+            await never_released.wait()
             if False:
                 yield None
 
@@ -447,7 +451,7 @@ async def test_start_and_stop_ingress_cancels_task():
     task = router.start_ingress()
     assert router.pipeline_task is task
     assert task in state["runtime_scope"].tasks(AudioRouter._INGRESS_TASK_NAME)
-    await asyncio.sleep(0)  # yield to allow the task to start
+    await asyncio.wait_for(ingress_started.wait(), timeout=1.0)
     await router.stop_ingress()
     assert router.pipeline_task is None
     assert task.cancelled() or task.done()

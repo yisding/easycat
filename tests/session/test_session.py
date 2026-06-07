@@ -729,9 +729,10 @@ async def test_journaled_task_records_scheduled_and_completed():
 async def test_journaled_task_records_cancelled():
     journal = InMemoryRingBuffer(capacity=32)
     session = Session(_full_config(journal=journal))
+    never_released = asyncio.Event()
 
     async def _slow() -> None:
-        await asyncio.sleep(10.0)
+        await never_released.wait()
 
     task = session._runtime_scope.create_journaled_task(
         _slow(), name="slow_task", journal_sink=session._journal_sink

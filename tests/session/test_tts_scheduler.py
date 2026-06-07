@@ -351,11 +351,12 @@ async def test_cancel_cancels_pending_current_task() -> None:
 
     started = asyncio.Event()
     cancelled = asyncio.Event()
+    never_released = asyncio.Event()
 
     async def _long_running() -> None:
         started.set()
         try:
-            await asyncio.sleep(5)
+            await never_released.wait()
         except asyncio.CancelledError:
             cancelled.set()
             raise
