@@ -142,6 +142,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
     (
         "uv run pytest "
         "tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix "
+        "tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid "
         "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path"
     ),
     (

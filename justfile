@@ -77,9 +77,9 @@ guard-docs:
 guard-teaching:
     uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 
-# Guard the examples chooser and docs-route example hints.
+# Guard the examples chooser, README command hints, and docs-route example hints.
 guard-examples:
-    uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+    uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 
 # Guard scaffold template READMEs and template catalog output.
 guard-templates:
