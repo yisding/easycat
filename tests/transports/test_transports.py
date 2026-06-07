@@ -697,6 +697,46 @@ class TestTwilioStreamTokenValidation:
         assert ws.closed_with is None
 
 
+class TestTwilioDtmfParsingInTransports:
+    @pytest.mark.asyncio
+    async def test_server_transport_uses_shared_dtmf_parser(self) -> None:
+        event_bus = EventBus()
+        digits: list[str] = []
+        event_bus.subscribe(DTMF, lambda event: digits.append(event.digit))
+        transport = TwilioTransport(event_bus=event_bus)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_dtmf_msg("a", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_dtmf_msg("X", stream_sid="STREAM1"))
+        await transport._handle_message(
+            json.dumps(
+                {
+                    "event": "dtmf",
+                    "streamSid": "STREAM1",
+                    "dtmf": {"digit": "12"},
+                }
+            )
+        )
+
+        assert digits == ["A"]
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_uses_shared_dtmf_parser(self) -> None:
+        event_bus = EventBus()
+        digits: list[str] = []
+        event_bus.subscribe(DTMF, lambda event: digits.append(event.digit))
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_dtmf_msg("b", stream_sid="STREAM1"))
+        await transport._handle_message(_twilio_dtmf_msg("", stream_sid="STREAM1"))
+        await transport._handle_message(
+            json.dumps({"event": "dtmf", "streamSid": "STREAM1", "dtmf": "5"})
+        )
+
+        assert digits == ["B"]
+
+
 @pytest.mark.integration_socket
 class TestTwilioTransport:
     """Tests for TwilioTransport with mocked Twilio messages."""

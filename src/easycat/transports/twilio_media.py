@@ -26,12 +26,12 @@ from websockets.asyncio.server import ServerConnection
 from easycat._audio_utils import resample
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import (
-    DTMF,
     CallAnswered,
     CallEnded,
     EventBus,
     PlaybackMarkAck,
 )
+from easycat.telephony.dtmf import parse_twilio_dtmf_message
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
 logger = logging.getLogger(__name__)
@@ -295,6 +295,26 @@ def _is_active_twilio_stream_event(
         return False
 
     return True
+
+
+async def _emit_parsed_twilio_dtmf(
+    msg: dict[str, Any],
+    event_bus: EventBus | None,
+    *,
+    active_stream_sid: str | None,
+) -> None:
+    if not _is_active_twilio_stream_event(
+        msg,
+        active_stream_sid=active_stream_sid,
+        event_name="dtmf",
+    ):
+        return
+    event = parse_twilio_dtmf_message(msg)
+    if event is None:
+        logger.debug("Ignoring Twilio DTMF with invalid payload")
+        return
+    if event_bus is not None:
+        await event_bus.emit(event)
 
 
 class TwilioTransport(_ServerTransportBase):
@@ -655,20 +675,11 @@ class TwilioTransport(_ServerTransportBase):
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
-        if not _is_active_twilio_stream_event(
+        await _emit_parsed_twilio_dtmf(
             msg,
+            self._event_bus,
             active_stream_sid=self._stream_sid,
-            event_name="dtmf",
-        ):
-            return
-        dtmf_data = msg.get("dtmf", {})
-        if not isinstance(dtmf_data, dict):
-            logger.debug("Ignoring Twilio DTMF with non-object payload")
-            return
-        digit = dtmf_data.get("digit", "")
-        if digit and self._event_bus is not None:
-            logger.debug("DTMF digit received: %s", digit)
-            await self._event_bus.emit(DTMF(digit=digit))
+        )
 
     # ── Properties ────────────────────────────────────────────────
 
@@ -1035,19 +1046,11 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
-        if not _is_active_twilio_stream_event(
+        await _emit_parsed_twilio_dtmf(
             msg,
+            self._event_bus,
             active_stream_sid=self._stream_sid,
-            event_name="dtmf",
-        ):
-            return
-        dtmf_data = msg.get("dtmf", {})
-        if not isinstance(dtmf_data, dict):
-            logger.debug("Ignoring Twilio DTMF with non-object payload")
-            return
-        digit = dtmf_data.get("digit", "")
-        if digit and self._event_bus is not None:
-            await self._event_bus.emit(DTMF(digit=digit))
+        )
 
     @property
     def stream_sid(self) -> str | None:

@@ -541,7 +541,8 @@ context. Several bullets are known stale; use the current-state list above and
 
 ### 6.4 Tighten Twilio Stream Handling
 
-- Validate DTMF using the existing parser instead of emitting raw digits.
+- Done: Twilio transports validate DTMF using the existing parser instead of
+  emitting raw digits.
 - Validate stream id and active stream state before accepting media/control
   frames.
 - Track Twilio sequence and timestamp gaps as metrics.
