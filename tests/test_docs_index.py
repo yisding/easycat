@@ -17,6 +17,13 @@ from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
+ONBOARDING_GUARD_COMMANDS = (
+    "just guard-docs",
+    "just guard-examples",
+    "just guard-templates",
+    "just guard-contributing",
+    "just guard-markdown",
+)
 
 
 def _root_relative_doc_links() -> set[str]:
@@ -116,13 +123,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "development commands, docs/onboarding guard recipes" in normalized
     assert "validation commands, and PR expectations" in normalized
     assert "docs/onboarding guard recipes" in normalized
-    for recipe in (
-        "just guard-docs",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
-    ):
+    for recipe in ONBOARDING_GUARD_COMMANDS:
         assert recipe in text
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
@@ -268,13 +269,18 @@ def test_coding_agents_docs_route_matches_guard_commands() -> None:
     )[0]
     route_commands = entries["AGENTS.md"].get("commands", ())
 
-    for command in (
-        "just guard-docs",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
-    ):
+    for command in ONBOARDING_GUARD_COMMANDS:
+        assert command in command_section
+        assert command in route_commands
+
+
+def test_architecture_docs_route_matches_guard_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
+    route_commands = entries["CLAUDE.md"].get("commands", ())
+
+    for command in ONBOARDING_GUARD_COMMANDS:
         assert command in command_section
         assert command in route_commands
 

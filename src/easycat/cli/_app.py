@@ -225,8 +225,18 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Architecture",
         "path": "CLAUDE.md",
         "audience": "maintainers",
-        "description": "Orient to the pipeline, packages, provider registries, and lifecycle.",
-        "commands": ("uv run pytest tests/test_install_guidance.py",),
+        "description": (
+            "Orient to the pipeline, packages, provider registries, lifecycle, "
+            "and docs/onboarding guards."
+        ),
+        "commands": (
+            "uv run pytest tests/test_install_guidance.py",
+            "just guard-docs",
+            "just guard-examples",
+            "just guard-templates",
+            "just guard-contributing",
+            "just guard-markdown",
+        ),
     },
     {
         "label": "Coding agents",

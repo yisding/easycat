@@ -567,6 +567,14 @@ def test_agent_guide_command_examples_are_current() -> None:
     for filename, command_section in command_sections.items():
         assert "just check" in command_section
         assert "just validate-quick" in command_section
+        for recipe in (
+            "just guard-docs",
+            "just guard-examples",
+            "just guard-templates",
+            "just guard-contributing",
+            "just guard-markdown",
+        ):
+            assert recipe in command_section, filename
         assert "uv run easycat docs" in command_section
         assert "uv run easycat docs --json" in command_section
         assert "uv run easycat doctor --json" in command_section
