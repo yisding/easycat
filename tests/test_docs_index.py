@@ -185,6 +185,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "top-level `available_audience_filters`" in text
     assert "top-level `audience_alias_note`" in text
     assert "`app-builders` and `coding-agents`" in text
+    assert "broad `maintainers` / `operators` role filters" in normalized
     assert "top-level `command_note`" in text
     assert "installed CLI hints from repo-local `uv run` hints" in normalized
     assert "uv run easycat validate quick" in text

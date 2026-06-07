@@ -312,6 +312,8 @@ def test_explain_meta_json_schema_documents_error_fix(
     assert "bare installed CLI hints, repo-local `uv run` hints" in stdout
     assert "uppercase placeholders such as PATH" in stdout
     assert "multi-word audience filters accept hyphens or underscores" in stdout
+    assert "maintainers/operators filters include compound labels" in stdout
+    assert "provider maintainers and operators and maintainers" in stdout
     assert "lists the copyable filter tokens" in stdout
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
@@ -397,6 +399,8 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "bare installed CLI hints, repo-local `uv run` hints" in normalized_body
     assert "uppercase placeholders such as PATH" in normalized_body
     assert "multi-word audience filters accept hyphens or underscores" in normalized_body
+    assert "maintainers/operators filters include compound labels" in normalized_body
+    assert "provider maintainers and operators and maintainers" in normalized_body
     assert "lists the copyable filter tokens" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     catalog_block = _json_schema_catalog_block(payload["body"])

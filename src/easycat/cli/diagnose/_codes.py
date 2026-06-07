@@ -136,8 +136,11 @@ entry points include:
                             `uv run` hints, and uppercase placeholders such
                             as PATH; `audience_alias_note` explains that
                             multi-word audience filters accept hyphens or
-                            underscores; `available_audience_filters` lists
-                            the copyable filter tokens
+                            underscores and that the maintainers/operators
+                            filters include compound labels such as provider
+                            maintainers and operators and maintainers;
+                            `available_audience_filters` lists the copyable
+                            filter tokens
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `name`, `mode`, `transport`,
