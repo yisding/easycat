@@ -118,6 +118,7 @@ _DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (
     "just guard-examples",
     "just guard-templates",
     "just guard-contributing",
+    "just guard-ops",
     "just guard-markdown",
 )
 
@@ -160,6 +161,22 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_validation_plan.py && "
         "uv run pytest tests/test_install_guidance.py -k "
         "'agent_guide or agent_guides or claude_'"
+    ),
+    (
+        "uv run pytest "
+        "tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands "
+        "tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points "
+        "tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands "
+        "tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token "
+        "tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost "
+        "tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed "
+        "tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras "
+        "tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path "
+        "tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_"
+        "extras_and_easyconfig "
+        "tests/test_observability.py "
+        "tests/cli/test_bundles.py "
+        "tests/runtime/test_sqlite_journal.py"
     ),
     (
         "uv run pytest "

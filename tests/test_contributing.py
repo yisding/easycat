@@ -210,6 +210,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-ops",
         "guard-markdown",
     )
 
@@ -224,6 +225,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Examples chooser or command matrix",
         "Scaffold templates or template catalog",
         "Contributor and validation guidance",
+        "Operator deployment, observability, or journal durability docs",
         "Markdown links in maintained docs",
         (
             "Root onboarding links, README e2e coverage, install guidance, "
@@ -243,6 +245,11 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         (
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "
             "validation lanes, docs-route hints, and plan current-state evidence"
+        ),
+        (
+            "Docker deployment guide, operator docs-route hints, journal CLI entry points, "
+            "debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, "
+            "and SQLite journal durability"
         ),
         "Local links, anchors, and docs-route Markdown targets",
     ):
@@ -293,6 +300,7 @@ def test_docs_route_guard_commands_match_contributing_table() -> None:
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-ops",
         "guard-markdown",
     )
     expected_guard_commands = tuple(f"just {recipe}" for recipe in guard_recipes)
@@ -546,6 +554,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-ops",
         "guard-markdown",
     ):
         assert f"`{recipe}`" in section
@@ -562,6 +571,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "teaching ladder",
         "examples matrix",
         "scaffold templates",
+        "operator docs",
         "maintained Markdown links",
         "strict pytest markers",
         "provider/surface pairing",

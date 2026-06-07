@@ -55,6 +55,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |
 | Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'` |
+| Guard operator docs | `just guard-ops` | `uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py` |
 | Guard Markdown links | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
@@ -95,6 +96,7 @@ surface before the broader validation lane:
 | Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
 | Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, and generated project smoke |
 | Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, docs-route hints, and plan current-state evidence |
+| Operator deployment, observability, or journal durability docs | `just guard-ops` | Docker deployment guide, operator docs-route hints, journal CLI entry points, debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, and SQLite journal durability |
 | Markdown links in maintained docs | `just guard-markdown` | Local links, anchors, and docs-route Markdown targets |
 
 If `just` is not installed, use the raw command table in

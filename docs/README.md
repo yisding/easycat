@@ -77,7 +77,7 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,
   `just guard-teaching`, `just guard-examples`, `just guard-templates`,
-  `just guard-contributing`, `just guard-markdown`), marker taxonomy,
+  `just guard-contributing`, `just guard-ops`, `just guard-markdown`), marker taxonomy,
   cassettes, and provider-addition checklist. If `just` is not installed, use
   its raw command table for the equivalent `uv run pytest ...` commands.
 - Operating sessions in production: read
@@ -86,7 +86,8 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   metrics, and traces. Start with `easycat bundles list`; from this repo, add
   `uv sync --extra debugger --group dev` when you need the UI. Then review the
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
-  persistence, recovery, and storage layout.
+  persistence, recovery, and storage layout. Run `just guard-ops` when editing
+  these operator-facing pages.
 - Validating a change: run `uv run easycat validate quick`, inspect
   `uv run easycat validate report .easycat/validation/latest.json`, or use the
   matching JSON lanes (`uv run easycat validate quick --json`,
