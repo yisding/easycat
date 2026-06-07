@@ -9,7 +9,8 @@
 
 Shipped:
 
-- `easycat.run(config)` with auto-attached runtime feedback
+- `easycat.run(config, feedback="auto" | "on" | "off")` with auto-attached
+  runtime feedback by default and explicit force/suppress controls
   (`src/easycat/helpers.py::run`).
 - String-keyed provider selection (`stt="deepgram/flux"`,
   `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
@@ -173,7 +174,8 @@ Current ceremony to remove:
 - explicit event logging setup (`default_event_logging()`) → journal is on
   by default
 - explicit runtime feedback attachment (`attach_runtime_feedback(session)`)
-  → auto-attached when `sys.stderr.isatty()` and not in a test environment
+  → `run(..., feedback="auto")` auto-attaches when `sys.stderr.isatty()` and
+  not in a test environment; `"on"` forces it and `"off"` suppresses it
 - explicit shutdown signal handling (`wait_for_shutdown_signal(session)`)
   → handled by `run()` or `async with session`
 - explicit `asyncio.run(main())` wrapper → handled by `run()`

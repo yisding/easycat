@@ -13,6 +13,7 @@ import easycat
 from easycat import EasyConfig, SessionConfig, require_env, run
 from easycat.config import _resolve_easycat_log_level
 from easycat.config.easy import _EASYCAT_LOG_LEVELS
+from easycat.helpers import _feedback_enabled
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
 from easycat.transports.local import LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransportConfig
@@ -43,6 +44,36 @@ def test_run_docstring_tracks_log_level_env_vocabulary() -> None:
     missing = sorted(level for level in _EASYCAT_LOG_LEVELS if level not in doc)
 
     assert not missing, "run() docstring missing EASYCAT_LOG_LEVEL values: " + ", ".join(missing)
+
+
+def test_run_docstring_tracks_feedback_modes() -> None:
+    doc = run.__doc__ or ""
+
+    assert 'feedback="auto"' in doc
+    assert 'feedback="on"' in doc
+    assert 'feedback="off"' in doc
+
+
+def test_run_feedback_auto_uses_tty_outside_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    assert _feedback_enabled("auto", stderr_isatty=True) is True
+    assert _feedback_enabled("auto", stderr_isatty=False) is False
+
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_dx_helpers.py::test")
+    assert _feedback_enabled("auto", stderr_isatty=True) is False
+
+
+def test_run_feedback_on_off_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_dx_helpers.py::test")
+
+    assert _feedback_enabled("on", stderr_isatty=False) is True
+    assert _feedback_enabled("off", stderr_isatty=True) is False
+
+
+def test_run_feedback_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="Unknown feedback mode.*auto.*on.*off"):
+        _feedback_enabled("loud")  # type: ignore[arg-type]
 
 
 def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.MonkeyPatch):

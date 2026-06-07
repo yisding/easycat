@@ -200,8 +200,8 @@ context. Several bullets are known stale; use the current-state list above and
 ### 1.3 Keep `run()`, But Make Feedback Explicit
 
 - Keep `run(config)` as the best first-run helper.
-- Remove duplicate signal-handling code by sharing one internal signal helper.
-- Add an explicit feedback option, for example `run(config, feedback="auto")`,
+- Done: remove duplicate signal-handling code by sharing one internal signal helper.
+- Done: add an explicit feedback option, `run(config, feedback="auto"|"on"|"off")`,
   where `"auto"` keeps the current TTY behavior.
 - Move `quick.speak()` out of the top-level namespace. Either delete it if it
   remains unused, or move it to `easycat.recipes`.

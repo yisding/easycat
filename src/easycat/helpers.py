@@ -7,7 +7,7 @@ import logging
 import os
 import signal
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.session._session import Session
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from easycat.config import EasyConfig
 
 logger = logging.getLogger(__name__)
+FeedbackMode = Literal["auto", "on", "off"]
 
 
 def require_env(name: str) -> str:
@@ -99,18 +100,37 @@ def attach_runtime_feedback(session: Session) -> None:
     session.subscribe_event(Interruption, lambda _e: _say("\u26a1 Interruption detected."))
 
 
-def run(config: EasyConfig) -> None:
+def _feedback_enabled(
+    feedback: FeedbackMode,
+    *,
+    stderr_isatty: bool | None = None,
+) -> bool:
+    """Resolve the ``run(..., feedback=...)`` policy to a boolean."""
+    if feedback == "on":
+        return True
+    if feedback == "off":
+        return False
+    if feedback == "auto":
+        if stderr_isatty is None:
+            stderr_isatty = sys.stderr.isatty()
+        return stderr_isatty and not os.getenv("PYTEST_CURRENT_TEST")
+    raise ValueError(f"Unknown feedback mode: {feedback!r}. Use 'auto', 'on', or 'off'.")
+
+
+def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
     """Run a voice agent to completion from a synchronous entry point.
 
     Replaces the ``asyncio.run(main())`` wrapper, manual
     ``await session.start()``, signal waiting, and teardown ceremony
     that every example used to carry. Internally it uses the public
     ``async with session:`` lifecycle: entering starts the session and
-    exiting calls ``stop(force=True)``. Runtime feedback
-    (``Listening...``, user transcripts, assistant replies) is
-    auto-attached when stderr is a TTY so `easycat init → run` feels
-    alive out of the box; tests and production pipelines that redirect
-    stderr stay quiet.
+    exiting calls ``stop(force=True)``. ``feedback="auto"`` preserves
+    the default first-run behavior: runtime feedback (``Listening...``,
+    user transcripts, assistant replies) is auto-attached when stderr
+    is a TTY and EasyCat is not running under pytest, so
+    `easycat init → run` feels alive out of the box while tests and
+    redirected production logs stay quiet. Use ``feedback="on"`` to
+    force that console feedback, or ``feedback="off"`` to suppress it.
 
     ``EASYCAT_LOG_LEVEL=info`` (or ``debug``/``warning``/``warn``/
     ``error``/``critical``) in the environment bumps the ``easycat``
@@ -124,6 +144,7 @@ def run(config: EasyConfig) -> None:
     from easycat._logging import enable_console_logging
     from easycat.config import create_session
 
+    feedback_on = _feedback_enabled(feedback)
     env_level = os.getenv("EASYCAT_LOG_LEVEL", "").strip()
     if env_level:
         # Only attach a console handler when the user explicitly asked for a
@@ -133,11 +154,11 @@ def run(config: EasyConfig) -> None:
         enable_console_logging()
 
     session = create_session(config)
-    if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST"):
-        # Live transcript feedback (Listening.../You.../Assistant...) always
-        # shows on an interactive TTY. The one-line "what got wired" banner is
-        # an extra on top, suppressed independently via EASYCAT_QUIET or the
-        # repo's standard NO_COLOR / CI conventions (see cli/_output.py) — so
+    if feedback_on:
+        # Live transcript feedback (Listening.../You.../Assistant...) follows
+        # ``feedback``. The one-line "what got wired" banner is an extra on
+        # top, suppressed independently via EASYCAT_QUIET or the repo's
+        # standard NO_COLOR / CI conventions (see cli/_output.py) — so
         # silencing the banner never costs you the transcripts.
         banner_suppressed = bool(
             os.getenv("EASYCAT_QUIET") or os.getenv("NO_COLOR") or os.getenv("CI") == "true"

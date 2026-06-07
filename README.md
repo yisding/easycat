@@ -312,6 +312,11 @@ run(
 )
 ```
 
+By default, `run(...)` shows live console feedback only on an interactive
+stderr. Use `run(config, feedback="off")` to keep a process quiet, or
+`feedback="on"` to force the same first-run transcript/status output when
+stderr is redirected.
+
 > Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
 > (gpt-realtime-whisper) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
 > environment) when you do not override `stt` or `tts`. The Realtime STT
