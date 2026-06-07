@@ -69,6 +69,26 @@ typecheck-fast:
 cov:
     uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
 
+# Guard root onboarding docs, the docs route map, and docs CLI JSON.
+guard-docs:
+    uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
+
+# Guard the examples chooser and docs-route example hints.
+guard-examples:
+    uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+
+# Guard scaffold template READMEs and template catalog output.
+guard-templates:
+    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json
+
+# Guard contributor guidance, validation plan state, and contributor docs route hints.
+guard-contributing:
+    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_report_commands tests/test_validation_plan.py
+
+# Guard maintained Markdown links and anchors.
+guard-markdown:
+    uv run pytest tests/test_markdown_links.py
+
 # Deterministic local validation slice (what CI's quick job runs).
 validate-quick:
     uv run easycat validate quick

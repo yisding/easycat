@@ -170,26 +170,13 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
 def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> None:
     section = _contributing_docs_onboarding_section()
     normalized = re.sub(r"\s+", " ", section)
-    commands = (
-        "uv run pytest "
-        "tests/test_quickstart_e2e.py::"
-        "test_readme_choose_your_path_routes_primary_onboarding_surfaces "
-        "tests/test_docs_index.py "
-        "tests/cli/test_app.py::test_docs_command "
-        "tests/cli/test_app.py::test_docs_command_json",
-        "uv run pytest "
-        "tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix "
-        "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path",
-        "uv run pytest "
-        "tests/cli/test_templates.py "
-        "tests/cli/test_init.py::test_list_templates "
-        "tests/cli/test_init.py::test_list_templates_json",
-        "uv run pytest "
-        "tests/test_contributing.py "
-        "tests/test_docs_index.py::"
-        "test_contributing_docs_route_matches_validation_report_commands "
-        "tests/test_validation_plan.py",
-        "uv run pytest tests/test_markdown_links.py",
+    recipes = just_recipe_commands(REPO_ROOT)
+    guard_recipes = (
+        "guard-docs",
+        "guard-examples",
+        "guard-templates",
+        "guard-contributing",
+        "guard-markdown",
     )
 
     assert "narrow guard that owns that surface" in normalized
@@ -206,8 +193,10 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
     ):
         assert phrase in section
 
-    for command in commands:
-        assert command in section
+    for recipe in guard_recipes:
+        assert f"`just {recipe}`" in section
+        command = recipes[recipe]
+        assert command.startswith("uv run pytest ")
         parts = shlex.split(command)
         assert parts[:3] == ["uv", "run", "pytest"]
         for target in parts[3:]:
@@ -392,6 +381,14 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "tests/test_docs_index.py",
     ):
         assert f"`{token}`" in section
+    for recipe in (
+        "guard-docs",
+        "guard-examples",
+        "guard-templates",
+        "guard-contributing",
+        "guard-markdown",
+    ):
+        assert f"`{recipe}`" in section
     for phrase in (
         "development-loop table",
         "validation chooser table",
