@@ -128,6 +128,56 @@ def _registered_easycat_commands() -> set[str]:
     return commands
 
 
+def _pytest_target_tokens(command: str) -> list[str]:
+    targets: list[str] = []
+    options_with_values = {"-m", "-n", "--dist", "--cov-report"}
+
+    for segment in re.split(r"\s+&&\s+", command):
+        tokens = shlex.split(segment)
+        if tokens[:3] != ["uv", "run", "pytest"]:
+            continue
+
+        index = 3
+        while index < len(tokens):
+            token = tokens[index]
+            if token in options_with_values:
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            targets.append(token)
+            index += 1
+
+    return targets
+
+
+def _pytest_target_problems(command: str, *, label: str) -> list[str]:
+    problems: list[str] = []
+
+    for target in _pytest_target_tokens(command):
+        file_target, _, node_id = target.partition("::")
+        path = REPO_ROOT / file_target
+        if not path.exists():
+            problems.append(f"{label}: missing pytest target {file_target}")
+            continue
+        if not node_id:
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        for node_part in node_id.split("::"):
+            node_name = node_part.split("[", 1)[0]
+            if node_name.startswith("Test"):
+                pattern = rf"\bclass\s+{re.escape(node_name)}\b"
+            else:
+                pattern = rf"\bdef\s+{re.escape(node_name)}\b"
+            if re.search(pattern, text) is None:
+                problems.append(f"{label}: missing pytest node {target}")
+                break
+
+    return problems
+
+
 def test_contributing_quick_start_points_to_docs_command() -> None:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     quick_start = contributing.split("## Quick start", 1)[1].split(
@@ -215,17 +265,11 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         assert f"`just {recipe}`" in section
         command = recipes[recipe]
         assert command.startswith("uv run pytest ")
-        parts = shlex.split(command)
-        assert parts[:3] == ["uv", "run", "pytest"]
-        for target in parts[3:]:
-            file_target, _, test_name = target.partition("::")
-            path = REPO_ROOT / file_target
-            assert path.exists(), f"CONTRIBUTING.md docs guard references missing {file_target}"
-            if test_name:
-                text = path.read_text(encoding="utf-8")
-                assert f"def {test_name}" in text, (
-                    f"CONTRIBUTING.md docs guard references missing {target}"
-                )
+        problems = _pytest_target_problems(
+            command,
+            label=f"CONTRIBUTING.md docs guard `just {recipe}`",
+        )
+        assert not problems, "\n".join(problems)
 
 
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
@@ -251,6 +295,41 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
     assert not missing, "CONTRIBUTING.md references missing just recipes: " + ", ".join(missing)
     assert not stale_raw_commands, "CONTRIBUTING.md stale raw commands: " + "; ".join(
         stale_raw_commands
+    )
+
+
+def test_contributing_development_loop_pytest_targets_resolve() -> None:
+    problems: list[str] = []
+
+    for row in _development_loop_rows():
+        raw_command = row["raw"]
+        if "uv run pytest" not in raw_command:
+            continue
+        problems.extend(
+            _pytest_target_problems(
+                raw_command,
+                label=f"CONTRIBUTING.md development loop {row['task'].strip()}",
+            )
+        )
+
+    assert not problems, "CONTRIBUTING.md pytest targets are stale:\n" + "\n".join(problems)
+
+
+def test_contributing_pytest_target_validator_checks_node_ids() -> None:
+    problems = _pytest_target_problems(
+        (
+            "uv run pytest tests/test_contributing.py::missing_test "
+            "tests/test_contributing_missing.py"
+        ),
+        label="Broken pytest command",
+    )
+
+    assert (
+        "Broken pytest command: missing pytest node tests/test_contributing.py::missing_test"
+        in problems
+    )
+    assert "Broken pytest command: missing pytest target tests/test_contributing_missing.py" in (
+        problems
     )
 
 
