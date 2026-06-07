@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -35,7 +36,6 @@ from .harness import (
     RecordingTTS,
     ScriptedSTT,
     ScriptedVAD,
-    find_free_port,
     make_chunk,
     make_test_config,
     patch_provider_factories,
@@ -44,6 +44,19 @@ from .harness import (
 pytestmark = pytest.mark.integration_socket
 
 FAST_TURN_MS = 1
+
+_unused_tcp_port_factory: Callable[[], int] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _set_unused_tcp_port_factory(unused_tcp_port_factory: Callable[[], int]) -> None:
+    global _unused_tcp_port_factory
+    _unused_tcp_port_factory = unused_tcp_port_factory
+
+
+def _unused_port() -> int:
+    assert _unused_tcp_port_factory is not None
+    return _unused_tcp_port_factory()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -112,7 +125,7 @@ async def test_twilio_full_turn_e2e(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -178,7 +191,7 @@ async def test_twilio_outbound_track_filtered(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -257,7 +270,7 @@ async def test_twilio_invalid_base64_media_ignored(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -326,7 +339,7 @@ async def test_twilio_invalid_base64_media_ignored(
 @pytest.mark.asyncio
 async def test_twilio_send_audio_before_start_is_noop() -> None:
     """Sending audio before receiving start message should be silently ignored."""
-    port = find_free_port()
+    port = _unused_port()
     send_result: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -359,7 +372,7 @@ async def test_twilio_send_audio_before_start_is_noop() -> None:
 @pytest.mark.asyncio
 async def test_twilio_mark_auto_naming() -> None:
     """send_mark without name should auto-generate sequential names."""
-    port = find_free_port()
+    port = _unused_port()
     marks_future: asyncio.Future[list] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -411,7 +424,7 @@ async def test_twilio_dtmf_during_session(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     dtmf_digits: list[str] = []
     result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
@@ -493,7 +506,7 @@ async def test_twilio_barge_in_sends_clear(
     vad = ScriptedVAD(["start", "stop", "start"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     bot_speaking = asyncio.Event()
     result_future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
@@ -567,7 +580,7 @@ async def test_twilio_stop_before_media_ends_receive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Twilio stop event should end the receive_audio iterator."""
-    port = find_free_port()
+    port = _unused_port()
     receive_ended = asyncio.Event()
 
     async def handler(ws) -> None:
@@ -598,7 +611,7 @@ async def test_twilio_multiple_start_messages() -> None:
 
     A second start message (e.g., call transfer) should update stream_sid.
     """
-    port = find_free_port()
+    port = _unused_port()
     sids_seen: list[str | None] = []
     receive_ended = asyncio.Event()
     ready_for_second_start = asyncio.Event()
@@ -648,7 +661,7 @@ async def test_twilio_multiple_start_messages() -> None:
 @pytest.mark.asyncio
 async def test_twilio_send_audio_after_stop_is_noop() -> None:
     """Sending audio after Twilio stop event should be silently ignored."""
-    port = find_free_port()
+    port = _unused_port()
     send_ok: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -680,7 +693,7 @@ async def test_twilio_send_audio_after_stop_is_noop() -> None:
 @pytest.mark.asyncio
 async def test_twilio_connection_transport_disconnect_cleanup() -> None:
     """disconnect() should clean up stream_sid and enqueue sentinel."""
-    port = find_free_port()
+    port = _unused_port()
     cleanup_ok: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:

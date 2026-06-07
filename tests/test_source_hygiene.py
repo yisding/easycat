@@ -578,11 +578,12 @@ def test_focused_transport_tests_use_pytest_port_factory() -> None:
         assert "unused_tcp_port_factory" in source
 
 
-def test_session_integration_tests_use_pytest_port_factory() -> None:
-    """Keep session integration tests off bind-close port helpers where feasible."""
+def test_integration_socket_tests_use_pytest_port_factory() -> None:
+    """Keep migrated integration socket tests off bind-close port helpers."""
     for path in (
         REPO_ROOT / "tests" / "integration" / "test_session_lifecycle_e2e.py",
         REPO_ROOT / "tests" / "integration" / "test_twilio_session_integration.py",
+        REPO_ROOT / "tests" / "integration" / "test_twilio_transport_e2e.py",
         REPO_ROOT / "tests" / "integration" / "test_websocket_session_integration.py",
         REPO_ROOT / "tests" / "integration" / "test_ws_transport_e2e.py",
     ):
