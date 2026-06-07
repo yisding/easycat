@@ -262,6 +262,12 @@ class TestLocalTransport:
 # ── WebSocketTransport tests ─────────────────────────────────────
 
 
+def test_websocket_transport_config_defaults_to_loopback():
+    config = WebSocketTransportConfig()
+
+    assert config.host == "127.0.0.1"
+
+
 @pytest.mark.integration_socket
 class TestWebSocketTransport:
     """Tests for WebSocketTransport with a real test client."""
@@ -278,6 +284,20 @@ class TestWebSocketTransport:
 
         await transport.disconnect()
         assert not transport.is_connected
+
+    @pytest.mark.asyncio
+    async def test_default_host_accepts_loopback_client(self):
+        port = _find_free_port()
+        config = WebSocketTransportConfig(port=port)
+        transport = WebSocketTransport(config)
+
+        await transport.connect()
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+                ready = await ws.recv()
+                assert json.loads(ready)["type"] == "ready"
+        finally:
+            await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_send_receive_audio(self):

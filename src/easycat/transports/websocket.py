@@ -65,7 +65,7 @@ class WebSocketTransportConfig:
 
     default_echo_cancellation_enabled: ClassVar[bool] = True
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8765
     audio_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_16K)
     max_pending_chunks: int = 200

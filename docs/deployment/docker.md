@@ -23,6 +23,9 @@ The compose service publishes the container only on host loopback
 (`127.0.0.1:8765`) and requires the token above before it creates a
 provider-backed EasyCat session.  Non-browser clients should send
 `Authorization: Bearer $EASYCAT_WS_TOKEN`.
+Inside the container, Compose explicitly sets `EASYCAT_WS_HOST=0.0.0.0`
+so Docker's loopback-published host port can reach the process; keep the
+host-side bind on loopback or put equivalent ingress controls in front.
 
 For the browser example, serve the static client from the repo in a
 second terminal:
