@@ -48,10 +48,11 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   automation needs validation run/report payloads. Replace uppercase
   placeholders in command hints, such as `PATH`, before running them. Each docs
   route entry includes an `audience` label for choosing the right starting
-  point without scraping descriptions. The top-level `audience_alias_note`
-  documents shell-friendly hyphen and underscore aliases for multi-word
-  audience filters, and the top-level `command_note` distinguishes installed
-  CLI hints from repo-local `uv run` hints.
+  point without scraping descriptions. The top-level `available_audience_filters`
+  lists copyable filter tokens such as `app-builders` and `coding-agents`;
+  the top-level `audience_alias_note` documents shell-friendly hyphen and
+  underscore aliases for multi-word audience filters, and the top-level `command_note`
+  distinguishes installed CLI hints from repo-local `uv run` hints.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.

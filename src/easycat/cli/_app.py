@@ -476,6 +476,15 @@ def _available_docs_audiences() -> tuple[str, ...]:
     )
 
 
+def _docs_audience_filter_alias(value: str) -> str:
+    """Return the shell-friendly filter token for a docs audience label."""
+    return _normalize_docs_audience(value).replace(" ", "-")
+
+
+def _available_docs_audience_filters() -> tuple[str, ...]:
+    return tuple(_docs_audience_filter_alias(value) for value in _available_docs_audiences())
+
+
 def _filter_docs_entries(entries: list[_DocsEntry], audience: str | None) -> list[_DocsEntry]:
     if audience is None:
         return entries
@@ -507,6 +516,7 @@ def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None 
     label_width = max(len(entry["label"]) for entry in entries)
     routes = "\n".join(_format_docs_entry(entry, label_width=label_width) for entry in entries)
     available_audiences = ", ".join(_available_docs_audiences())
+    available_filters = ", ".join(_available_docs_audience_filters())
     filter_note = (
         f"Audience filter: {audience_filter}\n"
         if audience_filter is not None
@@ -520,6 +530,7 @@ Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
 Filtered machine-readable routes: easycat docs --audience maintainers --json
 Available audiences: {available_audiences}
+Available filters: {available_filters}
 {_DOCS_AUDIENCE_ALIAS_NOTE}
 {filter_note}
 {_DOCS_COMMAND_NOTE}
@@ -552,8 +563,10 @@ def docs_command(
     filtered_entries = _filter_docs_entries(entries, audience)
     if not filtered_entries:
         available = ", ".join(_available_docs_audiences())
+        available_filters = ", ".join(_available_docs_audience_filters())
         message = (
             f"Unknown docs audience {audience!r}. Available audiences: {available}. "
+            f"Available filters: {available_filters}. "
             f"{_DOCS_AUDIENCE_ALIAS_NOTE}"
         )
         emit_command_error(
@@ -561,6 +574,7 @@ def docs_command(
             message,
             json_output=json_output,
             available_audiences=list(_available_docs_audiences()),
+            available_audience_filters=list(_available_docs_audience_filters()),
             audience_alias_note=_DOCS_AUDIENCE_ALIAS_NOTE,
             audience_filter=audience,
         )
@@ -575,6 +589,7 @@ def docs_command(
                 command_note=_DOCS_COMMAND_NOTE,
                 audience_filter=audience,
                 available_audiences=list(_available_docs_audiences()),
+                available_audience_filters=list(_available_docs_audience_filters()),
                 audience_alias_note=_DOCS_AUDIENCE_ALIAS_NOTE,
             )
         )

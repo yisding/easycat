@@ -25,6 +25,7 @@ from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _JOURNEY_SECTIONS,
+    _available_docs_audience_filters,
     _docs_entries,
     _format_docs_entry,
     _register_commands,
@@ -283,6 +284,9 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
+    assert "Available filters: all-readers, app-builders, coding-agents, contributors" in (
+        normalized
+    )
     assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
@@ -363,6 +367,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["command_note"] == _DOCS_COMMAND_NOTE
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     assert payload["audience_filter"] is None
+    assert payload["available_audience_filters"] == list(_available_docs_audience_filters())
+    assert "app-builders" in payload["available_audience_filters"]
+    assert "coding-agents" in payload["available_audience_filters"]
     assert "learners" in payload["available_audiences"]
     assert "operators" in payload["available_audiences"]
     assert "maintainers" in payload["available_audiences"]
@@ -513,6 +520,9 @@ def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
+    assert "Available filters: all-readers, app-builders, coding-agents, contributors" in (
+        normalized
+    )
     assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
     assert "Deployment" in result.stdout
     assert "Observability" in result.stdout
@@ -541,6 +551,7 @@ def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
 
     assert payload["status"] == "ok"
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
+    assert "maintainers" in payload["available_audience_filters"]
     assert payload["audience_filter"] == "maintainers"
     assert "maintainers" in payload["available_audiences"]
     assert "Architecture" in labels
@@ -570,7 +581,9 @@ def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) 
     assert payload["command"] == "docs"
     assert payload["audience_filter"] == "time-travelers"
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
+    assert payload["available_audience_filters"] == list(_available_docs_audience_filters())
     assert "Unknown docs audience 'time-travelers'" in payload["message"]
+    assert "Available filters:" in payload["message"]
     assert _DOCS_AUDIENCE_ALIAS_NOTE in payload["message"]
     assert "learners" in payload["available_audiences"]
     assert "operators" in payload["available_audiences"]
@@ -583,6 +596,7 @@ def test_docs_command_unknown_human_audience_reports_alias_hint(cli: CliRunner) 
     assert result.exit_code == 2
     assert "Unknown docs audience 'time-travelers'" in normalized
     assert "Available audiences:" in normalized
+    assert "Available filters:" in normalized
     assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
 
 

@@ -155,8 +155,9 @@ template catalog, scaffold output, doctor environment/checks output,
 validation quick/contracts/release/report output, bundle list/show/export,
 inspect, and replay command families, including command-specific fields such
 as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
-`available_audiences`, `audience_alias_note`, `command_note`,
-`base_requirement`, `create_command`, `repo_create_command`,
+`available_audiences`, `available_audience_filters`,
+`audience_alias_note`, `command_note`, `base_requirement`, `create_command`,
+`repo_create_command`,
 `next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
 `environment`, `checks`, `validation`, `source_path`, and
 `fidelity_effective`, and error fields such as `report_path`, `path`, and
