@@ -178,6 +178,11 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "equivalent `uv run pytest ...` commands" in normalized
     for recipe in ONBOARDING_GUARD_COMMANDS:
         assert recipe in text
+    guard_recipe_text = text.split("docs/onboarding guard recipes (", 1)[1].split(
+        "), marker taxonomy",
+        1,
+    )[0]
+    assert tuple(CODE_SPAN_RE.findall(guard_recipe_text)) == ONBOARDING_GUARD_COMMANDS
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text
