@@ -579,22 +579,21 @@ all-defaulted so the subclass `field(default_factory=...)` audio fields compose.
 
 ---
 
-### 5.13 — Correct the false "Silero VAD requires torch" install doc  *(adopt)*
+### 5.13 — Keep Silero install docs on bundled ONNX, not torch  *(landed; guarded)*
 
-**What / why.** `README.md:675-687` tells newcomers Silero "requires torch" and to
-`uv pip install torch`. This is false: Silero ships a bundled ONNX model run via `onnxruntime`
-(already in `quickstart`); torch is an optional speed-up that falls back to the bundled ONNX
-(`silero.py:32,174`, `vad/factory.py:69`). The doc sends users to install a multi-hundred-MB GPU
-library they do not need.
+**What / why.** Silero ships with a bundled ONNX model run via `onnxruntime` (already in
+`quickstart` and the `silero-vad` extra), so reader-facing install docs must not tell newcomers
+to install torch or imply torch is required. The relevant runtime owners are
+`src/easycat/vad/silero.py::SileroVAD` and `src/easycat/vad/factory.py::create_vad`.
 
-**After.** State that Silero runs on the bundled ONNX model via `onnxruntime` (in `quickstart`),
-and list torch only as an optional CPU/GPU speed-up. The lean install becomes
+**Current guidance.** State that Silero runs on the bundled ONNX model via `onnxruntime` and
+that no torch install is required. The lean install remains:
 `uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad`
 with no torch line.
 
-**Files touched.** `README.md`.
+**Files touched.** `README.md`; `tests/test_install_guidance.py`.
 
-**Verifier verdict.** Documentation correctness; adopt.
+**Verifier verdict.** Landed and guarded by `test_silero_guidance_uses_bundled_onnx_not_torch`.
 
 **Zen.** #3 simple; #2 explicit.
 

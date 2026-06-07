@@ -80,6 +80,12 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
 }
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 GUIDE_JUST_COMMAND_RE = re.compile(r"\bjust\s+(?P<recipe>[A-Za-z0-9_-]+)\b")
+SILERO_TORCH_REQUIRED_RE = re.compile(
+    r"silero[^\n.]{0,120}\b(?:requires|needs|required)\b[^\n.]{0,80}\btorch\b"
+    r"|\btorch\b[^\n.]{0,80}\b(?:required|needed)\b[^\n.]{0,120}\bsilero\b"
+    r"|\buv\s+pip\s+install\s+torch\b",
+    re.IGNORECASE,
+)
 
 
 def _guide_pytest_commands(command_section: str) -> list[str]:
@@ -409,6 +415,27 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
         "Guidance should not re-add extras that `quickstart` already bundles: "
         + "; ".join(redundant)
     )
+
+
+def test_silero_guidance_uses_bundled_onnx_not_torch() -> None:
+    """Silero install docs should not send newcomers to PyTorch."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    silero_deps = pyproject["project"]["optional-dependencies"]["silero-vad"]
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    stale: list[str] = []
+
+    assert any(dep.startswith("onnxruntime") for dep in silero_deps)
+    assert not any(dep.startswith("torch") for dep in silero_deps)
+    assert "no torch required" in readme
+
+    for path in _iter_reader_guidance_files():
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for match in SILERO_TORCH_REQUIRED_RE.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            stale.append(f"{rel}:{line}: {match.group(0).strip()}")
+
+    assert not stale, "Silero guidance should use bundled ONNX, not torch:\n" + "\n".join(stale)
 
 
 def test_docs_json_guidance_points_to_schema_contract() -> None:
