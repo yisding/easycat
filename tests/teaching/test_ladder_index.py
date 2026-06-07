@@ -100,8 +100,10 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     normalized = re.sub(r"\s+", " ", readme)
 
     assert "uv run easycat docs" in readme
+    assert "uv run easycat docs --audience learners" in readme
     assert "uv run easycat docs --json" in readme
     assert "maintained docs map" in normalized
+    assert "narrow that map to learner-facing routes" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
     assert "audience labels" in normalized
     assert "replace uppercase placeholders such as `PATH` before running those hints" in (

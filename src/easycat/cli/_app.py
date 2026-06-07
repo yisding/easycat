@@ -210,6 +210,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
+            "uv run easycat docs --audience learners",
             "uv run python docs/teaching/00-hello-audio/main.py",
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
