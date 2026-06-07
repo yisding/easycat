@@ -384,6 +384,24 @@ def test_start_here_docs_route_tracks_root_path_chooser_commands() -> None:
     )
 
 
+def test_root_path_chooser_command_hints_are_locally_valid() -> None:
+    commands = _root_path_chooser_command_spans()
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "README.md path chooser",
+                "path": "README.md#choose-your-path",
+                "audience": "all readers",
+                "description": "Root README first-screen command hints.",
+                "commands": commands,
+            }
+        ]
+    )
+
+    assert commands
+    assert not problems, "README.md path chooser commands are stale:\n" + "\n".join(problems)
+
+
 def test_quickstart_docs_route_matches_install_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     route_commands = set(entries["README.md#install"].get("commands", ()))
