@@ -97,6 +97,10 @@ surface before the broader validation lane:
 | Contributor and validation guidance | `just guard-contributing` | `justfile` parity, validation lanes, docs-route hints, and plan current-state evidence |
 | Markdown links in maintained docs | `just guard-markdown` | Local links and anchors in maintained Markdown |
 
+If `just` is not installed, use the raw command table in
+[the development loop](#the-development-loop) for the equivalent
+`uv run pytest ...` command behind each guard.
+
 Then run `uv run easycat validate quick` before a PR, or choose a broader lane
 from the validation table below when the change touches transports, provider
 contracts, packaging, live canaries, or stress behavior.

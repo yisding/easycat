@@ -991,6 +991,9 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
 
     assert guard_commands
     assert validation_commands
+    assert "If `just` is not installed" in maintenance_section
+    assert "[the development loop](#the-development-loop)" in maintenance_section
+    assert "`uv run pytest ...` command behind each guard" in maintenance_section
     for command in guard_commands:
         assert command in maintenance_section
         assert command in route_commands

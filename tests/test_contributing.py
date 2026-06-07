@@ -250,6 +250,9 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
 
     assert "narrow guard that owns that surface" in normalized
     assert "Then run `uv run easycat validate quick` before a PR" in normalized
+    assert "If `just` is not installed" in section
+    assert "[the development loop](#the-development-loop)" in section
+    assert "`uv run pytest ...` command behind each guard" in section
     for phrase in (
         "Root README chooser or docs route map",
         "Teaching ladder chapters or generated blocks",
