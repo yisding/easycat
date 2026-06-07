@@ -282,7 +282,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "uv run easycat docs",
-            'uv run easycat docs --audience "coding agents"',
+            "uv run easycat docs --audience coding-agents",
             "uv run easycat docs --json",
             "uv run easycat doctor --json",
             "uv run easycat doctor --env-file .env --json",

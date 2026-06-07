@@ -306,7 +306,7 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
 
     for command in (
         DOCS_MAP_COMMANDS
-        + ('uv run easycat docs --audience "coding agents"',)
+        + ("uv run easycat docs --audience coding-agents",)
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ONBOARDING_GUARD_COMMANDS
     ):

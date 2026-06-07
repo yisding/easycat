@@ -384,7 +384,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "uv run easycat validate contracts --json" in commands["CLAUDE.md"]
     assert "uv run easycat validate release --json" in commands["CLAUDE.md"]
     assert "uv run easycat docs" in commands["AGENTS.md"]
-    assert 'uv run easycat docs --audience "coding agents"' in commands["AGENTS.md"]
+    assert "uv run easycat docs --audience coding-agents" in commands["AGENTS.md"]
     assert "uv run easycat docs --json" in commands["AGENTS.md"]
     assert "just guard-docs" in commands["AGENTS.md"]
     assert "just guard-markdown" in commands["AGENTS.md"]
