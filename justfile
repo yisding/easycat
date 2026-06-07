@@ -83,7 +83,7 @@ guard-templates:
 
 # Guard contributor guidance, validation plan state, and contributor docs route hints.
 guard-contributing:
-    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_report_commands tests/test_validation_plan.py
+    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py
 
 # Guard maintained Markdown links and anchors.
 guard-markdown:

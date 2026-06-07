@@ -40,34 +40,6 @@ AGENT_GUIDE_MACHINE_COMMANDS = (
     "uv run easycat validate report .easycat/validation/latest.json",
     "uv run easycat validate report .easycat/validation/latest.json --json",
 )
-VALIDATION_WORKFLOW_COMMANDS = (
-    "uv run easycat validate quick",
-    "uv run easycat validate socket",
-    "uv run easycat validate stress",
-    "uv run easycat validate contracts",
-    "uv run easycat validate latency --smoke",
-    "uv run easycat validate live",
-    "uv run easycat validate release",
-    "uv run easycat validate report .easycat/validation/latest.json",
-    "uv run easycat validate quick --json",
-    "uv run easycat validate contracts --json",
-    "uv run easycat validate release --json",
-    "uv run easycat validate report .easycat/validation/latest.json --json",
-)
-CONTRIBUTING_VALIDATION_COMMANDS = (
-    "uv run easycat validate quick",
-    "uv run easycat validate socket",
-    "uv run easycat validate stress",
-    "uv run easycat validate contracts",
-    "uv run easycat validate latency --smoke",
-    "uv run easycat validate live --provider openai",
-    "uv run easycat validate release",
-    "uv run easycat validate report .easycat/validation/latest.json",
-    "uv run easycat validate quick --json",
-    "uv run easycat validate contracts --json",
-    "uv run easycat validate release --json",
-    "uv run easycat validate report .easycat/validation/latest.json --json",
-)
 
 
 def _root_relative_doc_links() -> set[str]:
@@ -105,6 +77,28 @@ def _root_path_chooser_command_spans() -> tuple[str, ...]:
         for match in CODE_SPAN_RE.finditer(section)
         if match.group(1).startswith(("uv ", "easycat ", "just ", "docker "))
     )
+
+
+def _strip_shell_comment(command: str) -> str:
+    return re.sub(r"\s+#.*$", "", command).strip()
+
+
+def _documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    commands: list[str] = []
+    seen: set[str] = set()
+
+    def add(raw_command: str) -> None:
+        command = _strip_shell_comment(raw_command)
+        if command.startswith(prefixes) and command not in seen:
+            seen.add(command)
+            commands.append(command)
+
+    for line in section.splitlines():
+        add(line.strip())
+    for match in CODE_SPAN_RE.finditer(section):
+        add(match.group(1).strip())
+
+    return tuple(commands)
 
 
 def _command_hint_variants(command: str) -> set[str]:
@@ -603,18 +597,19 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
     route_commands = entries["README.md#validation-workflow"].get("commands", ())
+    guard_commands = _documented_commands(validation_section, prefixes=("just guard-",))
+    validation_commands = _documented_commands(
+        validation_section,
+        prefixes=("uv run easycat validate ",),
+    )
 
-    for command in (
-        "just guard-docs",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
-    ):
+    assert guard_commands
+    assert validation_commands
+    for command in guard_commands:
         assert command in validation_section
         assert command in route_commands
 
-    for command in VALIDATION_WORKFLOW_COMMANDS:
+    for command in validation_commands:
         assert command in validation_section
         assert command in route_commands
 
@@ -623,7 +618,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     assert "easycat validate report .easycat/validation/latest.json --json" not in route_commands
 
 
-def test_contributing_docs_route_matches_validation_report_commands() -> None:
+def test_contributing_docs_route_matches_validation_lane_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     quick_start = contributing.split("## Quick start", 1)[1].split(
@@ -638,21 +633,22 @@ def test_contributing_docs_route_matches_validation_report_commands() -> None:
         1,
     )[1].split("## ", 1)[0]
     route_commands = entries["CONTRIBUTING.md"].get("commands", ())
+    guard_commands = _documented_commands(maintenance_section, prefixes=("just guard-",))
+    validation_commands = _documented_commands(
+        validation_section,
+        prefixes=("uv run easycat validate ",),
+    )
 
     assert "uv run easycat docs --audience contributors" in quick_start
     assert "uv run easycat docs --audience contributors" in route_commands
 
-    for command in (
-        "just guard-docs",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
-    ):
+    assert guard_commands
+    assert validation_commands
+    for command in guard_commands:
         assert command in maintenance_section
         assert command in route_commands
 
-    for command in CONTRIBUTING_VALIDATION_COMMANDS:
+    for command in validation_commands:
         assert command in validation_section
         assert command in route_commands
 

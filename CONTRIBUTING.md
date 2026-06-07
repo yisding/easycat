@@ -52,7 +52,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json` |
-| Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_report_commands tests/test_validation_plan.py` |
+| Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py` |
 | Guard Markdown links | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |

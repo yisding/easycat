@@ -461,4 +461,4 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "test_validation_plan_matches_contributor_quick_command",
     ):
         assert test_name in test_source
-    assert "test_contributing_docs_route_matches_validation_report_commands" in docs_index_tests
+    assert "test_contributing_docs_route_matches_validation_lane_commands" in docs_index_tests
