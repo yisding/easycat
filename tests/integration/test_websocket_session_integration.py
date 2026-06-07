@@ -93,9 +93,7 @@ async def test_create_session_websocket_streaming_barge_in(
             assert len(first_audio) == 640
 
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
-
-        result = await asyncio.wait_for(server_result, timeout=4.0)
+            result = await asyncio.wait_for(server_result, timeout=4.0)
     finally:
         server.close()
         await server.wait_closed()

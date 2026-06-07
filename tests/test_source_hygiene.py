@@ -655,6 +655,16 @@ def test_twilio_transport_e2e_uses_event_waits_for_transport_lifecycle() -> None
         assert stale_phrase not in source
 
 
+def test_websocket_session_integration_waits_on_server_result() -> None:
+    """The WebSocket session integration test should not sleep before checking the server."""
+    source = (
+        REPO_ROOT / "tests" / "integration" / "test_websocket_session_integration.py"
+    ).read_text(encoding="utf-8")
+
+    assert "asyncio.sleep(" not in source
+    assert "result = await asyncio.wait_for(server_result" in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(
