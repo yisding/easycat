@@ -568,6 +568,7 @@ def test_focused_transport_tests_use_pytest_port_factory() -> None:
     for path in (
         REPO_ROOT / "tests" / "transports" / "test_connection_transports.py",
         REPO_ROOT / "tests" / "transports" / "test_transports.py",
+        REPO_ROOT / "tests" / "transports" / "test_webrtc.py",
         REPO_ROOT / "tests" / "transports" / "test_websocket_session_server.py",
         REPO_ROOT / "tests" / "transports" / "test_webtransport.py",
     ):

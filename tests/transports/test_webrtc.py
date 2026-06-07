@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -31,12 +32,26 @@ from easycat.transports.webrtc import (
     _OutboundAudioSource,
 )
 
-from .conftest import find_free_port, make_chunk
+from .conftest import make_chunk
 
 # Whether aiortc + aiohttp are available (needed for integration tests).
 _HAS_AIORTC = importlib.util.find_spec("aiortc") is not None
 _HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
 _HAS_WEBRTC_DEPS = _HAS_AIORTC and _HAS_AIOHTTP
+
+
+class _UsesPytestTcpPortFactory:
+    _unused_tcp_port_factory: Callable[[], int]
+
+    @pytest.fixture(autouse=True)
+    def _set_unused_tcp_port_factory(
+        self,
+        unused_tcp_port_factory: Callable[[], int],
+    ) -> None:
+        self._unused_tcp_port_factory = unused_tcp_port_factory
+
+    def _unused_port(self) -> int:
+        return self._unused_tcp_port_factory()
 
 
 class _FakeResponse:
@@ -567,10 +582,10 @@ class TestWebRTCStatsArtifact:
 
 @pytest.mark.integration_socket
 @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
-class TestWebRTCTransportLifecycle:
+class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
 
@@ -584,7 +599,7 @@ class TestWebRTCTransportLifecycle:
     async def test_default_host_serves_health_on_loopback(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(port=port, static_dir=None)
         transport = WebRTCTransport(config)
 
@@ -606,7 +621,7 @@ class TestWebRTCTransportLifecycle:
 
     @pytest.mark.asyncio
     async def test_connect_idempotent(self):
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
 
@@ -623,7 +638,7 @@ class TestWebRTCTransportLifecycle:
         client = tmp_path / "webrtc_client.html"
         client.write_text("<html></html>", encoding="utf-8")
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -639,7 +654,7 @@ class TestWebRTCTransportLifecycle:
     async def test_root_returns_endpoint_hint_without_static_client(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=None)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -666,7 +681,7 @@ class TestWebRTCTransportLifecycle:
         client = tmp_path / "webrtc_client.html"
         client.write_text("<html></html>", encoding="utf-8")
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
         transport = WebRTCTransport(config)
 
@@ -702,7 +717,7 @@ class TestWebRTCTransportLifecycle:
     async def test_health_endpoint(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -720,7 +735,7 @@ class TestWebRTCTransportLifecycle:
     async def test_offer_without_valid_sdp_returns_error(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -747,7 +762,7 @@ class TestWebRTCTransportLifecycle:
     async def test_config_endpoint_omits_turn_credentials_by_default(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         servers = [
             ICEServer(urls="stun:stun.example.com:3478"),
             ICEServer(
@@ -779,7 +794,7 @@ class TestWebRTCTransportLifecycle:
     async def test_config_endpoint_can_expose_turn_credentials(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         servers = [
             ICEServer(
                 urls=["turn:turn.example.com:3478"],
@@ -838,7 +853,7 @@ class TestWebRTCTransportLifecycle:
     async def test_cors_preflight_allows_same_origin(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -862,7 +877,7 @@ class TestWebRTCTransportLifecycle:
     async def test_cors_preflight_denies_unknown_cross_origin_by_default(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -884,7 +899,7 @@ class TestWebRTCTransportLifecycle:
     async def test_cors_allows_configured_origin(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         origin = "https://voice.example.com"
         config = WebRTCTransportConfig(
             host="127.0.0.1",
@@ -908,7 +923,7 @@ class TestWebRTCTransportLifecycle:
     async def test_cors_wildcard_requires_explicit_opt_in(self):
         import aiohttp
 
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(
             host="127.0.0.1",
             port=port,
@@ -929,7 +944,7 @@ class TestWebRTCTransportLifecycle:
 
     @pytest.mark.asyncio
     async def test_receive_audio_ends_on_disconnect(self):
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
@@ -949,7 +964,7 @@ class TestWebRTCTransportLifecycle:
     @pytest.mark.asyncio
     async def test_send_audio_no_peer(self):
         """send_audio reports False when no peer is connected."""
-        port = find_free_port()
+        port = self._unused_port()
         config = WebRTCTransportConfig(host="127.0.0.1", port=port)
         transport = WebRTCTransport(config)
         await transport.connect()
