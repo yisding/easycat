@@ -11,7 +11,7 @@
 > **Goal:** lift coordination logic out of
 > `src/easycat/session/_session.py` (2,820 lines, 102 methods, 157
 > instance attributes) into five focused collaborators, leaving
-> `Session` as a thinner lifecycle + user-facing surface (~1,390 lines
+> `Session` as a thinner lifecycle + user-facing surface (~1,433 lines
 > in the current snapshot; it landed around ~1,770 after Phase 5, and
 > the ~1,250 estimate below proved optimistic).
 >
@@ -91,7 +91,7 @@ and testable in isolation.
 | 5 | `session/_turn_runner.py` | ~620 | **~1,250** | high |
 
 > **As-landed note:** Session landed around **~1,770 lines** after Phase 5,
-> not the projected ~1,250; the current snapshot is roughly **1,390 lines**.
+> not the projected ~1,250; the current snapshot is roughly **1,433 lines**.
 > The "Lands at" column was an estimate. The remaining Session-resident
 > concerns include lifecycle teardown, telephony/screening state, the full
 > public event surface, action drain, and collaborator construction/wiring.
@@ -207,7 +207,7 @@ authors can proceed without re-investigating:
 
 ## What stays on Session permanently
 
-After Phase 5, Session landed around ~1,770 lines and is roughly 1,390 lines
+After Phase 5, Session landed around ~1,770 lines and is roughly 1,433 lines
 in the current snapshot (see as-landed note above). It owns:
 
 - **Lifecycle.** `__init__`, `start`, `stop`, `shutdown`, `close`,

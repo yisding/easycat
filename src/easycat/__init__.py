@@ -11,7 +11,7 @@ Before the first run, set ``OPENAI_API_KEY`` and verify the environment with
 ``uv run easycat doctor --env-file .env`` and
 ``uv run --env-file .env ...``.
 
-``EasyConfig`` + ``run`` is the entry path. Drop to ``SessionConfig`` + ``Session``
+``EasyConfig`` + ``run`` is the entry path. Drop to ``Session.from_providers(...)``
 only when you need to hand-build provider instances.
 
 The top-level package intentionally exposes the app-facing surface only;

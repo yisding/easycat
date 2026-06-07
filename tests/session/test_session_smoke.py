@@ -134,6 +134,26 @@ class SmokeNoiseReducer:
         return chunk
 
 
+def test_session_from_providers_builds_raw_provider_session():
+    """Advanced callers can wire provider instances without SessionConfig."""
+    transport = SmokeTransport()
+
+    session = Session.from_providers(
+        stt=SmokeSTT(),
+        tts=SmokeTTS(),
+        vad=SmokeVAD(),
+        transport=transport,
+        agent=SmokeAgent(),
+        noise_reducer=SmokeNoiseReducer(),
+        turn_manager_config=_FAST_TURN,
+        session_id="raw-session",
+    )
+
+    assert session.session_id == "raw-session"
+    assert session.transport is transport
+    assert session._config.turn_manager_config is _FAST_TURN
+
+
 # ── Smoke test ─────────────────────────────────────────────────────
 
 

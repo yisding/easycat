@@ -152,9 +152,10 @@ def test_package_docstring_leads_with_canonical_quickstart() -> None:
     assert "uv run easycat doctor" in doc
     assert "uv run easycat doctor --env-file .env" in doc
     assert "uv run --env-file .env ..." in doc
-    assert "SessionConfig" in doc
+    assert "Session.from_providers" in doc
     assert "hand-build provider instances" in doc
-    assert "create_session" not in doc.split("Start here", 1)[1].split("SessionConfig", 1)[0]
+    before_raw_providers = doc.split("Start here", 1)[1].split("Session.from_providers", 1)[0]
+    assert "create_session" not in before_raw_providers
 
 
 def test_easyconfig_preset_docstrings_explain_next_rungs() -> None:
@@ -201,6 +202,7 @@ def test_sessionconfig_docstring_steers_to_easyconfig() -> None:
     assert "lowest rung of the ladder" in doc
     assert "provider *instances*" in doc
     assert "EasyConfig" in doc
+    assert "Session.from_providers" in doc
     assert "one rung up" in doc
     assert "create_session" in doc
 

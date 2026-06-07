@@ -119,9 +119,10 @@ class SessionConfig:
     different field *type* from :class:`~easycat.EasyConfig`, whose
     matching fields take provider *descriptors* (string shortcuts /
     config objects) that it resolves and wires for you one rung up. Reach
-    for ``SessionConfig`` + :class:`Session` only when you need to
-    hand-build providers or bypass the auto-wiring entirely; otherwise
-    ``EasyConfig`` + ``create_session`` is the path.
+    for ``Session.from_providers(...)`` when you need to hand-build
+    providers; use ``SessionConfig`` + :class:`Session` only when you need
+    every raw pipeline field. Otherwise ``EasyConfig`` + ``create_session``
+    is the path.
     """
 
     stt: STTProvider | None = None

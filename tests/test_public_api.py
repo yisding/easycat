@@ -158,6 +158,7 @@ def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
     assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in preferred
     assert "session.subscribe_event(STTFinal" in preferred
     assert "await session.wait_closed()" in preferred
+    assert "Session.from_providers(" in preferred
     assert "SessionConfig" not in preferred
 
 

@@ -51,6 +51,14 @@ from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents.base import ExternalAgentBridge
 from easycat.noise_reduction import PassthroughNoiseReducer
+from easycat.providers import (
+    EchoCanceller,
+    NoiseReducer,
+    STTProvider,
+    Transport,
+    TTSProvider,
+    VADProvider,
+)
 from easycat.runtime.capabilities import (
     aclose_if_supported,
     clear_audio_if_supported,
@@ -260,6 +268,41 @@ class Session:
             journal_view=self._journal_view,
             artifact_store=self._artifact_store,
             journal_sink=self._journal_sink,
+        )
+
+    @classmethod
+    def from_providers(
+        cls,
+        *,
+        stt: STTProvider,
+        tts: TTSProvider,
+        vad: VADProvider,
+        transport: Transport,
+        agent: Agent,
+        noise_reducer: NoiseReducer | None = None,
+        echo_canceller: EchoCanceller | None = None,
+        **session_options: Any,
+    ) -> Session:
+        """Build a :class:`Session` from already-constructed providers.
+
+        This is the advanced raw-provider entry point. New applications
+        should usually start with :class:`~easycat.EasyConfig` plus
+        :func:`~easycat.create_session`, but callers that truly own their
+        provider instances can use this instead of spelling out
+        ``Session(SessionConfig(...))``. Extra keyword arguments are
+        forwarded to :class:`SessionConfig` for lifecycle and policy knobs.
+        """
+        return cls(
+            SessionConfig(
+                stt=stt,
+                tts=tts,
+                vad=vad,
+                transport=transport,
+                agent=agent,
+                noise_reducer=noise_reducer,
+                echo_canceller=echo_canceller,
+                **session_options,
+            )
         )
 
     def _unpack(self, components: SessionComponents) -> None:

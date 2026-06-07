@@ -14,9 +14,10 @@ command-specific fields.
 - The first-run path is `EasyConfig` plus `run`.
 - Long-running applications should use `create_session` or
   `create_text_session`.
-- Advanced users may import `Session`, `SessionConfig`, provider protocols,
-  transport configs, core events, and debug bundle helpers from the top-level
-  package when those names are listed below.
+- Advanced users who own concrete providers should prefer
+  `Session.from_providers(...)`. They may also import `SessionConfig`,
+  provider protocols, transport configs, core events, and debug bundle helpers
+  from the top-level package when those names are listed below.
 - Provider implementations, bridge implementations, telephony internals, stage
   internals, testing helpers, and recipes stay in their own submodules.
 - Top-level exports load lazily. Adding a top-level name must not make
@@ -63,6 +64,22 @@ Use submodules for rare or implementation-specific names:
 ```python
 from easycat.integrations.agents import OpenAIAgentsBridge
 from easycat.telephony.ivr import IVRNavigator
+```
+
+For raw provider instances, prefer the named constructor over the low-level
+config object:
+
+```python
+from easycat import Session
+
+
+session = Session.from_providers(
+    stt=my_stt,
+    tts=my_tts,
+    vad=my_vad,
+    transport=my_transport,
+    agent=my_agent,
+)
 ```
 
 ## Top-Level Allowlist
