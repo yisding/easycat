@@ -143,9 +143,10 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "maintained reader-facing map" in quick_start
     assert "narrow the map to contributor-facing routes" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
-    assert "replace uppercase placeholders such as `PATH` before running those hints" in (
-        normalized
-    )
+    assert (
+        "replace uppercase or angle-bracket placeholders such as `PATH` or "
+        "`<session_id>` before running those hints"
+    ) in normalized
     assert "standard `--json` envelope" in normalized
     assert "command-specific fields" in normalized
     assert "CLI and scaffold commands" in quick_start

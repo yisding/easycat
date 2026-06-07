@@ -5,8 +5,9 @@ Use this page as the map for the maintained docs. Planning notes live under
 From this repository, `uv run easycat docs` prints the same map; in an
 installed app environment, use `easycat docs`. Use
 `uv run easycat docs --json` when a script or coding agent needs the route map
-with command hints and audience labels. Replace uppercase placeholders in
-command hints, such as `PATH`, before running them. Use
+with command hints and audience labels. Replace uppercase or angle-bracket
+placeholders in command hints, such as `PATH` or `<session_id>`, before
+running them. Use
 `uv run easycat docs --audience learners` to narrow the human map, or
 `uv run easycat docs --audience maintainers --json` when automation needs only
 maintainer-facing route entries. The human docs menu also prints the available
@@ -45,8 +46,9 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat validate contracts --json`,
   `uv run easycat validate release --json`, or
   `uv run easycat validate report .easycat/validation/latest.json --json` when
-  automation needs validation run/report payloads. Replace uppercase
-  placeholders in command hints, such as `PATH`, before running them. Each docs
+  automation needs validation run/report payloads. Replace uppercase or
+  angle-bracket placeholders in command hints, such as `PATH` or `<session_id>`,
+  before running them. Each docs
   route entry includes an `audience` label for choosing the right starting
   point without scraping descriptions. The top-level `available_audience_filters`
   lists copyable filter tokens such as `app-builders` and `coding-agents`;

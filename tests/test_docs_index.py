@@ -21,6 +21,7 @@ from tests._markdown import github_markdown_heading_anchors
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+ANGLE_PLACEHOLDER_RE = re.compile(r"<[^>\s]+>")
 ONBOARDING_GUARD_COMMANDS = (
     "just guard-docs",
     "just guard-examples",
@@ -292,7 +293,10 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "prints the same map" in text
     assert "docs route map" in normalized
     assert "route map with command hints and audience labels" in normalized
-    assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
+    assert (
+        "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
+        "or `<session_id>`"
+    ) in normalized
     assert "The human docs menu also prints the available audience labels" in normalized
     assert "uv run easycat docs --audience app-builders" in text
     assert 'uv run easycat docs --audience "app builders"' in text
@@ -855,15 +859,13 @@ def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
-    placeholders = sorted(
-        {
-            token
-            for entry in _docs_entries()
-            for command in entry.get("commands", ())
-            for token in shlex.split(command)
-            if token.isupper()
-        }
-    )
+    placeholders: set[str] = set()
+    for entry in _docs_entries():
+        for command in entry.get("commands", ()):
+            for token in shlex.split(command):
+                if token.isupper():
+                    placeholders.add(token)
+                placeholders.update(ANGLE_PLACEHOLDER_RE.findall(token))
 
     missing = [
         placeholder for placeholder in placeholders if placeholder not in _DOCS_COMMAND_NOTE
@@ -871,6 +873,7 @@ def test_cli_docs_command_placeholders_are_explained() -> None:
 
     assert not missing, "command_note missing placeholders: " + ", ".join(missing)
     assert "placeholder" in _DOCS_COMMAND_NOTE.lower()
+    assert "uppercase or angle-bracket placeholders" in _DOCS_COMMAND_NOTE
     assert "Bare easycat commands use installed CLI form" in _DOCS_COMMAND_NOTE
     assert "prefix them with uv run" in _DOCS_COMMAND_NOTE
     assert "Commands already starting with uv run are repo-local" in _DOCS_COMMAND_NOTE

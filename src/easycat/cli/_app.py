@@ -462,7 +462,8 @@ _DOCS_COMMAND_NOTE = (
     "Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. "
     "Commands already starting with uv run are repo-local and should run from the repository "
     "root. just commands are repo-local shortcuts; install just or use the raw command table "
-    "in CONTRIBUTING.md. Replace uppercase placeholders such as PATH and DIR before running."
+    "in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, "
+    "and <session_id> before running."
 )
 _DOCS_AUDIENCE_ALIAS_NOTE = (
     "Multi-word audiences also accept hyphens or underscores, such as app-builders."

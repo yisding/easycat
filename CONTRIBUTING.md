@@ -17,8 +17,9 @@ quickstart, CLI and scaffold commands, examples, teaching chapters, public API,
 validation, and operations. Use `uv run easycat docs --audience contributors`
 to narrow the map to contributor-facing routes, or
 `uv run easycat docs --json` when a script or coding agent needs the same
-route map with command hints and audience labels; replace uppercase
-placeholders such as `PATH` before running those hints. Use
+route map with command hints and audience labels; replace uppercase or
+angle-bracket placeholders such as `PATH` or `<session_id>` before running
+those hints. Use
 `uv run easycat explain json-schema` for the standard `--json` envelope and
 command-specific fields.
 For local audio or provider work, set the relevant environment variables and
