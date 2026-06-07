@@ -861,10 +861,13 @@ providers, debug bundles, and journal inspection.
 ### Quickstart: WebRTC in browser (fast path)
 1. Install extras:
    `uv sync --extra webrtc --extra openai --extra openai-agents --group dev`
-2. Set your key:
+2. Set your key and preflight:
    `export OPENAI_API_KEY="your-api-key"`
+   `uv run easycat doctor`
+   If keys live in `.env`, use `uv run easycat doctor --env-file .env`.
 3. Run the server:
    `uv run python examples/webrtc_server.py`
+   Or with `.env`: `uv run --env-file .env python examples/webrtc_server.py`
 4. Open:
    `http://localhost:8080`
    (auto-redirects to `webrtc_client.html` when using the bundled static client)

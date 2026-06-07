@@ -289,6 +289,30 @@ def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:
     ]
 
 
+def test_readme_webrtc_browser_fast_path_runs_doctor_preflight() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Quickstart: WebRTC in browser (fast path)", 1)[1].split(
+        "## Repo layout",
+        1,
+    )[0]
+
+    expected_order = (
+        "uv sync --extra webrtc --extra openai --extra openai-agents --group dev",
+        'export OPENAI_API_KEY="your-api-key"',
+        "uv run easycat doctor",
+        "uv run python examples/webrtc_server.py",
+        "http://localhost:8080",
+    )
+    cursor = -1
+    for term in expected_order:
+        index = section.index(term)
+        assert index > cursor
+        cursor = index
+
+    assert "uv run easycat doctor --env-file .env" in section
+    assert "uv run --env-file .env python examples/webrtc_server.py" in section
+
+
 def test_readme_telephony_opt_out_uses_easyconfig_surface() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("### Opt-out auto-detection", 1)[1].split("### ", 1)[0]
