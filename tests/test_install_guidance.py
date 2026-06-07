@@ -99,6 +99,19 @@ def _guide_pytest_commands(command_section: str) -> list[str]:
     return commands
 
 
+def _agent_guide_command_sections() -> dict[str, str]:
+    return {
+        "AGENTS.md": (REPO_ROOT / "AGENTS.md")
+        .read_text(encoding="utf-8")
+        .split("## Build, Test, and Development Commands", 1)[1]
+        .split("## ", 1)[0],
+        "CLAUDE.md": (REPO_ROOT / "CLAUDE.md")
+        .read_text(encoding="utf-8")
+        .split("## Commands", 1)[1]
+        .split("## Architecture", 1)[0],
+    }
+
+
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
@@ -682,16 +695,7 @@ uv run easycat docs --audience time-travelers  # Comment
 
 def test_agent_guide_command_examples_are_current() -> None:
     just_recipes = just_recipe_names(REPO_ROOT)
-    command_sections = {
-        "AGENTS.md": (REPO_ROOT / "AGENTS.md")
-        .read_text(encoding="utf-8")
-        .split("## Build, Test, and Development Commands", 1)[1]
-        .split("## ", 1)[0],
-        "CLAUDE.md": (REPO_ROOT / "CLAUDE.md")
-        .read_text(encoding="utf-8")
-        .split("## Commands", 1)[1]
-        .split("## ", 1)[0],
-    }
+    command_sections = _agent_guide_command_sections()
 
     for filename, command_section in command_sections.items():
         assert "raw docs/onboarding guard commands" in command_section, filename
@@ -774,6 +778,37 @@ def test_agent_guide_command_examples_are_current() -> None:
     assert not stale_easycat_commands, "Agent guide easycat examples are stale:\n" + "\n".join(
         stale_easycat_commands
     )
+
+
+def test_agent_guide_command_hints_are_locally_valid() -> None:
+    stale_commands: list[str] = []
+
+    for filename, command_section in _agent_guide_command_sections().items():
+        commands = tuple(
+            command
+            for command in documented_commands(
+                command_section,
+                prefixes=("just", "uv sync ", "uv run ", "uvx "),
+            )
+            if command == "just" or command.startswith(("just ", "uv sync ", "uv run ", "uvx "))
+        )
+        assert commands, filename
+        stale_commands.extend(
+            command_hint_problems(
+                [
+                    {
+                        "label": filename,
+                        "path": filename,
+                        "audience": "coding agents",
+                        "description": "Agent guide build, test, docs, and validation commands.",
+                        "commands": commands,
+                    }
+                ],
+                repo_root=REPO_ROOT,
+            )
+        )
+
+    assert not stale_commands, "Agent guide command hints are stale:\n" + "\n".join(stale_commands)
 
 
 def test_agent_guides_reference_config_package_layout() -> None:

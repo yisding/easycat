@@ -172,9 +172,13 @@ def _validate_command_hint_tokens(
                 args=args,
                 problems=problems,
             )
-        case ["just", recipe, *_]:
-            if recipe not in just_recipes:
-                problems.append(f"{label}: unknown just recipe {recipe}")
+        case ["just", *args]:
+            _validate_just_hint(
+                label=label,
+                just_recipes=just_recipes,
+                args=args,
+                problems=problems,
+            )
         case ["docker", "compose", *args]:
             _validate_docker_compose_hint(
                 label=label,
@@ -213,6 +217,12 @@ def _declared_optional_dependency_extras(repo_root: Path) -> set[str]:
 def _declared_dependency_groups(repo_root: Path) -> set[str]:
     pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
     return set(pyproject["dependency-groups"])
+
+
+def _is_placeholder_value(value: str) -> bool:
+    return value in {"PATH", "DIR", "FILE", "NAME"} or (
+        value.startswith("<") and value.endswith(">")
+    )
 
 
 def _option_values(
@@ -292,7 +302,7 @@ def _validate_uv_sync_hint(
         missing_message="uv sync extra hint missing value",
         problems=problems,
     ):
-        if extra not in declared_extras:
+        if extra not in declared_extras and not _is_placeholder_value(extra):
             problems.append(f"{label}: unknown uv sync extra {extra}")
 
     for group in _option_values(
@@ -302,8 +312,23 @@ def _validate_uv_sync_hint(
         missing_message="uv sync group hint missing value",
         problems=problems,
     ):
-        if group not in declared_groups:
+        if group not in declared_groups and not _is_placeholder_value(group):
             problems.append(f"{label}: unknown uv sync group {group}")
+
+
+def _validate_just_hint(
+    *,
+    label: str,
+    just_recipes: dict[str, str],
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if not args:
+        return
+
+    recipe = args[0]
+    if recipe not in just_recipes:
+        problems.append(f"{label}: unknown just recipe {recipe}")
 
 
 def _validate_http_server_hint(
@@ -390,7 +415,7 @@ def _validate_repo_path_targets(
     problems: list[str],
 ) -> None:
     for target in targets:
-        if target in {"PATH", "DIR", "FILE"} or (target.startswith("<") and target.endswith(">")):
+        if _is_placeholder_value(target):
             continue
         if not (repo_root / target).exists():
             problems.append(f"{label}: missing {context} target {target}")

@@ -1031,6 +1031,25 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_groups() -> None:
     assert problems.count("Broken uv sync groups: uv sync group hint missing value") == 2
 
 
+def test_cli_docs_command_hint_validator_accepts_guide_placeholders() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Agent guide placeholders",
+                "path": "AGENTS.md",
+                "audience": "coding agents",
+                "description": "Regression fixture for generic guide commands.",
+                "commands": (
+                    "just",
+                    "uv sync --extra <name> --group dev",
+                ),
+            }
+        ]
+    )
+
+    assert not problems
+
+
 def test_cli_docs_command_hint_validator_checks_http_server_directories() -> None:
     problems = _cli_docs_command_hint_problems(
         [
