@@ -286,6 +286,19 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Provider contracts",
+        "path": "tests/contracts/README.md",
+        "audience": "provider maintainers",
+        "description": (
+            "Maintain offline provider, protocol, cassette, and bridge contract coverage."
+        ),
+        "commands": (
+            "uv run easycat validate contracts",
+            "uv run pytest tests/contracts",
+            "uv run pytest tests/integration/test_provider_contract_matrix.py",
+        ),
+    },
+    {
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",

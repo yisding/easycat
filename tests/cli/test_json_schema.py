@@ -334,6 +334,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Examples", "path": "examples/README.md"} in entries
     assert {"label": "Architecture", "path": "CLAUDE.md"} in entries
     assert {"label": "Coding agents", "path": "AGENTS.md"} in entries
+    assert {"label": "Provider contracts", "path": "tests/contracts/README.md"} in entries
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in entries
     assert {"label": "Deployment", "path": "docs/deployment/docker.md"} in entries
     assert {"label": "Observability", "path": "docs/observability.md"} in entries
@@ -377,6 +378,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "just guard-docs" in commands["AGENTS.md"]
     assert "just guard-markdown" in commands["AGENTS.md"]
     assert "uv run easycat validate quick" in commands["AGENTS.md"]
+    assert "uv run easycat validate contracts" in commands["tests/contracts/README.md"]
+    assert "uv run pytest tests/contracts" in commands["tests/contracts/README.md"]
     assert "uv run easycat validate quick" in commands["README.md#validation-workflow"]
     assert (
         "uv run easycat validate report .easycat/validation/latest.json --json"

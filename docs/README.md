@@ -52,6 +52,10 @@ command hints, such as `PATH`, before running them.
 - Maintaining public imports: review the
   [public API contract](public-api.md) before changing `easycat.__all__`;
   it points to the docs route map, focused public API test, and docs guard.
+- Maintaining provider and protocol contracts: review the
+  [provider contract map](../tests/contracts/README.md) before changing
+  provider adapters, protocol cassettes, schema fingerprints, or bridge event
+  grammar.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,

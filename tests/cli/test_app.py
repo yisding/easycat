@@ -364,6 +364,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "examples/README.md" in paths
     assert "CLAUDE.md" in paths
     assert "AGENTS.md" in paths
+    assert "tests/contracts/README.md" in paths
     assert "CONTRIBUTING.md" in paths
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
@@ -406,6 +407,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run pytest tests/test_public_api.py",
         "just guard-docs",
     ]
+    assert commands["tests/contracts/README.md"] == [
+        "uv run easycat validate contracts",
+        "uv run pytest tests/contracts",
+        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+    ]
     assert commands["CONTRIBUTING.md"] == [
         "just guard-docs",
         "just guard-examples",
@@ -438,6 +444,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
     assert "docs/onboarding guards" in descriptions["AGENTS.md"]
+    assert "protocol" in descriptions["tests/contracts/README.md"]
     assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]

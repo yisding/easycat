@@ -90,6 +90,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "../CLAUDE.md",
         "../AGENTS.md",
         "public-api.md",
+        "../tests/contracts/README.md",
         "../CONTRIBUTING.md",
         "deployment/docker.md",
         "observability.md",
@@ -251,6 +252,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "CLAUDE.md": "uv run pytest tests/test_install_guidance.py",
         "AGENTS.md": "uv run easycat validate quick",
         "docs/public-api.md": "uv run pytest tests/test_public_api.py",
+        "tests/contracts/README.md": "uv run easycat validate contracts",
         "docs/deployment/docker.md": "docker compose -f docker/compose.yaml up --build",
         "docs/observability.md": "easycat bundles list",
         "src/easycat/runtime/DURABILITY.md": (
@@ -371,6 +373,22 @@ def test_public_api_docs_route_matches_contract_guard_commands() -> None:
         assert command in route_commands
 
     assert "easycat docs --json" not in route_commands
+
+
+def test_provider_contract_docs_route_matches_contract_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    contract_readme = (REPO_ROOT / "tests" / "contracts" / "README.md").read_text(encoding="utf-8")
+    route_commands = entries["tests/contracts/README.md"].get("commands", ())
+
+    for command in (
+        "uv run easycat validate contracts",
+        "uv run pytest tests/contracts",
+        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+    ):
+        assert command in contract_readme
+        assert command in route_commands
+
+    assert "easycat validate contracts" not in route_commands
 
 
 def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
