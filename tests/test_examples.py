@@ -590,6 +590,33 @@ def test_examples_readme_choose_example_table_tracks_matrix() -> None:
     assert "journal_ui.py" in linked_paths
 
 
+def test_examples_readme_no_key_chooser_avoids_optional_extra_setup() -> None:
+    readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    table = readme.split("## Choose An Example", 1)[1].split("## Core Voice Loops", 1)[0]
+    no_key_row = next(line for line in table.splitlines() if line.startswith("| No API keys |"))
+    no_key_links = re.findall(r"\[([^]]+\.py)\]\(([^)]+\.py)\)", no_key_row)
+    rows = {row["link"]: row for row in _example_readme_rows()}
+    stale: list[str] = []
+
+    assert no_key_links, "No-key chooser row should link offline examples"
+
+    for display, link in no_key_links:
+        assert display == link
+        row = rows[link]
+        path = REPO_ROOT / "examples" / link
+        doc = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
+        if row["env"] != "None":
+            stale.append(f"{link}: env cell is {row['env']!r}")
+        if "--extra" in row["install"]:
+            stale.append(f"{link}: README install uses optional extras")
+        if "uv sync --extra" in doc:
+            stale.append(f"{link}: docstring setup uses optional extras")
+        if "uv sync --group dev" not in doc:
+            stale.append(f"{link}: docstring missing base dev sync")
+
+    assert not stale, "No-key chooser examples should stay lightweight: " + "; ".join(stale)
+
+
 def test_examples_readme_rows_are_command_map_entries() -> None:
     rows = _example_readme_rows()
     row_names = [row["link"] for row in rows]

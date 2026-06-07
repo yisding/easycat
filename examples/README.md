@@ -155,4 +155,4 @@ Support files:
 
 | Example | Use When | Run | Install | Env |
 | --- | --- | --- | --- | --- |
-| [telephony_helpers.py](telephony_helpers.py) | Learn DTMF aggregation, voicemail detection, and IVR text classifiers offline. | `uv run python examples/telephony_helpers.py` | `uv sync --extra quickstart --group dev` | None |
+| [telephony_helpers.py](telephony_helpers.py) | Learn DTMF aggregation, voicemail detection, and IVR text classifiers offline. | `uv run python examples/telephony_helpers.py` | `uv sync --group dev` or base install | None |
