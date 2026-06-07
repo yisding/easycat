@@ -469,10 +469,15 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
+        "easycat bundles list --json # emit machine-readable bundle list",
         "easycat bundles show PATH # summarise a debug bundle or SQLite journal",
+        "easycat bundles show PATH --json # emit machine-readable bundle/journal summary",
         "easycat bundles export PATH # write a redacted coding-agent context pack",
+        "easycat bundles export PATH --output DIR --json # emit context-pack metadata",
         "easycat inspect PATH      # summarise a debug bundle or SQLite journal",
+        "easycat inspect PATH --json # emit machine-readable bundle/journal summary",
         "easycat replay PATH       # replay a debug bundle or SQLite journal",
+        "easycat replay PATH --json # emit machine-readable replay summary",
     )
     for line in expected_cli_lines:
         assert line in cli_section

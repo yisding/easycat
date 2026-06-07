@@ -113,10 +113,15 @@ easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic
 easycat bundles list      # list captured debug bundles and crash dumps
+easycat bundles list --json # emit machine-readable bundle list
 easycat bundles show PATH # summarise a debug bundle or SQLite journal
+easycat bundles show PATH --json # emit machine-readable bundle/journal summary
 easycat bundles export PATH # write a redacted coding-agent context pack
+easycat bundles export PATH --output DIR --json # emit context-pack metadata
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
+easycat inspect PATH --json # emit machine-readable bundle/journal summary
 easycat replay PATH       # replay a debug bundle or SQLite journal
+easycat replay PATH --json # emit machine-readable replay summary
 easycat validate quick       # run deterministic local validation
 easycat validate quick --json # emit quick validation in the standard envelope
 easycat validate contracts   # run offline provider/protocol contract validation

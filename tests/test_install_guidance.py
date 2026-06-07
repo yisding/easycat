@@ -478,6 +478,24 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
         assert readme_phrase in normalized_readme
 
 
+def test_readme_cli_debug_json_examples_are_copyable() -> None:
+    """Debug CLI commands should include machine-readable support handoffs."""
+    cli_section = _readme_cli_section()
+
+    for command in (
+        "easycat bundles list --json",
+        "easycat bundles show PATH --json",
+        "easycat bundles export PATH --output DIR --json",
+        "easycat inspect PATH --json",
+        "easycat replay PATH --json",
+    ):
+        assert command in cli_section
+    assert "machine-readable bundle list" in cli_section
+    assert "machine-readable bundle/journal summary" in cli_section
+    assert "context-pack metadata" in cli_section
+    assert "machine-readable replay summary" in cli_section
+
+
 def test_readme_cli_validate_examples_are_copyable() -> None:
     """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
     cli_section = _readme_cli_section()
