@@ -412,6 +412,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     assert commands["tests/contracts/README.md"] == [
         "uv run easycat validate contracts",
+        "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ]

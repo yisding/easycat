@@ -396,6 +396,7 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
 
     for command in (
         "uv run easycat validate contracts",
+        "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ):

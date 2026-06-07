@@ -65,6 +65,7 @@ def test_wiring_matrix_scope_is_documented_separately_from_protocol_contracts() 
     assert "protocol contracts" in contract_readme
     for command in (
         "uv run easycat validate contracts",
+        "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ):
