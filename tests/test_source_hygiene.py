@@ -578,6 +578,18 @@ def test_focused_transport_tests_use_pytest_port_factory() -> None:
         assert "unused_tcp_port_factory" in source
 
 
+def test_session_integration_tests_use_pytest_port_factory() -> None:
+    """Keep small session integration tests off bind-close port helpers."""
+    for path in (
+        REPO_ROOT / "tests" / "integration" / "test_twilio_session_integration.py",
+        REPO_ROOT / "tests" / "integration" / "test_websocket_session_integration.py",
+    ):
+        source = path.read_text(encoding="utf-8")
+
+        assert "find_free_port" not in source
+        assert "unused_tcp_port_factory" in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

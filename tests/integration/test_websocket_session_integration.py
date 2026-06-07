@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -16,7 +17,6 @@ from .harness import (
     RecordingTTS,
     ScriptedSTT,
     ScriptedVAD,
-    find_free_port,
     make_chunk,
     make_test_config,
     patch_provider_factories,
@@ -35,13 +35,14 @@ class TwoSentenceStreamingAgent(_TestBridgeBase):
 @pytest.mark.integration_socket
 async def test_create_session_websocket_streaming_barge_in(
     monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
 ) -> None:
     stt = ScriptedSTT(["hello websocket"])
     tts = RecordingTTS(chunk_sizes=(640, 640), chunk_delay_s=0.05)
     vad = ScriptedVAD(["start", "stop", "start"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = unused_tcp_port_factory()
     server_result: asyncio.Future[dict[str, object]] = asyncio.get_running_loop().create_future()
 
     async def handler(ws: object) -> None:
