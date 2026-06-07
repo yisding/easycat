@@ -11,6 +11,7 @@ from typer.main import get_command
 from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
+    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
     _available_docs_audience_filters,
     _docs_entries,
     _register_commands,
@@ -38,6 +39,7 @@ ONBOARDING_GUARD_COMMANDS = (
     "just guard-contributing",
     "just guard-markdown",
 )
+RAW_ONBOARDING_GUARD_COMMANDS = _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
 DOCS_MAP_COMMANDS = ("uv run easycat docs", "uv run easycat docs --json")
 AGENT_GUIDE_MACHINE_COMMANDS = (
     "uv run easycat doctor --json",
@@ -327,7 +329,10 @@ def _validate_uv_run_hint(
                 problems.append(f"{label}: missing python script {script}")
         case ["pytest", *paths]:
             for path in paths:
-                if not path.startswith("-") and not (REPO_ROOT / path).exists():
+                if path.startswith("-"):
+                    continue
+                target_path = path.split("::", 1)[0]
+                if not (REPO_ROOT / target_path).exists():
                     problems.append(f"{label}: missing pytest target {path}")
         case ["ruff", *_]:
             return
@@ -743,6 +748,7 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         + ("uv run easycat docs --audience coding-agents",)
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ONBOARDING_GUARD_COMMANDS
+        + RAW_ONBOARDING_GUARD_COMMANDS
     ):
         assert command in command_section
         assert command in route_commands
@@ -760,6 +766,7 @@ def test_architecture_docs_route_matches_guide_command_hints() -> None:
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ("uv run pytest tests/test_install_guidance.py",)
         + ONBOARDING_GUARD_COMMANDS
+        + RAW_ONBOARDING_GUARD_COMMANDS
     ):
         assert command in command_section
         assert command in route_commands

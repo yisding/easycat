@@ -7,6 +7,7 @@ import re
 import tomllib
 from pathlib import Path
 
+from easycat.cli._app import _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
 from easycat.cli.diagnose._codes import META_ENTRIES
 from tests._justfile import just_recipe_names
 
@@ -624,6 +625,8 @@ def test_agent_guide_command_examples_are_current() -> None:
             "just guard-markdown",
         ):
             assert recipe in command_section, filename
+        for command in _DOCS_ONBOARDING_RAW_GUARD_COMMANDS:
+            assert command in command_section, filename
         assert "uv run easycat docs" in command_section
         assert "uv run easycat docs --json" in command_section
         assert "uv run easycat doctor --json" in command_section

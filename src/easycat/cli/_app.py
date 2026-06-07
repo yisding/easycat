@@ -112,6 +112,44 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _JOURNEY_FOOTER = tuple(_rich_cli_hint(command, purpose) for command, purpose in _CLI_HINTS)
 
+_DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
+    (
+        "uv run pytest "
+        "tests/test_quickstart_e2e.py::"
+        "test_readme_choose_your_path_routes_primary_onboarding_surfaces "
+        "tests/test_docs_index.py "
+        "tests/cli/test_app.py::test_docs_command "
+        "tests/cli/test_app.py::test_docs_command_json"
+    ),
+    (
+        "uv run pytest "
+        "tests/teaching "
+        "tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands "
+        "tests/test_install_guidance.py::"
+        "test_teaching_ladder_prerequisites_run_doctor_after_setup "
+        "tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor "
+        "tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras"
+    ),
+    (
+        "uv run pytest "
+        "tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix "
+        "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path"
+    ),
+    (
+        "uv run pytest "
+        "tests/cli/test_templates.py "
+        "tests/cli/test_init.py::test_list_templates "
+        "tests/cli/test_init.py::test_list_templates_json"
+    ),
+    (
+        "uv run pytest "
+        "tests/test_contributing.py "
+        "tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands "
+        "tests/test_validation_plan.py"
+    ),
+    "uv run pytest tests/test_markdown_links.py",
+)
+
 
 def _format_journey_menu() -> str:
     """Render the bare ``easycat`` menu from the command text table."""
@@ -292,6 +330,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "just guard-templates",
             "just guard-contributing",
             "just guard-markdown",
+            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
             "uv run easycat validate contracts --json",
@@ -324,6 +363,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "just guard-templates",
             "just guard-contributing",
             "just guard-markdown",
+            *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
             "uv run easycat validate contracts --json",
