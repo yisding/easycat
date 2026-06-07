@@ -538,7 +538,7 @@ testpaths = ["tests"]
 strict_markers = true
 strict_config = true
 markers = [
-    "integration_local: in-process end-to-end tests with fake providers",
+    "integration_local: local integration tests with no live services; may use subprocesses/filesystem",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
     "integration_live: tests requiring live API keys and optional provider extras",
     "slow: long-running end-to-end tests; opt in with '-m slow'",

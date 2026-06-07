@@ -38,6 +38,17 @@ def _registered_marker_names() -> set[str]:
     return {marker.split(":", 1)[0].split("(", 1)[0].strip() for marker in markers}
 
 
+def _registered_marker_descriptions() -> dict[str, str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+    descriptions: dict[str, str] = {}
+    for marker in markers:
+        name = marker.split(":", 1)[0].split("(", 1)[0].strip()
+        _, _, description = marker.partition(":")
+        descriptions[name] = description.strip()
+    return descriptions
+
+
 def _validation_task_section(heading: str, next_heading: str) -> str:
     plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
     return plan.split(heading, 1)[1].split(next_heading, 1)[0]
@@ -162,3 +173,19 @@ def test_validation_marker_plan_tracks_registered_marker_state() -> None:
     assert "`tests/_marker_lint.py`" in flaky_section
     assert "`tests/conftest.py`" in flaky_section
     assert "release-scoped flaky tests" in flaky_section
+
+
+def test_integration_local_marker_definition_covers_local_builds() -> None:
+    descriptions = _registered_marker_descriptions()
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
+
+    assert descriptions["integration_local"] == (
+        "local integration tests with no live services; may use subprocesses/filesystem"
+    )
+    for doc in (contributing, reference):
+        assert "local integration tests with no live services" in doc
+    assert "fake providers, subprocesses, or filesystem state" in contributing
+    assert "in-process end-to-end tests with fake providers" not in "\n".join(
+        (contributing, reference, descriptions["integration_local"])
+    )

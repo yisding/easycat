@@ -167,7 +167,8 @@ Markers are **strict** (`strict_markers = true`): an unknown marker fails
 collection. The full list lives in `pyproject.toml` under
 `[tool.pytest.ini_options].markers`. What they mean:
 
-- `integration_local` — in-process end-to-end with fake providers.
+- `integration_local` — local integration tests with no live services; may use
+  fake providers, subprocesses, or filesystem state.
 - `integration_socket` — needs localhost socket bind/connect (auto-skipped
   where the sandbox forbids binding; see `tests/conftest.py`).
 - `integration_live` — needs live API keys and optional provider extras.
