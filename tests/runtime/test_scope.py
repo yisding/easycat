@@ -68,11 +68,12 @@ async def test_runtime_scope_cancel_and_drain_cancels_task() -> None:
     scope = RuntimeScope()
     started = asyncio.Event()
     cleaned_up = asyncio.Event()
+    never_released = asyncio.Event()
 
     async def wait_forever() -> None:
         started.set()
         try:
-            await asyncio.sleep(60)
+            await never_released.wait()
         finally:
             cleaned_up.set()
 

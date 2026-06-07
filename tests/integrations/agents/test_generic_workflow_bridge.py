@@ -226,7 +226,7 @@ class _SlowStreamingWorkflow:
 
     async def on_user_turn_streaming(self, text: str) -> AsyncIterator[str]:
         yield "first "
-        await asyncio.sleep(10)
+        await asyncio.Event().wait()
         yield "never"
 
 

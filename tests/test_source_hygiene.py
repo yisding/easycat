@@ -744,6 +744,20 @@ def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     assert "await asyncio.sleep(10)" not in source
 
 
+def test_runtime_and_generic_workflow_tests_use_events_for_never_complete_tasks() -> None:
+    """Long-lived cancellation tests should use events instead of long sleeps."""
+    files = (
+        REPO_ROOT / "tests" / "runtime" / "test_scope.py",
+        REPO_ROOT / "tests" / "integrations" / "agents" / "test_generic_workflow_bridge.py",
+    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    assert "await never_released.wait()" in combined
+    assert "await asyncio.Event().wait()" in combined
+    assert "await asyncio.sleep(10)" not in combined
+    assert "await asyncio.sleep(60)" not in combined
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

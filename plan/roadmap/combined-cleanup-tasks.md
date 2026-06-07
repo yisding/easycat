@@ -599,6 +599,8 @@ context. Several bullets are known stale; use the current-state list above and
   and ingress task completion signals instead of fixed client sleeps.
 - Done: timeout wrapper tests model non-completing providers with
   cancellation-friendly event waits instead of long sleeps.
+- Done: runtime scope and generic workflow cancellation tests use event waits
+  for intentionally pending work instead of long sleeps.
 - Done: the shared integration polling helper was removed after replacing its
   call sites with event-backed waits.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound
