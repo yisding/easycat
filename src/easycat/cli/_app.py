@@ -202,6 +202,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "easycat docs",
             "easycat docs --audience learners",
+            "easycat docs --audience app-builders",
             "easycat docs --json",
             "easycat docs --audience maintainers --json",
         ),
