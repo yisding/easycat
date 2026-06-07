@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -21,7 +22,7 @@ from easycat.transports.twilio_media import (
 )
 from easycat.transports.websocket import WebSocketConnectionTransport
 
-from .conftest import find_free_port, make_chunk
+from .conftest import make_chunk
 
 pytestmark = pytest.mark.integration_socket
 
@@ -69,13 +70,27 @@ class _DummyTwilioWebSocket:
         return None
 
 
+class _UsesPytestTcpPortFactory:
+    _unused_tcp_port_factory: Callable[[], int]
+
+    @pytest.fixture(autouse=True)
+    def _set_unused_tcp_port_factory(
+        self,
+        unused_tcp_port_factory: Callable[[], int],
+    ) -> None:
+        self._unused_tcp_port_factory = unused_tcp_port_factory
+
+    def _unused_port(self) -> int:
+        return self._unused_tcp_port_factory()
+
+
 # ── WebSocketConnectionTransport tests ────────────────────────────
 
 
-class TestWebSocketConnectionTransport:
+class TestWebSocketConnectionTransport(_UsesPytestTcpPortFactory):
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = find_free_port()
+        port = self._unused_port()
         transport_holder: list[WebSocketConnectionTransport] = []
 
         async def handler(ws):
@@ -105,7 +120,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_send_receive_audio(self):
-        port = find_free_port()
+        port = self._unused_port()
         received: list[AudioChunk] = []
 
         async def handler(ws):
@@ -131,7 +146,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_server_sends_audio_to_client(self):
-        port = find_free_port()
+        port = self._unused_port()
 
         async def handler(ws):
             t = WebSocketConnectionTransport(ws)
@@ -156,7 +171,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_control_message_config(self):
-        port = find_free_port()
+        port = self._unused_port()
         transport_holder: list[WebSocketConnectionTransport] = []
 
         async def handler(ws):
@@ -192,7 +207,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_non_object_control_frame_does_not_end_receive_loop(self):
-        port = find_free_port()
+        port = self._unused_port()
         transport_holder: list[WebSocketConnectionTransport] = []
 
         async def handler(ws):
@@ -218,7 +233,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_client_disconnect_ends_receive(self):
-        port = find_free_port()
+        port = self._unused_port()
         received: list[AudioChunk] = []
         collect_done = asyncio.Event()
 
@@ -245,7 +260,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
-        port = find_free_port()
+        port = self._unused_port()
 
         async def handler(ws):
             t = WebSocketConnectionTransport(ws)
@@ -264,7 +279,7 @@ class TestWebSocketConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_connect_idempotent(self):
-        port = find_free_port()
+        port = self._unused_port()
         ready_count = 0
 
         async def handler(ws):
@@ -295,7 +310,7 @@ class TestWebSocketConnectionTransport:
 # ── TwilioConnectionTransport tests ──────────────────────────────
 
 
-class TestTwilioConnectionTransport:
+class TestTwilioConnectionTransport(_UsesPytestTcpPortFactory):
     def test_audio_contract_declares_distinct_tts_preference(self):
         transport = TwilioConnectionTransport(_DummyTwilioWebSocket())
 
@@ -304,7 +319,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = find_free_port()
+        port = self._unused_port()
         transport_holder: list[TwilioConnectionTransport] = []
 
         async def handler(ws):
@@ -327,7 +342,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_receive_audio(self):
-        port = find_free_port()
+        port = self._unused_port()
         received: list[AudioChunk] = []
 
         async def handler(ws):
@@ -355,7 +370,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_send_audio(self):
-        port = find_free_port()
+        port = self._unused_port()
         send_ready = asyncio.Event()
 
         async def handler(ws):
@@ -386,7 +401,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_send_mark(self):
-        port = find_free_port()
+        port = self._unused_port()
         send_ready = asyncio.Event()
 
         async def handler(ws):
@@ -416,7 +431,7 @@ class TestTwilioConnectionTransport:
     @pytest.mark.asyncio
     async def test_send_mark_no_stream_returns_empty(self):
         """send_mark without an active stream returns gracefully."""
-        port = find_free_port()
+        port = self._unused_port()
 
         async def handler(ws):
             t = TwilioConnectionTransport(ws)
@@ -435,7 +450,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_send_playback_mark(self):
-        port = find_free_port()
+        port = self._unused_port()
         send_ready = asyncio.Event()
 
         async def handler(ws):
@@ -463,7 +478,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_dtmf_emitted(self):
-        port = find_free_port()
+        port = self._unused_port()
         digits: list[str] = []
 
         async def handler(ws):
@@ -490,7 +505,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_mark_ack_emitted(self):
-        port = find_free_port()
+        port = self._unused_port()
         marks: list[str] = []
 
         async def handler(ws):
@@ -545,7 +560,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_malformed_frames_do_not_end_receive_loop(self):
-        port = find_free_port()
+        port = self._unused_port()
         transport_holder: list[TwilioConnectionTransport] = []
 
         async def handler(ws):
@@ -573,7 +588,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_stop_message_ends_receive(self):
-        port = find_free_port()
+        port = self._unused_port()
         chunks: list[AudioChunk] = []
         collect_done = asyncio.Event()
 
@@ -599,7 +614,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):
-        port = find_free_port()
+        port = self._unused_port()
 
         async def handler(ws):
             t = TwilioConnectionTransport(ws)
@@ -617,7 +632,7 @@ class TestTwilioConnectionTransport:
 
     @pytest.mark.asyncio
     async def test_clear_audio(self):
-        port = find_free_port()
+        port = self._unused_port()
         send_ready = asyncio.Event()
 
         async def handler(ws):

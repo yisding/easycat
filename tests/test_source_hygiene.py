@@ -566,6 +566,7 @@ def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
 def test_focused_transport_tests_use_pytest_port_factory() -> None:
     """Keep focused transport tests off bind-close port helpers where feasible."""
     for path in (
+        REPO_ROOT / "tests" / "transports" / "test_connection_transports.py",
         REPO_ROOT / "tests" / "transports" / "test_websocket_session_server.py",
         REPO_ROOT / "tests" / "transports" / "test_webtransport.py",
     ):
