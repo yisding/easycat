@@ -413,6 +413,7 @@ Enable the outbound pipeline via `EasyConfig.telephony`:
 from easycat import (
     EasyConfig,
     OutboundCallConfig,
+    SessionPolicyConfig,
     TelephonyConfig,
     VoicemailDetectionConfig,
     create_session,
@@ -420,7 +421,9 @@ from easycat import (
 
 config = EasyConfig(
     agent=your_agent,
-    greeting="Hi, this is Lucy from Example Health.",
+    session_policy=SessionPolicyConfig(
+        greeting="Hi, this is Lucy from Example Health.",
+    ),
     telephony=TelephonyConfig(
         enable_outbound_call_manager=True,
         outbound=OutboundCallConfig(
@@ -487,10 +490,11 @@ customParameters and emits ``CallAnswered``, so observers like
 same lifecycle.
 
 ### Bot speaks first
-Set `EasyConfig.greeting` to have the bot synthesize a greeting on
-the first `CallAnswered` event.  Works for both inbound (stream
-start) and outbound (callee pickup).  Use this to play an
-AI-disclosure or identification line before the caller's first
+Set `EasyConfig.session_policy.greeting` (or pass
+`session_policy=SessionPolicyConfig(greeting=...)`) to have the bot
+synthesize a greeting on the first `CallAnswered` event.  Works for
+both inbound (stream start) and outbound (callee pickup).  Use this to
+play an AI-disclosure or identification line before the caller's first
 utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
 140 for outbound AI calls.
 
@@ -502,18 +506,17 @@ off your list"``, ``"opt out"``, …).  On match the session:
 1. emits an `OptOutDetected` event carrying the caller number, the
    matched phrase, and the full transcript text,
 2. adds the caller to `session.dnc_list` when one is attached
-   (pass a shared `DNCList` via `EasyConfig.dnc_list`),
+   (pass a shared `DNCList` via `SessionPolicyConfig(dnc_list=...)`),
 3. enqueues an `EndCallAction(reason="opt_out")` so the call
    terminates after the agent's current utterance finishes.
 
-Set `EasyConfig.opt_out_detection=False` to opt out of the
-auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace
-the built-in phrase list (language packs / industry-specific
-terminology).
+Set `SessionPolicyConfig(opt_out_detection=False)` to opt out of the
+auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace the
+built-in phrase list (language packs / industry-specific terminology).
 
 ### Caller-ID exposure policy
 Control whether the LLM sees the caller's number or only tool code
-does via `EasyConfig.caller_id_exposure`:
+does via `SessionPolicyConfig.caller_id_exposure`:
 
 - `"tools_only"` (default): number available at
   `session.call_identity.caller_number` for tools, hidden from the
@@ -526,7 +529,7 @@ does via `EasyConfig.caller_id_exposure`:
 ```python
 config = EasyConfig(
     agent=your_agent,
-    caller_id_exposure="system_message",
+    session_policy=SessionPolicyConfig(caller_id_exposure="system_message"),
 )
 ```
 

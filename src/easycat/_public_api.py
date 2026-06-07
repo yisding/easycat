@@ -22,6 +22,7 @@ _register(
     "easycat.config",
     "EasyConfig",
     "OutboundCallConfig",
+    "SessionPolicyConfig",
     "TelephonyConfig",
     "VoicemailDetectionConfig",
     "create_session",

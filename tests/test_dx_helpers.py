@@ -179,12 +179,21 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
         encoding="utf-8"
     )
     plan_index = (REPO_ROOT / "plan" / "peripherals" / "README.md").read_text(encoding="utf-8")
-    field_count = len(fields(EasyConfig))
+    field_names = {field.name for field in fields(EasyConfig)}
+    field_count = len(field_names)
     missing_knobs = plan.split("Advanced knobs promised by the plan", 1)[1].split(
         "The high-leverage DX wins",
         1,
     )[0]
 
+    assert "session_policy" in field_names
+    assert {
+        "greeting",
+        "dnc_list",
+        "opt_out_detection",
+        "opt_out_phrases",
+        "caller_id_exposure",
+    }.isdisjoint(field_names)
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan
     assert "`record_to=`" not in missing_knobs

@@ -16,7 +16,7 @@ import logging
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import InitVar, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -413,6 +413,34 @@ class TelephonyConfig:
     twilio_actions: TwilioSessionActionConfig | None = None
 
 
+@dataclass
+class SessionPolicyConfig:
+    """High-level session policy knobs for ``EasyConfig``.
+
+    New code should prefer grouping these related conversation and telephony
+    behaviors under ``session_policy=...``. The legacy top-level
+    ``EasyConfig(greeting=..., opt_out_detection=..., caller_id_exposure=...)``
+    aliases still work and forward into this object.
+    """
+
+    greeting: str | None = None
+    dnc_list: Any | None = None
+    opt_out_detection: bool = True
+    opt_out_phrases: tuple[str, ...] | None = None
+    caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+
+
+_SESSION_POLICY_ALIAS_FIELDS = frozenset(
+    {
+        "greeting",
+        "dnc_list",
+        "opt_out_detection",
+        "opt_out_phrases",
+        "caller_id_exposure",
+    }
+)
+
+
 TransportConfig = (
     LocalTransportConfig
     | WebSocketTransportConfig
@@ -490,6 +518,8 @@ class EasyConfig(_AgentSessionConfig):
             sensitivity. Higher values end turns more eagerly; internally this
             maps to ``SmartTurnConfig.threshold = 1 - sensitivity`` and enables
             smart turn automatically.
+        session_policy: Grouped conversation/telephony policies such as
+            greeting, opt-out auto-detection, DNC list, and caller-ID exposure.
         mcp_servers: Optional list of MCP server URIs to pass through to
             agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
             ``http://``, ``https://``.  Frozen per session — mid-session
@@ -515,6 +545,7 @@ class EasyConfig(_AgentSessionConfig):
     output_processors: Sequence[LLMOutputProcessor] = ()
     session_actions: SessionActions | None = None
     action_executors: Sequence[SessionActionExecutor] = ()
+    session_policy: SessionPolicyConfig = field(default_factory=SessionPolicyConfig)
     # When set, every session exports a timestamped debug bundle to this
     # directory on stop/shutdown — the "always be recording" flow so a
     # user who hits a real failure already has the bundle saved to disk
@@ -522,41 +553,50 @@ class EasyConfig(_AgentSessionConfig):
     # journal actually exists.
     record_to: str | Path | None = None
 
-    # Optional greeting text synthesized on the first
-    # :class:`~easycat.events.CallAnswered`.  Makes the bot speak
-    # first on both inbound and outbound calls — the canonical
-    # outbound pattern and the FCC's preferred moment for an
-    # AI-disclosure utterance.  Set to ``None`` (default) to preserve
-    # user-speaks-first behaviour.
-    greeting: str | None = None
+    # Backward-compatible aliases for fields now grouped under
+    # ``session_policy``. ``None`` means "leave the grouped value as-is";
+    # pass ``session_policy=SessionPolicyConfig(...)`` when you need to set
+    # one of the nullable policy values to ``None`` explicitly.
+    greeting: InitVar[str | None] = None
+    dnc_list: InitVar[Any | None] = None
+    opt_out_detection: InitVar[bool | None] = None
+    opt_out_phrases: InitVar[tuple[str, ...] | None] = None
+    caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
 
-    # Optional Do-Not-Call list reused for opt-out auto-detection.
-    # Session-level opt-out detection runs on every STT final and, on
-    # match, adds the caller's number here.  Attaching the same
-    # ``DNCList`` across sessions lets the list persist in-process
-    # without a database.
-    dnc_list: Any | None = None
+    def __getattribute__(self, name: str) -> Any:
+        if name in _SESSION_POLICY_ALIAS_FIELDS:
+            try:
+                policy = object.__getattribute__(self, "session_policy")
+            except AttributeError:
+                return object.__getattribute__(self, name)
+            return getattr(policy, name)
+        return object.__getattribute__(self, name)
 
-    # Session-level opt-out auto-detection runs on every STT final.
-    # Keep these high-level knobs alongside ``dnc_list`` so telephony apps
-    # using ``EasyConfig`` do not need to drop to ``SessionConfig`` just to
-    # disable detection or replace the stock phrase list.
-    opt_out_detection: bool = True
-    opt_out_phrases: tuple[str, ...] | None = None
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in _SESSION_POLICY_ALIAS_FIELDS and "session_policy" in self.__dict__:
+            setattr(self.session_policy, name, value)
+            return
+        object.__setattr__(self, name, value)
 
-    # Telephony caller-ID exposure.  ``"tools_only"`` (default) keeps
-    # the caller's phone number out of the LLM prompt but available to
-    # tool code via ``session.call_identity``.  ``"system_message"``
-    # prepends a short system note on every turn so the agent can
-    # reason about the caller.  ``"off"`` hides it from both layers.
-    # Internal telephony hooks still retain a private identity for
-    # opt-out/DNC handling.
-    # See :class:`easycat.session._types.CallIdentity` for the data
-    # model and :class:`easycat.session._types.CallerIdExposure` for
-    # the allowed literals.
-    caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
+    def __post_init__(
+        self,
+        greeting: str | None,
+        dnc_list: Any | None,
+        opt_out_detection: bool | None,
+        opt_out_phrases: tuple[str, ...] | None,
+        caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
+    ) -> None:
+        if greeting is not None:
+            self.greeting = greeting
+        if dnc_list is not None:
+            self.dnc_list = dnc_list
+        if opt_out_detection is not None:
+            self.opt_out_detection = opt_out_detection
+        if opt_out_phrases is not None:
+            self.opt_out_phrases = opt_out_phrases
+        if caller_id_exposure is not None:
+            self.caller_id_exposure = caller_id_exposure
 
-    def __post_init__(self) -> None:
         self.smart_turn = _normalize_smart_turn_config(
             self.smart_turn,
             sensitivity=self.smart_turn_sensitivity,

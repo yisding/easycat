@@ -5,7 +5,14 @@ import math
 
 import pytest
 
-from easycat import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, EasyConfig, create_session
+from easycat import (
+    PCM16_MONO_8K,
+    PCM16_MONO_16K,
+    PCM16_MONO_24K,
+    EasyConfig,
+    SessionPolicyConfig,
+    create_session,
+)
 from easycat.audio_format import AudioChunk
 from easycat.config import TelephonyConfig
 from easycat.echo_cancellation import EchoCancellationConfig
@@ -282,18 +289,48 @@ def test_create_session_accepts_policy_only_custom_tts(
     assert session._config.tts is tts
 
 
-def test_easyconfig_passes_opt_out_detection_settings_to_session_config():
+def test_easyconfig_session_policy_passes_opt_out_settings_to_session_config():
     session = create_session(
         EasyConfig(
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
-            opt_out_detection=False,
-            opt_out_phrases=("retire me",),
+            session_policy=SessionPolicyConfig(
+                opt_out_detection=False,
+                opt_out_phrases=("retire me",),
+            ),
         )
     )
 
     assert session._config.opt_out_detection is False
     assert session._config.opt_out_phrases == ("retire me",)
+
+
+def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
+    config = EasyConfig(
+        stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+        tts=OpenAITTSConfig(api_key="test-key"),
+        greeting="Hello",
+        opt_out_detection=False,
+        opt_out_phrases=("retire me",),
+        caller_id_exposure="system_message",
+    )
+
+    assert config.session_policy == SessionPolicyConfig(
+        greeting="Hello",
+        opt_out_detection=False,
+        opt_out_phrases=("retire me",),
+        caller_id_exposure="system_message",
+    )
+    assert config.greeting == "Hello"
+    assert config.opt_out_detection is False
+    assert config.opt_out_phrases == ("retire me",)
+    assert config.caller_id_exposure == "system_message"
+
+    config.opt_out_detection = True
+    config.caller_id_exposure = "tools_only"
+
+    assert config.session_policy.opt_out_detection is True
+    assert config.session_policy.caller_id_exposure == "tools_only"
 
 
 @pytest.mark.asyncio

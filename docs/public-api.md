@@ -85,6 +85,7 @@ from easycat.telephony.ivr import IVRNavigator
 ### Configuration Helpers
 
 - `OutboundCallConfig`
+- `SessionPolicyConfig`
 - `TelephonyConfig`
 - `VoicemailDetectionConfig`
 - `SmartTurnConfig`

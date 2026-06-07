@@ -20,7 +20,7 @@ Status from static inspection on 2026-06-06:
 | Plan | Status | Notes |
 |---|---|---|
 | [peripheral-cli.md](peripheral-cli.md) | Partially landed | `init`, `doctor`, `explain`, `bundles list/show/export`, `inspect`, `replay`, all planned scaffold templates, and template line budgets exist; raw export and full redaction-policy integration remain planned. |
-| [peripheral-dx-onboarding.md](peripheral-dx-onboarding.md) | Partially landed | `run`, string-keyed providers, config presets, error codes, `record_to`, log-level env support, and canonical example line budgets exist; `EasyConfig` remains at 34 top-level fields against the ≤22 flattening target. |
+| [peripheral-dx-onboarding.md](peripheral-dx-onboarding.md) | Partially landed | `run`, string-keyed providers, config presets, error codes, `record_to`, log-level env support, and canonical example line budgets exist; `EasyConfig` remains at 30 top-level fields against the ≤22 flattening target. |
 | [peripheral-redaction.md](peripheral-redaction.md) | Mostly planned | Safe default snapshots exist; full `RedactionPolicy` and export policies remain planned. |
 | [peripheral-observability-and-cost.md](peripheral-observability-and-cost.md) | Mostly planned | Debugger cost endpoint degrades to zero; real `CostRecord`, OTel export, and latency-budget objects remain planned. |
 | [peripheral-eval-and-debugger-ui.md](peripheral-eval-and-debugger-ui.md) | Partially landed | Debugger UI, replay endpoint, bundle pytest helpers, and checkpoint ids exist; simulator/judge and forked replay remain planned. |

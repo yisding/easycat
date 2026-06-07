@@ -317,8 +317,8 @@ def test_readme_telephony_opt_out_uses_easyconfig_surface() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("### Opt-out auto-detection", 1)[1].split("### ", 1)[0]
 
-    assert "EasyConfig.dnc_list" in section
-    assert "EasyConfig.opt_out_detection=False" in section
+    assert "SessionPolicyConfig(dnc_list=...)" in section
+    assert "SessionPolicyConfig(opt_out_detection=False)" in section
     assert "SessionConfig.opt_out_detection=False" not in section
 
 
