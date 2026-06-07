@@ -251,6 +251,9 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "PR expectations" in result.stdout
     assert "docs/public-api.md" in result.stdout
     assert "CONTRIBUTING.md" in result.stdout
+    assert "docs/onboarding guards" in result.stdout
+    assert "just guard-docs" in result.stdout
+    assert "just guard-contributing" in result.stdout
     assert "docs/deployment/docker.md" in result.stdout
     assert "docs/observability.md" in result.stdout
     assert "src/easycat/runtime/DURABILITY.md" in result.stdout
@@ -358,6 +361,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ]
     assert commands["CONTRIBUTING.md"] == [
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
         "uv run pytest",
         "uv run ruff check .",
         "uv run easycat validate quick",
@@ -381,6 +389,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "right first route" in descriptions["README.md#choose-your-path"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
+    assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
     assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]

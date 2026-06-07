@@ -12,6 +12,7 @@ from easycat.cli._app import (
     _register_commands,
     app,
 )
+from tests._justfile import just_recipe_commands
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -350,11 +351,24 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 def test_contributing_docs_route_matches_validation_report_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    maintenance_section = contributing.split("## Maintaining docs and onboarding maps", 1)[
+        1
+    ].split("## Parallel runs and xdist safety", 1)[0]
     validation_section = contributing.split(
         "## Validation slices and the `easycat validate` CLI",
         1,
     )[1].split("## ", 1)[0]
     route_commands = entries["CONTRIBUTING.md"].get("commands", ())
+
+    for command in (
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
+    ):
+        assert command in maintenance_section
+        assert command in route_commands
 
     for command in (
         "uv run easycat validate quick",
@@ -392,6 +406,7 @@ def test_cli_docs_command_hints_are_locally_valid() -> None:
     registered_commands.update(
         group.name for group in app.registered_groups if group.name is not None
     )
+    just_recipes = just_recipe_commands(REPO_ROOT)
     problems: list[str] = []
 
     for entry in _docs_entries():
@@ -416,6 +431,9 @@ def test_cli_docs_command_hints_are_locally_valid() -> None:
                             problems.append(f"{entry['label']}: missing pytest target {path}")
                 case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
                     continue
+                case ["just", recipe, *_]:
+                    if recipe not in just_recipes:
+                        problems.append(f"{entry['label']}: unknown just recipe {recipe}")
                 case ["docker", "compose", *args]:
                     if "-f" in args:
                         compose_file = args[args.index("-f") + 1]
@@ -451,6 +469,8 @@ def test_cli_docs_command_placeholders_are_explained() -> None:
     assert "Bare easycat commands use installed CLI form" in _DOCS_COMMAND_NOTE
     assert "prefix them with uv run" in _DOCS_COMMAND_NOTE
     assert "Commands already starting with uv run are repo-local" in _DOCS_COMMAND_NOTE
+    assert "just commands are repo-local shortcuts" in _DOCS_COMMAND_NOTE
+    assert "raw command table" in _DOCS_COMMAND_NOTE
     assert "repository root" in _DOCS_COMMAND_NOTE
 
 

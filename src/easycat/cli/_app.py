@@ -250,8 +250,15 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",
-        "description": "Follow the development loop and validation slices.",
+        "description": (
+            "Follow the development loop, docs/onboarding guards, and validation slices."
+        ),
         "commands": (
+            "just guard-docs",
+            "just guard-examples",
+            "just guard-templates",
+            "just guard-contributing",
+            "just guard-markdown",
             "uv run pytest",
             "uv run ruff check .",
             "uv run easycat validate quick",
@@ -322,7 +329,8 @@ _DOCS_SOURCE_URL = "https://github.com/yisding/easycat"
 _DOCS_COMMAND_NOTE = (
     "Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. "
     "Commands already starting with uv run are repo-local and should run from the repository "
-    "root. Replace uppercase placeholders such as PATH and DIR before running."
+    "root. just commands are repo-local shortcuts; install just or use the raw command table "
+    "in CONTRIBUTING.md. Replace uppercase placeholders such as PATH and DIR before running."
 )
 
 
