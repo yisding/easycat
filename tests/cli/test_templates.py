@@ -462,11 +462,15 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
 
     assert "uv run easycat docs" in next_steps
     assert "uv run easycat docs --json" in next_steps
+    assert "uv run easycat init --list-templates" in next_steps
+    assert "uv run easycat init --list-templates --json" in next_steps
     assert "uv run easycat explain json-schema" in next_steps
     assert "script or coding agent needs the route map with command hints" in (
         normalized_next_steps
     )
     assert "audience labels" in normalized_next_steps
+    assert "right starter" in normalized_next_steps
+    assert "automation needs the template catalog" in normalized_next_steps
     assert "JSON envelope and field contract" in normalized_next_steps
     assert "Replace uppercase placeholders such as `PATH` before running those hints" in (
         normalized_next_steps

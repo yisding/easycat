@@ -63,7 +63,10 @@ uv run python -m py_compile agent.py
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and examples:** run `uv run easycat docs`; use
   `uv run easycat docs --json` when a script or coding agent needs the route
-  map with command hints and audience labels. Replace uppercase placeholders
-  such as `PATH` before running those hints. Run
+  map with command hints and audience labels. If this is not the right starter,
+  run `uv run easycat init --list-templates`; use
+  `uv run easycat init --list-templates --json` when automation needs the
+  template catalog. Replace uppercase placeholders such as `PATH` before
+  running those hints. Run
   `uv run easycat explain json-schema` for the JSON envelope and field
   contract.
