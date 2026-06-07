@@ -779,7 +779,9 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
 
     for command in (
         "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
         "uv run python examples/openai_agents_voice.py",
+        "uv run --env-file .env python examples/openai_agents_voice.py",
         "uv run easycat validate quick",
         "uv run easycat validate quick --json",
         "uv run easycat validate report .easycat/validation/latest.json",
