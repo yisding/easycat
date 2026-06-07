@@ -22,11 +22,20 @@ STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
 
 
-def test_gitignore_covers_local_agent_tool_state() -> None:
-    """Keep contributor-local automation state out of routine git status."""
+def test_gitignore_covers_local_generated_state() -> None:
+    """Keep contributor-local automation and cache state out of routine git status."""
     patterns = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
 
-    for pattern in (".codex", ".codex/", ".claude/"):
+    for pattern in (
+        ".hypothesis/",
+        ".mypy_cache/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".uv-cache/",
+        ".codex",
+        ".codex/",
+        ".claude/",
+    ):
         assert pattern in patterns
 
 

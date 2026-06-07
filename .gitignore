@@ -5,8 +5,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.hypothesis/
+.mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.uv-cache/
 .easycat/
 
 # Local coding-agent/tool state
