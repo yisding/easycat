@@ -354,9 +354,10 @@ Current verified state:
   to run when editing the root README chooser, README e2e coverage, install
   guidance, command-hint extraction, docs route map, examples matrix, examples
   README support files, script smoke checks, teaching ladder, generated teaching
-  blocks, scaffold templates, init next-step output, template catalog next steps,
-  contributor guide commands, source-layout hints, architecture hints, validation
-  docs, or maintained Markdown links; the named
+  blocks, scaffold templates, init happy paths, overwrite safety, schema
+  rejection paths, template catalog next steps, contributor guide commands,
+  source-layout hints, architecture hints, validation docs, or maintained
+  Markdown links; the named
   `just` recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
   `guard-templates`, `guard-contributing`, and `guard-markdown`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,

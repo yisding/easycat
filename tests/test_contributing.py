@@ -235,8 +235,8 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "script smoke checks, and docs-route hints"
         ),
         (
-            "Generated README sections, line budgets, init stderr and JSON next steps, "
-            "catalog text, catalog JSON, and catalog next-step commands"
+            "Generated README sections, line budgets, init happy paths, overwrite safety, "
+            "schema rejection paths, catalog text, catalog JSON, and next-step commands"
         ),
         (
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "
