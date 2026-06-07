@@ -34,7 +34,7 @@ command-specific fields.
   `uv run pytest tests/test_public_api.py` and `just guard-docs` before
   opening the PR. If `just` is not installed, use the raw command table in
   [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop), or run
-  `uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_quickstart_e2e.py::test_readme_cli_section_lists_registered_top_level_commands tests/test_quickstart_e2e.py::test_readme_cli_section_does_not_advertise_stale_bundle_commands tests/test_quickstart_e2e.py::test_readme_cli_section_does_not_advertise_stale_top_level_commands tests/test_command_hints.py tests/test_install_guidance.py::test_readme_cli_explain_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_command_examples_are_locally_valid tests/test_install_guidance.py::test_readme_json_guidance_covers_schema_command_families tests/test_install_guidance.py::test_readme_cli_debug_json_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_validate_examples_are_copyable tests/test_install_guidance.py::test_readme_cli_doctor_documents_env_file_option tests/test_install_guidance.py::test_cli_init_examples_name_target_directory tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json`.
+  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json`.
 
 ## Preferred Imports
 
