@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -506,6 +507,26 @@ def test_cli_test_plan_names_packaging_artifact_hygiene() -> None:
         "local `.pem` / `.key` files",
     ):
         assert token in packaging_plan
+
+
+def test_pytest_timeout_is_configured_as_suite_safety_net() -> None:
+    """Keep the roadmap aligned with the configured pytest-timeout guard."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_dependencies = pyproject["dependency-groups"]["dev"]
+    pytest_options = pyproject["tool"]["pytest"]["ini_options"]
+    reliability = (REPO_ROOT / "plan/roadmap/combined-cleanup-tasks.md").read_text(
+        encoding="utf-8"
+    )
+    reliability_section = reliability.split("### 7.4 Test Reliability", 1)[1].split(
+        "### 7.5 Provider And Performance Testing",
+        1,
+    )[0]
+
+    assert any(dependency.startswith("pytest-timeout") for dependency in dev_dependencies)
+    assert pytest_options["timeout"] == 60
+    assert pytest_options["timeout_method"] == "thread"
+    assert pytest_options["faulthandler_timeout"] == 55
+    assert "Done: `pytest-timeout`" in reliability_section
 
 
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:

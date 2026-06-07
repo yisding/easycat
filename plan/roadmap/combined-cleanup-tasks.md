@@ -589,7 +589,8 @@ context. Several bullets are known stale; use the current-state list above and
 
 ### 7.4 Test Reliability
 
-- Add `pytest-timeout`.
+- Done: `pytest-timeout` is a dev dependency and pytest enforces a 60s
+  per-test timeout with faulthandler diagnostics.
 - Add leaked-task checks for async tests.
 - Prefer event-driven waits over sleeps and polling.
 - Replace bind-close-reuse free-port helpers with
