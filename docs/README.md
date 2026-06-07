@@ -11,7 +11,9 @@ command hints, such as `PATH`, before running them. Use
 `uv run easycat docs --audience maintainers --json` when automation needs only
 maintainer-facing route entries. The human docs menu also prints the available
 audience labels so readers can choose a narrower route map without switching
-to JSON first.
+to JSON first. Multi-word audience filters accept hyphens or underscores, so
+`uv run easycat docs --audience app-builders` is equivalent to
+`uv run easycat docs --audience "app builders"`.
 
 ## Choose Your Path
 

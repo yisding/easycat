@@ -461,7 +461,7 @@ def _docs_entries() -> list[_DocsEntry]:
 
 def _normalize_docs_audience(value: str) -> str:
     """Normalize an audience filter or label for forgiving CLI matching."""
-    return " ".join(value.casefold().split())
+    return " ".join(value.casefold().replace("-", " ").replace("_", " ").split())
 
 
 def _available_docs_audiences() -> tuple[str, ...]:
@@ -517,6 +517,7 @@ Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
 Filtered machine-readable routes: easycat docs --audience maintainers --json
 Available audiences: {available_audiences}
+Multi-word audiences also accept hyphens or underscores, such as app-builders.
 {filter_note}
 {_DOCS_COMMAND_NOTE}
 """
@@ -538,7 +539,8 @@ def docs_command(
         "--audience",
         help=(
             "Filter routes by audience label, such as learners, app builders, coding agents, "
-            "contributors, operators, or maintainers."
+            "contributors, operators, or maintainers. Multi-word labels also accept hyphens "
+            "or underscores."
         ),
     ),
 ) -> None:

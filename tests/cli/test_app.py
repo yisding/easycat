@@ -282,6 +282,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
+    assert "Multi-word audiences also accept hyphens or underscores" in normalized
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
 
@@ -345,6 +346,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert "learners app builders coding agents contributors operators or maintainers" in (
         help_text
     )
+    assert "Multi word labels also accept hyphens or underscores" in help_text
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
     assert "command hints" in help_text
@@ -509,11 +511,22 @@ def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
+    assert "Multi-word audiences also accept hyphens or underscores" in normalized
     assert "Deployment" in result.stdout
     assert "Observability" in result.stdout
     assert "Journal durability" in result.stdout
     assert "Teaching ladder" not in result.stdout
     assert "First lesson" not in result.stdout
+
+
+def test_docs_command_accepts_hyphenated_audience_filter(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "app-builders"])
+
+    assert result.exit_code == 0
+    assert "Audience filter: app-builders" in result.stdout
+    assert "CLI and scaffolds" in result.stdout
+    assert "Examples" in result.stdout
+    assert "Teaching ladder" not in result.stdout
 
 
 def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
@@ -533,6 +546,16 @@ def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
     assert "Validation reference" in labels
     assert "Teaching ladder" not in labels
     assert all("maintainers" in audience for audience in audiences)
+
+
+def test_docs_command_accepts_underscored_json_audience_filter(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "provider_maintainers", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["audience_filter"] == "provider_maintainers"
+    assert [entry["label"] for entry in payload["entries"]] == ["Provider contracts"]
+    assert payload["entries"][0]["audience"] == "provider maintainers"
 
 
 def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) -> None:
