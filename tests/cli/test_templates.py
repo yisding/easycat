@@ -171,6 +171,34 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
 
 
+def test_template_env_var_collector_reads_twilio_server_code() -> None:
+    required, referenced = _template_code_env_vars("twilio-phone")
+
+    assert required == {"OPENAI_API_KEY", "TWILIO_STREAM_URL"}
+    assert "TWILIO_WS_PORT" in referenced
+    assert "TWILIO_WS_PORT" not in required
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_catalog_env_covers_template_code(name: str) -> None:
+    code_required, code_referenced = _template_code_env_vars(name)
+    catalog_required = set(_TEMPLATE_CATALOG[name]["required_env"])
+    catalog_optional = set(_TEMPLATE_CATALOG[name]["optional_env"])
+    catalog_env = catalog_required | catalog_optional
+
+    missing = sorted(code_referenced - catalog_env)
+    missing_required = sorted(code_required - catalog_required)
+    required_marked_optional = sorted(code_required & catalog_optional)
+
+    assert not missing, f"{name} catalog missing env vars read by template code: {missing}"
+    assert not missing_required, (
+        f"{name} catalog required_env missing required template env vars: {missing_required}"
+    )
+    assert not required_marked_optional, (
+        f"{name} catalog optional_env includes required vars: {required_marked_optional}"
+    )
+
+
 def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
     name = str(entry["name"])
     files = set(entry["files"])
@@ -287,6 +315,69 @@ def _render_env_example(name: str, cfg: InitConfig) -> str:
 
 def _template_python_filenames(name: str) -> list[str]:
     return sorted(path.name for path in _template_dir(name).glob("*.py"))
+
+
+def _literal_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def _env_var_literal_from_call(node: ast.Call) -> tuple[str, bool] | None:
+    func = node.func
+    if isinstance(func, ast.Name) and func.id == "require_env":
+        required = True
+    elif isinstance(func, ast.Attribute) and func.attr == "getenv":
+        if not isinstance(func.value, ast.Name) or func.value.id != "os":
+            return None
+        required = False
+    elif isinstance(func, ast.Attribute) and func.attr == "get":
+        if not _is_os_environ(func.value):
+            return None
+        required = False
+    else:
+        return None
+
+    if not node.args:
+        return None
+    name = _literal_string(node.args[0])
+    if name is None:
+        return None
+    return name, required
+
+
+def _template_code_env_vars(name: str) -> tuple[set[str], set[str]]:
+    required: set[str] = set()
+    referenced: set[str] = set()
+
+    for filename in _template_python_filenames(name):
+        path = _template_dir(name) / filename
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                result = _env_var_literal_from_call(node)
+                if result is None:
+                    continue
+                env_var, is_required = result
+                referenced.add(env_var)
+                if is_required:
+                    required.add(env_var)
+            elif isinstance(node, ast.Subscript) and _is_os_environ(node.value):
+                name_literal = _literal_string(node.slice)
+                if name_literal is not None:
+                    referenced.add(name_literal)
+                    required.add(name_literal)
+
+    return required, referenced
 
 
 def _uses_run_easyconfig_preset(source: str, preset: str) -> bool:
