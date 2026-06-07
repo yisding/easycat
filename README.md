@@ -102,7 +102,7 @@ them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
 easycat init my-agent    # scaffold a new project from a template
-easycat init --list-templates # compare templates, extras, env vars, files, commands
+easycat init --list-templates # compare templates, base package requirements, env vars, files, preflight/check/docs/run commands
 easycat init --list-templates --json # emit the machine-readable template catalog
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat doctor --json    # emit machine-readable environment checks
