@@ -584,6 +584,7 @@ def test_session_integration_tests_use_pytest_port_factory() -> None:
         REPO_ROOT / "tests" / "integration" / "test_session_lifecycle_e2e.py",
         REPO_ROOT / "tests" / "integration" / "test_twilio_session_integration.py",
         REPO_ROOT / "tests" / "integration" / "test_websocket_session_integration.py",
+        REPO_ROOT / "tests" / "integration" / "test_ws_transport_e2e.py",
     ):
         source = path.read_text(encoding="utf-8")
 

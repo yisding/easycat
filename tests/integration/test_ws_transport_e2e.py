@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -34,7 +35,6 @@ from .harness import (
     RecordingTTS,
     ScriptedSTT,
     ScriptedVAD,
-    find_free_port,
     make_chunk,
     make_test_config,
     patch_provider_factories,
@@ -43,6 +43,19 @@ from .harness import (
 pytestmark = pytest.mark.integration_socket
 
 FAST_TURN_MS = 1
+
+_unused_tcp_port_factory: Callable[[], int] | None = None
+
+
+@pytest.fixture(autouse=True)
+def _set_unused_tcp_port_factory(unused_tcp_port_factory: Callable[[], int]) -> None:
+    global _unused_tcp_port_factory
+    _unused_tcp_port_factory = unused_tcp_port_factory
+
+
+def _unused_port() -> int:
+    assert _unused_tcp_port_factory is not None
+    return _unused_tcp_port_factory()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -86,7 +99,7 @@ async def test_ws_full_turn_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -157,7 +170,7 @@ async def test_ws_client_disconnect_session_shutdown(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     session_holder: list = []
     handler_done = asyncio.Event()
 
@@ -209,7 +222,7 @@ async def test_ws_sample_rate_negotiation(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -275,7 +288,7 @@ async def test_ws_server_transport_full_turn(monkeypatch: pytest.MonkeyPatch) ->
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebSocketTransportConfig(host="127.0.0.1", port=port)
     transport = WebSocketTransport(config)
 
@@ -323,7 +336,7 @@ async def test_ws_server_transport_rejects_second_client(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebSocketTransportConfig(host="127.0.0.1", port=port)
     transport = WebSocketTransport(config)
 
@@ -361,7 +374,7 @@ async def test_ws_server_transport_client_reconnection(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     config = WebSocketTransportConfig(host="127.0.0.1", port=port)
     transport = WebSocketTransport(config)
 
@@ -412,7 +425,7 @@ async def test_ws_multi_turn_single_connection(
     vad = ScriptedVAD(["start", "stop", "start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[list[str]] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -491,7 +504,7 @@ async def test_ws_audio_format_message_sent_once(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -560,7 +573,7 @@ async def test_ws_empty_binary_message_ignored(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -621,7 +634,7 @@ async def test_ws_invalid_json_control_message(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -684,7 +697,7 @@ async def test_ws_format_negotiation_before_audio(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -750,7 +763,7 @@ async def test_ws_invalid_sample_rate_ignored(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -815,7 +828,7 @@ async def test_ws_text_only_no_audio_no_crash(
     vad = ScriptedVAD([])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     session_holder: list = []
     handler_done = asyncio.Event()
 
@@ -869,7 +882,7 @@ async def test_ws_disconnect_during_tts_no_hang(
     vad = ScriptedVAD(["start", "stop"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     session_holder: list = []
     bot_speaking = asyncio.Event()
     handler_done = asyncio.Event()
@@ -929,7 +942,7 @@ async def test_ws_burst_audio_no_crash(
     vad = ScriptedVAD([])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     session_holder: list = []
     handler_done = asyncio.Event()
 
@@ -975,7 +988,7 @@ async def test_ws_burst_audio_no_crash(
 @pytest.mark.asyncio
 async def test_ws_connection_transport_natural_close_then_disconnect() -> None:
     """When the WebSocket closes naturally, disconnect() should be safe."""
-    port = find_free_port()
+    port = _unused_port()
     disconnect_ok: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
 
     async def handler(ws) -> None:
@@ -1024,7 +1037,7 @@ async def test_ws_barge_in_through_websocket(
     vad = ScriptedVAD(["start", "stop", "start"])
     patch_provider_factories(monkeypatch, stt=stt, tts=tts, vad=vad)
 
-    port = find_free_port()
+    port = _unused_port()
     result_future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
     bot_speaking = asyncio.Event()
 
