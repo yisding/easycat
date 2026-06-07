@@ -705,12 +705,18 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
     route_commands = entries["README.md#validation-workflow"].get("commands", ())
     guard_commands = _documented_commands(validation_section, prefixes=("just guard-",))
+    raw_guard_commands = _documented_command_lines(
+        validation_section,
+        prefixes=("uv run pytest ",),
+    )
     validation_commands = _documented_commands(
         validation_section,
         prefixes=("uv run easycat validate ",),
     )
 
     assert guard_commands
+    assert guard_commands == ONBOARDING_GUARD_COMMANDS
+    assert raw_guard_commands == RAW_ONBOARDING_GUARD_COMMANDS
     assert validation_commands
     assert "If `just` is not installed" in validation_section
     assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in validation_section
