@@ -40,6 +40,14 @@ def _contributing_runbundle_section() -> str:
     )[0]
 
 
+def _contributing_provider_section() -> str:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    return contributing.split("## Adding an STT or TTS provider", 1)[1].split(
+        "## What's expected on a PR",
+        1,
+    )[0]
+
+
 def _contributing_docs_onboarding_section() -> str:
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     return contributing.split("## Maintaining docs and onboarding maps", 1)[1].split(
@@ -323,6 +331,24 @@ def test_contributing_runbundle_helpers_track_public_testing_exports() -> None:
     missing = sorted(name for name in testing.__all__ if f"`{name}`" not in section)
 
     assert not missing, "CONTRIBUTING.md RunBundle section missing helpers: " + ", ".join(missing)
+
+
+def test_contributing_provider_section_points_to_contract_map() -> None:
+    section = _contributing_provider_section()
+    normalized = re.sub(r"\s+", " ", section)
+
+    for phrase in (
+        "EasyCat uses **registries**, not inheritance",
+        "ProviderSurfaceContract",
+        "[provider contract map](tests/contracts/README.md)",
+        "protocol cassettes",
+        "schema fingerprints",
+        "bridge event grammar",
+        "uv run easycat validate contracts",
+        "uv run pytest tests/contracts",
+        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+    ):
+        assert phrase in normalized
 
 
 def test_validation_plan_matches_contributor_quick_command() -> None:

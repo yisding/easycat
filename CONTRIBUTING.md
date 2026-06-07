@@ -259,13 +259,17 @@ EasyCat uses **registries**, not inheritance. To add a provider:
    `tests/contracts/provider_surface_matrix.py` (a `ProviderSurfaceContract`
    with adapter path, protocol, required extra, credential env var, and
    cassette status) — or add an explicit exclusion with a reason. The matrix
-   tests fail if a registered provider has no row.
+   tests fail if a registered provider has no row. Review the
+   [provider contract map](tests/contracts/README.md) before changing provider
+   adapters, protocol cassettes, schema fingerprints, or bridge event grammar.
 5. **Add an extra** in `pyproject.toml` `[project.optional-dependencies]` if
    the provider needs an SDK, and wire it into `all` / `quickstart` as
    appropriate.
 6. **Tests**: contract tests under `tests/contracts/` plus unit tests under
    `tests/stt/` or `tests/tts/`. Mark provider/surface pairs correctly (see
-   the pairing rule above). If the protocol is replayable, add a cassette.
+   the pairing rule above). If the protocol is replayable, add a cassette. Run
+   `uv run easycat validate contracts`, `uv run pytest tests/contracts`, and
+   `uv run pytest tests/integration/test_provider_contract_matrix.py`.
 
 ## What's expected on a PR
 
