@@ -12,6 +12,7 @@ Setup: export OPENAI_API_KEY=...
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/webrtc_observability_server.py
+       uv run --env-file .env python examples/webrtc_observability_server.py
 
 Open:
        http://localhost:8080/webrtc_observability.html   (combined view: mic

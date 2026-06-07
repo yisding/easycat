@@ -8,6 +8,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/agent_event_subscription.py
+       uv run --env-file .env python examples/agent_event_subscription.py  # if keys live in .env
 """
 
 from __future__ import annotations

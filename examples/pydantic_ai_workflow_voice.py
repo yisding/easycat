@@ -8,6 +8,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/pydantic_ai_workflow_voice.py
+       uv run --env-file .env python examples/pydantic_ai_workflow_voice.py  # if keys live in .env
 """
 
 from typing import Any

@@ -15,6 +15,7 @@ Setup:
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/custom_tts_provider.py
+  uv run --env-file .env python examples/custom_tts_provider.py  # if keys live in .env
 """
 
 from __future__ import annotations

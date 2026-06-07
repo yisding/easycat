@@ -7,6 +7,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev  # RNNo
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/noise_reduction_backends.py --backend rnnoise
+       uv run --env-file .env python examples/noise_reduction_backends.py --backend rnnoise
        # Other choices: --backend krisp or --backend auto
 """
 

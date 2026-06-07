@@ -19,6 +19,7 @@ Setup:
     uv run easycat doctor
     uv run easycat doctor --env-file .env  # if keys live in .env
     uv run python examples/ws_supervisor_server.py
+    uv run --env-file .env python examples/ws_supervisor_server.py  # if keys live in .env
 
 Open:
     Caller UI:     http://localhost:8080/ws_browser_client.html

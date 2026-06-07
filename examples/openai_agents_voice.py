@@ -4,6 +4,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/openai_agents_voice.py
+       uv run --env-file .env python examples/openai_agents_voice.py  # if keys live in .env
 """
 
 try:

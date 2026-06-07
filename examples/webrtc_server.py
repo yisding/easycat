@@ -10,6 +10,7 @@ Setup (local):
     uv run easycat doctor
     uv run easycat doctor --env-file .env  # if keys live in .env
     uv run python examples/webrtc_server.py
+    uv run --env-file .env python examples/webrtc_server.py  # if keys live in .env
 
 Setup (EC2):
     See examples/ec2_webrtc/deploy.sh for a full deployment script that

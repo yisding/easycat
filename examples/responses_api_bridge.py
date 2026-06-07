@@ -14,6 +14,7 @@ Setup: export OPENAI_API_KEY=...                       # for STT/TTS
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/responses_api_bridge.py
+       uv run --env-file .env python examples/responses_api_bridge.py  # if keys live in .env
 """
 
 from easycat import EasyConfig, require_env, run

@@ -15,6 +15,7 @@ Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra langchain -
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
 Run:   uv run python examples/session_actions_langchain.py
+       uv run --env-file .env python examples/session_actions_langchain.py  # if keys live in .env
 
 LangChain 1.x removed ``create_tool_calling_agent`` (the recommended
 replacement, ``langchain.agents.create_agent``, returns a LangGraph

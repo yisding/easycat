@@ -823,10 +823,12 @@ def test_examples_readme_env_cells_cover_referenced_env_vars() -> None:
 def test_env_examples_document_doctor_preflight() -> None:
     missing_doctor: list[str] = []
     missing_env_file: list[str] = []
+    missing_env_run: list[str] = []
 
     for row in _example_readme_rows():
         if row["env"].startswith("None"):
             continue
+        env_run = row["run"].replace("uv run ", "uv run --env-file .env ", 1)
         path = REPO_ROOT / "examples" / row["link"]
         module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         doc = ast.get_docstring(module) or ""
@@ -834,6 +836,8 @@ def test_env_examples_document_doctor_preflight() -> None:
             missing_doctor.append(row["link"])
         if "uv run easycat doctor --env-file .env" not in doc:
             missing_env_file.append(row["link"])
+        if env_run not in doc:
+            missing_env_run.append(f"{row['link']}: `{env_run}`")
 
     assert not missing_doctor, (
         "Example docstrings with required env vars should document "
@@ -842,6 +846,10 @@ def test_env_examples_document_doctor_preflight() -> None:
     assert not missing_env_file, (
         "Example docstrings with required env vars should document "
         "`uv run easycat doctor --env-file .env`: " + ", ".join(missing_env_file)
+    )
+    assert not missing_env_run, (
+        "Example docstrings with required env vars should document the `.env` run command: "
+        + "; ".join(missing_env_run)
     )
 
 

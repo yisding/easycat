@@ -6,6 +6,7 @@ Setup:
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/ws_server.py
+  uv run --env-file .env python examples/ws_server.py  # if keys live in .env
 
 Connect clients streaming raw PCM16 audio to ws://localhost:8765.
 For non-local deployments, set EASYCAT_WS_TOKEN and send it as:

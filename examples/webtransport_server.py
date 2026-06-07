@@ -10,6 +10,7 @@ Setup:
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/webtransport_server.py --cert cert.pem --key key.pem
+  uv run --env-file .env python examples/webtransport_server.py --cert cert.pem --key key.pem
 
 Open ``examples/webtransport_browser_client.html`` in Chrome.  WebTransport
 requires a trusted certificate; for local development, launch Chrome with

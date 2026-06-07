@@ -19,6 +19,7 @@ Setup:
   uv run easycat doctor
   uv run easycat doctor --env-file .env  # if keys live in .env
   uv run python examples/vad_backends.py --backend silero
+  uv run --env-file .env python examples/vad_backends.py --backend silero  # if keys live in .env
   uv run python examples/vad_backends.py --backend funasr
   uv run python examples/vad_backends.py --backend ten
 """
