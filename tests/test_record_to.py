@@ -154,10 +154,12 @@ async def test_record_to_exports_via_async_with(tmp_path: Path) -> None:
 async def test_record_to_is_noop_when_debug_off(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
+    _restore_easycat_logger,
 ) -> None:
     """With debug='off' there is no journal, so recording is skipped."""
     target = tmp_path / "runs"
-    with caplog.at_level(logging.WARNING):
+    logging.getLogger("easycat").propagate = True
+    with caplog.at_level(logging.WARNING, logger="easycat.session._session"):
         session = create_text_session(agent=None, debug="off", record_to=target)
 
     await session.stop()

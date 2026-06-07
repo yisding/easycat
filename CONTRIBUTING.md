@@ -180,6 +180,8 @@ collection. The full list lives in `pyproject.toml` under
 - `stress` — load / soak / high-volume tests.
 - `release` — release-gate validation.
 - `flaky` — quarantined intermittent test (see policy below).
+- `allow_task_leak` — explicit escape hatch for async tests that intentionally
+  leave background tasks alive beyond the test body.
 - `provider_openai` / `provider_deepgram` / `provider_elevenlabs` /
   `provider_cartesia` — provider coverage; `provider("name")` is the generic
   form for custom providers.

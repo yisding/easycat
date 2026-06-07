@@ -430,18 +430,21 @@ async def test_segment_final_journal_records_confidence_and_word_timestamps() ->
     turn = _new_turn()
     committer.start_event_loop(turn)
 
-    await committer.commit_now(turn)
-    for _ in range(20):
-        await asyncio.sleep(0.01)
-        if any(r.name == "stt_segment_final" for r in journal.read()):
-            break
+    try:
+        await committer.commit_now(turn)
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if any(r.name == "stt_segment_final" for r in journal.read()):
+                break
 
-    final = next(r for r in journal.read() if r.name == "stt_segment_final")
-    assert final.data["confidence"] == 0.91
-    assert final.data["word_timestamps"] == [
-        {"word": "hi", "start": 0.0, "end": 0.2},
-        {"word": "there", "start": 0.2, "end": 0.5},
-    ]
+        final = next(r for r in journal.read() if r.name == "stt_segment_final")
+        assert final.data["confidence"] == 0.91
+        assert final.data["word_timestamps"] == [
+            {"word": "hi", "start": 0.0, "end": 0.2},
+            {"word": "there", "start": 0.2, "end": 0.5},
+        ]
+    finally:
+        await committer.cancel(turn)
 
 
 @pytest.mark.asyncio
@@ -505,20 +508,23 @@ async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
     turn = _new_turn()
     committer.start_event_loop(turn)
 
-    await stt._queue.put(STTEvent(type=STTEventType.PARTIAL, text="Hel"))
-    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
-    for _ in range(50):
-        await asyncio.sleep(0.005)
-        if any(isinstance(e, STTFinal) for e in emitted):
-            break
+    try:
+        await stt._queue.put(STTEvent(type=STTEventType.PARTIAL, text="Hel"))
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            if any(isinstance(e, STTFinal) for e in emitted):
+                break
 
-    finals = [e for e in emitted if isinstance(e, STTFinal)]
-    partials = [e for e in emitted if isinstance(e, STTPartial)]
-    assert finals and finals[0].track == "inbound"
-    assert partials and partials[0].track == "inbound"
-    # The transcript segment recorded on the turn is labelled too.
-    assert turn.stt_segments == ["Hello?"]
-    assert turn.stt_track == "inbound"
+        finals = [e for e in emitted if isinstance(e, STTFinal)]
+        partials = [e for e in emitted if isinstance(e, STTPartial)]
+        assert finals and finals[0].track == "inbound"
+        assert partials and partials[0].track == "inbound"
+        # The transcript segment recorded on the turn is labelled too.
+        assert turn.stt_segments == ["Hello?"]
+        assert turn.stt_track == "inbound"
+    finally:
+        await committer.cancel(turn)
 
 
 @pytest.mark.asyncio
@@ -532,14 +538,17 @@ async def test_provider_track_overrides_transport_label() -> None:
     turn = _new_turn()
     committer.start_event_loop(turn)
 
-    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?", track="caller"))
-    for _ in range(50):
-        await asyncio.sleep(0.005)
-        if any(isinstance(e, STTFinal) for e in emitted):
-            break
+    try:
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?", track="caller"))
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            if any(isinstance(e, STTFinal) for e in emitted):
+                break
 
-    finals = [e for e in emitted if isinstance(e, STTFinal)]
-    assert finals and finals[0].track == "caller"
+        finals = [e for e in emitted if isinstance(e, STTFinal)]
+        assert finals and finals[0].track == "caller"
+    finally:
+        await committer.cancel(turn)
 
 
 @pytest.mark.asyncio
@@ -551,11 +560,14 @@ async def test_no_transport_label_leaves_track_none() -> None:
     turn = _new_turn()
     committer.start_event_loop(turn)
 
-    await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
-    for _ in range(50):
-        await asyncio.sleep(0.005)
-        if any(isinstance(e, STTFinal) for e in emitted):
-            break
+    try:
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
+        for _ in range(50):
+            await asyncio.sleep(0.005)
+            if any(isinstance(e, STTFinal) for e in emitted):
+                break
 
-    finals = [e for e in emitted if isinstance(e, STTFinal)]
-    assert finals and finals[0].track is None
+        finals = [e for e in emitted if isinstance(e, STTFinal)]
+        assert finals and finals[0].track is None
+    finally:
+        await committer.cancel(turn)

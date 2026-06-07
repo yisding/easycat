@@ -529,6 +529,27 @@ def test_pytest_timeout_is_configured_as_suite_safety_net() -> None:
     assert "Done: `pytest-timeout`" in reliability_section
 
 
+def test_asyncio_task_leak_guard_is_configured() -> None:
+    """Keep async test leak detection wired into the root pytest config."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    markers = "\n".join(pyproject["tool"]["pytest"]["ini_options"]["markers"])
+    conftest = (REPO_ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+    reliability = (REPO_ROOT / "plan/roadmap/combined-cleanup-tasks.md").read_text(
+        encoding="utf-8"
+    )
+    reliability_section = reliability.split("### 7.4 Test Reliability", 1)[1].split(
+        "### 7.5 Provider And Performance Testing",
+        1,
+    )[0]
+
+    assert "allow_task_leak" in markers
+    assert "@pytest_asyncio.fixture(autouse=True)" in conftest
+    assert "async def fail_on_leaked_asyncio_tasks" in conftest
+    assert "asyncio.all_tasks" in conftest
+    assert 'pytest.fail(f"asyncio task leak detected:' in conftest
+    assert "Done: async tests fail on newly leaked pending asyncio tasks" in (reliability_section)
+
+
 def test_e2e_ws_server_fixture_lets_os_choose_bound_port() -> None:
     """The shared e2e WebSocket fixture should not bind-close-reuse a port."""
     source = (REPO_ROOT / "tests" / "e2e" / "conftest.py").read_text(encoding="utf-8")

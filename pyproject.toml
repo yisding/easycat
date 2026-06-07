@@ -192,6 +192,7 @@ markers = [
     "stress: load, soak, or high-volume validation tests",
     "release: release-gate validation tests",
     "flaky: quarantined intermittent test; requires linked issue, owner, and review date",
+    "allow_task_leak: async test intentionally leaves background tasks beyond the test body",
     "provider_openai: OpenAI provider coverage",
     "provider_deepgram: Deepgram provider coverage",
     "provider_elevenlabs: ElevenLabs provider coverage",

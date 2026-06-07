@@ -1131,13 +1131,16 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
     session._turn_manager._state = TurnManagerState.USER_PAUSED
     session._stt_committer.start_event_loop(session._turn)
 
-    session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
-    await asyncio.sleep(0.05)
+    try:
+        session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
+        await asyncio.sleep(0.05)
 
-    assert stt.commit_calls == 1
-    assert session._turn is not None
-    assert session._turn_manager.state == TurnManagerState.USER_PAUSED
-    assert session._turn.transcript_text == "hello"
+        assert stt.commit_calls == 1
+        assert session._turn is not None
+        assert session._turn_manager.state == TurnManagerState.USER_PAUSED
+        assert session._turn.transcript_text == "hello"
+    finally:
+        await session._stt_committer.cancel(session._turn)
 
 
 @pytest.mark.asyncio
@@ -1257,32 +1260,35 @@ async def test_pause_commit_journals_segment_commit_and_final():
     session._turn_manager._state = TurnManagerState.USER_PAUSED
     session._stt_committer.start_event_loop(session._turn)
 
-    await session._stt_committer._start_segment_commit(turn=session._turn)
-    await asyncio.sleep(0.05)
+    try:
+        await session._stt_committer._start_segment_commit(turn=session._turn)
+        await asyncio.sleep(0.05)
 
-    records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
-    records_by_name = {record.name: record for record in records}
-    assert set(records_by_name) == {
-        "stt_segment_commit_requested",
-        "stt_segment_final",
-        "stt_segment_commit_result",
-    }
-    assert records_by_name["stt_segment_commit_requested"].data == {
-        "segment_index": 1,
-        "transcript_text": "",
-        "pending_commit_bytes": None,
-    }
-    assert records_by_name["stt_segment_final"].data == {
-        "segment_index": 1,
-        "text": "hello",
-        "track": None,
-        "transcript_text": "hello",
-    }
-    assert records_by_name["stt_segment_commit_result"].data == {
-        "segment_index": 1,
-        "committed": True,
-        "transcript_text": "",
-    }
+        records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
+        records_by_name = {record.name: record for record in records}
+        assert set(records_by_name) == {
+            "stt_segment_commit_requested",
+            "stt_segment_final",
+            "stt_segment_commit_result",
+        }
+        assert records_by_name["stt_segment_commit_requested"].data == {
+            "segment_index": 1,
+            "transcript_text": "",
+            "pending_commit_bytes": None,
+        }
+        assert records_by_name["stt_segment_final"].data == {
+            "segment_index": 1,
+            "text": "hello",
+            "track": None,
+            "transcript_text": "hello",
+        }
+        assert records_by_name["stt_segment_commit_result"].data == {
+            "segment_index": 1,
+            "committed": True,
+            "transcript_text": "",
+        }
+    finally:
+        await session._stt_committer.cancel(session._turn)
 
 
 @pytest.mark.asyncio

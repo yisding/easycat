@@ -82,8 +82,11 @@ async def test_vad_stop_transitions_to_user_paused():
     await tm.on_vad_event(VADStartSpeaking())
     assert tm.state == TurnManagerState.USER_SPEAKING
 
-    await tm.on_vad_event(VADStopSpeaking())
-    assert tm.state == TurnManagerState.USER_PAUSED
+    try:
+        await tm.on_vad_event(VADStopSpeaking())
+        assert tm.state == TurnManagerState.USER_PAUSED
+    finally:
+        await tm.shutdown()
 
 
 @pytest.mark.asyncio

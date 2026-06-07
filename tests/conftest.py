@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 
 import pytest
+import pytest_asyncio
 
 from tests._hypothesis_profiles import register_hypothesis_profiles
 from tests._marker_lint import validate_flaky_marker, validate_provider_surface_markers
@@ -22,6 +24,43 @@ def _can_bind_localhost() -> bool:
 
 
 _HAS_LOCALHOST_SOCKET_ACCESS = _can_bind_localhost()
+
+
+def _format_task(task: asyncio.Task[object]) -> str:
+    coroutine = task.get_coro()
+    name = getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None)
+    return f"{task.get_name()} ({name or coroutine!r})"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fail_on_leaked_asyncio_tasks(request: pytest.FixtureRequest):
+    """Fail async tests that leave new pending tasks on the pytest event loop."""
+    if request.node.get_closest_marker("allow_task_leak") is not None:
+        yield
+        return
+
+    loop = asyncio.get_running_loop()
+    before = set(asyncio.all_tasks(loop))
+    yield
+
+    # Let callbacks scheduled by the test and by dependent fixture teardowns run.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    current = asyncio.current_task(loop)
+    leaked = [
+        task
+        for task in asyncio.all_tasks(loop)
+        if task not in before and task is not current and not task.done()
+    ]
+    if not leaked:
+        return
+
+    for task in leaked:
+        task.cancel()
+    await asyncio.gather(*leaked, return_exceptions=True)
+    leaked_summary = ", ".join(sorted(_format_task(task) for task in leaked))
+    pytest.fail(f"asyncio task leak detected: {leaked_summary}")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

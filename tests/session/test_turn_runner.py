@@ -227,11 +227,14 @@ async def test_on_turn_started_creates_turn_context() -> None:
     runner = session._turn_runner
     assert session._turn is None
 
-    await runner.on_turn_started(TurnStarted(turn_id="t-1"))
+    try:
+        await runner.on_turn_started(TurnStarted(turn_id="t-1"))
 
-    assert session._turn is not None
-    assert session._turn.id == "t-1"
-    assert session._stt_committer.is_active
+        assert session._turn is not None
+        assert session._turn.id == "t-1"
+        assert session._stt_committer.is_active
+    finally:
+        await session._stt_committer.cancel(session._turn)
 
 
 @pytest.mark.asyncio
@@ -241,11 +244,14 @@ async def test_on_turn_started_does_not_leave_task_bound_to_turn() -> None:
     session = Session(_config())
     session._is_running = True
 
-    await session._turn_runner.on_turn_started(TurnStarted(turn_id="t-context"))
+    try:
+        await session._turn_runner.on_turn_started(TurnStarted(turn_id="t-context"))
 
-    assert session._turn is not None
-    assert session._turn.id == "t-context"
-    assert _current_turn_log_context() == "-"
+        assert session._turn is not None
+        assert session._turn.id == "t-context"
+        assert _current_turn_log_context() == "-"
+    finally:
+        await session._stt_committer.cancel(session._turn)
 
 
 @pytest.mark.asyncio

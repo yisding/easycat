@@ -591,7 +591,9 @@ context. Several bullets are known stale; use the current-state list above and
 
 - Done: `pytest-timeout` is a dev dependency and pytest enforces a 60s
   per-test timeout with faulthandler diagnostics.
-- Add leaked-task checks for async tests.
+- Done: async tests fail on newly leaked pending asyncio tasks, with an
+  explicit `allow_task_leak` marker escape hatch for deliberate long-lived
+  background work.
 - Prefer event-driven waits over sleeps and polling.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound
   port and reads it back from the live server socket.
