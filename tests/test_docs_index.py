@@ -258,6 +258,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
     assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
+    assert "uv run pytest tests/test_install_guidance.py" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
 
 
 def test_coding_agents_docs_route_matches_guard_commands() -> None:

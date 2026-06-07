@@ -143,13 +143,15 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "README.md#choose-your-path",
         "audience": "new users",
         "description": (
-            "Choose the right first route for quickstart, learning, examples, or operations."
+            "Choose the right first route for quickstart, learning, examples, "
+            "maintenance, or operations."
         ),
         "commands": (
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
             "easycat init --list-templates",
             "uv run easycat validate quick",
+            "uv run pytest tests/test_install_guidance.py",
         ),
     },
     {

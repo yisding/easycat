@@ -347,6 +347,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat doctor",
         "easycat init --list-templates",
         "uv run easycat validate quick",
+        "uv run pytest tests/test_install_guidance.py",
     ]
     assert commands["README.md#cli"] == [
         "easycat init --list-templates",
@@ -393,6 +394,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert audiences["docs/observability.md"] == "operators"
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert "right first route" in descriptions["README.md#choose-your-path"]
+    assert "maintenance" in descriptions["README.md#choose-your-path"]
     assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]

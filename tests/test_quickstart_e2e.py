@@ -235,6 +235,10 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
             "[Contributing](CONTRIBUTING.md)",
             "uv run easycat validate quick",
         ),
+        "Maintain architecture or package boundaries": (
+            "[Architecture map](CLAUDE.md)",
+            "provider registries, session lifecycle",
+        ),
         "Operate or debug sessions": (
             "[Observability](docs/observability.md)",
             "journals, bundles, metrics, and traces",
@@ -249,6 +253,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "docs/teaching/",
         "examples/README.md",
         "CONTRIBUTING.md",
+        "CLAUDE.md",
         "docs/observability.md",
         "docs/deployment/docker.md",
     ):

@@ -363,6 +363,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["README.md#validation-workflow"] == "contributors"
     assert "uv run easycat validate quick" in commands["README.md#choose-your-path"]
+    assert "uv run pytest tests/test_install_guidance.py" in commands["README.md#choose-your-path"]
     assert "easycat init --list-templates" in commands["README.md#cli"]
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "easycat doctor --env-file .env --json" in commands["README.md#cli"]
