@@ -17,6 +17,7 @@ import importlib
 import importlib.util
 import json
 import struct
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -41,13 +42,26 @@ from easycat.transports.twilio_media import (
 from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import WebSocketTransport, WebSocketTransportConfig
 
-from .conftest import find_free_port, make_chunk
+from .conftest import make_chunk
 
 # ── Helpers ───────────────────────────────────────────────────────
 
 # Aliases for backward compatibility within this file.
 _make_chunk = make_chunk
-_find_free_port = find_free_port
+
+
+class _UsesPytestTcpPortFactory:
+    _unused_tcp_port_factory: Callable[[], int]
+
+    @pytest.fixture(autouse=True)
+    def _set_unused_tcp_port_factory(
+        self,
+        unused_tcp_port_factory: Callable[[], int],
+    ) -> None:
+        self._unused_tcp_port_factory = unused_tcp_port_factory
+
+    def _unused_port(self) -> int:
+        return self._unused_tcp_port_factory()
 
 
 def _make_sine_pcm16(freq: int = 440, duration_ms: int = 20, sample_rate: int = 16000) -> bytes:
@@ -298,12 +312,12 @@ async def test_server_websocket_transports_disable_compression(monkeypatch: pyte
 
 
 @pytest.mark.integration_socket
-class TestWebSocketTransport:
+class TestWebSocketTransport(_UsesPytestTcpPortFactory):
     """Tests for WebSocketTransport with a real test client."""
 
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
 
@@ -316,7 +330,7 @@ class TestWebSocketTransport:
 
     @pytest.mark.asyncio
     async def test_default_host_accepts_loopback_client(self):
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(port=port)
         transport = WebSocketTransport(config)
 
@@ -331,7 +345,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_send_receive_audio(self):
         """Client sends audio, server yields it via receive_audio."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -365,7 +379,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_server_sends_audio_to_client(self):
         """Server sends audio chunk, client receives binary frame."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -389,7 +403,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_control_message_config(self):
         """Client can send a config control message to negotiate format."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -419,7 +433,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_client_disconnect_signals_end(self):
         """When client disconnects, receive_audio iterator should end."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -446,7 +460,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_audio_format_resets_after_client_disconnect(self):
         """Negotiated audio format resets to default when client disconnects."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -467,7 +481,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_rejects_second_client(self):
         """Only one client at a time is allowed."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -487,7 +501,7 @@ class TestWebSocketTransport:
     @pytest.mark.asyncio
     async def test_wait_for_client_waits_for_new_connection_after_disconnect(self):
         """wait_for_client should not stay set after a client disconnects."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = WebSocketTransportConfig(host="127.0.0.1", port=port)
         transport = WebSocketTransport(config)
         await transport.connect()
@@ -914,7 +928,7 @@ class TestTwilioStreamLifecycleRaces:
 
 
 @pytest.mark.integration_socket
-class TestTwilioTransport:
+class TestTwilioTransport(_UsesPytestTcpPortFactory):
     """Tests for TwilioTransport with mocked Twilio messages."""
 
     def test_audio_contract_declares_distinct_tts_preference(self):
@@ -925,7 +939,7 @@ class TestTwilioTransport:
 
     @pytest.mark.asyncio
     async def test_connect_disconnect(self):
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
 
@@ -937,7 +951,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_receive_audio_from_twilio(self):
         """Twilio media messages produce PCM16 audio chunks."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1040,7 +1054,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_send_audio_to_twilio(self):
         """Audio sent via send_audio is received by Twilio as a base64 media message."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1070,7 +1084,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_send_playback_mark_to_twilio(self):
         """Playback marks are sent as Twilio mark messages."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1094,7 +1108,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_dtmf_emitted_to_event_bus(self):
         """DTMF messages from Twilio are emitted as DTMF events."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         event_bus = EventBus()
         transport = TwilioTransport(config, event_bus=event_bus)
@@ -1117,7 +1131,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_mark_ack_emitted_to_event_bus(self):
         """Twilio mark messages are emitted as PlaybackMarkAck events."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         event_bus = EventBus()
         transport = TwilioTransport(config, event_bus=event_bus)
@@ -1169,7 +1183,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_stream_metadata(self):
         """stream_sid and call_sid are set from the start message."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1187,7 +1201,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_stop_message(self):
         """Twilio stop message ends the receive_audio iterator."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1213,7 +1227,7 @@ class TestTwilioTransport:
     @pytest.mark.asyncio
     async def test_wait_for_client_waits_for_new_twilio_connection_after_disconnect(self):
         """wait_for_client should clear after Twilio socket disconnects."""
-        port = _find_free_port()
+        port = self._unused_port()
         config = TwilioTransportConfig(host="127.0.0.1", port=port)
         transport = TwilioTransport(config)
         await transport.connect()
@@ -1253,7 +1267,7 @@ class TestTwilioSendAudioConnectionClosed:
 
     @pytest.mark.asyncio
     async def test_server_variant_clears_state_on_connection_closed(self):
-        config = TwilioTransportConfig(host="127.0.0.1", port=_find_free_port())
+        config = TwilioTransportConfig(host="127.0.0.1", port=0)
         transport = TwilioTransport(config)
         transport._ws = self._ClosedWS()
         transport._stream_sid = "STREAM1"
