@@ -105,6 +105,38 @@ def _guide_pytest_commands(command_section: str) -> list[str]:
     return commands
 
 
+def _agent_guide_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
+    commands: list[str] = []
+
+    for line in command_section.splitlines():
+        stripped = line.strip()
+        if filename == "AGENTS.md":
+            match = re.match(r"^- `(?P<command>just guard-[^`]+)`:", stripped)
+            if match is not None:
+                commands.append(match.group("command"))
+        elif stripped.startswith("just guard-"):
+            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
+
+    return tuple(commands)
+
+
+def _agent_guide_raw_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
+    commands: list[str] = []
+
+    for line in command_section.splitlines():
+        stripped = line.strip()
+        if filename == "AGENTS.md":
+            if not stripped.startswith("- Raw fallback for "):
+                continue
+            spans = CODE_SPAN_RE.findall(stripped)
+            if len(spans) == 2 and spans[0].startswith("just guard-"):
+                commands.append(spans[1])
+        elif "# Raw fallback for just guard-" in stripped:
+            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
+
+    return tuple(commands)
+
+
 def _agent_guide_command_sections() -> dict[str, str]:
     return {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
@@ -764,6 +796,12 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in (command_section), (
             filename
         )
+        assert _agent_guide_guard_commands(filename, command_section) == (
+            _DOCS_ONBOARDING_GUARD_COMMANDS
+        ), filename
+        assert _agent_guide_raw_guard_commands(filename, command_section) == (
+            _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
+        ), filename
         assert "just check" in command_section
         assert "just validate-quick" in command_section
         for recipe in _DOCS_ONBOARDING_GUARD_COMMANDS:
