@@ -5,6 +5,8 @@ import shlex
 from pathlib import Path
 from urllib.parse import unquote
 
+from typer.main import get_command
+
 from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
@@ -99,6 +101,107 @@ def _documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[st
         add(match.group(1).strip())
 
     return tuple(commands)
+
+
+def _easycat_command_tree() -> dict[str, set[str] | None]:
+    _register_commands()
+    root_command = get_command(app)
+    return {
+        name: set(nested_commands) if nested_commands is not None else None
+        for name, command in root_command.commands.items()
+        for nested_commands in (getattr(command, "commands", None),)
+    }
+
+
+def _validate_easycat_command_hint(
+    *,
+    label: str,
+    command_tree: dict[str, set[str] | None],
+    subcommand: str,
+    args: list[str],
+    problems: list[str],
+) -> None:
+    if subcommand not in command_tree:
+        problems.append(f"{label}: unknown easycat command {subcommand}")
+        return
+
+    nested_commands = command_tree[subcommand]
+    if nested_commands is None:
+        return
+
+    if not args or args[0].startswith("-"):
+        problems.append(f"{label}: missing easycat {subcommand} command")
+        return
+
+    nested_command = args[0]
+    if nested_command not in nested_commands:
+        problems.append(f"{label}: unknown easycat {subcommand} command {nested_command}")
+
+
+def _cli_docs_command_hint_problems(entries: list[dict[str, object]]) -> list[str]:
+    command_tree = _easycat_command_tree()
+    just_recipes = just_recipe_commands(REPO_ROOT)
+    problems: list[str] = []
+
+    for entry in entries:
+        label = str(entry["label"])
+        for command in entry.get("commands", ()):
+            tokens = shlex.split(command)
+            if not tokens:
+                problems.append(f"{label}: empty command hint")
+                continue
+            match tokens:
+                case ["easycat", subcommand, *args]:
+                    _validate_easycat_command_hint(
+                        label=label,
+                        command_tree=command_tree,
+                        subcommand=subcommand,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["uv", "run", "easycat", subcommand, *args]:
+                    _validate_easycat_command_hint(
+                        label=label,
+                        command_tree=command_tree,
+                        subcommand=subcommand,
+                        args=args,
+                        problems=problems,
+                    )
+                case ["uv", "run", "python", script, *_]:
+                    if not (REPO_ROOT / script).exists():
+                        problems.append(f"{label}: missing python script {script}")
+                case ["uv", "run", "--env-file", _env_file, "python", script, *_]:
+                    if not (REPO_ROOT / script).exists():
+                        problems.append(f"{label}: missing python script {script}")
+                case ["uv", "run", "pytest", *paths]:
+                    for path in paths:
+                        if not path.startswith("-") and not (REPO_ROOT / path).exists():
+                            problems.append(f"{label}: missing pytest target {path}")
+                case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
+                    continue
+                case ["python", "-m", "http.server", *_args]:
+                    if "--directory" in tokens:
+                        directory_index = tokens.index("--directory") + 1
+                        if directory_index >= len(tokens):
+                            problems.append(f"{label}: http.server hint missing directory")
+                            continue
+                        directory = tokens[directory_index]
+                        if not (REPO_ROOT / directory).is_dir():
+                            problems.append(f"{label}: missing http.server directory {directory}")
+                case ["just", recipe, *_]:
+                    if recipe not in just_recipes:
+                        problems.append(f"{label}: unknown just recipe {recipe}")
+                case ["docker", "compose", *args]:
+                    if "-f" in args:
+                        compose_file = args[args.index("-f") + 1]
+                        if not (REPO_ROOT / compose_file).exists():
+                            problems.append(f"{label}: missing compose file {compose_file}")
+                    else:
+                        problems.append(f"{label}: docker compose hint missing -f")
+                case _:
+                    problems.append(f"{label}: unsupported command hint {command!r}")
+
+    return problems
 
 
 def _command_hint_variants(command: str) -> set[str]:
@@ -675,70 +778,29 @@ def test_validation_reference_docs_route_matches_json_commands() -> None:
 
 
 def test_cli_docs_command_hints_are_locally_valid() -> None:
-    _register_commands()
-    registered_commands = {
-        command.name for command in app.registered_commands if command.name is not None
-    }
-    registered_commands.update(
-        group.name for group in app.registered_groups if group.name is not None
-    )
-    just_recipes = just_recipe_commands(REPO_ROOT)
-    problems: list[str] = []
-
-    for entry in _docs_entries():
-        for command in entry.get("commands", ()):
-            tokens = shlex.split(command)
-            if not tokens:
-                problems.append(f"{entry['label']}: empty command hint")
-                continue
-            match tokens:
-                case ["easycat", subcommand, *_]:
-                    if subcommand not in registered_commands:
-                        problems.append(f"{entry['label']}: unknown easycat command {subcommand}")
-                case ["uv", "run", "easycat", subcommand, *_]:
-                    if subcommand not in registered_commands:
-                        problems.append(f"{entry['label']}: unknown easycat command {subcommand}")
-                case ["uv", "run", "python", script, *_]:
-                    if not (REPO_ROOT / script).exists():
-                        problems.append(f"{entry['label']}: missing python script {script}")
-                case ["uv", "run", "--env-file", _env_file, "python", script, *_]:
-                    if not (REPO_ROOT / script).exists():
-                        problems.append(f"{entry['label']}: missing python script {script}")
-                case ["uv", "run", "pytest", *paths]:
-                    for path in paths:
-                        if not path.startswith("-") and not (REPO_ROOT / path).exists():
-                            problems.append(f"{entry['label']}: missing pytest target {path}")
-                case ["uv", "run", "ruff", *_] | ["uv", "sync", *_]:
-                    continue
-                case ["python", "-m", "http.server", *_args]:
-                    if "--directory" in tokens:
-                        directory_index = tokens.index("--directory") + 1
-                        if directory_index >= len(tokens):
-                            problems.append(
-                                f"{entry['label']}: http.server hint missing directory"
-                            )
-                            continue
-                        directory = tokens[directory_index]
-                        if not (REPO_ROOT / directory).is_dir():
-                            problems.append(
-                                f"{entry['label']}: missing http.server directory {directory}"
-                            )
-                case ["just", recipe, *_]:
-                    if recipe not in just_recipes:
-                        problems.append(f"{entry['label']}: unknown just recipe {recipe}")
-                case ["docker", "compose", *args]:
-                    if "-f" in args:
-                        compose_file = args[args.index("-f") + 1]
-                        if not (REPO_ROOT / compose_file).exists():
-                            problems.append(
-                                f"{entry['label']}: missing compose file {compose_file}"
-                            )
-                    else:
-                        problems.append(f"{entry['label']}: docker compose hint missing -f")
-                case _:
-                    problems.append(f"{entry['label']}: unsupported command hint {command!r}")
+    problems = _cli_docs_command_hint_problems(_docs_entries())
 
     assert not problems, "easycat docs command hints are stale:\n" + "\n".join(problems)
+
+
+def test_cli_docs_command_hint_validator_checks_nested_easycat_commands() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken nested hints",
+                "path": "README.md#cli",
+                "audience": "contributors",
+                "description": "Regression fixture for nested command validation.",
+                "commands": (
+                    "uv run easycat validate not-a-lane",
+                    "easycat bundles not-a-bundle-command",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken nested hints: unknown easycat validate command not-a-lane" in problems
+    assert "Broken nested hints: unknown easycat bundles command not-a-bundle-command" in problems
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
