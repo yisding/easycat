@@ -135,7 +135,6 @@ async def main() -> None:
     ]
 
     config = EasyConfig(
-        openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=bridge,  # ← the whole point of this chapter
         transport=LocalTransportConfig(),
         stt="openai",

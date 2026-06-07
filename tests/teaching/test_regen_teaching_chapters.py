@@ -149,6 +149,34 @@ def test_teaching_materials_use_current_beginner_config_name() -> None:
     )
 
 
+def test_teaching_easyconfig_examples_rely_on_openai_env_key() -> None:
+    """EasyConfig teaching scripts preflight OPENAI_API_KEY but let config read it."""
+    stale: list[str] = []
+
+    for path in sorted((ROOT / "docs" / "teaching").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.as_posix())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.keyword) or node.arg != "openai_api_key":
+                continue
+            value = node.value
+            if not (
+                isinstance(value, ast.Subscript)
+                and isinstance(value.value, ast.Attribute)
+                and isinstance(value.value.value, ast.Name)
+                and value.value.value.id == "os"
+                and value.value.attr == "environ"
+                and isinstance(value.slice, ast.Constant)
+                and value.slice.value == "OPENAI_API_KEY"
+            ):
+                continue
+            stale.append(f"{path.relative_to(ROOT).as_posix()}:{node.lineno}")
+
+    assert not stale, (
+        "Teaching EasyConfig examples should let EasyConfig read OPENAI_API_KEY:\n"
+        + "\n".join(stale)
+    )
+
+
 def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:
     """Keep the tools chapter plan aligned with the current bridge event surface."""
     plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(

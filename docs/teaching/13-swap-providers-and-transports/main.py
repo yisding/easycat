@@ -118,7 +118,6 @@ async def main() -> None:
 
     mix = provider_mix(args.provider_mix)
     config = EasyConfig(
-        openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=build_agent(),
         transport=transport_config(args.transport),
         debug="light",  # journal must be on so export_debug_bundle works

@@ -98,7 +98,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,100 +29,132 @@
+@@ -40,99 +29,131 @@
  
  from __future__ import annotations
  
@@ -256,7 +256,6 @@
 +    ]
 +
      config = EasyConfig(
-         openai_api_key=os.environ["OPENAI_API_KEY"],
 -        agent=build_agent(),
 -        transport=transport_config(args.transport),
 -        debug="light",  # journal must be on so export_debug_bundle works
@@ -285,7 +284,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
-@@ -142,4 +163,7 @@
+@@ -141,4 +162,7 @@
  
  
  if __name__ == "__main__":

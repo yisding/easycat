@@ -92,7 +92,6 @@ Each run drops a bundle in `runs/ch13-<mix>-<transport>-*.bundle`.
 
 ```python
 EasyConfig(
-    openai_api_key=...,
     agent=agent,                       # ← same across every cell
     transport=LocalTransportConfig(),  # ← axis 2 switch
     stt="deepgram/nova-2",             # ← axis 1 switch

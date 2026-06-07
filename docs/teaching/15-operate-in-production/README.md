@@ -69,7 +69,7 @@
  
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,134 +18,97 @@
+@@ -32,133 +18,96 @@
  import asyncio
  import os
  import time
@@ -163,7 +163,6 @@
 -        if full:
 -            self._history.append({"role": "assistant", "content": full})
 +    config = EasyConfig(
-+        openai_api_key=os.environ["OPENAI_API_KEY"],
 +        agent=Agent(
 +            name="assistant",
 +            instructions="You are a helpful voice assistant. Keep replies brief.",
@@ -197,7 +196,6 @@
 -    ]
 -
 -    config = EasyConfig(
--        openai_api_key=os.environ["OPENAI_API_KEY"],
 -        agent=bridge,  # ← the whole point of this chapter
 -        transport=LocalTransportConfig(),
 -        stt="openai",
@@ -379,7 +377,6 @@ def build_session():
     from agents import Agent  # type: ignore[import-untyped]
 
     config = EasyConfig(
-        openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=Agent(
             name="assistant",
             instructions="You are a helpful voice assistant. Keep replies brief.",

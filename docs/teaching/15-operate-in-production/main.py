@@ -45,7 +45,6 @@ def build_session():
     from agents import Agent  # type: ignore[import-untyped]
 
     config = EasyConfig(
-        openai_api_key=os.environ["OPENAI_API_KEY"],
         agent=Agent(
             name="assistant",
             instructions="You are a helpful voice assistant. Keep replies brief.",
