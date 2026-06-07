@@ -219,7 +219,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
     assert "[the development loop](#the-development-loop)" in section
     assert "`uv run pytest ...` command behind each guard" in section
     for phrase in (
-        "Root README chooser, docs route map, or CLI JSON envelopes",
+        "Root README chooser, docs route map, public API docs, or CLI JSON envelopes",
         "Teaching ladder chapters or generated blocks",
         "Examples chooser or command matrix",
         "Scaffold templates or template catalog",
@@ -227,8 +227,8 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Markdown links in maintained docs",
         (
             "Root onboarding links, README e2e coverage, install guidance, "
-            "command-hint extraction, `easycat docs`, JSON route entries, and shared "
-            "CLI `--json` envelope contracts"
+            "command-hint extraction, `easycat docs`, public API import-surface docs, "
+            "JSON route entries, and shared CLI `--json` envelope contracts"
         ),
         "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
         (
@@ -557,6 +557,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "narrowest useful validation lane",
         "root README chooser",
         "docs route map",
+        "public API import-surface docs",
         "shared CLI `--json` envelope contracts",
         "teaching ladder",
         "examples matrix",

@@ -31,10 +31,11 @@ command-specific fields.
 - The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
   CI parses this section rather than accepting incidental mentions elsewhere.
 - After changing top-level exports, run
-  `uv run pytest tests/test_public_api.py` and `just guard-docs` before
-  opening the PR. If `just` is not installed, use the raw command table in
+  `just guard-docs` before opening the PR. It includes
+  `uv run pytest tests/test_public_api.py`. If `just` is not installed, use the
+  raw command table in
   [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop), or run
-  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py`.
+  `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py`.
 
 ## Preferred Imports
 

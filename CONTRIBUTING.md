@@ -50,7 +50,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
-| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py` |
+| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py` |
 | Guard teaching docs | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |
@@ -90,7 +90,7 @@ surface before the broader validation lane:
 
 | If you change | Run | What it protects |
 | --- | --- | --- |
-| Root README chooser, docs route map, or CLI JSON envelopes | `just guard-docs` | Root onboarding links, README e2e coverage, install guidance, command-hint extraction, `easycat docs`, JSON route entries, and shared CLI `--json` envelope contracts |
+| Root README chooser, docs route map, public API docs, or CLI JSON envelopes | `just guard-docs` | Root onboarding links, README e2e coverage, install guidance, command-hint extraction, `easycat docs`, public API import-surface docs, JSON route entries, and shared CLI `--json` envelope contracts |
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
 | Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
 | Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, and generated project smoke |

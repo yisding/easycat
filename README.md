@@ -176,7 +176,7 @@ For docs and onboarding-only edits, run the narrower guard that owns the
 surface first, then run quick validation before a PR:
 
 ```bash
-just guard-docs          # root README e2e, install guidance, docs map, CLI JSON envelopes
+just guard-docs          # root README e2e, install guidance, docs map, public API docs, CLI JSON envelopes
 just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples README, support files, script smoke, docs route
 just guard-templates     # scaffold templates, init flows, generated project smoke
@@ -190,7 +190,7 @@ If `just` is not installed, use the raw command table in
 directly:
 
 ```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
