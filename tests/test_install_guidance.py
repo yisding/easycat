@@ -491,6 +491,7 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     assert "easycat validate release" in cli_section
     assert "easycat validate release --json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json" in cli_section
+    assert "easycat validate report .easycat/validation/latest.json --json" in cli_section
     assert "uv run easycat validate quick --json" in readme
     assert "uv run easycat validate contracts --json" in readme
     assert "uv run easycat validate release --json" in readme

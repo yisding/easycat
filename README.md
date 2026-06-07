@@ -124,6 +124,7 @@ easycat validate contracts --json # emit contract validation in the standard env
 easycat validate release     # run the strict installed-wheel release gate
 easycat validate release --json # emit release validation in the standard envelope
 easycat validate report .easycat/validation/latest.json # render latest validation report
+easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
 ```
 
 From an empty directory, `easycat init --list-templates` shows the available
@@ -198,6 +199,7 @@ uv run easycat validate latency --smoke # low-cost live latency validation
 uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
 uv run easycat validate release    # build, install, and run release validation
 uv run easycat validate report .easycat/validation/latest.json # render latest report summary
+uv run easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
 ```
 
 `easycat validate release` builds the sdist and wheel, installs the wheel into
