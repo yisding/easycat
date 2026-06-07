@@ -237,6 +237,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "app builders",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
         "commands": (
+            "uv run easycat init --list-templates",
+            "uv run easycat init my-agent",
+            "uv run easycat init --list-templates --json",
             "uv run easycat doctor",
             "uv run easycat doctor --env-file .env",
             "uv run python examples/openai_agents_voice.py",

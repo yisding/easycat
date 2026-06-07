@@ -417,8 +417,17 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    intro = examples_readme.split("For the fastest local mic/speaker path:", 1)[0]
     fast_path = examples_readme.split("For the fastest local mic/speaker path:", 1)[1]
     route_commands = entries["examples/README.md"].get("commands", ())
+
+    for command in (
+        "uv run easycat init --list-templates",
+        "uv run easycat init my-agent",
+        "uv run easycat init --list-templates --json",
+    ):
+        assert command in intro
+        assert command in route_commands
 
     for command in (
         "uv run easycat doctor",
