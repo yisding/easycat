@@ -69,9 +69,9 @@ typecheck-fast:
 cov:
     uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
 
-# Guard root onboarding docs, install guidance, docs routes, and docs CLI JSON.
+# Guard root onboarding docs, install guidance, docs routes, and CLI JSON envelopes.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
+    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:

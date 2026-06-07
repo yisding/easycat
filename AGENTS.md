@@ -20,13 +20,13 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just`: list every developer task.
 - `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
 - `just validate-quick`: run the deterministic local validation slice.
-- `just guard-docs`: guard root onboarding docs, install guidance, `easycat docs`, and docs JSON.
+- `just guard-docs`: guard root onboarding docs, install guidance, `easycat docs`, and CLI JSON envelopes.
 - `just guard-teaching`: guard teaching ladder chapters and generated README blocks.
 - `just guard-examples`: guard examples README, support files, script smoke checks, and docs-route hints.
 - `just guard-templates`: guard scaffold templates, init flows, catalog output, and generated project smoke.
 - `just guard-contributing`: guard contributor docs, agent guide contracts, validation state, and route hints.
 - `just guard-markdown`: guard maintained Markdown links, anchors, and docs-route targets.
-- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json`.
+- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py`.
 - Raw fallback for `just guard-teaching`: `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras`.
 - Raw fallback for `just guard-examples`: `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path`.
 - Raw fallback for `just guard-templates`: `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py`.
