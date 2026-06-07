@@ -239,6 +239,24 @@ def _documented_pip_packages(path: Path) -> set[str]:
     return _pip_install_packages_in(doc)
 
 
+def _readme_install_packages(install: str) -> set[str]:
+    packages = _pip_install_packages_in(install)
+
+    for snippet in re.findall(r"`([^`]+)`", install):
+        snippet = snippet.strip()
+        if "uv pip install" in snippet:
+            packages.update(_pip_install_packages_in(snippet))
+            continue
+        if snippet.startswith(("uv ", "--")):
+            continue
+        for token in shlex.split(snippet):
+            package = token.strip(",.;")
+            if package and not package.startswith("-"):
+                packages.add(package)
+
+    return packages
+
+
 def _app_extras_in(message: str) -> set[str]:
     extras: set[str] = set()
     for match in _EASYCAT_EXTRA_RE.finditer(message):
@@ -702,6 +720,19 @@ def test_examples_readme_install_extras_cover_docstring_setup() -> None:
     assert not stale, "examples/README.md install cells omit setup extras: " + "; ".join(stale)
 
 
+def test_examples_readme_install_package_collector_reads_pip_and_package_snippets() -> None:
+    install = (
+        "`uv sync --extra quickstart --group dev`; `langchain<1`, `langchain-openai`, "
+        "`--extra ten-vad`, or `uv pip install krisp_audio` for optional backends"
+    )
+
+    assert _readme_install_packages(install) == {
+        "krisp_audio",
+        "langchain-openai",
+        "langchain<1",
+    }
+
+
 def test_default_openai_provider_examples_install_openai_sdk() -> None:
     stale: list[str] = []
 
@@ -806,10 +837,12 @@ def test_examples_readme_install_cells_cover_docstring_pip_packages() -> None:
 
     for row in _example_readme_rows():
         path = REPO_ROOT / "examples" / row["link"]
-        packages = _documented_pip_packages(path)
-        if not packages:
+        documented_packages = _documented_pip_packages(path)
+        if not documented_packages:
             continue
-        missing = sorted(package for package in packages if package not in row["install"])
+
+        row_packages = _readme_install_packages(row["install"])
+        missing = sorted(documented_packages - row_packages)
         if missing:
             stale.append(f"{row['link']}: missing {missing}")
 
