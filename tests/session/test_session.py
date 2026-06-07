@@ -93,10 +93,12 @@ class FakePlaybackAckTransport(FakeTransport):
     def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
         super().__init__(chunks=chunks)
         self.playback_marks: list[str] = []
+        self.playback_mark_sent = asyncio.Event()
 
     async def send_playback_mark(self, name: str | None = None) -> str:
         mark_name = name or f"mark_{len(self.playback_marks) + 1}"
         self.playback_marks.append(mark_name)
+        self.playback_mark_sent.set()
         return mark_name
 
 
@@ -878,8 +880,10 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session._turn.stt_has_uncommitted_audio = True
     session._stt_committer.mark_active()
     session._stt_committer._segment_silence_ms = 0  # match plan-7's fast config
+    session._turn_manager._state = TurnManagerState.USER_PAUSED
 
     events = []
+    commit_started = asyncio.Event()
 
     class _RaceSTT:
         async def start_stream(self) -> None: ...
@@ -887,7 +891,8 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
 
         async def commit_segment(self) -> bool:
             events.append("commit")
-            await asyncio.sleep(0.05)
+            commit_started.set()
+            await asyncio.Event().wait()
             events.append("commit_done")
             return True
 
@@ -902,10 +907,14 @@ async def test_schedule_turn_ended_cancels_inflight_stt_commit():
     session._stt_stage = type(session._stt_stage)(session.stt, journal=session._journal)
 
     session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
-    await asyncio.sleep(0.001)
+    await asyncio.wait_for(commit_started.wait(), timeout=1.0)
+    commit_task = session._stt_committer._segment_commit_task
+    assert commit_task is not None
     session._turn_runner.schedule_turn_ended(TurnEnded(turn_id="race-turn"))
-    for _ in range(20):
-        await asyncio.sleep(0.01)
+    with pytest.raises(asyncio.CancelledError):
+        await commit_task
+    if session._tts_scheduler.current_task is not None:
+        await session._tts_scheduler.current_task
 
     # Invariant: we never observe BOTH commit_done AND end_stream in
     # the same run — the in-flight cancel closes the window.
@@ -988,11 +997,19 @@ async def test_pipeline_emits_audio_in_events():
     session = Session(config)
 
     received: list[AudioIn] = []
-    session.event_bus.subscribe(AudioIn, lambda e: received.append(e))
+    received_all = asyncio.Event()
 
+    def _record_audio_in(event: AudioIn) -> None:
+        received.append(event)
+        if len(received) == len(chunks):
+            received_all.set()
+
+    session.event_bus.subscribe(AudioIn, _record_audio_in)
     await session.start()
-    await asyncio.sleep(0.05)
-    await session.stop()
+    try:
+        await asyncio.wait_for(received_all.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert len(received) == 2
 
@@ -1041,22 +1058,30 @@ async def test_flux_auto_turn_starts_once_and_ends_on_stt_final():
     )
 
     events_received: list[Event] = []
+    agent_finished = asyncio.Event()
+
+    def _record_turn_event(event: Event) -> None:
+        events_received.append(event)
+        if isinstance(event, AgentFinal):
+            agent_finished.set()
+
     for event_type in (TurnStarted, STTFinal, TurnEnded, AgentFinal):
-        session.event_bus.subscribe(event_type, lambda e: events_received.append(e))
+        session.event_bus.subscribe(event_type, _record_turn_event)
 
     await session.start()
-    await asyncio.sleep(0.2)
+    try:
+        await asyncio.wait_for(agent_finished.wait(), timeout=1.0)
 
-    type_names = [type(event).__name__ for event in events_received]
-    assert type_names.count("TurnStarted") == 1
-    assert "STTFinal" in type_names
-    assert "TurnEnded" in type_names
-    assert "AgentFinal" in type_names
-    assert stt.start_count == 1
-    assert stt.end_count == 1
-    assert stt.sent_chunks == chunks
-
-    await session.stop()
+        type_names = [type(event).__name__ for event in events_received]
+        assert type_names.count("TurnStarted") == 1
+        assert "STTFinal" in type_names
+        assert "TurnEnded" in type_names
+        assert "AgentFinal" in type_names
+        assert stt.start_count == 1
+        assert stt.end_count == 1
+        assert stt.sent_chunks == chunks
+    finally:
+        await session.stop()
 
 
 @pytest.mark.asyncio
@@ -1067,9 +1092,11 @@ async def test_pipeline_noise_reduction():
     class TrackingNoiseReducer:
         def __init__(self) -> None:
             self.processed = False
+            self.processed_event = asyncio.Event()
 
         async def process(self, c: AudioChunk) -> AudioChunk:
             self.processed = True
+            self.processed_event.set()
             return c
 
     nr = TrackingNoiseReducer()
@@ -1079,8 +1106,10 @@ async def test_pipeline_noise_reduction():
     session = Session(config)
 
     await session.start()
-    await asyncio.sleep(0.05)
-    await session.stop()
+    try:
+        await asyncio.wait_for(nr.processed_event.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert nr.processed
 
@@ -1133,7 +1162,11 @@ async def test_pause_commit_keeps_turn_open_but_collects_segment_final():
 
     try:
         session._stt_committer.schedule(VADStopSpeaking(), turn=session._turn)
-        await asyncio.sleep(0.05)
+        pause_task = session._stt_committer._pause_commit_task
+        assert pause_task is not None
+        await pause_task
+        await session._stt_committer.await_inflight_commit()
+        await session._stt_committer.await_pending(session._turn)
 
         assert stt.commit_calls == 1
         assert session._turn is not None
@@ -1262,7 +1295,8 @@ async def test_pause_commit_journals_segment_commit_and_final():
 
     try:
         await session._stt_committer._start_segment_commit(turn=session._turn)
-        await asyncio.sleep(0.05)
+        await session._stt_committer.await_inflight_commit()
+        await session._stt_committer.await_pending(session._turn)
 
         records = [record for record in journal.read() if record.name.startswith("stt_segment_")]
         records_by_name = {record.name: record for record in records}
@@ -1420,6 +1454,13 @@ async def test_pipeline_full_turn_with_provider_events():
     session = Session(config)
 
     events_received: list[Event] = []
+    bot_stopped = asyncio.Event()
+
+    def _record_pipeline_event(event: Event) -> None:
+        events_received.append(event)
+        if isinstance(event, BotStoppedSpeaking):
+            bot_stopped.set()
+
     for et in [
         AudioIn,
         VADStartSpeaking,
@@ -1435,11 +1476,13 @@ async def test_pipeline_full_turn_with_provider_events():
         BotStoppedSpeaking,
         TurnEnded,
     ]:
-        session.event_bus.subscribe(et, lambda e: events_received.append(e))
+        session.event_bus.subscribe(et, _record_pipeline_event)
 
     await session.start()
-    await asyncio.sleep(0.2)
-    await session.stop()
+    try:
+        await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     type_names = [type(e).__name__ for e in events_received]
     assert "AudioIn" in type_names
@@ -1669,10 +1712,14 @@ async def test_turn_state_idle_after_basic_agent_turn():
         turn_manager_config=_FAST_TURN,
     )
     session = Session(config)
+    bot_stopped = asyncio.Event()
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _event: bot_stopped.set())
 
     await session.start()
-    await asyncio.sleep(0.2)
-    await session.stop()
+    try:
+        await asyncio.wait_for(bot_stopped.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     assert session.turn_state == TurnState.IDLE
 
@@ -1742,16 +1789,15 @@ async def test_trailing_playback_mark_emitted_while_session_running():
     session._playback_mark_bytes_interval = 10_000
 
     await session.start()
-    session._turn = TurnContext("test-turn", CancelToken())
-    await session._outbound_queue.put(_make_chunk())
+    try:
+        session._turn = TurnContext("test-turn", CancelToken())
+        await session._outbound_queue.put(_make_chunk())
 
-    for _ in range(20):
-        if transport.playback_marks:
-            break
-        await asyncio.sleep(0.01)
+        await asyncio.wait_for(transport.playback_mark_sent.wait(), timeout=1.0)
 
-    assert len(transport.playback_marks) == 1
-    await session.stop()
+        assert len(transport.playback_marks) == 1
+    finally:
+        await session.stop()
 
 
 @pytest.mark.asyncio
