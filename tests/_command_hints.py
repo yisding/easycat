@@ -16,6 +16,8 @@ from easycat.cli._app import (
 from tests._justfile import just_recipe_commands
 from tests._pytest_targets import pytest_target_problems
 
+INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+
 
 def strip_shell_comment(command: str) -> str:
     return re.sub(r"\s+#.*$", "", command).strip()
@@ -33,7 +35,7 @@ def documented_commands(section: str, *, prefixes: tuple[str, ...]) -> tuple[str
 
     for line in section.splitlines():
         add(line.strip())
-    for command in re.findall(r"`([^`]+)`", section):
+    for command in INLINE_CODE_RE.findall(section):
         add(command.strip())
 
     return tuple(commands)
