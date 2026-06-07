@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 import pytest
 import websockets
@@ -13,8 +14,6 @@ from easycat.transports.websocket import (
     serve_websocket_config_sessions,
     serve_websocket_sessions,
 )
-
-from .conftest import find_free_port
 
 
 class _FakeSession:
@@ -74,8 +73,10 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_serve_websocket_sessions_manages_session_lifecycle() -> None:
-    port = find_free_port()
+async def test_serve_websocket_sessions_manages_session_lifecycle(
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    port = unused_tcp_port_factory()
     stop_event = asyncio.Event()
     sessions: list[_FakeSession] = []
 
@@ -107,10 +108,11 @@ async def test_serve_websocket_sessions_manages_session_lifecycle() -> None:
 @pytest.mark.asyncio
 async def test_serve_websocket_config_sessions_builds_connection_transport(
     monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
 ) -> None:
     import easycat.config as config_module
 
-    port = find_free_port()
+    port = unused_tcp_port_factory()
     stop_event = asyncio.Event()
     sessions: list[_FakeSession] = []
     configs: list[dict[str, object]] = []
