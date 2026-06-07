@@ -547,7 +547,7 @@ context. Several bullets are known stale; use the current-state list above and
   accepting media/control frames.
 - Done: Twilio transports emit `TransportDegraded` diagnostics for sequence and
   timestamp gaps.
-- Add remaining tests for stale stream ids and stop/start races.
+- Done: Twilio transports cover stale stream ids and stop/start races.
 
 ### 6.5 Productize Supervisor Audio
 

@@ -23,7 +23,7 @@ import websockets
 
 import easycat.transports.local as local_mod
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
-from easycat.events import DTMF, EventBus, PlaybackMarkAck, TransportDegraded
+from easycat.events import DTMF, CallEnded, EventBus, PlaybackMarkAck, TransportDegraded
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
     _DEGRADED_TWILIO_SEQUENCE_GAP,
@@ -851,6 +851,66 @@ class TestTwilioStreamGapDiagnostics:
         await _drain_transport_diagnostics(transport)
 
         assert degraded == []
+
+
+class TestTwilioStreamLifecycleRaces:
+    @pytest.mark.asyncio
+    async def test_server_transport_ignores_stale_stop_and_media_after_new_start(self) -> None:
+        event_bus = EventBus()
+        ended: list[str] = []
+        event_bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
+        transport = TwilioTransport(event_bus=event_bus)
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM1"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+
+        assert transport.stream_sid == "STREAM2"
+        assert transport.call_sid == "CALL2"
+        assert transport._in_queue.empty()
+        assert ended == []
+
+        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        chunk = transport._in_queue.get_nowait()
+        assert chunk is not None
+        assert chunk.format.sample_rate == 16000
+
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM2"))
+
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert ended == ["CALL2"]
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_ignores_stale_stop_and_media_after_new_start(self) -> None:
+        event_bus = EventBus()
+        ended: list[str] = []
+        event_bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM1"))
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM1"))
+
+        assert transport.stream_sid == "STREAM2"
+        assert transport.call_sid == "CALL2"
+        assert transport._in_queue.empty()
+        assert ended == []
+
+        await transport._handle_message(_twilio_media_msg(mulaw_data, "STREAM2"))
+        chunk = transport._in_queue.get_nowait()
+        assert chunk is not None
+        assert chunk.format.sample_rate == 16000
+
+        await transport._handle_message(_twilio_stop_msg(stream_sid="STREAM2"))
+
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+        assert ended == ["CALL2"]
 
 
 @pytest.mark.integration_socket
