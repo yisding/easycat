@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from typing import Any
 
 from easycat import EasyConfig
@@ -36,6 +36,31 @@ async def wait_for_condition(
             return
         await asyncio.sleep(interval)
     raise AssertionError("condition was not met before timeout")
+
+
+async def _wait_for_change(
+    predicate: Callable[[], bool],
+    changed: asyncio.Event,
+    *,
+    timeout: float,
+    message: str,
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+
+    while True:
+        if predicate():
+            return
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise AssertionError(message)
+        changed.clear()
+        if predicate():
+            return
+        try:
+            await asyncio.wait_for(changed.wait(), timeout=remaining)
+        except TimeoutError:
+            raise AssertionError(message) from None
 
 
 class EventCollector:
@@ -75,6 +100,20 @@ class EventCollector:
             self._changed.clear()
             await asyncio.wait_for(self._changed.wait(), timeout=remaining)
 
+    async def wait_for_count(
+        self,
+        event_type: type[Any],
+        count: int,
+        *,
+        timeout: float = 2.0,
+    ) -> None:
+        await _wait_for_change(
+            lambda: sum(1 for event in self.events if isinstance(event, event_type)) >= count,
+            self._changed,
+            timeout=timeout,
+            message=f"timed out waiting for {count} {event_type.__name__} events",
+        )
+
 
 class QueueTransport:
     def __init__(
@@ -91,6 +130,7 @@ class QueueTransport:
         self._fail_on_send = fail_on_send
         self._fail_after_n_sends = fail_after_n_sends
         self._send_count = 0
+        self._sent_changed = asyncio.Event()
 
     async def connect(self) -> None:
         self.connected = True
@@ -115,6 +155,7 @@ class QueueTransport:
                 raise self._fail_on_send
         self._send_count += 1
         self.sent.append(chunk)
+        self._sent_changed.set()
 
     async def clear_audio(self) -> None:
         self.clear_calls += 1
@@ -133,6 +174,14 @@ class QueueTransport:
 
     async def finish_input(self) -> None:
         await self._incoming.put(None)
+
+    async def wait_for_sent_count(self, count: int, *, timeout: float = 2.0) -> None:
+        await _wait_for_change(
+            lambda: len(self.sent) >= count,
+            self._sent_changed,
+            timeout=timeout,
+            message=f"timed out waiting for {count} sent audio chunks",
+        )
 
 
 class ScriptedVAD:
@@ -192,12 +241,22 @@ class ScriptedSTT:
         self.end_calls = 0
         self._fail_on_start = fail_on_start
         self._partials = list(partials) if partials else None
+        self._start_changed = asyncio.Event()
 
     async def start_stream(self) -> None:
         self.start_calls += 1
+        self._start_changed.set()
         if self._fail_on_start is not None:
             raise self._fail_on_start
         self._events = asyncio.Queue()
+
+    async def wait_for_start_calls(self, count: int, *, timeout: float = 2.0) -> None:
+        await _wait_for_change(
+            lambda: self.start_calls >= count,
+            self._start_changed,
+            timeout=timeout,
+            message=f"timed out waiting for {count} STT start calls",
+        )
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         self.sent_audio.append(chunk)

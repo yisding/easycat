@@ -20,7 +20,6 @@ from .harness import (
     make_chunk,
     make_test_config,
     patch_provider_factories,
-    wait_for_condition,
 )
 
 
@@ -59,7 +58,7 @@ async def test_create_session_websocket_streaming_barge_in(
         await session.start()
         try:
             await collector.wait_for(Interruption, timeout=3.0)
-            await wait_for_condition(lambda: stt.start_calls >= 2, timeout=3.0)
+            await stt.wait_for_start_calls(2, timeout=3.0)
             if not server_result.done():
                 server_result.set_result(
                     {

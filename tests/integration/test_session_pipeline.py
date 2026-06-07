@@ -41,7 +41,6 @@ from .harness import (
     make_chunk,
     make_test_config,
     patch_provider_factories,
-    wait_for_condition,
 )
 
 pytestmark = pytest.mark.integration_local
@@ -426,10 +425,7 @@ async def test_barge_in_during_bot_speaking(monkeypatch: pytest.MonkeyPatch) -> 
         assert interruption is not None
 
         # Second TurnStarted fires right after Interruption
-        await wait_for_condition(
-            lambda: len([e for e in collector.events if isinstance(e, TurnStarted)]) >= 2,
-            timeout=2.0,
-        )
+        await collector.wait_for_count(TurnStarted, 2, timeout=2.0)
     finally:
         await transport.finish_input()
         await session.stop()
@@ -506,10 +502,7 @@ async def test_barge_in_during_processing_state(monkeypatch: pytest.MonkeyPatch)
         assert interruption is not None
 
         # Second TurnStarted fires right after Interruption
-        await wait_for_condition(
-            lambda: len([e for e in collector.events if isinstance(e, TurnStarted)]) >= 2,
-            timeout=2.0,
-        )
+        await collector.wait_for_count(TurnStarted, 2, timeout=2.0)
     finally:
         await transport.finish_input()
         await session.stop()

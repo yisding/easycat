@@ -104,7 +104,7 @@ async def test_create_session_replays_gated_audio_after_human_classification(
         assert tts.payloads[0].text == agent_final.text
 
         await outbound_sm.gate.flush_and_release()
-        await wait_for_condition(lambda: len(transport.sent) >= 1, timeout=2.0)
+        await transport.wait_for_sent_count(1, timeout=2.0)
         await collector.wait_for(BotStartedSpeaking, timeout=2.0)
 
         assert not outbound_sm.gate.is_buffering
