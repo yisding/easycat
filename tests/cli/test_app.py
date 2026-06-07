@@ -232,6 +232,8 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "copyable create/check/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
     assert "Commands:" in result.stdout
+    assert "README.md#choose-your-path" in result.stdout
+    assert "right first route" in result.stdout
     assert "uv run python examples/openai_agents_voice.py" in result.stdout
     assert "easycat init --list-templates" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
@@ -318,6 +320,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     paths = {entry["path"] for entry in payload["entries"]}
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
+    assert "README.md#choose-your-path" in paths
     assert "README.md#cli" in paths
     assert "docs/README.md" in paths
     assert "docs/teaching/" in paths
@@ -335,6 +338,12 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert all(entry.get("audience") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
+    assert commands["README.md#choose-your-path"] == [
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "easycat init --list-templates",
+        "uv run easycat validate quick",
+    ]
     assert commands["README.md#cli"] == [
         "easycat init --list-templates",
         "easycat init --list-templates --json",
@@ -362,18 +371,23 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]
+    assert audiences["README.md#choose-your-path"] == "new users"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
+    assert "right first route" in descriptions["README.md#choose-your-path"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
     assert "maintained guide" in descriptions["docs/README.md"]
     assert "runnable local" in descriptions["examples/README.md"]
     assert "storage layout" in descriptions["src/easycat/runtime/DURABILITY.md"]
     urls = {entry["path"]: entry["url"] for entry in payload["entries"]}
+    assert urls["README.md#choose-your-path"] == (
+        "https://github.com/yisding/easycat/blob/main/README.md#choose-your-path"
+    )
     assert urls["README.md#cli"] == "https://github.com/yisding/easycat/blob/main/README.md#cli"
     assert urls["README.md#install"] == (
         "https://github.com/yisding/easycat/blob/main/README.md#install"

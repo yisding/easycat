@@ -10,9 +10,11 @@ command hints, such as `PATH`, before running them.
 
 ## Choose Your Path
 
-- New to EasyCat: start with the [repository quickstart](../README.md#install),
-  then run `uv run easycat doctor`. If provider keys are in a project `.env`,
-  run `uv run easycat doctor --env-file .env`.
+- New to EasyCat: start with the
+  [repository path chooser](../README.md#choose-your-path), then use the
+  [quickstart](../README.md#install) to run your first local voice bot. Run
+  `uv run easycat doctor` before the example; if provider keys are in a
+  project `.env`, run `uv run easycat doctor --env-file .env`.
 - Learning voice pipelines from scratch: follow the
   [teaching ladder](teaching/), starting at
   [00-hello-audio](teaching/00-hello-audio/).

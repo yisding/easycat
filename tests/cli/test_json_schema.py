@@ -327,6 +327,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert isinstance(payload["entries"], list)
     assert payload["command_note"] == _DOCS_COMMAND_NOTE
     entries = [{key: entry[key] for key in ("label", "path")} for entry in payload["entries"]]
+    assert {"label": "Start here", "path": "README.md#choose-your-path"} in entries
     assert {"label": "CLI and scaffolds", "path": "README.md#cli"} in entries
     assert {"label": "Docs map", "path": "docs/README.md"} in entries
     assert {"label": "First lesson", "path": "docs/teaching/00-hello-audio/"} in entries
@@ -348,17 +349,20 @@ def test_docs_envelope(cli: CliRunner) -> None:
     descriptions = {entry["path"]: entry["description"] for entry in payload["entries"]}
     audiences = {entry["path"]: entry["audience"] for entry in payload["entries"]}
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
+    assert "right first route" in descriptions["README.md#choose-your-path"]
     assert "base package requirements" in descriptions["README.md#cli"]
     assert "extras" in descriptions["README.md#cli"]
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
+    assert audiences["README.md#choose-your-path"] == "new users"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["README.md#validation-workflow"] == "contributors"
+    assert "uv run easycat validate quick" in commands["README.md#choose-your-path"]
     assert "easycat init --list-templates" in commands["README.md#cli"]
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "easycat doctor --env-file .env --json" in commands["README.md#cli"]

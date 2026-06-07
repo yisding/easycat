@@ -64,6 +64,7 @@ def test_docs_heading_anchors_match_github_duplicate_suffixes(tmp_path: Path) ->
 def test_docs_index_routes_primary_reader_paths() -> None:
     text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     required_links = [
+        "../README.md#choose-your-path",
         "../README.md#install",
         "teaching/",
         "teaching/00-hello-audio/",
@@ -91,6 +92,7 @@ def test_docs_index_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in text
     assert "uv run easycat docs --json" in text
+    assert "repository path chooser" in normalized
     assert "installed app environment" in text
     assert "prints the same map" in text
     assert "docs route map" in normalized
@@ -156,6 +158,7 @@ def test_cli_docs_routes_keep_onboarding_order() -> None:
     labels = [entry["label"] for entry in _DOCS_LINKS]
 
     expected_prefix = [
+        "Start here",
         "Quickstart",
         "CLI and scaffolds",
         "Docs map",
@@ -205,6 +208,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     audiences = {entry["path"]: entry["audience"] for entry in _DOCS_LINKS}
 
     assert not missing, "easycat docs routes missing audience labels: " + ", ".join(missing)
+    assert audiences["README.md#choose-your-path"] == "new users"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["AGENTS.md"] == "coding agents"
@@ -215,6 +219,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
 def test_cli_docs_routes_have_useful_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     required_commands = {
+        "README.md#choose-your-path": "uv run easycat validate quick",
         "README.md#install": "uv run python examples/openai_agents_voice.py",
         "docs/teaching/": "uv run python docs/teaching/00-hello-audio/main.py",
         "README.md#cli": "easycat init --list-templates --json",
