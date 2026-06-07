@@ -22,7 +22,8 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [repository path chooser](../README.md#choose-your-path), then use the
   [quickstart](../README.md#install) to run your first local voice bot. Run
   `uv run easycat doctor` before the example; if provider keys are in a
-  project `.env`, run `uv run easycat doctor --env-file .env`.
+  project `.env`, run `uv run easycat doctor --env-file .env`, then run the
+  example with `uv run --env-file .env python examples/openai_agents_voice.py`.
 - Learning voice pipelines from scratch: follow the
   [teaching ladder](teaching/), starting at
   [00-hello-audio](teaching/00-hello-audio/).
