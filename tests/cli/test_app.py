@@ -362,6 +362,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     )
     assert "exact audience label or broad operators maintainers role" in help_text
     assert "Multi word labels also accept hyphens or underscores" in help_text
+    assert "operators and maintainers include compound labels" in help_text
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
     assert "command hints" in help_text

@@ -108,9 +108,9 @@ easycat doctor           # check API keys, optional extras, provider reachabilit
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat docs             # show docs for learning, maintenance, validation, operations
-easycat docs --audience learners # show docs for one reader audience
+easycat docs --audience learners # filter docs by reader audience or broad role
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
-easycat docs --audience maintainers --json # emit a filtered docs route map
+easycat docs --audience maintainers --json # emit a filtered docs route map for maintainers
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic

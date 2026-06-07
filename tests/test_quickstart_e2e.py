@@ -449,6 +449,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     cli_section = readme.split("## CLI", 1)[1].split("## ", 1)[0]
+    cli_lines = set(cli_section.splitlines())
     normalized_cli_section = re.sub(r"\s+", " ", cli_section)
 
     assert "installed CLI form" in cli_section
@@ -471,9 +472,12 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat doctor --json    # emit machine-readable environment checks",
         "easycat doctor --env-file .env --json # emit checks with project .env loaded",
         "easycat docs             # show docs for learning, maintenance, validation, operations",
-        "easycat docs --audience learners # show docs for one reader audience",
+        "easycat docs --audience learners # filter docs by reader audience or broad role",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
-        "easycat docs --audience maintainers --json # emit a filtered docs route map",
+        (
+            "easycat docs --audience maintainers --json # emit a filtered docs route map "
+            "for maintainers"
+        ),
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
@@ -492,13 +496,15 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     stale_cli_lines = (
         "easycat doctor           # check API keys, Python version, optional extras",
         "easycat docs             # show documentation entry points",
+        "easycat docs --audience learners # show docs for one reader audience",
+        "easycat docs --audience maintainers --json # emit a filtered docs route map",
         "easycat docs             # show docs for learning, validation, operations",
         "easycat docs             # show quickstart, examples, validation, operations",
         "easycat docs             # show quickstart, examples, and teaching routes",
         "easycat explain E102     # look up an EasyCat error code",
     )
     for line in stale_cli_lines:
-        assert line not in cli_section
+        assert line not in cli_lines
     assert "easycat docs --json" in cli_section
     assert "easycat docs --audience learners" in cli_section
     assert "easycat docs --audience maintainers --json" in cli_section

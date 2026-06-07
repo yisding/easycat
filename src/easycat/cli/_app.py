@@ -689,7 +689,8 @@ def docs_command(
             "Filter routes by exact audience label or broad operators/maintainers role, "
             "such as learners, app builders, coding agents, contributors, operators, "
             "or maintainers. "
-            "Multi-word labels also accept hyphens or underscores."
+            "Multi-word labels also accept hyphens or underscores; operators and "
+            "maintainers include compound labels."
         ),
     ),
 ) -> None:
