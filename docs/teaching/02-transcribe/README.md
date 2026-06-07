@@ -196,7 +196,7 @@ and writes a debug bundle to `docs/teaching/02-transcribe/runs/`.
 Same STT provider, two usage patterns:
 
 - **batch** — record first, transcribe in one call. The helper
-  `easycat.quick.transcribe_file(path)` wraps everything in ~30 lines.
+  `easycat.recipes.transcribe_file(path)` wraps everything in ~30 lines.
 - **streaming** — start the STT stream, push audio as it arrives,
   consume events concurrently. When the stream ends, partials and a
   final flow back.

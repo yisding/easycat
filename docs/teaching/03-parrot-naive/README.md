@@ -23,7 +23,7 @@ personally heard this fail on your own voice.
 
 ## Diff from chapter 2
 
-- **Added:** TTS via `easycat.quick.speak`; a fixed silence-timeout
+- **Added:** TTS via `easycat.recipes.speak`; a fixed silence-timeout
   turn detector; a conversation loop that keeps running until
   Ctrl-C.
 - **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
@@ -67,7 +67,7 @@ personally heard this fail on your own voice.
  from easycat.debug.export import export_debug_bundle
 -from easycat.events import STTEventType
 +from easycat.events import EventBus, STTEventType
-+from easycat.quick import speak
++from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport

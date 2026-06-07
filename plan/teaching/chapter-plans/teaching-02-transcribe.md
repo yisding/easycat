@@ -25,10 +25,10 @@
 Two scripts in `docs/teaching/02-transcribe/`:
 
 - `batch.py` — record 5 seconds, call
-  `easycat.transcribe_file(path)`, print transcript. ~15 lines
-  thanks to the `easycat.quick` helper.
+  `easycat.recipes.transcribe_file(path)`, print transcript. ~15 lines
+  thanks to the `easycat.recipes` helper.
 - `streaming.py` — stream audio to STT directly via
-  `create_stt_provider` (`easycat.quick` doesn't cover streaming
+  `create_stt_provider` (`easycat.recipes` doesn't cover streaming
   — intentionally, so the chapter can show what the helper hides),
   print partials as they arrive. ~40 lines.
 
@@ -55,8 +55,8 @@ Both write a `RunBundle` to
 
 ## Key concepts
 
-- `easycat.transcribe_file` — the batch convenience helper; read
-  its source in `src/easycat/quick.py` once to see what it wraps
+- `easycat.recipes.transcribe_file` — the batch convenience helper; read
+  its source in `src/easycat/recipes.py` once to see what it wraps
   (it's ~30 lines, no magic)
 - `easycat.create_stt_provider` + `STTProviderConfig` — the
   underlying factory, used in the streaming script

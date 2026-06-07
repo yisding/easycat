@@ -123,7 +123,7 @@ any specific vendor SDK, or voice-UX conventions.
 The chapters lean on three additions made to the library
 specifically to keep teaching code small:
 
-- **`easycat.quick`** — `transcribe_file(path)` and
+- **`easycat.recipes`** — `transcribe_file(path)` and
   `speak(transport, text)` helpers so chapter 2 and chapter 3 can
   stay under ~20 lines each. They are intentionally not
   comprehensive; chapters reach for `create_stt_provider` /

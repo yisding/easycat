@@ -31,7 +31,7 @@ from easycat import LocalTransportConfig
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.debug.export import export_debug_bundle
 from easycat.events import EventBus, STTEventType, VADStartSpeaking, VADStopSpeaking
-from easycat.quick import speak
+from easycat.recipes import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
 from easycat.transports.local import LocalTransport

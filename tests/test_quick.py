@@ -1,4 +1,4 @@
-"""Tests for ``easycat.quick`` API-key resolution.
+"""Tests for ``easycat.recipes`` and ``easycat.quick`` compatibility.
 
 These lock in that the teaching helpers resolve API keys from the factory
 provider catalogs (a single source of truth) rather than a hand-maintained
@@ -14,13 +14,20 @@ from collections.abc import AsyncIterator
 import pytest
 
 import easycat.quick as quick
+import easycat.recipes as recipes
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.errors import EasyCatError
 from easycat.events import TTSEvent, TTSEventType
-from easycat.quick import _resolve_api_key, speak
+from easycat.recipes import _resolve_api_key, speak
 from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.tts.factory import _CATALOG as _TTS_CATALOG
 from easycat.tts.input import TTSInput
+
+
+def test_quick_reexports_recipe_helpers() -> None:
+    assert quick.speak is recipes.speak
+    assert quick.transcribe_file is recipes.transcribe_file
+    assert quick._resolve_api_key is recipes._resolve_api_key
 
 
 class TestResolveApiKey:
@@ -81,7 +88,7 @@ class TestSpeakResourceOwnership:
         # httpx client and must close it so callers do not leak connections.
         monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
         fake = _FakeTTS()
-        monkeypatch.setattr(quick, "create_tts_provider", lambda _config: fake)
+        monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
         transport = _FakeTransport()
 
         await speak(transport, "hello")
@@ -104,7 +111,7 @@ class TestSpeakResourceOwnership:
     async def test_helper_constructed_tts_closed_even_on_error(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
         fake = _FakeTTS()
-        monkeypatch.setattr(quick, "create_tts_provider", lambda _config: fake)
+        monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
 
         class _BoomTransport:
             async def send_audio(self, _audio: AudioChunk) -> None:

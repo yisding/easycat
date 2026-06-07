@@ -25,7 +25,7 @@ from pathlib import Path
 import sounddevice as sd
 
 from easycat.debug.export import export_debug_bundle
-from easycat.quick import transcribe_file
+from easycat.recipes import transcribe_file
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 
 SAMPLE_RATE = 16_000  # OpenAI + most STT providers default to 16 kHz.
@@ -67,8 +67,8 @@ async def main() -> None:
     )
 
     # 2) Send it to the default OpenAI STT provider in one call.
-    #    transcribe_file is the `easycat.quick` convenience helper —
-    #    it is ~30 lines of code; read src/easycat/quick.py if curious.
+    #    transcribe_file is the `easycat.recipes` convenience helper —
+    #    it is ~30 lines of code; read src/easycat/recipes.py if curious.
     print("Transcribing...")
     request_start = time.monotonic()
     transcript = await transcribe_file(wav_path)

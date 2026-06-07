@@ -177,7 +177,7 @@ def test_curated_public_api_lazy_imports() -> None:
 
 
 def test_documented_factory_surface_is_importable() -> None:
-    # The quick.py docstring and CLAUDE.md advertise these as the canonical
+    # The recipes.py docstring and public API docs advertise these as the canonical
     # top-level factory functions, so they must resolve from ``easycat``.
     from easycat import (
         STTProviderConfig,
@@ -255,7 +255,9 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
 def test_culled_symbols_remain_available_from_modules() -> None:
     from easycat.debug.testing import load_bundle
     from easycat.integrations.agents import AgentRunner, AgentRunnerConfig
-    from easycat.quick import speak, transcribe_file
+    from easycat.quick import speak as quick_speak
+    from easycat.quick import transcribe_file as quick_transcribe_file
+    from easycat.recipes import speak, transcribe_file
     from easycat.session import split_at_sentence_boundaries
     from easycat.session.actions import CoreSessionActionExecutor
 
@@ -272,6 +274,8 @@ def test_culled_symbols_remain_available_from_modules() -> None:
     assert load_bundle.__name__ == "load_bundle"
     assert speak.__name__ == "speak"
     assert transcribe_file.__name__ == "transcribe_file"
+    assert quick_speak is speak
+    assert quick_transcribe_file is transcribe_file
     assert split_at_sentence_boundaries("Hello world. ") == ("Hello world. ", "")
 
 

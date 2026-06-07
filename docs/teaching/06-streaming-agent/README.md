@@ -61,7 +61,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
--from easycat.quick import speak
+-from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 +from easycat.session import split_at_sentence_boundaries
 +from easycat.strip_markdown import strip_markdown

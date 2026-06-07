@@ -203,9 +203,8 @@ context. Several bullets are known stale; use the current-state list above and
 - Done: remove duplicate signal-handling code by sharing one internal signal helper.
 - Done: add an explicit feedback option, `run(config, feedback="auto"|"on"|"off")`,
   where `"auto"` keeps the current TTY behavior.
-- Move `quick.speak()` out of the top-level namespace. Either delete it if it
-  remains unused, or move it to `easycat.recipes`.
-- Keep `transcribe_file()` as a recipe/teaching helper, not as core API.
+- Done: move `speak()` and `transcribe_file()` into `easycat.recipes` as
+  teaching helpers; keep `easycat.quick` as a compatibility import path.
 
 ### 1.4 CLI Product Shape
 
