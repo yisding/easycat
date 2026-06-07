@@ -68,6 +68,8 @@ the raw commands below. For raw docs/onboarding guard commands, use the
   that saved report inside the standard CLI JSON envelope.
 - `uv run ruff check .`: lint (imports, style, correctness rules).
 - `uv run ruff format .`: apply formatting.
+- `uv run easycat doctor`: check API keys, optional extras, and provider
+  reachability before running credentialed examples.
 - `uv run python examples/ws_server.py`: run a local example.
 - `uv run python examples/webrtc_server.py`: run the WebRTC example server.
 

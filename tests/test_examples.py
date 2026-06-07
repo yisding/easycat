@@ -919,6 +919,39 @@ def test_env_examples_document_doctor_preflight() -> None:
     )
 
 
+def test_mixed_client_server_examples_document_server_preflight() -> None:
+    stale: list[str] = []
+
+    for row in _example_readme_rows():
+        if not row["env"].startswith("None for client") or "API_KEY" not in row["env"]:
+            continue
+        path = REPO_ROOT / "examples" / row["link"]
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        doc = ast.get_docstring(module) or ""
+        paired_server_runs = [
+            line.strip()
+            for line in doc.splitlines()
+            if line.strip().startswith("uv run python examples/") and line.strip() != row["run"]
+        ]
+        if not paired_server_runs:
+            stale.append(f"{row['link']}: missing paired server run command")
+        if "uv run easycat doctor" not in doc:
+            stale.append(f"{row['link']}: missing `uv run easycat doctor`")
+        if "uv run easycat doctor --env-file .env" not in doc:
+            stale.append(f"{row['link']}: missing `.env` doctor command")
+        if "uv run easycat doctor --env-file .env --json" not in doc:
+            stale.append(f"{row['link']}: missing parseable `.env` doctor command")
+        for run_command in paired_server_runs:
+            env_run = run_command.replace("uv run ", "uv run --env-file .env ", 1)
+            if env_run not in doc:
+                stale.append(f"{row['link']}: missing `{env_run}`")
+
+    assert not stale, (
+        "Client examples that rely on a credentialed paired server should document "
+        "the server doctor preflight: " + "; ".join(stale)
+    )
+
+
 def test_examples_readme_none_env_rows_are_explicit_in_docstrings() -> None:
     stale: list[str] = []
 

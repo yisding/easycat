@@ -62,6 +62,7 @@ uv run easycat validate report .easycat/validation/latest.json  # Inspect latest
 uv run easycat validate report .easycat/validation/latest.json --json  # JSON report envelope
 uv run ruff check .              # Lint
 uv run ruff format .             # Format
+uv run easycat doctor            # Check credentials/extras before examples
 uv run python examples/ws_server.py  # Run an example
 ```
 

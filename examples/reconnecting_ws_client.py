@@ -18,7 +18,11 @@ Setup:
 
   # Terminal 1 (server; requires OpenAI credentials):
   export OPENAI_API_KEY="..."
+  uv run easycat doctor
+  uv run easycat doctor --env-file .env  # if keys live in .env
+  uv run easycat doctor --env-file .env --json  # for parseable checks
   uv run python examples/ws_server.py
+  uv run --env-file .env python examples/ws_server.py  # if keys live in .env
 
   # Terminal 2 (client; no API keys required):
   uv run python examples/reconnecting_ws_client.py

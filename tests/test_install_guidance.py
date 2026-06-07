@@ -911,6 +911,31 @@ def test_agent_guide_command_hints_are_locally_valid() -> None:
     assert not stale_commands, "Agent guide command hints are stale:\n" + "\n".join(stale_commands)
 
 
+def test_agent_guides_preflight_credentialed_example_runs() -> None:
+    stale: list[str] = []
+    plain_doctor_re = re.compile(r"(?m)(?:^- `|^)uv run easycat doctor(?:`|\s+#|$)")
+
+    for filename, command_section in _agent_guide_command_sections().items():
+        doctor_match = plain_doctor_re.search(command_section)
+        for command in (
+            "uv run python examples/ws_server.py",
+            "uv run python examples/webrtc_server.py",
+        ):
+            command_index = command_section.find(command)
+            if command_index == -1:
+                continue
+            if doctor_match is None:
+                stale.append(f"{filename}: missing plain doctor preflight before `{command}`")
+                continue
+            if doctor_match.start() > command_index:
+                stale.append(f"{filename}: doctor preflight appears after `{command}`")
+
+    assert not stale, (
+        "Agent guide credentialed example commands should be preceded by "
+        "`uv run easycat doctor`: " + "; ".join(stale)
+    )
+
+
 def test_agent_guides_reference_config_package_layout() -> None:
     assert (REPO_ROOT / "src" / "easycat" / "config").is_dir()
     assert not (REPO_ROOT / "src" / "easycat" / "config.py").exists()
