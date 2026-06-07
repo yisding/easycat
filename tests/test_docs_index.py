@@ -295,6 +295,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run easycat init --list-templates" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )
+    assert "uv run easycat init my-agent" in entries["README.md#choose-your-path"].get(
+        "commands", ()
+    )
     assert "uv run pytest tests/test_install_guidance.py" in entries[
         "README.md#choose-your-path"
     ].get("commands", ())

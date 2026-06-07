@@ -156,6 +156,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv sync --extra quickstart --group dev",
             "uv run easycat doctor",
             "uv run easycat init --list-templates",
+            "uv run easycat init my-agent",
             "uv run easycat validate quick",
             "uv run pytest tests/test_install_guidance.py",
         ),
