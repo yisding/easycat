@@ -100,6 +100,7 @@ def test_current_peripheral_plans_reference_current_config_and_tts_alignment_nam
     texts = {path: path.read_text(encoding="utf-8") for path in files}
     combined = "\n".join(texts.values())
     missing_paths: list[str] = []
+    brittle_line_refs: list[str] = []
 
     for current_phrase in (
         "src/easycat/config/easy.py",
@@ -126,12 +127,19 @@ def test_current_peripheral_plans_reference_current_config_and_tts_alignment_nam
         for line_number, line in enumerate(text.splitlines(), 1):
             for match in CURRENT_PLAN_SOURCE_TEST_PATH_RE.finditer(line):
                 path_text = match.group("path")
+                if match.group("line") is not None:
+                    rel = path.relative_to(REPO_ROOT).as_posix()
+                    brittle_line_refs.append(f"{rel}:{line_number}: `{match.group(0).strip('`')}`")
                 if not (REPO_ROOT / path_text).exists():
                     rel = path.relative_to(REPO_ROOT).as_posix()
                     missing_paths.append(f"{rel}:{line_number}: `{path_text}`")
 
     assert not missing_paths, "Current peripheral docs reference missing files:\n" + "\n".join(
         missing_paths
+    )
+    assert not brittle_line_refs, (
+        "Current peripheral docs should use stable symbol refs, not file-line refs:\n"
+        + "\n".join(brittle_line_refs)
     )
 
 

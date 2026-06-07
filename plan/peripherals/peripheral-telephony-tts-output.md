@@ -39,8 +39,9 @@ Every phone call today pays work no phone call can use:
 1. TTS generates PCM16 at 24 kHz.
 2. `TwilioTransport.send_audio` calls `pcm16_to_mulaw(chunk.data,
    chunk.format.sample_rate)`
-   (`src/easycat/transports/twilio_media.py:285-289`). That function
-   resamples 24 → 8 kHz, *then* μ-law encodes.
+   (`src/easycat/transports/twilio_media.py::TwilioTransport.send_audio`
+   delegates to `pcm16_to_mulaw`). That function resamples 24 → 8 kHz,
+   *then* μ-law encodes.
 3. The 12 kHz of spectrum above the phone-line ceiling is thrown away.
 
 Costs:
@@ -95,10 +96,10 @@ coding — providers version output formats silently.
 
 | Provider | Native 8 kHz PCM16 | Native μ-law 8 kHz | Notes |
 |---|---|---|---|
-| Deepgram Aura | ✅ `encoding=linear16&sample_rate=8000` | ✅ `encoding=mulaw&sample_rate=8000` | sample_rate already a config field (`deepgram_tts.py:35`) |
+| Deepgram Aura | ✅ `encoding=linear16&sample_rate=8000` | ✅ `encoding=mulaw&sample_rate=8000` | `sample_rate` already lives on `src/easycat/tts/deepgram_tts.py::DeepgramTTSConfig` |
 | ElevenLabs | ✅ `output_format=pcm_8000` (already in `_ELEVENLABS_FORMAT_MAP`) | ✅ `output_format=ulaw_8000` (not in map today) | current code rejects non-PCM in `__post_init__` — needs to accept μ-law |
 | Cartesia | ✅ `{encoding: "pcm_s16le", sample_rate: 8000}` | ✅ `{encoding: "pcm_mulaw", sample_rate: 8000}` | greenfield — land this plan's support directly in the new provider |
-| OpenAI | ❌ (fixed 24 kHz per `openai_tts.py:29`) | ❌ | local resample unavoidable; already happens today |
+| OpenAI | ❌ (fixed 24 kHz per `src/easycat/tts/openai_tts.py::_OPENAI_PCM_FORMAT`) | ❌ | local resample unavoidable; already happens today |
 
 ## Architecture
 
