@@ -142,9 +142,13 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "top-level `command_note`" in text
     assert "installed CLI hints from repo-local `uv run` hints" in normalized
     assert "uv run easycat validate quick" in text
+    assert "uv run easycat validate quick --json" in text
+    assert "uv run easycat validate contracts --json" in text
+    assert "uv run easycat validate release --json" in text
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in text
-    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
+    assert "automation needs validation run/report payloads" in normalized
+    assert "script or coding agent needs validation output inside the standard CLI envelope" in (
         normalized
     )
 

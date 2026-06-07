@@ -34,11 +34,15 @@ command hints, such as `PATH`, before running them.
   `uv run easycat doctor --json` when automation needs first-run
   environment/check rows without Rich formatting; use
   `uv run easycat doctor --env-file .env --json` when those checks should load
-  a project `.env`. Replace uppercase placeholders in command hints, such as
-  `PATH`, before running them. Each docs route entry includes an `audience`
-  label for choosing the right starting point without scraping descriptions,
-  and the top-level `command_note` distinguishes installed CLI hints from
-  repo-local `uv run` hints.
+  a project `.env`. Use `uv run easycat validate quick --json`,
+  `uv run easycat validate contracts --json`,
+  `uv run easycat validate release --json`, or
+  `uv run easycat validate report .easycat/validation/latest.json --json` when
+  automation needs validation run/report payloads. Replace uppercase
+  placeholders in command hints, such as `PATH`, before running them. Each docs
+  route entry includes an `audience` label for choosing the right starting
+  point without scraping descriptions, and the top-level `command_note`
+  distinguishes installed CLI hints from repo-local `uv run` hints.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
@@ -68,9 +72,12 @@ command hints, such as `PATH`, before running them.
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout.
 - Validating a change: run `uv run easycat validate quick`, inspect
-  `uv run easycat validate report .easycat/validation/latest.json`, or use
-  `uv run easycat validate report .easycat/validation/latest.json --json` when
-  a script or coding agent needs the saved report inside the standard CLI
+  `uv run easycat validate report .easycat/validation/latest.json`, or use the
+  matching JSON lanes (`uv run easycat validate quick --json`,
+  `uv run easycat validate contracts --json`,
+  `uv run easycat validate release --json`, and
+  `uv run easycat validate report .easycat/validation/latest.json --json`) when
+  a script or coding agent needs validation output inside the standard CLI
   envelope. Then use the validation workflow in the
   [root README](../README.md#validation-workflow) and the
   [validation reference](../plan/validation/reference.md) for provider and
