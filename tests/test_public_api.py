@@ -7,6 +7,7 @@ from pathlib import Path
 
 import easycat
 from easycat._public_api import LAZY_EXPORTS
+from easycat.cli._app import _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
 
 PUBLIC_IMPORT_SURFACE_ROOTS = (
     Path("README.md"),
@@ -132,6 +133,7 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     assert "uv run easycat explain json-schema" in doc
     assert "uv run pytest tests/test_public_api.py" in doc
     assert "just guard-docs" in doc
+    assert _DOCS_ONBOARDING_RAW_GUARD_COMMANDS[0] in doc
     assert "If `just` is not installed" in doc
     assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in doc
 

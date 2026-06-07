@@ -383,6 +383,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat explain json-schema",
             "uv run pytest tests/test_public_api.py",
             "just guard-docs",
+            _DOCS_ONBOARDING_RAW_GUARD_COMMANDS[0],
         ),
     },
     {

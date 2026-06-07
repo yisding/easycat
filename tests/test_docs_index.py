@@ -884,6 +884,7 @@ def test_public_api_docs_route_matches_contract_guard_commands() -> None:
         "uv run easycat explain json-schema",
         "uv run pytest tests/test_public_api.py",
         "just guard-docs",
+        RAW_ONBOARDING_GUARD_COMMANDS[0],
     ):
         assert command in contract
         assert command in route_commands
