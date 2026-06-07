@@ -234,12 +234,18 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv run easycat docs",
             "uv run easycat docs --json",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run easycat explain json-schema",
             "uv run pytest tests/test_install_guidance.py",
             "just guard-docs",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",
             "just guard-markdown",
+            "uv run easycat validate quick",
+            "uv run easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
         ),
     },
     {
@@ -253,6 +259,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "uv run easycat docs",
             "uv run easycat docs --json",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run easycat explain json-schema",
             "just guard-docs",
             "just guard-examples",
             "just guard-templates",
@@ -260,6 +269,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "just guard-markdown",
             "uv run easycat validate quick",
             "uv run easycat validate report .easycat/validation/latest.json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
         ),
     },
     {

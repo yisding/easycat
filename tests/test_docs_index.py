@@ -25,6 +25,14 @@ ONBOARDING_GUARD_COMMANDS = (
     "just guard-markdown",
 )
 DOCS_MAP_COMMANDS = ("uv run easycat docs", "uv run easycat docs --json")
+AGENT_GUIDE_MACHINE_COMMANDS = (
+    "uv run easycat doctor --json",
+    "uv run easycat doctor --env-file .env --json",
+    "uv run easycat explain json-schema",
+    "uv run easycat validate quick",
+    "uv run easycat validate report .easycat/validation/latest.json",
+    "uv run easycat validate report .easycat/validation/latest.json --json",
+)
 
 
 def _root_relative_doc_links() -> set[str]:
@@ -266,7 +274,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     ].get("commands", ())
 
 
-def test_coding_agents_docs_route_matches_docs_map_and_guard_commands() -> None:
+def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     command_section = agents.split("## Build, Test, and Development Commands", 1)[1].split(
@@ -275,18 +283,23 @@ def test_coding_agents_docs_route_matches_docs_map_and_guard_commands() -> None:
     )[0]
     route_commands = entries["AGENTS.md"].get("commands", ())
 
-    for command in DOCS_MAP_COMMANDS + ONBOARDING_GUARD_COMMANDS:
+    for command in DOCS_MAP_COMMANDS + AGENT_GUIDE_MACHINE_COMMANDS + ONBOARDING_GUARD_COMMANDS:
         assert command in command_section
         assert command in route_commands
 
 
-def test_architecture_docs_route_matches_docs_map_and_guard_commands() -> None:
+def test_architecture_docs_route_matches_guide_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
     route_commands = entries["CLAUDE.md"].get("commands", ())
 
-    for command in DOCS_MAP_COMMANDS + ONBOARDING_GUARD_COMMANDS:
+    for command in (
+        DOCS_MAP_COMMANDS
+        + AGENT_GUIDE_MACHINE_COMMANDS
+        + ("uv run pytest tests/test_install_guidance.py",)
+        + ONBOARDING_GUARD_COMMANDS
+    ):
         assert command in command_section
         assert command in route_commands
 
