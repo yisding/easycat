@@ -71,7 +71,7 @@ cov:
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json tests/cli/test_json_schema.py
+    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
