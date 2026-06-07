@@ -8,6 +8,13 @@ from pathlib import Path
 import easycat
 from easycat._public_api import LAZY_EXPORTS
 
+PUBLIC_IMPORT_SURFACE_ROOTS = (
+    Path("README.md"),
+    Path("docs"),
+    Path("examples"),
+    Path("src/easycat/cli/scaffold/templates"),
+)
+
 PUBLIC_API_SNAPSHOT = (
     "AgentDelta",
     "AgentFinal",
@@ -118,6 +125,8 @@ def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     assert not extra, "docs/public-api.md lists non-exported names: " + ", ".join(extra)
     assert "[public API contract](docs/public-api.md)" in readme
     assert "PUBLIC_API_SNAPSHOT" in doc
+    assert "Reader-facing snippets in the root README" in doc
+    assert "scaffold templates must use this allowlist" in doc
 
 
 def test_public_api_contract_doc_has_unique_allowlist_entries() -> None:
@@ -303,18 +312,21 @@ def _documented_top_level_allowlist_entries(doc: str) -> list[str]:
     return names
 
 
-def test_docs_and_examples_use_only_public_top_level_imports() -> None:
+def test_reader_facing_surfaces_use_only_public_top_level_imports() -> None:
     public = set(easycat.__all__)
     violations: list[str] = []
 
-    for root in (Path("docs"), Path("examples")):
-        for path in sorted(root.rglob("*.py")):
+    for root in PUBLIC_IMPORT_SURFACE_ROOTS:
+        python_paths = [root] if root.is_file() and root.suffix == ".py" else root.rglob("*.py")
+        markdown_paths = [root] if root.is_file() and root.suffix == ".md" else root.rglob("*.md")
+
+        for path in sorted(python_paths):
             for line, name in _easycat_imports_from_ast(
                 path.read_text(encoding="utf-8"), str(path)
             ):
                 if name not in public:
                     violations.append(f"{path}:{line}: {name}")
-        for path in sorted(root.rglob("*.md")):
+        for path in sorted(markdown_paths):
             for line, name in _easycat_imports_from_markdown(path):
                 if name not in public:
                     violations.append(f"{path}:{line}: {name}")

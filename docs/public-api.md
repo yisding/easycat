@@ -19,6 +19,10 @@ changes to this page and the snapshot should be reviewed together.
   modules.
 - Any top-level addition or removal must update this page and the
   `PUBLIC_API_SNAPSHOT` in `tests/test_public_api.py`.
+- Reader-facing snippets in the root README, maintained docs, examples, and
+  scaffold templates must use this allowlist when they write
+  `from easycat import ...`; import implementation-specific names from their
+  submodules instead.
 - The `Top-Level Allowlist` bullets below must exactly match `easycat.__all__`;
   CI parses this section rather than accepting incidental mentions elsewhere.
 - After changing top-level exports, run
