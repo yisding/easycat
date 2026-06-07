@@ -489,25 +489,30 @@ Run easycat explain json-schema for CLI JSON.
   tool side effects unless you choose `--tool-policy stub` or
   `--tool-policy allow`.
 - **`uv run easycat validate quick`** — deterministic local validation
-  for normal PR work.
+  for normal PR work. Use `uv run easycat validate quick --json` when a
+  coding agent or script needs the current quick validation run inside the
+  standard CLI envelope.
 - **`uv run easycat validate socket`** — localhost socket integration
   validation.
 - **`uv run easycat validate stress`** — local stress validation and
   saturation-signal capture.
 - **`uv run easycat validate contracts`** — offline provider,
-  protocol, and bridge contract validation.
+  protocol, and bridge contract validation. Use
+  `uv run easycat validate contracts --json` for a parseable contract run.
 - **`uv run easycat validate latency --smoke`** — low-cost live latency
   probe; use `--sweep` for the broader condition matrix.
 - **`uv run easycat validate live`** — live provider canaries and
   capability reports.
 - **`uv run easycat validate release`** — build the package, install the
   wheel into a clean temporary venv, verify it outside the source tree, and
-  run the release validation gates through the installed package.
+  run the release validation gates through the installed package. Use
+  `uv run easycat validate release --json` when release automation needs the
+  installed-wheel validation result inside the standard CLI envelope.
 - **`uv run easycat validate report .easycat/validation/latest.json`** —
   render a concise summary of the latest saved validation report. Use
   `uv run easycat validate report .easycat/validation/latest.json --json`
-  when a coding agent or script needs the saved report re-emitted inside the
-  standard CLI envelope; use
+  when a coding agent or script needs a saved report re-emitted inside that
+  same envelope; use
   `.easycat/validation/runs/<run_id>/report.json` for a specific older run.
 
 The debugger is intentionally *not* a CLI subcommand — it's imported

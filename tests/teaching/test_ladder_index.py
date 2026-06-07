@@ -349,8 +349,19 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
     assert "command-specific success and error fields" in normalized_cli_section
+    assert "validate quick --json" in cli_section
+    assert "current quick validation run inside the standard CLI envelope" in (
+        normalized_cli_section
+    )
+    assert "validate contracts --json" in cli_section
+    assert "parseable contract run" in normalized_cli_section
+    assert "validate release --json" in cli_section
+    assert "installed-wheel validation result inside the standard CLI envelope" in (
+        normalized_cli_section
+    )
     assert "validate report .easycat/validation/latest.json" in cli_section
     assert "validate report .easycat/validation/latest.json --json" in cli_section
+    assert "saved report re-emitted inside that same envelope" in normalized_cli_section
     assert ".easycat/validation/runs/<run_id>/report.json" in cli_section
     assert "validate report <path>" not in cli_section
     assert "Add `--json` when a coding agent or script" not in normalized_cli_section
