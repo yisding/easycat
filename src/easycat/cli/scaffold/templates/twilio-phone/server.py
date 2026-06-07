@@ -21,14 +21,13 @@ from easycat.transports.twilio_media import twiml_connect_stream
 
 
 def create_app() -> FastAPI:
-    api_key = require_env("OPENAI_API_KEY")
+    require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
     manager: SessionManager[int] = SessionManager()
 
     async def handle_call(ws: ServerConnection) -> None:
         transport = TwilioConnectionTransport(ws)
         config = EasyConfig(
-            openai_api_key=api_key,
             transport=transport,
             telephony=TelephonyConfig(
                 enable_dtmf_aggregator=True,

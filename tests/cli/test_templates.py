@@ -207,6 +207,22 @@ def test_template_env_var_collector_reads_twilio_server_code() -> None:
     assert "TWILIO_WS_PORT" not in required
 
 
+def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
+    """Templates preflight OPENAI_API_KEY but let EasyConfig consume the env var."""
+    stale: list[str] = []
+
+    for template in available_templates():
+        for filename in _template_python_filenames(template):
+            path = _template_dir(template) / filename
+            source = path.read_text(encoding="utf-8")
+            if "openai_api_key=" in source:
+                stale.append(f"{template}/{filename}")
+
+    assert not stale, "Scaffold templates should let EasyConfig read OPENAI_API_KEY: " + ", ".join(
+        stale
+    )
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_catalog_env_covers_template_code(name: str) -> None:
     code_required, code_referenced = _template_code_env_vars(name)
