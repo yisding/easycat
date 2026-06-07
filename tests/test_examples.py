@@ -246,22 +246,50 @@ def _app_extras_in(message: str) -> set[str]:
     return extras
 
 
-def _required_env_vars(path: Path) -> set[str]:
+def _is_os_environ(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    )
+
+
+def _env_var_literal_from_call(node: ast.Call) -> str | None:
+    func = node.func
+    if isinstance(func, ast.Name):
+        if func.id not in {"require_env", "_env_flag"}:
+            return None
+    elif isinstance(func, ast.Attribute):
+        if func.attr == "getenv":
+            if not isinstance(func.value, ast.Name) or func.value.id != "os":
+                return None
+        elif func.attr == "get":
+            if not _is_os_environ(func.value):
+                return None
+        else:
+            return None
+    else:
+        return None
+
+    if node.args:
+        return _literal_string(node.args[0])
+    return None
+
+
+def _referenced_env_vars(path: Path) -> set[str]:
     module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
 
     for node in ast.walk(module):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Name) or func.id != "require_env":
-            continue
-        if (
-            node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            names.add(node.args[0].value)
+        if isinstance(node, ast.Call):
+            name = _env_var_literal_from_call(node)
+            if name is not None:
+                names.add(name)
+        elif isinstance(node, ast.Subscript) and _is_os_environ(node.value):
+            name = _literal_string(node.slice)
+            if name is not None:
+                names.add(name)
 
     return names
 
@@ -694,19 +722,44 @@ def test_default_openai_provider_examples_install_openai_sdk() -> None:
     assert not stale, "Default OpenAI provider examples omit the OpenAI SDK: " + "; ".join(stale)
 
 
-def test_examples_readme_env_cells_cover_required_env_helpers() -> None:
+def test_example_env_var_collector_reads_direct_environ_access(tmp_path: Path) -> None:
+    path = tmp_path / "example.py"
+    path.write_text(
+        "\n".join(
+            [
+                "import os",
+                'require_env("REQUIRED_API_KEY")',
+                'os.getenv("OPTIONAL_TOKEN")',
+                'os.environ.get("OPTIONAL_HOST")',
+                'os.environ["DIRECT_SECRET"]',
+                '_env_flag("FEATURE_FLAG")',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert _referenced_env_vars(path) == {
+        "DIRECT_SECRET",
+        "FEATURE_FLAG",
+        "OPTIONAL_HOST",
+        "OPTIONAL_TOKEN",
+        "REQUIRED_API_KEY",
+    }
+
+
+def test_examples_readme_env_cells_cover_referenced_env_vars() -> None:
     stale: list[str] = []
 
     for row in _example_readme_rows():
         path = REPO_ROOT / "examples" / row["link"]
-        required = _required_env_vars(path)
-        if not required:
+        referenced = _referenced_env_vars(path)
+        if not referenced:
             continue
-        missing = sorted(name for name in required if name not in row["env"])
+        missing = sorted(name for name in referenced if name not in row["env"])
         if missing:
             stale.append(f"{row['link']}: missing {missing}")
 
-    assert not stale, "examples/README.md env cells omit require_env vars: " + "; ".join(stale)
+    assert not stale, "examples/README.md env cells omit referenced env vars: " + "; ".join(stale)
 
 
 def test_env_examples_document_doctor_preflight() -> None:
