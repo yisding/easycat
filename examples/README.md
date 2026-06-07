@@ -16,7 +16,8 @@ your `.env`.
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
 copyable create/preflight/check/docs/run commands for local mic, browser
-WebRTC, Twilio, and text-chat starting points. Use
+WebRTC, Twilio, and text-chat starting points. Then create the default local
+voice starter with `uv run easycat init my-agent`. Use
 `uv run easycat init --list-templates --json` when a script or coding agent
 needs the same template catalog.
 
