@@ -67,7 +67,7 @@
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -20,18 +22,17 @@
+@@ -21,18 +23,17 @@
  
  from __future__ import annotations
  
@@ -88,7 +88,7 @@
  from easycat.audio_format import PCM16_MONO_24K, AudioChunk
  from easycat.debug.export import export_debug_bundle
  from easycat.events import (
-@@ -43,6 +44,7 @@
+@@ -44,6 +45,7 @@
  )
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
@@ -96,7 +96,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -54,221 +56,161 @@
+@@ -55,221 +57,161 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -449,7 +449,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -276,51 +218,75 @@
+@@ -277,51 +219,75 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -535,7 +535,7 @@
      client = AsyncOpenAI()
      tts = create_tts_provider(
          TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -336,7 +302,7 @@
+@@ -337,7 +303,7 @@
          )
  
      await transport.connect()
@@ -544,7 +544,7 @@
  
      async def collect_turns():
          stt = None
-@@ -350,7 +316,7 @@
+@@ -351,7 +317,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
@@ -553,7 +553,7 @@
                  stt = None
  
      try:
-@@ -361,7 +327,7 @@
+@@ -362,7 +328,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

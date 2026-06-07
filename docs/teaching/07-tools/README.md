@@ -56,7 +56,7 @@
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-@@ -20,7 +22,9 @@
+@@ -21,7 +23,9 @@
  
  import asyncio
  import collections
@@ -66,7 +66,7 @@
  import time
  import types
  from pathlib import Path
-@@ -50,11 +54,55 @@
+@@ -51,11 +55,55 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -124,7 +124,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -78,94 +126,152 @@
+@@ -79,94 +127,152 @@
                  self._preroll.append(chunk)
  
  
@@ -346,7 +346,7 @@
                  await transport.send_audio(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
-@@ -173,6 +279,7 @@
+@@ -174,6 +280,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -354,7 +354,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -180,7 +287,6 @@
+@@ -181,7 +288,6 @@
  
  
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -362,7 +362,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -191,26 +297,20 @@
+@@ -192,26 +298,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -392,7 +392,7 @@
  
  
  async def main() -> None:
-@@ -236,7 +336,7 @@
+@@ -237,7 +337,7 @@
          )
  
      await transport.connect()

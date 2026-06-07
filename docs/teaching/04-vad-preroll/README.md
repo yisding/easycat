@@ -59,7 +59,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -17,123 +18,169 @@
+@@ -18,123 +19,169 @@
  
  from __future__ import annotations
  

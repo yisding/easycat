@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from scripts.regen_teaching_chapters import (
@@ -10,6 +12,10 @@ from scripts.regen_teaching_chapters import (
     discover_chapters,
     regen_readme,
     render_diff,
+)
+
+SOURCE_PATH_RE = re.compile(
+    r"`(?P<path>src/easycat/[A-Za-z0-9_./-]+\.py)(?:::[A-Za-z_][A-Za-z0-9_]*)?`"
 )
 
 
@@ -63,3 +69,34 @@ def test_render_diff_still_allows_chapter_local_prev_src() -> None:
 
     assert "docs/teaching/02-transcribe/streaming.py" in rendered
     assert "docs/teaching/03-parrot-naive/main.py" in rendered
+
+
+def test_teaching_plan_source_path_mentions_resolve() -> None:
+    """Keep teaching-plan code-span source pointers from drifting after refactors."""
+    docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))
+    plans = sorted((ROOT / "plan" / "teaching" / "chapter-plans").glob("*.md"))
+    missing: list[str] = []
+
+    for doc in docs + plans:
+        for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            for match in SOURCE_PATH_RE.finditer(line):
+                path_text = match.group("path")
+                if not (ROOT / path_text).exists():
+                    rel = doc.relative_to(ROOT).as_posix()
+                    missing.append(f"{rel}:{line_number}: `{path_text}`")
+
+    assert not missing, "Teaching docs reference missing source files:\n" + "\n".join(missing)
+
+
+def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:
+    """Keep the tools chapter plan aligned with the current bridge event surface."""
+    plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "easycat.integrations.agents.base.AgentBridgeEvent" in plan
+    assert '"tool_started"' in plan
+    assert '"tool_delta"' in plan
+    assert '"tool_result"' in plan
+    assert "_legacy_types.AgentStreamEventType" not in plan
+    assert "AgentStreamEventType." not in plan

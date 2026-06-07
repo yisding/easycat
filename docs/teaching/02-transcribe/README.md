@@ -35,7 +35,7 @@
 ```diff
 --- docs/teaching/01-echo/main.py
 +++ docs/teaching/02-transcribe/streaming.py
-@@ -1,50 +1,103 @@
+@@ -1,50 +1,104 @@
 -"""Chapter 1 — Echo.
 +"""Chapter 2 — streaming transcription.
  
@@ -53,6 +53,7 @@
 +    uv run easycat doctor
 +    uv run easycat doctor --env-file .env         # if keys live in .env
 +    uv run easycat doctor --env-file .env --json  # for parseable checks
++    Add `--env-file .env` after `uv run` on script commands if keys live in `.env`.
  """
  
  from __future__ import annotations

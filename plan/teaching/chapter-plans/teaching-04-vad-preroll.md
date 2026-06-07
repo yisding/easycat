@@ -72,7 +72,7 @@ minimum that shows it, then point at the real thing.
 
 ## Key concepts
 
-- `src/easycat/vad.py::create_vad()`; auto-backend fallback order
+- `src/easycat/vad/factory.py::create_vad()`; auto-backend fallback order
   Silero → FunASR → TEN → Krisp. There is no passthrough fallback:
   if none of these import, `create_vad()` raises. Silero is the
   default and its ONNX model is bundled, but it still requires

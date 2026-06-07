@@ -44,7 +44,7 @@ The chapter README includes the A/B/C transcript drift.
    The bot plows through its full response while you try to stop
    it. Like talking to an answering machine.
 3. **Version B (cancel).** Introduce `CancelToken`. Walk through
-   `src/easycat/session/_turn_context.py`. Demo: bot stops
+   `src/easycat/_turn_context.py`. Demo: bot stops
    mid-word. Much better. But not solved:
    - What does the bot *think* it said?
    - The conversation history still contains the full response.
@@ -58,18 +58,18 @@ The chapter README includes the A/B/C transcript drift.
    - Playback buffered by OS sound driver — *bytes sent to the
      driver* ≠ *bytes heard by the user*.
    - Markdown stripping means `len(text)` ≠ synthesis units. See
-     `src/easycat/session/_text.py`.
+     `src/easycat/session/text.py`.
    - Network-buffered TTS chunks that arrive *after* the cancel
      signal and must be dropped.
 
 ## Key concepts
 
 - `CancelToken` — cooperative cancellation, not exceptions
-- `src/easycat/session/_turn_context.py` — per-turn state, cancel
+- `src/easycat/_turn_context.py` — per-turn state, cancel
   token, playback tracking
 - `src/easycat/session/interruption.py` — the byte-to-heard
   estimator
-- `src/easycat/session/_text.py` — text normalization for
+- `src/easycat/session/text.py` — text normalization for
   interruption math
 - Transcript memory mutation — a load-bearing behavior, not
   cosmetic

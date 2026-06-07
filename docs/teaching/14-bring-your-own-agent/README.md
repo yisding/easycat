@@ -98,7 +98,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -39,100 +28,132 @@
+@@ -40,100 +29,132 @@
  
  from __future__ import annotations
  
@@ -285,7 +285,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
-@@ -141,4 +162,7 @@
+@@ -142,4 +163,7 @@
  
  
  if __name__ == "__main__":

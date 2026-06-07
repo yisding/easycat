@@ -143,7 +143,7 @@ Current session helper locations for chapter 6 and chapter 9
 walk-throughs:
 
 - `easycat.session.interruption` — public interruption-estimation helpers
-- `src/easycat/session/_text.py` — internal sentence splitting, markdown
+- `src/easycat/session/text.py` — internal sentence splitting, markdown
   buffering, and text-normalization helpers. `easycat.session` re-exports
   `split_at_sentence_boundaries` for public use.
 

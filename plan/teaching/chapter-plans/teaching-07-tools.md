@@ -70,16 +70,16 @@
    action queue (`SessionActions`) and the executor surface.
 5. **Streaming events for tools.** Two parallel vocabularies,
    easy to conflate:
-   - Internal enum in
-     `src/easycat/integrations/agents/_legacy_types.py`:
-     `AgentStreamEventType.TOOL_STARTED`, `TOOL_DELTA`,
-     `TOOL_RESULT` (no `_CALL_` infix).
+   - Internal bridge events in
+     `src/easycat/integrations/agents/base.py`:
+     `AgentBridgeEvent.kind == "tool_started"`, `"tool_delta"`,
+     or `"tool_result"` (lowercase, no `_call_` infix).
    - EventBus events in `easycat.events`: `ToolCallStarted`,
      `ToolCallDelta`, `ToolCallResult` (with `Call`).
    The adapter layer translates between them. Show how
-   `consume_agent_stream` (chapter 6's reference reading) handles
-   each branch of the enum and emits the corresponding EventBus
-   event.
+   `emit_tool_event` in `src/easycat/session/_streaming.py` maps each
+   bridge kind and how `consume_agent_stream` (chapter 6's reference
+   reading) routes the events.
 6. **A common bug: speaking the tool result text.** Some agents
    leak the JSON back into the response stream. Demo it.
    Filter rule: tool deltas go to the journal, not to TTS.
@@ -88,8 +88,8 @@
 
 - `easycat.events.ToolCallStarted` / `ToolCallDelta` /
   `ToolCallResult`
-- `easycat.integrations.agents._legacy_types.AgentStreamEventType`
-  — the `TOOL_STARTED` / `TOOL_DELTA` / `TOOL_RESULT` branch
+- `easycat.integrations.agents.base.AgentBridgeEvent` — the
+  `"tool_started"` / `"tool_delta"` / `"tool_result"` branches
 - `easycat.session.actions` — `SessionAction`, `EndCallAction`,
   `TransferCallAction`, `SendDTMFAction`, `SendSMSAction`,
   `CustomAction`, `SessionActions`

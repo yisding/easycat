@@ -61,7 +61,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -23,53 +26,91 @@
+@@ -24,53 +27,91 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -179,7 +179,7 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -80,16 +121,15 @@
+@@ -81,16 +122,15 @@
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -200,7 +200,7 @@ personally heard this fail on your own voice.
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
-@@ -100,4 +140,7 @@
+@@ -101,4 +141,7 @@
  
  
  if __name__ == "__main__":

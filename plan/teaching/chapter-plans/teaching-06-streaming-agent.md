@@ -68,7 +68,7 @@ production version.
    the scenario it is guarding against (interruption mid-stream;
    custom payload envelope; markdown in agent output).
 6. **Walk the sentence splitter.** Open
-   `src/easycat/session/_text.py` and read
+   `src/easycat/session/text.py` and read
    `split_at_sentence_boundaries`. It wraps `sentencesplit` and handles
    the real edge cases — trailing abbreviations, unclosed
    markdown, incomplete final sentence — but the *core idea* is

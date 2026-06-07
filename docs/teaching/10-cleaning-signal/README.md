@@ -98,7 +98,7 @@ hearing.
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -24,19 +37,23 @@
+@@ -25,19 +38,23 @@
  
  from __future__ import annotations
  
@@ -124,7 +124,7 @@ hearing.
  from easycat.events import (
      EventBus,
      STTEventType,
-@@ -44,6 +61,7 @@
+@@ -45,6 +62,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
@@ -132,7 +132,7 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
  from easycat.strip_markdown import strip_markdown
-@@ -57,48 +75,23 @@
+@@ -58,48 +76,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -196,7 +196,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -126,13 +119,33 @@
+@@ -127,13 +120,33 @@
                  self._preroll.append(chunk)
  
  
@@ -234,7 +234,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -153,95 +166,48 @@
+@@ -154,95 +167,48 @@
      await sentence_queue.put(None)
  
  
@@ -341,7 +341,7 @@ hearing.
              continue
  
          if tag == "speech_started":
-@@ -261,33 +227,56 @@
+@@ -262,33 +228,56 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -410,7 +410,7 @@ hearing.
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -306,13 +295,14 @@
+@@ -307,13 +296,14 @@
          )
  
      await transport.connect()
@@ -428,7 +428,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -320,7 +310,7 @@
+@@ -321,7 +311,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

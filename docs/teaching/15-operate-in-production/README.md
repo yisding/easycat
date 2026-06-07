@@ -69,7 +69,7 @@
  
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -31,134 +17,97 @@
+@@ -32,134 +18,97 @@
  import asyncio
  import os
  import time
