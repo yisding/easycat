@@ -5,6 +5,7 @@ import shlex
 import tomllib
 from pathlib import Path
 
+from easycat.cli._app import _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
 from tests._justfile import just_recipe_commands
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -307,6 +308,21 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
     assert not stale_raw_commands, "CONTRIBUTING.md stale raw commands: " + "; ".join(
         stale_raw_commands
     )
+
+
+def test_docs_route_raw_guard_commands_match_contributing_table() -> None:
+    rows = {row["recipe"]: row["raw"] for row in _development_loop_rows()}
+    guard_recipes = (
+        "guard-docs",
+        "guard-teaching",
+        "guard-examples",
+        "guard-templates",
+        "guard-contributing",
+        "guard-markdown",
+    )
+    expected = tuple(rows[recipe] for recipe in guard_recipes)
+
+    assert _DOCS_ONBOARDING_RAW_GUARD_COMMANDS == expected
 
 
 def test_contributing_development_loop_pytest_targets_resolve() -> None:
