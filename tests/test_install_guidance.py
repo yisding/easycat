@@ -13,6 +13,7 @@ from easycat.cli._app import (
 )
 from easycat.cli.diagnose._codes import META_ENTRIES
 from tests._justfile import just_recipe_names
+from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEXT_SUFFIXES = {
@@ -78,6 +79,25 @@ PROVIDER_EXTRA_BY_ENV_VAR = {
 }
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 GUIDE_JUST_COMMAND_RE = re.compile(r"\bjust\s+(?P<recipe>[A-Za-z0-9_-]+)\b")
+
+
+def _guide_pytest_commands(command_section: str) -> list[str]:
+    commands = [
+        command.strip()
+        for command in CODE_SPAN_RE.findall(command_section)
+        if command.strip().startswith("uv run pytest")
+    ]
+
+    for line in command_section.splitlines():
+        command = line.strip()
+        if not command.startswith("uv run pytest"):
+            continue
+        command = re.split(r"\s+#", command, maxsplit=1)[0].rstrip()
+        commands.append(command)
+
+    return commands
+
+
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
@@ -590,6 +610,21 @@ def test_agent_guides_use_current_live_marker_name() -> None:
     )
 
 
+def test_agent_guide_pytest_command_extractor_handles_guide_formats() -> None:
+    command_section = """
+- `uv run pytest tests/cli/test_app.py::test_docs_command`.
+
+```bash
+uv run pytest tests/cli/test_app.py::test_docs_command_json  # Comment
+```
+"""
+
+    assert _guide_pytest_commands(command_section) == [
+        "uv run pytest tests/cli/test_app.py::test_docs_command",
+        "uv run pytest tests/cli/test_app.py::test_docs_command_json",
+    ]
+
+
 def test_agent_guide_command_examples_are_current() -> None:
     from easycat.cli import _app
 
@@ -656,12 +691,12 @@ def test_agent_guide_command_examples_are_current() -> None:
             if recipe not in just_recipes:
                 stale_recipes.append(f"{filename}: just {recipe}")
 
-    stale_paths: list[str] = []
+    stale_pytest_targets: list[str] = []
     for filename, command_section in command_sections.items():
-        for match in re.finditer(r"uv run pytest\s+(?P<target>tests/\S+)", command_section):
-            path_text = match.group("target").split("::", 1)[0].strip("`.,:;")
-            if not (REPO_ROOT / path_text).exists():
-                stale_paths.append(f"{filename}: {path_text}")
+        for command in _guide_pytest_commands(command_section):
+            stale_pytest_targets.extend(
+                pytest_target_problems(command, repo_root=REPO_ROOT, label=filename)
+            )
 
     stale_easycat_commands: list[str] = []
     easycat_command_re = re.compile(r"\b(?:uv run\s+)?easycat\s+(?P<command>[A-Za-z0-9_-]+)\b")
@@ -674,8 +709,8 @@ def test_agent_guide_command_examples_are_current() -> None:
     assert not stale_recipes, "Agent guide just examples point at missing recipes: " + ", ".join(
         stale_recipes
     )
-    assert not stale_paths, "Agent guide pytest examples point at missing paths: " + ", ".join(
-        stale_paths
+    assert not stale_pytest_targets, "Agent guide pytest examples are stale:\n" + "\n".join(
+        stale_pytest_targets
     )
     assert not stale_easycat_commands, (
         "Agent guide easycat examples point at missing commands: "
