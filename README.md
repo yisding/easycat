@@ -236,11 +236,12 @@ uv run easycat validate report .easycat/validation/latest.json # render latest r
 uv run easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
 ```
 
-`easycat validate release` builds the sdist and wheel, installs the wheel into
-a clean temporary venv, clears `PYTHONPATH`, verifies the installed package
-outside the source tree, then runs quick, stress, contracts, live, and latency
-release gates through that installed environment. Use `--python`, `--extra`,
-`--provider`, and `--surface` to match the release target.
+`easycat validate release` builds the sdist and wheel, checks package metadata,
+installs the wheel into a clean temporary venv, clears `PYTHONPATH`, verifies
+the installed package outside the source tree, then runs quick, stress,
+contracts, live, and latency release gates through that installed environment.
+Use `--python`, `--extra`, `--provider`, and `--surface` to match the release
+target.
 
 `scripts/validate.py` remains as a compatibility shim for pytest-backed slice
 runs, but new docs and local workflows should use

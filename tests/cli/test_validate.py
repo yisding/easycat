@@ -950,6 +950,7 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
     assert payload["status"] == "pass"
     assert {
         "release.build",
+        "release.metadata",
         "release.venv",
         "release.install",
         "release.import-smoke",
@@ -965,6 +966,16 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
     assert payload["artifacts"]["latency_sweep_report"]["kind"] == "validation_report"
     assert (tmp_path / "latest.json").read_text() == result.report_path.read_text()
     assert any(command[:2] == ["uv", "build"] for command in commands)
+    assert any(
+        command[:4]
+        == [
+            "uvx",
+            "twine",
+            "check",
+            str(tmp_path / "runs" / result.run.run_id / "dist" / "easycat-0.1.0-py3-none-any.whl"),
+        ]
+        for command in commands
+    )
     assert any(command[:2] == ["uv", "venv"] and "--python" in command for command in commands)
     assert any("doctor" in command for command in commands)
     assert any(

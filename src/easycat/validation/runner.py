@@ -912,6 +912,20 @@ def run_release_validation(
             f"uv build did not create exactly one wheel under {dist_dir}",
             details={"dist_dir": str(dist_dir)},
         )
+    dist_paths = _release_dist_paths(dist_dir) if build_ok else []
+    if build_ok and dist_paths:
+        record_command(
+            "release.metadata",
+            ["uvx", "twine", "check", *[str(path) for path in dist_paths]],
+            env={**os.environ},
+            cwd=source_root,
+        )
+    elif build_ok:
+        record_failure(
+            "release.metadata",
+            f"uv build did not create any metadata-checkable distributions under {dist_dir}",
+            details={"dist_dir": str(dist_dir)},
+        )
 
     venv_ok = False
     install_ok = False
@@ -1407,6 +1421,14 @@ def _release_wheel_path(dist_dir: Path) -> Path | None:
     if len(wheels) != 1:
         return None
     return wheels[0]
+
+
+def _release_dist_paths(dist_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in dist_dir.iterdir()
+        if path.suffix == ".whl" or path.name.endswith(".tar.gz")
+    )
 
 
 def _release_package_spec(wheel_path: Path, extras: Sequence[str]) -> str:

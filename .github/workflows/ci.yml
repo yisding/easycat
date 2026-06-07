@@ -145,6 +145,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
       - run: uv build
+      - run: uvx twine check dist/*
 
   integration-live:
     name: Tests (Live Providers)

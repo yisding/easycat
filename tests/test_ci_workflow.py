@@ -80,6 +80,7 @@ def test_ci_has_package_build_smoke() -> None:
 
     assert "build-smoke:" in text
     assert "uv build" in text
+    assert "uvx twine check dist/*" in text
     assert 'python-version: "3.12"' in text
 
 
@@ -161,6 +162,7 @@ def test_release_validation_workflow_skeleton_exists() -> None:
 
     assert "workflow_dispatch:" in text
     assert "uv build --sdist --wheel" in text
+    assert "uvx twine check dist/*" in text
     # RELEASE_VENV is exported via $GITHUB_ENV (not a job-level ``env:``)
     # because ``runner.temp`` is not resolvable when job env is evaluated —
     # see the workflow's "Configure release venv path" step.
@@ -206,6 +208,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "Mask live provider secrets",
         "::add-mask::",
         "uv build --sdist --wheel",
+        "uvx twine check dist/*",
         'echo "RELEASE_VENV=$RUNNER_TEMP/easycat-release-venv" >> "$GITHUB_ENV"',
         'uv venv "$RELEASE_VENV" --python 3.12',
         '"easycat[openai,openai-agents] @ file://$WHEEL_PATH"',
@@ -230,6 +233,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
     for token in (
         "def run_release_validation",
         "release.build",
+        "release.metadata",
         "release.venv",
         "release.install",
         "release.install-test-tools",
@@ -273,6 +277,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "workflow_dispatch",
         "release-validation",
         "uv build --sdist --wheel",
+        "uvx twine check dist/*",
         "RELEASE_VENV",
         "$RUNNER_TEMP/easycat-release-venv",
         "easycat[openai,openai-agents]",
@@ -300,6 +305,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "run_release_validation(...)",
         "easycat validate release",
         "release.build",
+        "release.metadata",
         "release.venv",
         "release.install",
         "release.install-test-tools",

@@ -562,10 +562,11 @@ context. Several bullets are known stale; use the current-state list above and
 
 ### 7.1 Project Metadata
 
-- Add a root `LICENSE`.
-- Add `license`, `authors`, classifiers, keywords, and project URLs to
-  `pyproject.toml`.
-- Add `twine check` or equivalent metadata validation in CI.
+- Add a root `LICENSE` once maintainers choose the project license.
+- Done: `pyproject.toml` includes authors, classifiers, keywords, and project
+  URLs.
+- Done: release validation and CI build smoke run `twine check` metadata
+  validation after building distributions.
 
 ### 7.2 CI Matrix And Type Checking
 

@@ -35,6 +35,8 @@ jobs:
           done
       - run: uv sync --group dev --python 3.12
       - run: uv build --sdist --wheel
+      - name: Check package metadata
+        run: uvx twine check dist/*
       - name: Configure release venv path
         # `runner.temp` is not available in a job-level `env:` block (no
         # runner is assigned when job env is evaluated), which made GitHub

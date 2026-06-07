@@ -1525,7 +1525,8 @@ Current verified state:
   workflow using the `release-validation` environment, masking live provider
   secrets before validation commands run.
 - The workflow builds release distributions with `uv build --sdist --wheel`,
-  creates `RELEASE_VENV` under `$RUNNER_TEMP/easycat-release-venv`, installs
+  checks package metadata with `uvx twine check dist/*`, creates `RELEASE_VENV`
+  under `$RUNNER_TEMP/easycat-release-venv`, installs
   `easycat[openai,openai-agents]`, and installs release test dependencies
   `pytest`, `pytest-asyncio`, and `hypothesis`.
 - Installed-package checks run from `${{ runner.temp }}` with `PYTHONPATH: ""`;
@@ -1543,8 +1544,8 @@ Current verified state:
   `actions/upload-artifact@v4` with `if: always()` and `retention-days: 30`.
 - `src/easycat/validation/runner.py` provides the local
   `run_release_validation(...)` implementation used by
-  `easycat validate release`; it records `release.build`, `release.venv`,
-  `release.install`,
+  `easycat validate release`; it records `release.build`, `release.metadata`,
+  `release.venv`, `release.install`,
   `release.install-test-tools`, `release.import-smoke`, `release.doctor`,
   `release.cli-smoke`, `release.quick`, `release.stress`, `release.contracts`,
   `release.live`, and `release.latency.<mode>` checks.
