@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from easycat.cli._app import app
+from easycat.cli._app import _DOCS_AUDIENCE_ALIAS_NOTE, app
 from easycat.cli.diagnose._codes import META_ENTRIES
 from easycat.cli.scaffold._schema import SCHEMA_V1_KEYS, available_templates
 from easycat.debug.bundle import FORMAT_VERSION
@@ -26,6 +26,14 @@ from easycat.validation.report import (
 
 def _json_schema_catalog_block(body: str) -> str:
     return body.split("catalog entries include", 1)[1].split("; `command_note`", 1)[0]
+
+
+def _assert_docs_audience_alias_note_coverage(text: str) -> None:
+    assert "multi-word audience filters accept hyphens or underscores" in text
+    assert "maintainers/operators filters include compound labels" in text
+    for phrase in ("provider maintainers", "release maintainers", "operators and maintainers"):
+        assert phrase in _DOCS_AUDIENCE_ALIAS_NOTE
+        assert phrase in text
 
 
 def _catalog_entry_keys_from_cli(cli: CliRunner) -> set[str]:
@@ -311,9 +319,7 @@ def test_explain_meta_json_schema_documents_error_fix(
     assert "in onboarding order" in result.stdout
     assert "bare installed CLI hints, repo-local `uv run` hints" in stdout
     assert "uppercase placeholders such as PATH" in stdout
-    assert "multi-word audience filters accept hyphens or underscores" in stdout
-    assert "maintainers/operators filters include compound labels" in stdout
-    assert "provider maintainers and operators and maintainers" in stdout
+    _assert_docs_audience_alias_note_coverage(stdout)
     assert "lists the copyable filter tokens" in stdout
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
@@ -398,9 +404,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "in onboarding order" in payload["body"]
     assert "bare installed CLI hints, repo-local `uv run` hints" in normalized_body
     assert "uppercase placeholders such as PATH" in normalized_body
-    assert "multi-word audience filters accept hyphens or underscores" in normalized_body
-    assert "maintainers/operators filters include compound labels" in normalized_body
-    assert "provider maintainers and operators and maintainers" in normalized_body
+    _assert_docs_audience_alias_note_coverage(normalized_body)
     assert "lists the copyable filter tokens" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     catalog_block = _json_schema_catalog_block(payload["body"])

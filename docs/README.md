@@ -57,7 +57,8 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   lists copyable filter tokens such as `app-builders` and `coding-agents`;
   the top-level `audience_alias_note` documents shell-friendly hyphen and
   underscore aliases for multi-word audience filters and the broad
-  `maintainers` / `operators` role filters, and the top-level `command_note`
+  `maintainers` / `operators` role filters, including `provider maintainers`,
+  `release maintainers`, and `operators and maintainers`; the top-level `command_note`
   distinguishes installed CLI hints from repo-local `uv run` hints.
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,

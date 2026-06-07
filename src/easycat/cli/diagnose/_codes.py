@@ -138,9 +138,9 @@ entry points include:
                             multi-word audience filters accept hyphens or
                             underscores and that the maintainers/operators
                             filters include compound labels such as provider
-                            maintainers and operators and maintainers;
-                            `available_audience_filters` lists the copyable
-                            filter tokens
+                            maintainers, release maintainers, and operators
+                            and maintainers; `available_audience_filters`
+                            lists the copyable filter tokens
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `name`, `mode`, `transport`,
