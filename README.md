@@ -177,6 +177,7 @@ surface first, then run quick validation before a PR:
 
 ```bash
 just guard-docs          # root README chooser, docs route map, docs CLI JSON
+just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples chooser and docs-route example hints
 just guard-templates     # scaffold template READMEs and template catalog
 just guard-contributing  # contributor guidance, validation plan, route hints

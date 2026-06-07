@@ -32,6 +32,7 @@ EXAMPLE_README_ROW_RE = re.compile(
 )
 ONBOARDING_GUARD_COMMANDS = (
     "just guard-docs",
+    "just guard-teaching",
     "just guard-examples",
     "just guard-templates",
     "just guard-contributing",

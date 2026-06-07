@@ -277,6 +277,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat replay PATH --json",
             "uv run pytest tests/test_install_guidance.py",
             "just guard-docs",
+            "just guard-teaching",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",
@@ -308,6 +309,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat bundles export PATH --output DIR --json",
             "uv run easycat replay PATH --json",
             "just guard-docs",
+            "just guard-teaching",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",
@@ -356,6 +358,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "just guard-docs",
+            "just guard-teaching",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",
@@ -432,6 +435,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "just guard-docs",
+            "just guard-teaching",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",

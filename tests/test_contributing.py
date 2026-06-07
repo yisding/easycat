@@ -241,6 +241,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
     recipes = just_recipe_commands(REPO_ROOT)
     guard_recipes = (
         "guard-docs",
+        "guard-teaching",
         "guard-examples",
         "guard-templates",
         "guard-contributing",
@@ -251,11 +252,13 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
     assert "Then run `uv run easycat validate quick` before a PR" in normalized
     for phrase in (
         "Root README chooser or docs route map",
+        "Teaching ladder chapters or generated blocks",
         "Examples chooser or command matrix",
         "Scaffold templates or template catalog",
         "Contributor and validation guidance",
         "Markdown links in maintained docs",
         "Root onboarding links, `easycat docs`, and JSON route entries",
+        "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
         "Generated README sections, line budgets, catalog text, and catalog JSON",
         "`justfile` parity, validation lanes, docs-route hints, and plan current-state evidence",
     ):
@@ -503,6 +506,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         assert f"`{token}`" in section
     for recipe in (
         "guard-docs",
+        "guard-teaching",
         "guard-examples",
         "guard-templates",
         "guard-contributing",
@@ -517,6 +521,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "narrowest useful validation lane",
         "root README chooser",
         "docs route map",
+        "teaching ladder",
         "examples matrix",
         "scaffold templates",
         "maintained Markdown links",

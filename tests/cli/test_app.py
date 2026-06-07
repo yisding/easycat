@@ -441,6 +441,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     assert commands["README.md#validation-workflow"] == [
         "just guard-docs",
+        "just guard-teaching",
         "just guard-examples",
         "just guard-templates",
         "just guard-contributing",
@@ -473,6 +474,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     assert commands["CONTRIBUTING.md"] == [
         "just guard-docs",
+        "just guard-teaching",
         "just guard-examples",
         "just guard-templates",
         "just guard-contributing",

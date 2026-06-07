@@ -75,9 +75,9 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,
-  `just guard-examples`, `just guard-templates`, `just guard-contributing`,
-  `just guard-markdown`), marker taxonomy, cassettes, and provider-addition
-  checklist.
+  `just guard-teaching`, `just guard-examples`, `just guard-templates`,
+  `just guard-contributing`, `just guard-markdown`), marker taxonomy,
+  cassettes, and provider-addition checklist.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md) for journal CLI commands, the debugger UI,

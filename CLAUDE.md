@@ -22,6 +22,7 @@ just check                       # Format check + lint + full serial tests
 just test-one tests/stt/test_stt_openai.py  # Run one test file
 just validate-quick              # Deterministic local validation slice
 just guard-docs                  # Guard root onboarding docs and docs route map
+just guard-teaching              # Guard teaching ladder chapters and generated blocks
 just guard-examples              # Guard examples chooser and route hints
 just guard-templates             # Guard scaffold READMEs and template catalog
 just guard-contributing          # Guard contributor docs and validation plan

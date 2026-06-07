@@ -20,6 +20,7 @@ the raw commands below.
 - `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
 - `just validate-quick`: run the deterministic local validation slice.
 - `just guard-docs`: guard root onboarding docs, `easycat docs`, and docs JSON.
+- `just guard-teaching`: guard teaching ladder chapters and generated README blocks.
 - `just guard-examples`: guard the examples chooser and docs-route hints.
 - `just guard-templates`: guard scaffold READMEs and template catalog output.
 - `just guard-contributing`: guard contributor docs, validation plan state, and route hints.

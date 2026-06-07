@@ -608,6 +608,7 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "just validate-quick" in command_section
         for recipe in (
             "just guard-docs",
+            "just guard-teaching",
             "just guard-examples",
             "just guard-templates",
             "just guard-contributing",
