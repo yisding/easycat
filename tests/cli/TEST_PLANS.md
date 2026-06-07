@@ -117,13 +117,13 @@ URLs; command hints drift away from target pages; placeholders such as
 order stops putting onboarding paths first.
 
 **Checks.**
-- Human `easycat docs` output includes the maintained routes, audience
-  labels, command hints, online URLs, and the machine-readable command
-  note.
+- Human `easycat docs` output includes every maintained route, audience
+  label, description, command hint, online URL, and the machine-readable
+  command note.
 - `easycat docs --json` emits a standard envelope with every route,
   including `label`, `path`, `audience`, `description`, `commands`,
   `url`, `source_url`, and `command_note`; maintainer and coding-agent
-  routes include docs/onboarding guard commands.
+  routes include docs-map and onboarding guard commands.
 - Routes are unique, resolve to local sources, and match GitHub
   heading anchors for fragments.
 - Command hints are valid local commands, appear on their target pages,

@@ -232,6 +232,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "and docs/onboarding guards."
         ),
         "commands": (
+            "uv run easycat docs",
+            "uv run easycat docs --json",
             "uv run pytest tests/test_install_guidance.py",
             "just guard-docs",
             "just guard-examples",
@@ -250,6 +252,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
         "commands": (
             "uv run easycat docs",
+            "uv run easycat docs --json",
             "just guard-docs",
             "just guard-examples",
             "just guard-templates",

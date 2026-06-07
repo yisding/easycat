@@ -24,6 +24,7 @@ from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _JOURNEY_SECTIONS,
+    _docs_entries,
     _format_docs_entry,
     _register_commands,
     app,
@@ -276,6 +277,34 @@ def test_docs_command(cli: CliRunner) -> None:
     )
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
+
+
+def test_docs_command_renders_every_route_entry(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs"])
+    normalized_stdout = re.sub(r"\s+", " ", result.stdout)
+    missing: list[str] = []
+
+    assert result.exit_code == 0
+
+    for entry in _docs_entries():
+        for field, expected in (
+            ("label", entry["label"]),
+            ("path", entry["path"]),
+            ("audience", f"For: {entry['audience']}"),
+            ("url", entry["url"]),
+        ):
+            if expected not in result.stdout:
+                missing.append(f"{entry['label']}: {field} {expected!r}")
+
+        normalized_description = re.sub(r"\s+", " ", entry["description"])
+        if normalized_description not in normalized_stdout:
+            missing.append(f"{entry['label']}: description {entry['description']!r}")
+
+        for command in entry.get("commands", ()):
+            if command not in result.stdout:
+                missing.append(f"{entry['label']}: command {command!r}")
+
+    assert not missing, "easycat docs output missing route fields:\n" + "\n".join(missing)
 
 
 def test_docs_entry_renders_bracketed_text_literally() -> None:
