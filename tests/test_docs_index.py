@@ -201,6 +201,28 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv sync --extra debugger --group dev" in text
 
 
+def test_docs_index_command_hints_are_locally_valid() -> None:
+    text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    commands = _documented_commands(
+        text,
+        prefixes=("easycat ", "just ", "uv run easycat ", "uv sync "),
+    )
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "docs/README.md",
+                "path": "docs/README.md",
+                "audience": "all readers",
+                "description": "Docs index command hints.",
+                "commands": commands,
+            }
+        ]
+    )
+
+    assert commands
+    assert not problems, "docs/README.md command hints are stale:\n" + "\n".join(problems)
+
+
 def test_cli_docs_routes_are_represented_in_docs_index() -> None:
     docs_links = _root_relative_doc_links()
     missing = [
