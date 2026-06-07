@@ -40,6 +40,34 @@ AGENT_GUIDE_MACHINE_COMMANDS = (
     "uv run easycat validate report .easycat/validation/latest.json",
     "uv run easycat validate report .easycat/validation/latest.json --json",
 )
+VALIDATION_WORKFLOW_COMMANDS = (
+    "uv run easycat validate quick",
+    "uv run easycat validate socket",
+    "uv run easycat validate stress",
+    "uv run easycat validate contracts",
+    "uv run easycat validate latency --smoke",
+    "uv run easycat validate live",
+    "uv run easycat validate release",
+    "uv run easycat validate report .easycat/validation/latest.json",
+    "uv run easycat validate quick --json",
+    "uv run easycat validate contracts --json",
+    "uv run easycat validate release --json",
+    "uv run easycat validate report .easycat/validation/latest.json --json",
+)
+CONTRIBUTING_VALIDATION_COMMANDS = (
+    "uv run easycat validate quick",
+    "uv run easycat validate socket",
+    "uv run easycat validate stress",
+    "uv run easycat validate contracts",
+    "uv run easycat validate latency --smoke",
+    "uv run easycat validate live --provider openai",
+    "uv run easycat validate release",
+    "uv run easycat validate report .easycat/validation/latest.json",
+    "uv run easycat validate quick --json",
+    "uv run easycat validate contracts --json",
+    "uv run easycat validate release --json",
+    "uv run easycat validate report .easycat/validation/latest.json --json",
+)
 
 
 def _root_relative_doc_links() -> set[str]:
@@ -586,14 +614,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
         assert command in validation_section
         assert command in route_commands
 
-    for command in (
-        "uv run easycat validate quick",
-        "uv run easycat validate quick --json",
-        "uv run easycat validate contracts --json",
-        "uv run easycat validate release --json",
-        "uv run easycat validate report .easycat/validation/latest.json",
-        "uv run easycat validate report .easycat/validation/latest.json --json",
-    ):
+    for command in VALIDATION_WORKFLOW_COMMANDS:
         assert command in validation_section
         assert command in route_commands
 
@@ -631,14 +652,7 @@ def test_contributing_docs_route_matches_validation_report_commands() -> None:
         assert command in maintenance_section
         assert command in route_commands
 
-    for command in (
-        "uv run easycat validate quick",
-        "uv run easycat validate quick --json",
-        "uv run easycat validate contracts --json",
-        "uv run easycat validate release --json",
-        "uv run easycat validate report .easycat/validation/latest.json",
-        "uv run easycat validate report .easycat/validation/latest.json --json",
-    ):
+    for command in CONTRIBUTING_VALIDATION_COMMANDS:
         assert command in validation_section
         assert command in route_commands
 
