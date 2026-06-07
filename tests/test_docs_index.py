@@ -10,6 +10,7 @@ from typer.main import get_command
 from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
+    _available_docs_audience_filters,
     _docs_entries,
     _register_commands,
     app,
@@ -113,6 +114,33 @@ def _easycat_command_tree() -> dict[str, set[str] | None]:
     }
 
 
+def _docs_audience_hint_values() -> set[str]:
+    filters = set(_available_docs_audience_filters())
+    return (
+        filters
+        | {value.replace("-", "_") for value in filters}
+        | {entry["audience"] for entry in _DOCS_LINKS}
+    )
+
+
+def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
+    valid_audiences = _docs_audience_hint_values()
+
+    for index, arg in enumerate(args):
+        if arg == "--audience":
+            if index + 1 >= len(args):
+                problems.append(f"{label}: docs audience hint missing value")
+                return
+            value = args[index + 1]
+        elif arg.startswith("--audience="):
+            value = arg.split("=", 1)[1]
+        else:
+            continue
+
+        if value not in valid_audiences:
+            problems.append(f"{label}: unknown docs audience hint {value}")
+
+
 def _validate_easycat_command_hint(
     *,
     label: str,
@@ -124,6 +152,9 @@ def _validate_easycat_command_hint(
     if subcommand not in command_tree:
         problems.append(f"{label}: unknown easycat command {subcommand}")
         return
+
+    if subcommand == "docs":
+        _validate_docs_command_hint(label=label, args=args, problems=problems)
 
     nested_commands = command_tree[subcommand]
     if nested_commands is None:
@@ -801,6 +832,26 @@ def test_cli_docs_command_hint_validator_checks_nested_easycat_commands() -> Non
 
     assert "Broken nested hints: unknown easycat validate command not-a-lane" in problems
     assert "Broken nested hints: unknown easycat bundles command not-a-bundle-command" in problems
+
+
+def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken docs audience hints",
+                "path": "docs/README.md",
+                "audience": "all readers",
+                "description": "Regression fixture for docs audience validation.",
+                "commands": (
+                    "uv run easycat docs --audience time-travelers",
+                    "easycat docs --audience",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken docs audience hints: unknown docs audience hint time-travelers" in problems
+    assert "Broken docs audience hints: docs audience hint missing value" in problems
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
