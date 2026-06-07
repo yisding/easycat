@@ -176,6 +176,24 @@ def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[s
             problems.append(f"{label}: unknown docs audience hint {value}")
 
 
+def _validate_env_file_values(
+    *,
+    label: str,
+    args: list[str],
+    context: str,
+    problems: list[str],
+) -> None:
+    for env_file in _option_values(
+        args,
+        "--env-file",
+        label=label,
+        missing_message=f"{context} env-file hint missing value",
+        problems=problems,
+    ):
+        if not (REPO_ROOT / env_file).parent.is_dir():
+            problems.append(f"{label}: missing {context} env-file directory {env_file}")
+
+
 def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) -> None:
     declared_extras = _declared_optional_dependency_extras()
     declared_groups = _declared_dependency_groups()
@@ -241,6 +259,74 @@ def _validate_docker_compose_hint(*, label: str, args: list[str], problems: list
             problems.append(f"{label}: missing docker compose env-file directory {env_file}")
 
 
+def _uv_run_command_tokens(*, label: str, args: list[str], problems: list[str]) -> list[str]:
+    index = 0
+
+    while index < len(args):
+        arg = args[index]
+        if arg == "--env-file":
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                problems.append(f"{label}: uv run env-file hint missing value")
+                index += 1
+                continue
+            env_file = args[index + 1]
+            if not (REPO_ROOT / env_file).parent.is_dir():
+                problems.append(f"{label}: missing uv run env-file directory {env_file}")
+            index += 2
+            continue
+        if arg.startswith("--env-file="):
+            env_file = arg.split("=", 1)[1]
+            if not env_file:
+                problems.append(f"{label}: uv run env-file hint missing value")
+                index += 1
+                continue
+            if not (REPO_ROOT / env_file).parent.is_dir():
+                problems.append(f"{label}: missing uv run env-file directory {env_file}")
+            index += 1
+            continue
+        if arg.startswith("-"):
+            problems.append(f"{label}: unsupported uv run option {arg}")
+            return []
+        return args[index:]
+
+    problems.append(f"{label}: missing uv run command")
+    return []
+
+
+def _validate_uv_run_hint(
+    *,
+    label: str,
+    command: str,
+    command_tree: dict[str, set[str] | None],
+    args: list[str],
+    problems: list[str],
+) -> None:
+    run_tokens = _uv_run_command_tokens(label=label, args=args, problems=problems)
+    if not run_tokens:
+        return
+
+    match run_tokens:
+        case ["easycat", subcommand, *sub_args]:
+            _validate_easycat_command_hint(
+                label=label,
+                command_tree=command_tree,
+                subcommand=subcommand,
+                args=sub_args,
+                problems=problems,
+            )
+        case ["python", script, *_]:
+            if not (REPO_ROOT / script).exists():
+                problems.append(f"{label}: missing python script {script}")
+        case ["pytest", *paths]:
+            for path in paths:
+                if not path.startswith("-") and not (REPO_ROOT / path).exists():
+                    problems.append(f"{label}: missing pytest target {path}")
+        case ["ruff", *_]:
+            return
+        case _:
+            problems.append(f"{label}: unsupported command hint {command!r}")
+
+
 def _validate_easycat_command_hint(
     *,
     label: str,
@@ -255,6 +341,13 @@ def _validate_easycat_command_hint(
 
     if subcommand == "docs":
         _validate_docs_command_hint(label=label, args=args, problems=problems)
+    if subcommand == "doctor":
+        _validate_env_file_values(
+            label=label,
+            args=args,
+            context="easycat doctor",
+            problems=problems,
+        )
 
     nested_commands = command_tree[subcommand]
     if nested_commands is None:
@@ -290,26 +383,14 @@ def _cli_docs_command_hint_problems(entries: list[dict[str, object]]) -> list[st
                         args=args,
                         problems=problems,
                     )
-                case ["uv", "run", "easycat", subcommand, *args]:
-                    _validate_easycat_command_hint(
+                case ["uv", "run", *args]:
+                    _validate_uv_run_hint(
                         label=label,
+                        command=command,
                         command_tree=command_tree,
-                        subcommand=subcommand,
                         args=args,
                         problems=problems,
                     )
-                case ["uv", "run", "python", script, *_]:
-                    if not (REPO_ROOT / script).exists():
-                        problems.append(f"{label}: missing python script {script}")
-                case ["uv", "run", "--env-file", _env_file, "python", script, *_]:
-                    if not (REPO_ROOT / script).exists():
-                        problems.append(f"{label}: missing python script {script}")
-                case ["uv", "run", "pytest", *paths]:
-                    for path in paths:
-                        if not path.startswith("-") and not (REPO_ROOT / path).exists():
-                            problems.append(f"{label}: missing pytest target {path}")
-                case ["uv", "run", "ruff", *_]:
-                    continue
                 case ["uv", "sync", *args]:
                     _validate_uv_sync_hint(label=label, args=args, problems=problems)
                 case ["python", "-m", "http.server", *args]:
@@ -946,6 +1027,60 @@ def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
 
     assert "Broken docs audience hints: unknown docs audience hint time-travelers" in problems
     assert problems.count("Broken docs audience hints: docs audience hint missing value") == 2
+
+
+def test_cli_docs_command_hint_validator_checks_doctor_env_file_values() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken doctor env-file hints",
+                "path": "README.md#cli",
+                "audience": "app builders",
+                "description": "Regression fixture for doctor env-file validation.",
+                "commands": (
+                    "easycat doctor --env-file --json",
+                    "uv run easycat doctor --env-file --json",
+                    "easycat doctor --env-file=missing-dir/.env",
+                ),
+            }
+        ]
+    )
+
+    assert (
+        problems.count("Broken doctor env-file hints: easycat doctor env-file hint missing value")
+        == 2
+    )
+    assert (
+        "Broken doctor env-file hints: missing easycat doctor env-file directory missing-dir/.env"
+    ) in problems
+
+
+def test_cli_docs_command_hint_validator_checks_uv_run_env_file_values() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken uv run env-file hints",
+                "path": "README.md#install",
+                "audience": "new users",
+                "description": "Regression fixture for uv run env-file validation.",
+                "commands": (
+                    "uv run --env-file .env python missing_script.py",
+                    "uv run --env-file --isolated python examples/openai_agents_voice.py",
+                    "uv run --env-file=missing-dir/.env python examples/openai_agents_voice.py",
+                    "uv run --env-file .env",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken uv run env-file hints: missing python script missing_script.py" in problems
+    assert "Broken uv run env-file hints: uv run env-file hint missing value" in problems
+    assert "Broken uv run env-file hints: unsupported uv run option --isolated" in problems
+    assert (
+        "Broken uv run env-file hints: missing uv run env-file directory missing-dir/.env"
+        in problems
+    )
+    assert "Broken uv run env-file hints: missing uv run command" in problems
 
 
 def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
