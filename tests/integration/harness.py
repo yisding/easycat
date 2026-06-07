@@ -23,21 +23,6 @@ def make_chunk(n_bytes: int = 640) -> AudioChunk:
     return AudioChunk(data=bytes(n_bytes), format=PCM16_MONO_16K)
 
 
-async def wait_for_condition(
-    predicate: Any,
-    *,
-    timeout: float = 2.0,
-    interval: float = 0.01,
-) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(interval)
-    raise AssertionError("condition was not met before timeout")
-
-
 async def _wait_for_change(
     predicate: Callable[[], bool],
     changed: asyncio.Event,

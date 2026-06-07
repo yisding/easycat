@@ -595,6 +595,8 @@ context. Several bullets are known stale; use the current-state list above and
   explicit `allow_task_leak` marker escape hatch for deliberate long-lived
   background work.
 - Prefer event-driven waits over sleeps and polling.
+- Done: the shared integration polling helper was removed after replacing its
+  call sites with event-backed waits.
 - Done: the shared e2e WebSocket server fixture lets the OS choose the bound
   port and reads it back from the live server socket.
 - Done: bind-close-reuse free-port helpers were removed from shared test

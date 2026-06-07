@@ -614,6 +614,27 @@ def test_integration_socket_tests_use_pytest_port_factory() -> None:
         assert "unused_tcp_port_factory" in source
 
 
+def test_integration_tests_do_not_use_shared_polling_wait_helper() -> None:
+    """Integration tests should prefer event-backed waits over polling sleeps."""
+    reliability = (REPO_ROOT / "plan/roadmap/combined-cleanup-tasks.md").read_text(
+        encoding="utf-8"
+    )
+    reliability_section = reliability.split("### 7.4 Test Reliability", 1)[1].split(
+        "### 7.5 Provider And Performance Testing",
+        1,
+    )[0]
+    stale: list[str] = []
+
+    assert "Done: the shared integration polling helper was removed" in reliability_section
+
+    for path in sorted((REPO_ROOT / "tests" / "integration").glob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "wait_for_condition" in source:
+            stale.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not stale, "Integration tests use wait_for_condition: " + ", ".join(stale)
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

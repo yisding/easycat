@@ -4,7 +4,7 @@ import pytest
 
 from easycat import TelephonyConfig, create_session
 from easycat.config import OutboundCallConfig
-from easycat.events import AgentFinal, BotStartedSpeaking
+from easycat.events import AgentFinal, BotStartedSpeaking, TTSAudio
 from easycat.telephony.call_state import OutboundCallStateMachine
 from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
 
@@ -17,7 +17,6 @@ from .harness import (
     make_chunk,
     make_test_config,
     patch_provider_factories,
-    wait_for_condition,
 )
 
 
@@ -85,7 +84,7 @@ async def test_create_session_replays_gated_audio_after_human_classification(
     )
     session = create_session(config)
     collector = EventCollector(session.event_bus)
-    collector.subscribe(AgentFinal, BotStartedSpeaking)
+    collector.subscribe(AgentFinal, BotStartedSpeaking, TTSAudio)
 
     await session.start()
     try:
@@ -99,7 +98,8 @@ async def test_create_session_replays_gated_audio_after_human_classification(
         await transport.push_audio(make_chunk(), make_chunk())
         agent_final = await collector.wait_for(AgentFinal, timeout=2.0)
 
-        await wait_for_condition(lambda: len(outbound_sm.gate.buffer) >= 1, timeout=2.0)
+        await collector.wait_for(TTSAudio, timeout=2.0)
+        assert outbound_sm.gate.buffer
         assert transport.sent == []
         assert tts.payloads[0].text == agent_final.text
 
