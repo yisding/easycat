@@ -12,7 +12,8 @@
 
 ## Build, Test, and Development Commands
 Prefer the `just` recipes when available; they shell out through `uv` and mirror
-the raw commands below.
+the raw commands below. For raw docs/onboarding guard commands, use the
+[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop) command table.
 
 - `uv sync --group dev`: install project + dev tools.
 - `uv sync --extra <name> --group dev`: install optional provider/transport extras while keeping dev tools (for example `openai`, `openai-agents`, `webrtc`, `telephony`, `local`, `rnnoise`).

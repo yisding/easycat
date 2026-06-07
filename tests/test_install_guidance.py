@@ -604,6 +604,10 @@ def test_agent_guide_command_examples_are_current() -> None:
     }
 
     for filename, command_section in command_sections.items():
+        assert "raw docs/onboarding guard commands" in command_section, filename
+        assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in (command_section), (
+            filename
+        )
         assert "just check" in command_section
         assert "just validate-quick" in command_section
         for recipe in (

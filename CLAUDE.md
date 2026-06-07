@@ -13,7 +13,9 @@ providers at each stage.
 ## Commands
 
 Prefer the `just` recipes when available; each recipe shells out through `uv`.
-The raw `uv` commands below are the fallback when `just` is not installed.
+The raw `uv` commands below are the fallback when `just` is not installed. For
+raw docs/onboarding guard commands, use the
+[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop) command table.
 
 ```bash
 uv sync --group dev              # Install project + dev tools
