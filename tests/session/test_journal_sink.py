@@ -2,7 +2,15 @@ import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
-from easycat.events import Error, ErrorStage, EventBus, STTFinal, TransportDegraded
+from easycat.events import (
+    Error,
+    ErrorStage,
+    EventBus,
+    STTFinal,
+    SupervisorListenerAttached,
+    SupervisorListenerDetached,
+    TransportDegraded,
+)
 from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
@@ -79,6 +87,49 @@ async def test_journal_sink_records_transport_degraded() -> None:
     assert records[1].kind == JournalRecordKind.CONTROL
     assert records[1].data["reason"] == "control_codec_poisoned"
     assert records[1].data["fatal"] is True
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_records_supervisor_audit_events() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        SupervisorListenerAttached(
+            listener_id=1,
+            queue_size=4,
+            session_id="session-a",
+        )
+    )
+    await bus.emit(
+        SupervisorListenerDetached(
+            listener_id=1,
+            dropped_frames=2,
+            reason="close",
+            session_id="session-a",
+        )
+    )
+
+    records = journal.read()
+    assert [r.name for r in records] == [
+        "supervisor_listener_attached",
+        "supervisor_listener_detached",
+    ]
+    assert records[0].kind == JournalRecordKind.EVENT
+    assert records[0].data == {"listener_id": 1, "queue_size": 4}
+    assert records[1].data == {
+        "listener_id": 1,
+        "dropped_frames": 2,
+        "reason": "close",
+    }
 
 
 @pytest.mark.asyncio

@@ -283,6 +283,24 @@ class TransportDegraded(Event):
     fatal: bool = False
 
 
+# Supervisor audit
+@dataclass(frozen=True)
+class SupervisorListenerAttached(Event):
+    """A passive supervisor listener subscribed to session audio."""
+
+    listener_id: int
+    queue_size: int
+
+
+@dataclass(frozen=True)
+class SupervisorListenerDetached(Event):
+    """A passive supervisor listener detached from session audio."""
+
+    listener_id: int
+    dropped_frames: int = 0
+    reason: Literal["unsubscribe", "close"] = "unsubscribe"
+
+
 # Telephony
 @dataclass(frozen=True)
 class DTMF(Event):
@@ -552,6 +570,10 @@ LIFECYCLE_EVENTS: tuple[type[Event], ...] = (
 )
 INTERRUPTION_EVENTS: tuple[type[Event], ...] = (Interruption, PlaybackMarkAck)
 RECONNECT_EVENTS: tuple[type[Event], ...] = (ReconnectAttempt, ReconnectSuccess, ReconnectFailure)
+SUPERVISOR_EVENTS: tuple[type[Event], ...] = (
+    SupervisorListenerAttached,
+    SupervisorListenerDetached,
+)
 TELEPHONY_EVENTS: tuple[type[Event], ...] = (
     DTMF,
     DTMFAggregated,
@@ -586,6 +608,7 @@ ALL_EVENTS: tuple[type[Event], ...] = (
     + LIFECYCLE_EVENTS
     + INTERRUPTION_EVENTS
     + RECONNECT_EVENTS
+    + SUPERVISOR_EVENTS
     + TELEPHONY_EVENTS
     + ERROR_EVENTS
     + ACTION_EVENTS

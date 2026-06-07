@@ -66,6 +66,8 @@ PUBLIC_API_SNAPSHOT = (
     "SessionManager",
     "SessionPolicyConfig",
     "SmartTurnConfig",
+    "SupervisorListenerAttached",
+    "SupervisorListenerDetached",
     "TTSAudio",
     "TTSMarkers",
     "TTSProvider",
@@ -110,7 +112,7 @@ PUBLIC_API_SNAPSHOT = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 88
+    assert len(easycat.__all__) <= 90
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

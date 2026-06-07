@@ -29,6 +29,8 @@ from easycat.events import (
     ReconnectSuccess,
     STTFinal,
     STTPartial,
+    SupervisorListenerAttached,
+    SupervisorListenerDetached,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -51,6 +53,10 @@ _JOURNAL_ATTRS = (
     "tool_name",
     "call_id",
     "delta",
+    "listener_id",
+    "queue_size",
+    "dropped_frames",
+    "reason",
     "structured_output",
 )
 
@@ -154,6 +160,17 @@ class SessionJournalSink:
         self._subscribe(ReconnectAttempt, self._make_event_handler(evt, "ws_reconnect_attempt"))
         self._subscribe(ReconnectSuccess, self._make_event_handler(evt, "ws_reconnect_success"))
         self._subscribe(ReconnectFailure, self._make_event_handler(evt, "ws_reconnect_failure"))
+        # Passive supervisor listener lifecycle is audit-relevant: these
+        # records show who attached to a session's audio fan-out and whether
+        # slow listeners dropped frames before detaching.
+        self._subscribe(
+            SupervisorListenerAttached,
+            self._make_event_handler(evt, "supervisor_listener_attached"),
+        )
+        self._subscribe(
+            SupervisorListenerDetached,
+            self._make_event_handler(evt, "supervisor_listener_detached"),
+        )
         # PlaybackMarkAck is also consumed by Session state tracking; keep a
         # separate journal timeline of what the client rendered when.
         self._subscribe(PlaybackMarkAck, self._make_event_handler(evt, "playback_mark_ack"))

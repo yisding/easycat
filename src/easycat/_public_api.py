@@ -96,6 +96,8 @@ _register(
     "Interruption",
     "STTFinal",
     "STTPartial",
+    "SupervisorListenerAttached",
+    "SupervisorListenerDetached",
     "TTSAudio",
     "TTSMarkers",
     "TurnEnded",

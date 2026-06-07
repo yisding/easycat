@@ -555,8 +555,8 @@ context. Several bullets are known stale; use the current-state list above and
   listener subscribe requests.
 - Done: supervisor audio exposes per-listener drop counters and logs listener
   drop counts on detach.
-- Add recording consent and redaction hooks.
-- Add audit events.
+- Done: supervisor audio supports recording consent and redaction hooks.
+- Done: supervisor listener attach/detach audit events are emitted and journaled.
 
 ## Phase 7: Packaging, CI, And Release Bar
 

@@ -152,6 +152,8 @@ session = Session.from_providers(
 - `Interruption`
 - `STTFinal`
 - `STTPartial`
+- `SupervisorListenerAttached`
+- `SupervisorListenerDetached`
 - `TTSAudio`
 - `TTSMarkers`
 - `TurnEnded`
