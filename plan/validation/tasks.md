@@ -352,10 +352,10 @@ Current verified state:
   contributors can choose the narrowest useful validation lane before a PR.
 - The docs/onboarding maintenance map tells contributors which targeted guard
   to run when editing the root README chooser, README e2e coverage, install
-  guidance, command-hint extraction, docs route map, examples matrix, teaching
-  ladder, generated teaching blocks, scaffold templates, init next-step output,
-  template catalog next steps, contributor guide, validation docs, or maintained
-  Markdown links; the named
+  guidance, command-hint extraction, docs route map, examples matrix, examples
+  README support files, script smoke checks, teaching ladder, generated teaching
+  blocks, scaffold templates, init next-step output, template catalog next steps,
+  contributor guide, validation docs, or maintained Markdown links; the named
   `just` recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
   `guard-templates`, `guard-contributing`, and `guard-markdown`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,

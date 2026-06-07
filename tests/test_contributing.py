@@ -230,7 +230,10 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "command-hint extraction, `easycat docs`, and JSON route entries"
         ),
         "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
-        "Example categories, README command hints, run commands, and docs-route hints",
+        (
+            "Example README matrix, support files, setup/install/env guidance, "
+            "script smoke checks, and docs-route hints"
+        ),
         (
             "Generated README sections, line budgets, init stderr and JSON next steps, "
             "catalog text, catalog JSON, and catalog next-step commands"

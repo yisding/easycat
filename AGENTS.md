@@ -22,13 +22,13 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just validate-quick`: run the deterministic local validation slice.
 - `just guard-docs`: guard root onboarding docs, install guidance, `easycat docs`, and docs JSON.
 - `just guard-teaching`: guard teaching ladder chapters and generated README blocks.
-- `just guard-examples`: guard the examples chooser, README command hints, and docs-route hints.
+- `just guard-examples`: guard examples README, support files, script smoke checks, and docs-route hints.
 - `just guard-templates`: guard scaffold READMEs, init output, and catalog next steps.
 - `just guard-contributing`: guard contributor docs, agent guide commands, validation state, and route hints.
 - `just guard-markdown`: guard maintained Markdown links and anchors.
 - Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json`.
 - Raw fallback for `just guard-teaching`: `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras`.
-- Raw fallback for `just guard-examples`: `uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path`.
+- Raw fallback for `just guard-examples`: `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path`.
 - Raw fallback for `just guard-templates`: `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json tests/cli/test_init.py::test_init_list_templates_json_catalog_includes_next_step_commands tests/cli/test_init.py::test_init_next_steps_match_template_readme_run_command tests/cli/test_init.py::test_init_next_steps_match_template_readme_check_command tests/cli/test_init.py::test_init_json_next_step_commands_match_template_readme`.
 - Raw fallback for `just guard-contributing`: `uv run pytest tests/test_contributing.py tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py`.
 - Raw fallback for `just guard-markdown`: `uv run pytest tests/test_markdown_links.py`.
