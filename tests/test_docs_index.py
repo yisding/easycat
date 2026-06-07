@@ -300,7 +300,12 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
     )[0]
     route_commands = entries["AGENTS.md"].get("commands", ())
 
-    for command in DOCS_MAP_COMMANDS + AGENT_GUIDE_MACHINE_COMMANDS + ONBOARDING_GUARD_COMMANDS:
+    for command in (
+        DOCS_MAP_COMMANDS
+        + ('uv run easycat docs --audience "coding agents"',)
+        + AGENT_GUIDE_MACHINE_COMMANDS
+        + ONBOARDING_GUARD_COMMANDS
+    ):
         assert command in command_section
         assert command in route_commands
 
@@ -313,6 +318,7 @@ def test_architecture_docs_route_matches_guide_command_hints() -> None:
 
     for command in (
         DOCS_MAP_COMMANDS
+        + ("uv run easycat docs --audience maintainers",)
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ("uv run pytest tests/test_install_guidance.py",)
         + ONBOARDING_GUARD_COMMANDS

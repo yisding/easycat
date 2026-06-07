@@ -627,8 +627,12 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "tests/test_metrics.py" not in command_section, filename
 
     agents_commands = command_sections["AGENTS.md"]
+    assert 'uv run easycat docs --audience "coding agents"' in agents_commands
     assert "architecture and maintenance" in agents_commands
     assert "examples, teaching, validation, and operations" not in agents_commands
+
+    claude_commands = command_sections["CLAUDE.md"]
+    assert "uv run easycat docs --audience maintainers" in claude_commands
 
     stale_recipes: list[str] = []
     for filename, command_section in command_sections.items():
