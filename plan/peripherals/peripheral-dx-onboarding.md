@@ -10,7 +10,7 @@
 Shipped:
 
 - `easycat.run(config)` with auto-attached runtime feedback
-  (`helpers.py:63`).
+  (`src/easycat/helpers.py::run`).
 - String-keyed provider selection (`stt="deepgram/flux"`,
   `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
   (`stt/factory.py`, `tts/factory.py`).
@@ -18,13 +18,16 @@ Shipped:
   (`config/easy.py`).
 - Stable `EASYCAT_Exxx` error codes with headline / cause / fix / example /
   related (`errors.py`).
-- Third-party traceback frame collapse (`runtime/records.py:50`).
+- Third-party traceback frame collapse
+  (`src/easycat/runtime/records.py::ErrorInfo.from_exception`).
 - PEP 678 exception notes are captured in `ErrorInfo.notes`, so provider and
   framework diagnostics survive journal filters and debug bundle export
   (`runtime/records.py`).
 - `debug="light" | "full"`, `export_debug_bundle()` (`config/easy.py`,
-  `session/_session.py:987`).
-- `async with session:` context-manager support (`session/_session.py`).
+  `src/easycat/session/_session.py::export_debug_bundle`).
+- `async with session:` context-manager support
+  (`src/easycat/session/_session.py::__aenter__` /
+  `src/easycat/session/_session.py::__aexit__`).
 - `EasyConfig.mic() / .browser() / .phone()` factory presets
   (`config/easy.py`). Text-mode sessions go through `create_text_session()`
   instead of a `.text()` classmethod because the config itself

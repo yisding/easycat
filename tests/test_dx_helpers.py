@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import fields
 from pathlib import Path
 
@@ -191,6 +192,33 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "target ≤22" in plan
     assert f"`EasyConfig` remains at {field_count} top-level fields" in plan_index
     assert "≤22 flattening target" in plan_index
+
+
+def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
+    """Keep current DX status notes anchored to symbols, not stale line numbers."""
+    from easycat.helpers import run as helpers_run
+    from easycat.runtime.records import ErrorInfo
+    from easycat.session._session import Session
+
+    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-dx-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    status = plan.split("## Status", 1)[1].split("Still remaining:", 1)[0]
+    line_refs = re.findall(r"`?[\w./-]+\.py:\d+(?:-\d+)?`?", status)
+
+    assert not line_refs, "DX onboarding status uses brittle source line refs: " + ", ".join(
+        line_refs
+    )
+    symbol_refs = {
+        "src/easycat/helpers.py::run": helpers_run,
+        "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,
+        "src/easycat/session/_session.py::export_debug_bundle": Session.export_debug_bundle,
+        "src/easycat/session/_session.py::__aenter__": Session.__aenter__,
+        "src/easycat/session/_session.py::__aexit__": Session.__aexit__,
+    }
+    for symbol_ref, symbol in symbol_refs.items():
+        assert symbol_ref in status
+        assert callable(symbol)
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
