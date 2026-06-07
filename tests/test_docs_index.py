@@ -23,6 +23,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
 CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 ANGLE_PLACEHOLDER_RE = re.compile(r"<[^>\s]+>")
+EXAMPLE_README_ROW_RE = re.compile(
+    r"^\| \[(?P<name>[^\]]+\.py)\]\((?P<link>[^)]+\.py)\) "
+    r"\| (?P<use_when>[^|]+) "
+    r"\| `(?P<run>[^`]+)` "
+    r"\| (?P<install>[^|]+) "
+    r"\| (?P<env>[^|]+) \|$"
+)
 ONBOARDING_GUARD_COMMANDS = (
     "just guard-docs",
     "just guard-examples",
@@ -770,8 +777,16 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     intro = examples_readme.split("For the fastest local mic/speaker path:", 1)[0]
+    chooser = examples_readme.split("## Choose An Example", 1)[1].split("## Core Voice Loops", 1)[
+        0
+    ]
     fast_path = examples_readme.split("For the fastest local mic/speaker path:", 1)[1]
     route_commands = entries["examples/README.md"].get("commands", ())
+    example_rows = {
+        match.group("link"): match.group("run")
+        for line in examples_readme.splitlines()
+        if (match := EXAMPLE_README_ROW_RE.match(line)) is not None
+    }
 
     for command in (
         "uv run easycat init --list-templates",
@@ -779,6 +794,14 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
         "uv run easycat init --list-templates --json",
     ):
         assert command in intro
+        assert command in route_commands
+
+    no_key_row = next(line for line in chooser.splitlines() if line.startswith("| No API keys |"))
+    no_key_commands = [
+        example_rows[link] for _, link in re.findall(r"\[([^]]+\.py)\]\(([^)]+\.py)\)", no_key_row)
+    ]
+    assert no_key_commands
+    for command in no_key_commands:
         assert command in route_commands
 
     for command in (

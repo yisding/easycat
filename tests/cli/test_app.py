@@ -242,6 +242,8 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "README.md#choose-your-path" in result.stdout
     assert "right first route" in result.stdout
     assert "uv run python examples/openai_agents_voice.py" in result.stdout
+    assert "uv run python examples/journal_demo.py" in result.stdout
+    assert "uv run python examples/telephony_helpers.py" in result.stdout
     assert "uv run easycat init --list-templates" in result.stdout
     assert "uv run easycat init my-agent" in result.stdout
     assert "easycat init --list-templates" in result.stdout

@@ -386,6 +386,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
         "uv run --env-file .env python examples/openai_agents_voice.py"
         in commands["examples/README.md"]
     )
+    assert "uv run python examples/journal_demo.py" in commands["examples/README.md"]
+    assert "uv run python examples/telephony_helpers.py" in commands["examples/README.md"]
     assert "uv run easycat docs" in commands["CLAUDE.md"]
     assert "uv run easycat docs --audience maintainers" in commands["CLAUDE.md"]
     assert "uv run easycat docs --json" in commands["CLAUDE.md"]
