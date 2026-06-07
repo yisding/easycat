@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import re
+from pathlib import Path
 
 import pytest
 
@@ -15,8 +17,38 @@ from scripts.regen_teaching_chapters import (
 )
 
 SOURCE_PATH_RE = re.compile(
-    r"`(?P<path>src/easycat/[A-Za-z0-9_./-]+\.py)(?:::[A-Za-z_][A-Za-z0-9_]*)?`"
+    r"`(?P<path>src/easycat/[A-Za-z0-9_./-]+\.py)"
+    r"(?:::(?P<symbol>[A-Za-z_][A-Za-z0-9_]*)(?:\(\))?)?`"
 )
+
+
+def _add_assignment_target_symbols(target: ast.AST, symbols: set[str]) -> None:
+    if isinstance(target, ast.Name):
+        symbols.add(target.id)
+    elif isinstance(target, ast.Tuple | ast.List):
+        for item in target.elts:
+            _add_assignment_target_symbols(item, symbols)
+
+
+def _collect_defined_symbols(nodes: list[ast.stmt], symbols: set[str]) -> None:
+    for node in nodes:
+        if isinstance(node, ast.ClassDef):
+            symbols.add(node.name)
+            _collect_defined_symbols(node.body, symbols)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            symbols.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _add_assignment_target_symbols(target, symbols)
+        elif isinstance(node, ast.AnnAssign):
+            _add_assignment_target_symbols(node.target, symbols)
+
+
+def _defined_symbols(source_path: Path) -> set[str]:
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=source_path.as_posix())
+    symbols: set[str] = set()
+    _collect_defined_symbols(tree.body, symbols)
+    return symbols
 
 
 def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
@@ -76,16 +108,29 @@ def test_teaching_plan_source_path_mentions_resolve() -> None:
     docs = sorted((ROOT / "docs" / "teaching").rglob("*.md"))
     plans = sorted((ROOT / "plan" / "teaching" / "chapter-plans").glob("*.md"))
     missing: list[str] = []
+    symbols_by_path: dict[str, set[str]] = {}
 
     for doc in docs + plans:
         for line_number, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
             for match in SOURCE_PATH_RE.finditer(line):
                 path_text = match.group("path")
-                if not (ROOT / path_text).exists():
-                    rel = doc.relative_to(ROOT).as_posix()
+                symbol = match.group("symbol")
+                source_path = ROOT / path_text
+                rel = doc.relative_to(ROOT).as_posix()
+                if not source_path.exists():
                     missing.append(f"{rel}:{line_number}: `{path_text}`")
+                    continue
+                if symbol is not None:
+                    defined_symbols = symbols_by_path.setdefault(
+                        path_text,
+                        _defined_symbols(source_path),
+                    )
+                    if symbol not in defined_symbols:
+                        missing.append(f"{rel}:{line_number}: `{path_text}::{symbol}`")
 
-    assert not missing, "Teaching docs reference missing source files:\n" + "\n".join(missing)
+    assert not missing, "Teaching docs reference missing source files or symbols:\n" + "\n".join(
+        missing
+    )
 
 
 def test_tools_teaching_plan_uses_current_agent_bridge_event_contract() -> None:

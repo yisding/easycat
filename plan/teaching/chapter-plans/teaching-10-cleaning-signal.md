@@ -131,7 +131,7 @@
 - Pipeline order:
   `transport → NR → AEC → VAD → STT → agent → TTS → transport`
   (matches the production flow documented in
-  `src/easycat/session/_session.py::_run_pipeline` and the
+  `src/easycat/session/_audio_router.py::_run_pipeline` and the
   `AudioStage` chain in `src/easycat/stages/audio.py`)
 - Half-duplex vs full-duplex; speakerphone vs headset
 - **Double-talk** as the AEC failure mode that maps onto chapter
