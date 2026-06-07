@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import TypeVar
 
 import pytest
 
@@ -28,6 +29,32 @@ from easycat.session._stt_committer import STTCommitter
 from easycat.timeouts import TimeoutConfig
 from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerState
 from tests.session._wiring_helpers import make_wiring
+
+_EventT = TypeVar("_EventT")
+
+
+class _EmissionLog(list[object]):
+    def __init__(self) -> None:
+        super().__init__()
+        self._changed = asyncio.Event()
+
+    def append(self, event: object) -> None:
+        super().append(event)
+        self._changed.set()
+
+    async def wait_for(self, event_type: type[_EventT], *, timeout_s: float = 1.0) -> _EventT:
+        async def _match() -> _EventT:
+            while True:
+                for event in self:
+                    if isinstance(event, event_type):
+                        return event
+                self._changed.clear()
+                for event in self:
+                    if isinstance(event, event_type):
+                        return event
+                await self._changed.wait()
+
+        return await asyncio.wait_for(_match(), timeout=timeout_s)
 
 
 class _RecordingSTT:
@@ -74,16 +101,16 @@ def _make_committer(
     current_turn=lambda: None,
     on_speech_detection_reset=lambda: None,
     stt_track_label=lambda: None,
-) -> tuple[STTCommitter, _RecordingSTT, list, TurnContext, TurnManager]:
+) -> tuple[STTCommitter, _RecordingSTT, _EmissionLog, TurnContext, TurnManager]:
     stt = stt or _RecordingSTT()
     journal = journal if journal is not None else InMemoryRingBuffer(capacity=64)
     timeout_config = timeout_config or TimeoutConfig()
     bus = EventBus()
-    emitted: list = []
+    emitted = _EmissionLog()
 
     async def _emit(event):
-        emitted.append(event)
         await bus.emit(event)
+        emitted.append(event)
 
     no_turn = TurnContext("no-turn", CancelToken())
     tm = TurnManager(bus, config=TurnManagerConfig())
@@ -134,7 +161,8 @@ async def test_schedule_then_cancel_scheduled_cancels_task() -> None:
     assert task is not None and not task.done()
 
     committer.cancel_scheduled(VADStartSpeaking(), turn=turn)
-    await asyncio.sleep(0.01)
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert task.cancelled()
     assert committer._pause_commit_task is None
 
@@ -155,7 +183,8 @@ async def test_schedule_resolves_current_turn_when_called_like_event_bus() -> No
     task = committer._pause_commit_task
     assert task is not None and not task.done()
     committer.cancel_scheduled()
-    await asyncio.sleep(0.01)
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
@@ -167,10 +196,10 @@ async def test_schedule_runs_commit_and_emits_journal_records() -> None:
     turn = _new_turn()
 
     committer.schedule(VADStopSpeaking(), turn=turn)
-    for _ in range(20):
-        await asyncio.sleep(0.01)
-        if stt.commit_calls:
-            break
+    pause_task = committer._pause_commit_task
+    assert pause_task is not None
+    await pause_task
+    await committer.await_inflight_commit()
     assert stt.commit_calls == 1
 
     names = {r.name for r in journal.read()}
@@ -425,17 +454,14 @@ async def test_segment_final_journal_records_confidence_and_word_timestamps() ->
             return True
 
     journal = InMemoryRingBuffer(capacity=64)
-    committer, _stt, _emitted, _no_turn, _tm = _make_committer(stt=_MetadataSTT(), journal=journal)
+    committer, _stt, emitted, _no_turn, _tm = _make_committer(stt=_MetadataSTT(), journal=journal)
     committer.mark_active()
     turn = _new_turn()
     committer.start_event_loop(turn)
 
     try:
         await committer.commit_now(turn)
-        for _ in range(20):
-            await asyncio.sleep(0.01)
-            if any(r.name == "stt_segment_final" for r in journal.read()):
-                break
+        await emitted.wait_for(STTFinal)
 
         final = next(r for r in journal.read() if r.name == "stt_segment_final")
         assert final.data["confidence"] == 0.91
@@ -511,10 +537,7 @@ async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
     try:
         await stt._queue.put(STTEvent(type=STTEventType.PARTIAL, text="Hel"))
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
-        for _ in range(50):
-            await asyncio.sleep(0.005)
-            if any(isinstance(e, STTFinal) for e in emitted):
-                break
+        await emitted.wait_for(STTFinal)
 
         finals = [e for e in emitted if isinstance(e, STTFinal)]
         partials = [e for e in emitted if isinstance(e, STTPartial)]
@@ -540,10 +563,7 @@ async def test_provider_track_overrides_transport_label() -> None:
 
     try:
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?", track="caller"))
-        for _ in range(50):
-            await asyncio.sleep(0.005)
-            if any(isinstance(e, STTFinal) for e in emitted):
-                break
+        await emitted.wait_for(STTFinal)
 
         finals = [e for e in emitted if isinstance(e, STTFinal)]
         assert finals and finals[0].track == "caller"
@@ -562,10 +582,7 @@ async def test_no_transport_label_leaves_track_none() -> None:
 
     try:
         await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello?"))
-        for _ in range(50):
-            await asyncio.sleep(0.005)
-            if any(isinstance(e, STTFinal) for e in emitted):
-                break
+        await emitted.wait_for(STTFinal)
 
         finals = [e for e in emitted if isinstance(e, STTFinal)]
         assert finals and finals[0].track is None
