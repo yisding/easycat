@@ -1,9 +1,9 @@
 """Typer application construction and top-level ``main`` entry point.
 
 Commands are grouped into the Scaffold, Debug with the journal, Validation,
-and Learn sections for a journey-ordered bare ``easycat`` menu.  Typer does
-not offer first-class command grouping, so we render our own menu on the bare
-``easycat`` invocation via a no-argument callback.
+and Docs and guidance sections for a journey-ordered bare ``easycat`` menu.
+Typer does not offer first-class command grouping, so we render our own menu
+on the bare ``easycat`` invocation via a no-argument callback.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scaffold", ("init", "doctor", "explain")),
     ("Debug with the journal", ("bundles", "inspect", "replay")),
     ("Validation", ("validate",)),
-    ("Learn", ("docs",)),
+    ("Docs and guidance", ("docs",)),
 )
 
 _JOURNEY_FOOTER = tuple(_rich_cli_hint(command, purpose) for command, purpose in _CLI_HINTS)

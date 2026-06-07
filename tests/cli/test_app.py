@@ -190,7 +190,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Scaffold" in result.stdout
     assert "Debug with the journal" in result.stdout
-    assert "Learn" in result.stdout
+    assert "Docs and guidance" in result.stdout
     assert "Check API keys, optional extras, and provider reachability" in result.stdout
     assert "Check API keys, extras, and provider reachability" not in result.stdout
     assert "Check environment and provider reachability" not in result.stdout

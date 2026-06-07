@@ -436,7 +436,7 @@ EasyCat — voice bot framework
   Validation
     validate    Run validation checks and inspect validation reports
 
-  Learn
+  Docs and guidance
     docs        Show docs for learning, maintenance, validation, and operations
 
 Run easycat <command> --help for command-specific options.

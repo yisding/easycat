@@ -796,11 +796,11 @@ EasyCat — voice bot framework
   Validation
     validate    Run validation checks and inspect validation reports
 
-  Learn
-    docs        Show docs for learning, validation, and operations
+  Docs and guidance
+    docs        Show docs for learning, maintenance, validation, and operations
 
 Run `easycat <command> --help` for command-specific options.
-Run `easycat docs` for learning, validation, and operations routes.
+Run `easycat docs` for learning, maintenance, validation, and operations routes.
 Run `easycat docs --json` for machine-readable docs routes, audiences, and command hints.
 Run `easycat explain <code>` for errors.
 Run `easycat explain json-schema` for CLI JSON.
