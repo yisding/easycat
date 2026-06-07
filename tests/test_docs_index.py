@@ -135,20 +135,43 @@ def _declared_dependency_groups() -> set[str]:
     return set(pyproject["dependency-groups"])
 
 
+def _option_values(
+    args: list[str],
+    option: str,
+    *,
+    label: str,
+    missing_message: str,
+    problems: list[str],
+) -> list[str]:
+    values: list[str] = []
+    prefix = f"{option}="
+
+    for index, arg in enumerate(args):
+        if arg == option:
+            if index + 1 >= len(args) or args[index + 1].startswith("-"):
+                problems.append(f"{label}: {missing_message}")
+                continue
+            values.append(args[index + 1])
+        elif arg.startswith(prefix):
+            value = arg.split("=", 1)[1]
+            if not value:
+                problems.append(f"{label}: {missing_message}")
+                continue
+            values.append(value)
+
+    return values
+
+
 def _validate_docs_command_hint(*, label: str, args: list[str], problems: list[str]) -> None:
     valid_audiences = _docs_audience_hint_values()
 
-    for index, arg in enumerate(args):
-        if arg == "--audience":
-            if index + 1 >= len(args):
-                problems.append(f"{label}: docs audience hint missing value")
-                return
-            value = args[index + 1]
-        elif arg.startswith("--audience="):
-            value = arg.split("=", 1)[1]
-        else:
-            continue
-
+    for value in _option_values(
+        args,
+        "--audience",
+        label=label,
+        missing_message="docs audience hint missing value",
+        problems=problems,
+    ):
         if value not in valid_audiences:
             problems.append(f"{label}: unknown docs audience hint {value}")
 
@@ -157,32 +180,65 @@ def _validate_uv_sync_hint(*, label: str, args: list[str], problems: list[str]) 
     declared_extras = _declared_optional_dependency_extras()
     declared_groups = _declared_dependency_groups()
 
-    for index, arg in enumerate(args):
-        if arg == "--extra":
-            if index + 1 >= len(args):
-                problems.append(f"{label}: uv sync extra hint missing value")
-                return
-            extra = args[index + 1]
-        elif arg.startswith("--extra="):
-            extra = arg.split("=", 1)[1]
-        elif arg == "--group":
-            if index + 1 >= len(args):
-                problems.append(f"{label}: uv sync group hint missing value")
-                return
-            group = args[index + 1]
-            if group not in declared_groups:
-                problems.append(f"{label}: unknown uv sync group {group}")
-            continue
-        elif arg.startswith("--group="):
-            group = arg.split("=", 1)[1]
-            if group not in declared_groups:
-                problems.append(f"{label}: unknown uv sync group {group}")
-            continue
-        else:
-            continue
-
+    for extra in _option_values(
+        args,
+        "--extra",
+        label=label,
+        missing_message="uv sync extra hint missing value",
+        problems=problems,
+    ):
         if extra not in declared_extras:
             problems.append(f"{label}: unknown uv sync extra {extra}")
+
+    for group in _option_values(
+        args,
+        "--group",
+        label=label,
+        missing_message="uv sync group hint missing value",
+        problems=problems,
+    ):
+        if group not in declared_groups:
+            problems.append(f"{label}: unknown uv sync group {group}")
+
+
+def _validate_http_server_hint(*, label: str, args: list[str], problems: list[str]) -> None:
+    for directory in _option_values(
+        args,
+        "--directory",
+        label=label,
+        missing_message="http.server hint missing directory",
+        problems=problems,
+    ):
+        if not (REPO_ROOT / directory).is_dir():
+            problems.append(f"{label}: missing http.server directory {directory}")
+
+
+def _validate_docker_compose_hint(*, label: str, args: list[str], problems: list[str]) -> None:
+    has_compose_file_flag = any(arg == "-f" or arg.startswith("-f=") for arg in args)
+    compose_files = _option_values(
+        args,
+        "-f",
+        label=label,
+        missing_message="docker compose hint missing compose file",
+        problems=problems,
+    )
+
+    if not has_compose_file_flag:
+        problems.append(f"{label}: docker compose hint missing -f")
+
+    for compose_file in compose_files:
+        if not (REPO_ROOT / compose_file).exists():
+            problems.append(f"{label}: missing compose file {compose_file}")
+
+    for env_file in _option_values(
+        args,
+        "--env-file",
+        label=label,
+        missing_message="docker compose env-file hint missing value",
+        problems=problems,
+    ):
+        if not (REPO_ROOT / env_file).parent.is_dir():
+            problems.append(f"{label}: missing docker compose env-file directory {env_file}")
 
 
 def _validate_easycat_command_hint(
@@ -256,25 +312,13 @@ def _cli_docs_command_hint_problems(entries: list[dict[str, object]]) -> list[st
                     continue
                 case ["uv", "sync", *args]:
                     _validate_uv_sync_hint(label=label, args=args, problems=problems)
-                case ["python", "-m", "http.server", *_args]:
-                    if "--directory" in tokens:
-                        directory_index = tokens.index("--directory") + 1
-                        if directory_index >= len(tokens):
-                            problems.append(f"{label}: http.server hint missing directory")
-                            continue
-                        directory = tokens[directory_index]
-                        if not (REPO_ROOT / directory).is_dir():
-                            problems.append(f"{label}: missing http.server directory {directory}")
+                case ["python", "-m", "http.server", *args]:
+                    _validate_http_server_hint(label=label, args=args, problems=problems)
                 case ["just", recipe, *_]:
                     if recipe not in just_recipes:
                         problems.append(f"{label}: unknown just recipe {recipe}")
                 case ["docker", "compose", *args]:
-                    if "-f" in args:
-                        compose_file = args[args.index("-f") + 1]
-                        if not (REPO_ROOT / compose_file).exists():
-                            problems.append(f"{label}: missing compose file {compose_file}")
-                    else:
-                        problems.append(f"{label}: docker compose hint missing -f")
+                    _validate_docker_compose_hint(label=label, args=args, problems=problems)
                 case _:
                     problems.append(f"{label}: unsupported command hint {command!r}")
 
@@ -894,13 +938,14 @@ def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
                 "commands": (
                     "uv run easycat docs --audience time-travelers",
                     "easycat docs --audience",
+                    "easycat docs --audience --json",
                 ),
             }
         ]
     )
 
     assert "Broken docs audience hints: unknown docs audience hint time-travelers" in problems
-    assert "Broken docs audience hints: docs audience hint missing value" in problems
+    assert problems.count("Broken docs audience hints: docs audience hint missing value") == 2
 
 
 def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
@@ -915,6 +960,7 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
                     "uv sync --extra not-a-real-extra --group dev",
                     "uv sync --extra=another-fake-extra --group dev",
                     "uv sync --extra",
+                    "uv sync --extra --group dev",
                 ),
             }
         ]
@@ -922,7 +968,7 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_extras() -> None:
 
     assert "Broken uv sync hints: unknown uv sync extra not-a-real-extra" in problems
     assert "Broken uv sync hints: unknown uv sync extra another-fake-extra" in problems
-    assert "Broken uv sync hints: uv sync extra hint missing value" in problems
+    assert problems.count("Broken uv sync hints: uv sync extra hint missing value") == 2
 
 
 def test_cli_docs_command_hint_validator_checks_uv_sync_groups() -> None:
@@ -937,6 +983,7 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_groups() -> None:
                     "uv sync --extra quickstart --group not-a-real-group",
                     "uv sync --extra quickstart --group=another-fake-group",
                     "uv sync --group",
+                    "uv sync --group --extra quickstart",
                 ),
             }
         ]
@@ -944,7 +991,61 @@ def test_cli_docs_command_hint_validator_checks_uv_sync_groups() -> None:
 
     assert "Broken uv sync groups: unknown uv sync group not-a-real-group" in problems
     assert "Broken uv sync groups: unknown uv sync group another-fake-group" in problems
-    assert "Broken uv sync groups: uv sync group hint missing value" in problems
+    assert problems.count("Broken uv sync groups: uv sync group hint missing value") == 2
+
+
+def test_cli_docs_command_hint_validator_checks_http_server_directories() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken http.server hints",
+                "path": "docs/deployment/docker.md",
+                "audience": "operators",
+                "description": "Regression fixture for static file server hints.",
+                "commands": (
+                    "python -m http.server 8080 --directory missing-examples",
+                    "python -m http.server 8080 --directory",
+                    "python -m http.server 8080 --directory --bind localhost",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken http.server hints: missing http.server directory missing-examples" in problems
+    assert problems.count("Broken http.server hints: http.server hint missing directory") == 2
+
+
+def test_cli_docs_command_hint_validator_checks_docker_compose_files() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken docker compose hints",
+                "path": "docs/deployment/docker.md",
+                "audience": "operators",
+                "description": "Regression fixture for compose file hints.",
+                "commands": (
+                    "docker compose up --build",
+                    "docker compose -f docker/missing.yaml up --build",
+                    "docker compose -f",
+                    "docker compose -f --env-file docker/.env up --build",
+                    "docker compose --env-file -f docker/compose.yaml up --build",
+                    "docker compose --env-file missing-dir/.env -f docker/compose.yaml up",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken docker compose hints: docker compose hint missing -f" in problems
+    assert "Broken docker compose hints: missing compose file docker/missing.yaml" in problems
+    assert (
+        problems.count("Broken docker compose hints: docker compose hint missing compose file")
+        == 2
+    )
+    assert "Broken docker compose hints: docker compose env-file hint missing value" in problems
+    assert (
+        "Broken docker compose hints: missing docker compose env-file directory missing-dir/.env"
+        in problems
+    )
 
 
 def test_cli_docs_command_placeholders_are_explained() -> None:
