@@ -80,6 +80,44 @@ def _example_readme_rows() -> list[dict[str, str]]:
     return rows
 
 
+def _example_run_command_problems(row: dict[str, str]) -> list[str]:
+    link = row["link"]
+    tokens = shlex.split(row["run"])
+    problems: list[str] = []
+
+    if len(tokens) < 3 or tokens[:2] != ["uv", "run"]:
+        return [f"{link}: run command is not a uv run command"]
+
+    if tokens[2] == "python":
+        if len(tokens) < 4:
+            return [f"{link}: run command is missing a Python script"]
+        script = tokens[3]
+        script_path = REPO_ROOT / script
+        if not script_path.exists():
+            problems.append(f"{link}: run command script {script} does not exist")
+        if script_path.parent != REPO_ROOT / "examples" or script_path.name != link:
+            problems.append(f"{link}: run command script {script} does not match linked example")
+        return problems
+
+    if tokens[2] == "uvicorn":
+        if len(tokens) < 4:
+            return [f"{link}: run command is missing an ASGI target"]
+        target = tokens[3]
+        module_name = target.partition(":")[0]
+        if not module_name:
+            return [f"{link}: run command has an empty ASGI module target"]
+        module_path = REPO_ROOT / Path(*module_name.split(".")).with_suffix(".py")
+        if not module_path.exists():
+            problems.append(f"{link}: run command ASGI target {target} does not exist")
+        if module_path.parent != REPO_ROOT / "examples" or module_path.name != link:
+            problems.append(
+                f"{link}: run command ASGI target {target} does not match linked example"
+            )
+        return problems
+
+    return [f"{link}: unsupported run command executable {tokens[2]}"]
+
+
 def _is_module_docstring_node(module: ast.Module, node: ast.stmt) -> bool:
     return bool(
         module.body
@@ -526,8 +564,7 @@ def test_examples_readme_rows_are_command_map_entries() -> None:
         run_command = row["run"]
         if row["name"] != link:
             stale_rows.append(f"{link}: display name is {row['name']}")
-        if not run_command.startswith("uv run "):
-            stale_rows.append(f"{link}: run command does not start with `uv run`")
+        stale_rows.extend(_example_run_command_problems(row))
         if f"examples/{link}" not in run_command and f"examples.{stem}" not in run_command:
             stale_rows.append(f"{link}: run command does not reference linked example")
         if not row["install"].startswith("`uv sync "):
@@ -538,6 +575,36 @@ def test_examples_readme_rows_are_command_map_entries() -> None:
             stale_rows.append(f"{link}: missing Env text")
 
     assert not stale_rows, "Stale examples/README.md rows: " + "; ".join(stale_rows)
+
+
+def test_examples_readme_run_command_validator_checks_targets() -> None:
+    problems = [
+        problem
+        for row in (
+            {"link": "openai_agents_voice.py", "run": "uv run python examples/missing.py"},
+            {"link": "twilio_app.py", "run": "uv run uvicorn examples.missing:create_app"},
+            {"link": "openai_agents_voice.py", "run": "uv run python"},
+            {"link": "openai_agents_voice.py", "run": "uv run easycat doctor"},
+        )
+        for problem in _example_run_command_problems(row)
+    ]
+
+    assert (
+        "openai_agents_voice.py: run command script examples/missing.py does not exist" in problems
+    )
+    assert (
+        "openai_agents_voice.py: run command script examples/missing.py "
+        "does not match linked example"
+    ) in problems
+    assert "twilio_app.py: run command ASGI target examples.missing:create_app does not exist" in (
+        problems
+    )
+    assert (
+        "twilio_app.py: run command ASGI target examples.missing:create_app "
+        "does not match linked example"
+    ) in problems
+    assert "openai_agents_voice.py: run command is missing a Python script" in problems
+    assert "openai_agents_voice.py: unsupported run command executable easycat" in problems
 
 
 def test_examples_readme_repo_sync_install_cells_include_dev_group() -> None:
