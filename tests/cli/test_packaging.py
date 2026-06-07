@@ -174,7 +174,11 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
     offenders = []
     for member in members:
         parts = set(Path(member).parts)
-        if parts & forbidden_parts or member.endswith((".pyc", ".pyo")):
+        if (
+            parts & forbidden_parts
+            or member.endswith((".pyc", ".pyo"))
+            or any(part.endswith(".egg-info") for part in parts)
+        ):
             offenders.append(member)
 
     assert not offenders, "wheel should not ship cache/workspace artifacts: " + ", ".join(

@@ -33,6 +33,7 @@ from easycat.cli.scaffold.init import (
     _COPY_FILE_IGNORE,
     _COPY_FILE_PREFIX_IGNORE,
     _COPY_IGNORE,
+    _COPY_PART_SUFFIX_IGNORE,
     _COPY_SUFFIX_IGNORE,
     _TEMPLATE_BASE_EXTRAS,
     _TEMPLATE_CATALOG,
@@ -90,6 +91,7 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".env.*",
     "!.env.example",
     ".venv/",
+    "*.egg-info/",
     ".agents/",
     ".claude/",
     ".codex",
@@ -942,6 +944,10 @@ def test_template_copy_filter_omits_coverage_report_files() -> None:
     assert ".coverage." in _COPY_FILE_PREFIX_IGNORE
 
 
+def test_template_copy_filter_omits_package_metadata_directories() -> None:
+    assert ".egg-info" in _COPY_PART_SUFFIX_IGNORE
+
+
 def test_template_copy_filter_omits_compiled_bytecode_suffixes() -> None:
     assert {".pyc", ".pyo"} <= _COPY_SUFFIX_IGNORE
 
@@ -957,6 +963,7 @@ def test_template_sources_skip_generated_artifacts(
     kept.write_text("print('ok')\n", encoding="utf-8")
     for rel in (
         "__pycache__/agent.cpython-312.pyc",
+        "demo.egg-info/PKG-INFO",
         ".pytest_cache/state",
         "build/generated.py",
         "dist/package.whl",

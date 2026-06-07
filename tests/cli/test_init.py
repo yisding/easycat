@@ -507,12 +507,16 @@ def test_init_omits_cache_artifacts(
     for path in project.rglob("*"):
         parts = set(path.relative_to(project).parts)
         assert not (parts & forbidden), f"shipped a cache artifact: {path}"
+        assert not any(part.endswith(".egg-info") for part in parts), (
+            f"shipped package metadata artifact: {path}"
+        )
         assert path.suffix not in {".pyc", ".pyo"}, f"shipped a compiled artifact: {path}"
 
     # The reported file manifest is equally clean.
     payload = json.loads(result.stdout)
     for rel in payload["files"]:
         assert not (set(Path(rel).parts) & forbidden), rel
+        assert not any(part.endswith(".egg-info") for part in Path(rel).parts), rel
         assert not rel.endswith((".pyc", ".pyo")), rel
 
     # The legitimate top-level .gitignore is still shipped.

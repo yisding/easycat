@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 .venv/
+*.egg-info/
 .agents/
 .claude/
 .codex

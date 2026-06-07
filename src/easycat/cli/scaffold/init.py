@@ -252,6 +252,7 @@ _COPY_IGNORE: frozenset[str] = frozenset(
 )
 _COPY_FILE_IGNORE: frozenset[str] = frozenset({".coverage", "coverage.xml"})
 _COPY_FILE_PREFIX_IGNORE: tuple[str, ...] = (".coverage.",)
+_COPY_PART_SUFFIX_IGNORE: tuple[str, ...] = (".egg-info",)
 _COPY_SUFFIX_IGNORE: frozenset[str] = frozenset({".pyc", ".pyo"})
 
 
@@ -271,8 +272,9 @@ def _template_sources(template_name: str) -> list[Path]:
         ignored_file = source.name in _COPY_FILE_IGNORE or source.name.startswith(
             _COPY_FILE_PREFIX_IGNORE
         )
+        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in source.parts)
         ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
-        if ignored_directory or ignored_file or ignored_suffix:
+        if ignored_directory or ignored_file or ignored_part_suffix or ignored_suffix:
             continue
         sources.append(source)
     return sources
