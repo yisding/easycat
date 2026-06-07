@@ -440,6 +440,9 @@ _DOCS_COMMAND_NOTE = (
     "root. just commands are repo-local shortcuts; install just or use the raw command table "
     "in CONTRIBUTING.md. Replace uppercase placeholders such as PATH and DIR before running."
 )
+_DOCS_AUDIENCE_ALIAS_NOTE = (
+    "Multi-word audiences also accept hyphens or underscores, such as app-builders."
+)
 
 
 def _docs_url_for(path: str) -> str:
@@ -517,7 +520,7 @@ Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
 Filtered machine-readable routes: easycat docs --audience maintainers --json
 Available audiences: {available_audiences}
-Multi-word audiences also accept hyphens or underscores, such as app-builders.
+{_DOCS_AUDIENCE_ALIAS_NOTE}
 {filter_note}
 {_DOCS_COMMAND_NOTE}
 """
@@ -549,7 +552,10 @@ def docs_command(
     filtered_entries = _filter_docs_entries(entries, audience)
     if not filtered_entries:
         available = ", ".join(_available_docs_audiences())
-        message = f"Unknown docs audience {audience!r}. Available audiences: {available}."
+        message = (
+            f"Unknown docs audience {audience!r}. Available audiences: {available}. "
+            f"{_DOCS_AUDIENCE_ALIAS_NOTE}"
+        )
         emit_command_error(
             "docs",
             message,

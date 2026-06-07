@@ -21,6 +21,7 @@ import easycat.cli._app as cli_app
 from easycat.cli._app import (
     _CLI_HINTS,
     _COMMAND_TEXT,
+    _DOCS_AUDIENCE_ALIAS_NOTE,
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
     _JOURNEY_SECTIONS,
@@ -282,7 +283,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
-    assert "Multi-word audiences also accept hyphens or underscores" in normalized
+    assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
 
@@ -511,7 +512,7 @@ def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
-    assert "Multi-word audiences also accept hyphens or underscores" in normalized
+    assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
     assert "Deployment" in result.stdout
     assert "Observability" in result.stdout
     assert "Journal durability" in result.stdout
@@ -567,8 +568,19 @@ def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) 
     assert payload["command"] == "docs"
     assert payload["audience_filter"] == "time-travelers"
     assert "Unknown docs audience 'time-travelers'" in payload["message"]
+    assert _DOCS_AUDIENCE_ALIAS_NOTE in payload["message"]
     assert "learners" in payload["available_audiences"]
     assert "operators" in payload["available_audiences"]
+
+
+def test_docs_command_unknown_human_audience_reports_alias_hint(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "time-travelers"])
+    normalized = re.sub(r"\s+", " ", result.stdout + result.stderr)
+
+    assert result.exit_code == 2
+    assert "Unknown docs audience 'time-travelers'" in normalized
+    assert "Available audiences:" in normalized
+    assert _DOCS_AUDIENCE_ALIAS_NOTE in normalized
 
 
 def test_docs_route_paths_resolve_to_local_sources() -> None:
