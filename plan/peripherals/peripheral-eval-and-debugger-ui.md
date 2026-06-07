@@ -30,10 +30,11 @@ Shipped:
 - Pytest plugin registration under `[project.entry-points."pytest11"]`
   exposing the bundle fixture out of the box.
 - Auto-launch of the debugger UI when `debug="full"` is set
-  (`config.py` glue into `debugger.server.serve_in_background()`).
-- `EasyCatConfig(record_to=".easycat/recordings/")` — session
-  auto-captures a timestamped bundle on stop/shutdown (`config.py`
-  `_install_record_to_hook`).
+  (`src/easycat/config/_factory.py` glue into
+  `debugger.server.serve_in_background()`).
+- `EasyConfig(record_to=".easycat/recordings/")` — session
+  auto-captures a timestamped bundle on stop/shutdown
+  (`src/easycat/config/_factory.py::_install_record_to_hook`).
 - `checkpoint_id` (`cp_<sequence>`) vocabulary helpers —
   `easycat.debug.bundle.checkpoint_id`, `parse_checkpoint_id`,
   `CommittableCheckpoint.checkpoint_id`, and
@@ -320,7 +321,7 @@ the web debugger, rendered for the terminal.
 
 A dedicated `easycat dev` command is deferred by `peripheral-cli.md`.
 The two library-level features below surface debugger-UI behavior
-from this file, both driven by `EasyCatConfig` rather than a
+from this file, both driven by `EasyConfig` rather than a
 dedicated CLI command:
 
 - **Auto-reload** — a library helper (`easycat.run(..., reload=True)`
@@ -328,7 +329,7 @@ dedicated CLI command:
   changes and swaps the agent module in-process via the bridge
   boundary. The debugger timeline writes a `CodeReloaded` checkpoint
   that shows up as a visual divider in the UI.
-- **Session recording** — `EasyCatConfig(record_to=".easycat/recordings/")`
+- **Session recording** — `EasyConfig(record_to=".easycat/recordings/")`
   automatically captures every session as a timestamped bundle,
   retained for seven days. Makes "wait, what just happened?"
   debugging one command away — no more losing a surprising behavior

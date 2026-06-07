@@ -144,43 +144,39 @@ Cartesia API  →  μ-law 8k   →  TTSBase (no-op)  →  TTSAudio  →  TwilioT
 
 ### Transport declares its preferred output
 
-A new read-only field on the `Transport` protocol:
+An optional read-only attribute on transports that need non-default TTS
+output:
 
 ```python
-# in easycat/providers.py
-class Transport(Protocol):
-    ...
-    preferred_tts_format: AudioFormat  # default implementation returns PCM16_MONO_24K
+preferred_tts_output_format: AudioFormat  # optional, duck-typed by EasyConfig
 ```
 
 Per-transport defaults:
 
-| Transport | `preferred_tts_format` |
+| Transport | `preferred_tts_output_format` |
 |---|---|
-| `LocalTransport` | `PCM16_MONO_24K` |
-| `WebSocketTransport` | `PCM16_MONO_24K` |
-| `WebRTCTransport` | `PCM16_MONO_48K` (matches Opus @ 48 kHz native) |
+| Local/WebSocket/WebRTC transports | no attribute today; EasyConfig leaves TTS defaults alone |
 | `TwilioTransport` | `PCM16_MONO_8K` (Stage 1) → `MULAW_8K` (Stage 2) |
 
-The attribute lives on the transport (not on Session) because the
-transport is the one authoritative source of "what does the terminal
-wire accept." Any new transport gets one knob to configure.
-
-Pattern matches how `Transport` already declares `expected_audio_format`
-for the incoming direction. This is the symmetric outgoing side.
+The optional attribute lives on the transport (not on Session) because
+the transport is the one authoritative source of "what does the terminal
+wire accept." Any transport that needs non-default TTS output gets one
+knob to configure.
 
 ### `create_session()` plumbs it through
 
-When building a TTS provider, `config.create_session()`:
+`EasyConfig.__post_init__` delegates to
+`config/_tts_alignment.py::align_tts_config_to_transport()` before the
+session is created:
 
 1. Looks at the user's `TTSConfig`. If `output_format` is set
    explicitly (non-default), respect it — the user has opinions.
-2. Otherwise, read `transport.preferred_tts_format` and set
-   `output_format` on the TTS config via `dataclasses.replace()`
+2. Otherwise, read `transport.preferred_tts_output_format` when present
+   and set `output_format` on the TTS config via `dataclasses.replace()`
    before instantiation.
-3. Log a single `TransportFormatApplied` event on the bus with
-   `{transport=..., tts_format=...}` so journal consumers can see
-   what happened. No user-facing print.
+3. No dedicated event is emitted today; if journal visibility becomes
+   necessary, add it as a follow-up rather than documenting one as
+   already shipped.
 
 "Set explicitly" is detected by comparing to the dataclass default. If
 we want to be safer about this, make `output_format` default to `None`
@@ -253,8 +249,8 @@ def _normalize_audio(self, data: bytes, source_format: AudioFormat) -> bytes:
 
 All three helpers already exist in `transports/twilio_media.py`
 (`_mulaw_decode`, `_mulaw_encode`, `mulaw_to_pcm16`, `pcm16_to_mulaw`).
-Move them to `audio_utils.py` so TTS and telephony both import from one
-place. No behaviour change for the transport.
+Move them to `src/easycat/_audio_utils.py` so TTS and telephony both
+import from one place. No behaviour change for the transport.
 
 ### `TwilioTransport` μ-law pass-through
 
@@ -291,19 +287,14 @@ verify with a regression test.
 | File | Edit |
 |---|---|
 | `src/easycat/audio_format.py` | Add `MULAW_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="mulaw")` constant. |
-| `src/easycat/audio_utils.py` | Move `_mulaw_encode`, `_mulaw_decode`, `pcm16_to_mulaw`, `mulaw_to_pcm16` here from `transports/twilio_media.py`. Re-export from `twilio_media.py` for backward compat. |
-| `src/easycat/providers.py` | Add `preferred_tts_format: AudioFormat` to the `Transport` Protocol. |
-| `src/easycat/transports/local.py` | Declare `preferred_tts_format = PCM16_MONO_24K`. |
-| `src/easycat/transports/websocket.py` | Declare `preferred_tts_format = PCM16_MONO_24K`. |
-| `src/easycat/transports/webrtc.py` | Declare `preferred_tts_format = PCM16_MONO_48K`. |
-| `src/easycat/transports/twilio_media.py` | Declare `preferred_tts_format = PCM16_MONO_8K` (Stage 1). Add μ-law 8k pass-through branch in both `send_audio` paths. Stage 2: bump preference to `MULAW_8K`. |
+| `src/easycat/_audio_utils.py` | Move `_mulaw_encode`, `_mulaw_decode`, `pcm16_to_mulaw`, `mulaw_to_pcm16` here from `transports/twilio_media.py`. Re-export from `twilio_media.py` for backward compat. |
+| `src/easycat/transports/twilio_media.py` | Declare `preferred_tts_output_format = PCM16_MONO_8K` (Stage 1). Add μ-law 8k pass-through branch in both `send_audio` paths. Stage 2: bump preference to `MULAW_8K`. |
 | `src/easycat/tts/base.py` | Extend `_normalize_audio` with encoding conversion (PCM16 ↔ μ-law). Keep the existing resample/mono paths as-is. |
 | `src/easycat/tts/openai_tts.py` | No change to API request (OpenAI has no 8 kHz option). `_source_format` stays at `_OPENAI_PCM_FORMAT`; `_normalize_audio` handles the bridge to whatever `output_format` the session picked. |
 | `src/easycat/tts/deepgram_tts.py` | Add `_request_params_for(output_format)`. Drive `_build_url` + `_source_format` from its output. |
 | `src/easycat/tts/elevenlabs_tts.py` | Add `_request_params_for(output_format)`. Extend `_ELEVENLABS_FORMAT_MAP` with `ulaw_8000`. Lift the PCM-only guard in `__post_init__` — allow μ-law, keep the error for encodings we genuinely can't decode (mp3, opus). |
 | `src/easycat/tts/cartesia_tts.py` (new per `peripheral-cartesia-provider.md`) | Ship with `_request_params_for` from day one — JSON `output_format` field derives from the target. Default target stays `PCM16_MONO_24K`; transport override handles the telephony case. |
-| `src/easycat/config.py` | In `create_session()`, after building the TTS config, check `tts_config.output_format` against the dataclass default. If default, set it to `transport.preferred_tts_format` via `replace`. Emit a `TransportFormatApplied` event on the bus. |
-| `src/easycat/events.py` | Add `TransportFormatApplied` dataclass event. |
+| `src/easycat/config/easy.py` / `src/easycat/config/_tts_alignment.py` | Before session creation, check `tts_config.output_format` against the dataclass default. If default, set it to `transport.preferred_tts_output_format` via `replace`. |
 
 ### New tests
 
@@ -313,31 +304,31 @@ verify with a regression test.
 | `tests/tts/test_tts_deepgram.py` | Add a parametrized case: `output_format=PCM16_MONO_8K` ⇒ URL carries `sample_rate=8000`, `_source_format` matches, no resample in `_normalize_audio`. Same with `MULAW_8K` ⇒ `encoding=mulaw`. |
 | `tests/tts/test_tts_elevenlabs.py` | Parametrize over `pcm_8000` and `ulaw_8000` output formats. Confirm `__post_init__` no longer rejects `ulaw_8000`. |
 | `tests/tts/test_tts_cartesia.py` (from the Cartesia plan) | Parametrize over PCM16 24k, PCM16 8k, and μ-law 8k targets; confirm the JSON request matches. |
-| `tests/session/test_session_transport_format.py` | With `TwilioTransport` + default `DeepgramTTSConfig`, assert the instantiated provider has `output_format=PCM16_MONO_8K`. With an *explicit* `output_format=PCM16_MONO_24K` in the config, the session respects it (no override). |
-| `tests/transports/test_twilio_media.py` | μ-law 8 kHz `AudioChunk` → base64 of raw bytes (no re-encoding). PCM16 8 kHz `AudioChunk` → `_mulaw_encode` only, no resample. |
-| `tests/session/test_interruption.py` | Regression case: interruption estimation with μ-law 8 kHz chunks produces the same spoken-text output as the PCM16 24 kHz baseline, given equivalent send-log durations. |
+| `tests/test_config.py` | With Twilio transport/config + default TTS configs, assert EasyConfig aligns TTS output to `PCM16_MONO_8K`; with explicit output or `auto_align_tts_output_to_transport=False`, assert the config is respected. |
+| `tests/transports/test_transports.py` / `tests/transports/test_connection_transports.py` | Extend Twilio send-path coverage for μ-law 8 kHz `AudioChunk` → base64 of raw bytes (no re-encoding), and PCM16 8 kHz `AudioChunk` → `_mulaw_encode` only, no resample. |
+| `tests/session/test_session_streaming.py` / `tests/session/test_interruption_property.py` | Regression case: interruption estimation with μ-law 8 kHz chunks produces the same spoken-text output as the PCM16 24 kHz baseline, given equivalent send-log durations. |
 
 ## Sequencing
 
 **Stage 1 — PCM16 @ 8 kHz across all providers (primary win)**
 
-1. Land `audio_utils.py` relocation of μ-law helpers + `MULAW_8K`
+1. Land `_audio_utils.py` relocation of μ-law helpers + `MULAW_8K`
    constant. No behaviour change.
 2. Extend `_normalize_audio` with encoding conversion + unit tests.
-3. Add `preferred_tts_format` to the Transport protocol; set it on
-   each transport. Twilio = `PCM16_MONO_8K`.
+3. Add `preferred_tts_output_format` to Twilio transports/configs.
+   Twilio = `PCM16_MONO_8K`.
 4. Refactor one provider (Deepgram is the safest — smallest adapter,
    best test coverage) to read `self._output_format` and drive the
    URL from it. Land with tests.
 5. Apply the same refactor to ElevenLabs and Cartesia. OpenAI only
    needs the downstream `_normalize_audio` path, no provider-side
    change.
-6. Wire the `create_session()` transport → output_format override and
-   `TransportFormatApplied` event.
+6. Wire the `EasyConfig` transport → output_format override through
+   `align_tts_config_to_transport()`.
 
 **Stage 2 — μ-law pass-through on Twilio (optimization)**
 
-7. Bump `TwilioTransport.preferred_tts_format` to `MULAW_8K`.
+7. Bump `TwilioTransport.preferred_tts_output_format` to `MULAW_8K`.
 8. Add the μ-law 8 kHz pass-through branch in `send_audio`.
 9. Parametrize per-provider tests over `MULAW_8K` targets.
 

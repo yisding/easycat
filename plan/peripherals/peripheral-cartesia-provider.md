@@ -136,7 +136,7 @@ balance), `sonic-2`, `sonic-turbo`. All accept the same request shape.
 |---|---|
 | `src/easycat/stt/factory.py` | Import `CartesiaSTT`/`CartesiaSTTConfig`. Add to `_PROVIDER_TO_CONFIG` under `"cartesia"`. Add `STTConfig` union member. Add `"cartesia": "CARTESIA_API_KEY"` to `_PROVIDER_ENV_VAR`. Include `CartesiaSTTConfig` in the `needs_event_bus` isinstance check in `create_stt_provider_from_config` (it emits provider errors on the bus). |
 | `src/easycat/tts/factory.py` | Symmetric edits in TTS factory: register `"cartesia"`, add to `TTSConfig` union, `_PROVIDER_ENV_VAR`, and the `event_bus` replace branch in `create_tts_provider_from_config`. |
-| `src/easycat/config.py` | Import `CartesiaSTTConfig`/`CartesiaTTSConfig` for type-union propagation (mirror existing `DeepgramSTTConfig` import; nothing else to change — string-keyed `stt="cartesia"` / `tts="cartesia/sonic-turbo"` falls out of the factory work above). |
+| `src/easycat/config/easy.py` | No provider-specific branch should be needed here: `EasyConfig` resolves string-keyed `stt="cartesia"` / `tts="cartesia/sonic-turbo"` through the STT/TTS factory unions once the factory registries include Cartesia. |
 | `pyproject.toml` | Add optional extra `cartesia = []` (no SDK — we use raw `websockets`). Include Cartesia under the `all` and `quickstart` extras at the reviewer's discretion. Also update the `CARTESIA_API_KEY` mention in `easycat doctor` (see below). |
 | `src/easycat/cli/diagnose/doctor.py` | Current code includes `CARTESIA_API_KEY` in env-var and reachability probes. |
 | `peripheral-provider-ecosystem.md` | Keep the provider-ecosystem competitive context aligned with the landed Cartesia provider files. |

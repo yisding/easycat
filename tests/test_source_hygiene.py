@@ -22,6 +22,11 @@ TEST_PLAN_HEADING_RE = re.compile(r"^## Plan (?P<number>\d+) — (?P<title>.+)$"
 STALE_TEST_PLAN_COUNT_RE = re.compile(r"\([0-9]+(?: [A-Za-z-]+)? tests?\)")
 STALE_TEST_PLAN_PHRASES = ("M1 checks",)
 BUNDLED_SMART_TURN_RE = re.compile(r"smart-turn-v(?P<version>[0-9.]+)-cpu\.onnx")
+CURRENT_PLAN_SOURCE_TEST_PATH_RE = re.compile(
+    r"`(?P<path>(?:src/easycat|tests)/[A-Za-z0-9_./-]+\.py)"
+    r"(?::(?P<line>[0-9]+(?:-[0-9]+)?))?"
+    r"(?:::[A-Za-z_][A-Za-z0-9_]*)?`"
+)
 
 
 def _tracked_file_count(*patterns: str) -> int:
@@ -82,6 +87,51 @@ def test_library_source_references_config_package_not_removed_module() -> None:
 
     assert not stale, "Library source should reference config/, not config.py:\n" + "\n".join(
         stale
+    )
+
+
+def test_current_peripheral_plans_reference_current_config_and_tts_alignment_names() -> None:
+    """Keep current peripheral docs aligned with the landed config package layout."""
+    files = (
+        REPO_ROOT / "plan" / "peripherals" / "peripheral-cartesia-provider.md",
+        REPO_ROOT / "plan" / "peripherals" / "peripheral-telephony-tts-output.md",
+        REPO_ROOT / "plan" / "peripherals" / "peripheral-eval-and-debugger-ui.md",
+    )
+    texts = {path: path.read_text(encoding="utf-8") for path in files}
+    combined = "\n".join(texts.values())
+    missing_paths: list[str] = []
+
+    for current_phrase in (
+        "src/easycat/config/easy.py",
+        "src/easycat/config/_factory.py",
+        "src/easycat/config/_tts_alignment.py",
+        "preferred_tts_output_format",
+        "EasyConfig(record_to=",
+    ):
+        assert current_phrase in combined
+
+    for stale_phrase in (
+        "src/easycat/config.py",
+        "`config.py`",
+        "`preferred_tts_format`",
+        "preferred_tts_format:",
+        "transport.preferred_tts_format",
+        "TwilioTransport.preferred_tts_format",
+        "TransportFormatApplied",
+        "EasyCatConfig",
+    ):
+        assert stale_phrase not in combined
+
+    for path, text in texts.items():
+        for line_number, line in enumerate(text.splitlines(), 1):
+            for match in CURRENT_PLAN_SOURCE_TEST_PATH_RE.finditer(line):
+                path_text = match.group("path")
+                if not (REPO_ROOT / path_text).exists():
+                    rel = path.relative_to(REPO_ROOT).as_posix()
+                    missing_paths.append(f"{rel}:{line_number}: `{path_text}`")
+
+    assert not missing_paths, "Current peripheral docs reference missing files:\n" + "\n".join(
+        missing_paths
     )
 
 
