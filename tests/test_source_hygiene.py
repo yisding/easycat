@@ -339,6 +339,17 @@ def test_current_plan_docs_track_bundled_smart_turn_version() -> None:
         assert stale_phrase not in current_plan_text
 
 
+def test_langchain_langgraph_peripheral_plan_uses_current_config_surface() -> None:
+    """Keep copy-pastable bridge examples on the current EasyConfig API."""
+    plan_path = REPO_ROOT / "plan" / "peripherals" / "peripheral-langchain-langgraph-bridge.md"
+    plan = plan_path.read_text(encoding="utf-8")
+
+    assert "from easycat import EasyConfig, LocalTransportConfig, create_session" in plan
+    assert "EasyConfig(" in plan
+    assert "EasyConfig(mcp_servers=[...])" in plan
+    assert "EasyCatConfig" not in plan
+
+
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     """Keep the onboarding docs command visible in the CLI coverage map."""
     plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")

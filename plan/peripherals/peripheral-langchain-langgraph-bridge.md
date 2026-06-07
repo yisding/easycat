@@ -584,7 +584,7 @@ def auto_adapt_agent(agent: Any) -> ExternalAgentBridge:
 ## Examples
 
 These parallel the WS2A appendix examples. Each is ~40–70 lines and
-includes full `EasyCatConfig` wiring.
+includes full `EasyConfig` wiring.
 
 ### Example L1: `LangChainBridge` wrapping an LCEL chain
 
@@ -592,7 +592,7 @@ includes full `EasyCatConfig` wiring.
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
-from easycat import EasyCatConfig, LocalTransportConfig, create_session
+from easycat import EasyConfig, LocalTransportConfig, create_session
 from easycat.integrations.agents import LangChainBridge
 
 
@@ -605,7 +605,7 @@ prompt = ChatPromptTemplate.from_messages([
 model = ChatOpenAI(model="gpt-5.2")
 chain = prompt | model
 
-config = EasyCatConfig(
+config = EasyConfig(
     transport=LocalTransportConfig(),
     agent=LangChainBridge(runnable=chain),
 )
@@ -626,7 +626,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 
-from easycat import EasyCatConfig, LocalTransportConfig, create_session
+from easycat import EasyConfig, LocalTransportConfig, create_session
 from easycat.integrations.agents import LangGraphBridge
 
 
@@ -658,7 +658,7 @@ graph = (
 )
 
 
-config = EasyCatConfig(
+config = EasyConfig(
     transport=LocalTransportConfig(),
     agent=LangGraphBridge(graph=graph),
 )
@@ -685,7 +685,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from easycat import EasyCatConfig, LocalTransportConfig, create_session
+from easycat import EasyConfig, LocalTransportConfig, create_session
 from easycat.integrations.agents import LangGraphBridge
 
 
@@ -730,7 +730,7 @@ graph = (
 )
 
 
-config = EasyCatConfig(
+config = EasyConfig(
     transport=LocalTransportConfig(),
     agent=LangGraphBridge(graph=graph),
     mcp_servers=["stdio://mcp-filesystem"],  # forwarded to model.bind_tools
@@ -827,7 +827,7 @@ application. Defer the decision; flag it in the future plan.
 
 **Per-node tool binding vs graph-wide MCP forwarding.** LangGraph
 nodes can call different models with different tool sets.
-`EasyCatConfig(mcp_servers=[...])` in the current plan forwards
+`EasyConfig(mcp_servers=[...])` in the current plan forwards
 one server list to all agents referenced by the graph. For
 LangGraph the equivalent is "forward to all `bind_tools` calls
 inside all nodes". The bridge either walks graph nodes at
