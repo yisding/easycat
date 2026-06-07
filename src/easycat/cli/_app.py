@@ -223,7 +223,10 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/teaching/00-hello-audio/",
         "audience": "learners",
         "description": "Start with audio chunks before agents or providers.",
-        "commands": ("uv run python docs/teaching/00-hello-audio/main.py",),
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run python docs/teaching/00-hello-audio/main.py",
+        ),
     },
     {
         "label": "Examples",

@@ -351,6 +351,10 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     teaching_readme = (REPO_ROOT / "docs" / "teaching" / "README.md").read_text(encoding="utf-8")
     route_commands = entries["docs/teaching/"].get("commands", ())
+    first_lesson = (REPO_ROOT / "docs" / "teaching" / "00-hello-audio" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    first_lesson_commands = entries["docs/teaching/00-hello-audio/"].get("commands", ())
 
     for command in (
         "uv sync --extra quickstart --group dev",
@@ -365,9 +369,18 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
         assert command in teaching_readme
         assert command in route_commands
 
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run python docs/teaching/00-hello-audio/main.py",
+    ):
+        assert command in first_lesson
+        assert command in first_lesson_commands
+
     assert "uv run pytest tests/teaching/test_ladder_index.py" not in route_commands
     assert "easycat validate quick" not in route_commands
     assert "easycat validate report .easycat/validation/latest.json" not in route_commands
+    assert "uv run easycat validate quick" not in first_lesson_commands
+    assert "easycat validate quick" not in first_lesson_commands
 
 
 def test_examples_docs_route_matches_examples_fast_path() -> None:
