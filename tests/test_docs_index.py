@@ -220,7 +220,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     audiences = {entry["path"]: entry["audience"] for entry in _DOCS_LINKS}
 
     assert not missing, "easycat docs routes missing audience labels: " + ", ".join(missing)
-    assert audiences["README.md#choose-your-path"] == "new users"
+    assert audiences["README.md#choose-your-path"] == "all readers"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["AGENTS.md"] == "coding agents"

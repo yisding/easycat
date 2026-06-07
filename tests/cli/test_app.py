@@ -221,6 +221,7 @@ def test_docs_command(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs"])
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
+    assert "For: all readers" in result.stdout
     assert "For: new users" in result.stdout
     assert "For: app builders" in result.stdout
     assert "README.md#cli" in result.stdout
@@ -386,7 +387,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]
-    assert audiences["README.md#choose-your-path"] == "new users"
+    assert audiences["README.md#choose-your-path"] == "all readers"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"

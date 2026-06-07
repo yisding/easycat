@@ -356,7 +356,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
-    assert audiences["README.md#choose-your-path"] == "new users"
+    assert audiences["README.md#choose-your-path"] == "all readers"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"

@@ -106,9 +106,9 @@ render.
 ## Plan 4 — `docs` route map
 
 **Concern.** `easycat docs` is the maintained navigation surface for
-new users, contributors, operators, and coding agents. It must point to
-current docs, expose useful command hints, and keep the human output
-and JSON route map in sync.
+new users, maintainers, contributors, operators, and coding agents. It
+must point to current docs, expose useful command hints, and keep the
+human output and JSON route map in sync.
 
 **Risks.** A docs route points at a removed file or stale anchor; the
 JSON payload drops `audience`, `commands`, `command_note`, or online

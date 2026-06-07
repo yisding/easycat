@@ -141,7 +141,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Start here",
         "path": "README.md#choose-your-path",
-        "audience": "new users",
+        "audience": "all readers",
         "description": (
             "Choose the right first route for quickstart, learning, examples, "
             "maintenance, or operations."
