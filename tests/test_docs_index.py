@@ -114,6 +114,15 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "provider registries" in normalized
     assert "repository agent guide" in normalized
     assert "development commands, validation commands, and PR expectations" in normalized
+    assert "docs/onboarding guard recipes" in normalized
+    for recipe in (
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
+    ):
+        assert recipe in text
     assert "uv run easycat explain json-schema" in text
     assert "command-specific success and error fields" in normalized
     assert "standard `--json` envelope" in text

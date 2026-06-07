@@ -51,7 +51,10 @@ command hints, such as `PATH`, before running them.
   [public API contract](public-api.md) before changing `easycat.__all__`.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
-  slices, marker taxonomy, cassettes, and provider-addition checklist.
+  slices, docs/onboarding guard recipes (`just guard-docs`,
+  `just guard-examples`, `just guard-templates`, `just guard-contributing`,
+  `just guard-markdown`), marker taxonomy, cassettes, and provider-addition
+  checklist.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md), then review the
