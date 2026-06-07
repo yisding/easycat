@@ -828,6 +828,9 @@ def test_template_debug_guidance_points_to_public_inspect_cli(name: str) -> None
     assert "RunBundle journal" not in readme
     assert ".easycat/journals/" in readme
     assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in readme
+    if name != "text-chat":
+        assert 'record_to="runs"' in readme
+        assert "timestamped `RunBundle` under `runs/`" in readme
 
 
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))

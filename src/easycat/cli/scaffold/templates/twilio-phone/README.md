@@ -68,8 +68,9 @@ If Ruff reports an auto-fixable issue, run
   `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`.
 - **Harden production webhooks:** copy signature validation, status callbacks,
   and outbound call helpers from `examples/twilio_app.py`.
-- **Debug a session:** pass `debug="full"` to `EasyConfig(...)`. EasyCat writes
-  a SQLite journal under `.easycat/journals/`; inspect it with
+- **Debug a session:** pass `debug="full", record_to="runs"` to
+  `EasyConfig(...)`. EasyCat writes a SQLite journal under `.easycat/journals/`
+  and a timestamped `RunBundle` under `runs/`; inspect the journal with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use

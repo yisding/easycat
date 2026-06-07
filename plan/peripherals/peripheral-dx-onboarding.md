@@ -63,6 +63,10 @@ Shipped:
 - `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
   and loads the timestamped bundle after shutdown instead of manually calling
   `session.export_debug_bundle(...)`.
+- Voice/server scaffold README debug guidance now tells generated-project
+  users to pass `record_to="runs"` alongside `debug="full"` so they get both a
+  durable journal and a timestamped `RunBundle`
+  (`src/easycat/cli/scaffold/templates/*/README.md`).
 - `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to
   `SmartTurnConfig(enabled=True, threshold=1-sensitivity)` so common endpoint
   tuning does not require importing the lower-level config class.
@@ -75,7 +79,8 @@ Still remaining:
   `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
   Provider shortcut and PydanticAI slim examples have shed duplicate key
-  preflights, and the debug bundle example uses `record_to=` auto-capture;
+  preflights, the debug bundle example uses `record_to=` auto-capture, and
+  scaffold debug guidance points generated-project users at `record_to=`;
   broader raw line-count shrinkage remains open, especially in server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +

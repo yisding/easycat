@@ -61,9 +61,10 @@ If Ruff reports an auto-fixable issue, run
   `EasyConfig.mic(...)` call, add `deepgram` to the `easycat[...]`
   dependency in `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY`
   in `.env`.
-- **Debug a session:** pass `debug="full"` to `EasyConfig.mic(...)`. EasyCat
-  writes a SQLite journal under `.easycat/journals/`; inspect it with
-  `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+- **Debug a session:** pass `debug="full", record_to="runs"` to
+  `EasyConfig.mic(...)`. EasyCat writes a SQLite journal under
+  `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
+  the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to

@@ -65,9 +65,10 @@ If Ruff reports an auto-fixable issue, run
   in `.env`.
 - **Deploy beyond localhost:** start from `examples/webrtc_server.py` for
   TURN server and HTTPS reverse-proxy settings.
-- **Debug a session:** pass `debug="full"` to `EasyConfig.browser(...)`.
-  EasyCat writes a SQLite journal under `.easycat/journals/`; inspect it with
-  `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+- **Debug a session:** pass `debug="full", record_to="runs"` to
+  `EasyConfig.browser(...)`. EasyCat writes a SQLite journal under
+  `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
+  the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to
