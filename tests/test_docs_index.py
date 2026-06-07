@@ -124,6 +124,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "docs route map" in normalized
     assert "route map with command hints and audience labels" in normalized
     assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized
+    assert "The human docs menu also prints the available audience labels" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "easycat doctor --json" in text
     assert "uv run easycat doctor --env-file .env --json" in text

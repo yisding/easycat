@@ -503,6 +503,7 @@ def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
 def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None = None) -> str:
     label_width = max(len(entry["label"]) for entry in entries)
     routes = "\n".join(_format_docs_entry(entry, label_width=label_width) for entry in entries)
+    available_audiences = ", ".join(_available_docs_audiences())
     filter_note = (
         f"Audience filter: {audience_filter}\n"
         if audience_filter is not None
@@ -515,6 +516,7 @@ def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None 
 Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
 Filtered machine-readable routes: easycat docs --audience maintainers --json
+Available audiences: {available_audiences}
 {filter_note}
 {_DOCS_COMMAND_NOTE}
 """
@@ -534,7 +536,10 @@ def docs_command(
     audience: str | None = typer.Option(
         None,
         "--audience",
-        help="Filter routes by audience label, such as learners, operators, or maintainers.",
+        help=(
+            "Filter routes by audience label, such as learners, app builders, coding agents, "
+            "contributors, operators, or maintainers."
+        ),
     ),
 ) -> None:
     """Show docs for learning, maintenance, validation, and operations."""

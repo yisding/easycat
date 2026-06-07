@@ -9,7 +9,9 @@ with command hints and audience labels. Replace uppercase placeholders in
 command hints, such as `PATH`, before running them. Use
 `uv run easycat docs --audience learners` to narrow the human map, or
 `uv run easycat docs --audience maintainers --json` when automation needs only
-maintainer-facing route entries.
+maintainer-facing route entries. The human docs menu also prints the available
+audience labels so readers can choose a narrower route map without switching
+to JSON first.
 
 ## Choose Your Path
 

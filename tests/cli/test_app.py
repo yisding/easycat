@@ -222,6 +222,7 @@ def test_journey_menu(cli: CliRunner) -> None:
 
 def test_docs_command(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs"])
+    normalized = re.sub(r"\s+", " ", result.stdout)
     assert result.exit_code == 0
     assert "EasyCat documentation" in result.stdout
     assert "For: all readers" in result.stdout
@@ -277,6 +278,9 @@ def test_docs_command(cli: CliRunner) -> None:
     )
     assert "Machine-readable routes, audiences, and command hints: easycat docs --json" in (
         result.stdout
+    )
+    assert "Available audiences: all readers, app builders, coding agents, contributors" in (
+        normalized
     )
     assert _DOCS_COMMAND_NOTE in result.stdout
     assert "DURABILITY.\nmd" not in result.stdout
@@ -338,7 +342,9 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "--json" in result.stdout
     assert "--audience" in result.stdout
-    assert "learners operators or maintainers" in help_text
+    assert "learners app builders coding agents contributors operators or maintainers" in (
+        help_text
+    )
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
     assert "command hints" in help_text
@@ -496,9 +502,13 @@ def test_docs_command_json(cli: CliRunner) -> None:
 
 def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs", "--audience", "operators"])
+    normalized = re.sub(r"\s+", " ", result.stdout)
 
     assert result.exit_code == 0
     assert "Audience filter: operators" in result.stdout
+    assert "Available audiences: all readers, app builders, coding agents, contributors" in (
+        normalized
+    )
     assert "Deployment" in result.stdout
     assert "Observability" in result.stdout
     assert "Journal durability" in result.stdout
