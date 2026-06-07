@@ -81,9 +81,9 @@ guard-teaching:
 guard-examples:
     uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 
-# Guard scaffold template READMEs and template catalog output.
+# Guard scaffold template READMEs, template catalog output, and catalog next steps.
 guard-templates:
-    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json
+    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json tests/cli/test_init.py::test_init_list_templates_json_catalog_includes_next_step_commands
 
 # Guard contributor guidance, agent guide commands, validation state, and route hints.
 guard-contributing:

@@ -151,7 +151,8 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "uv run pytest "
         "tests/cli/test_templates.py "
         "tests/cli/test_init.py::test_list_templates "
-        "tests/cli/test_init.py::test_list_templates_json"
+        "tests/cli/test_init.py::test_list_templates_json "
+        "tests/cli/test_init.py::test_init_list_templates_json_catalog_includes_next_step_commands"
     ),
     (
         "uv run pytest "
