@@ -347,6 +347,10 @@ Current verified state:
 - The validation chooser table maps common change types to quick, socket,
   contracts, stress, latency, live, release, and report commands so
   contributors can choose the narrowest useful validation lane before a PR.
+- The docs/onboarding maintenance map tells contributors which targeted guard
+  to run when editing the root README chooser, docs route map, examples matrix,
+  scaffold templates, contributor guide, validation docs, or maintained
+  Markdown links.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,
   provider/surface pairing, flaky quarantine metadata, and the rule that
   validation slices deselect `flaky`.
@@ -355,8 +359,8 @@ Current verified state:
 - `tests/test_contributing.py` verifies quick-start CLI commands, report
   commands, `justfile` parity, public validation lanes, repo-local `uv run`
   validation commands, validation chooser parity, marker taxonomy coverage,
-  RunBundle helper coverage, and that this plan still includes the contributor
-  quick command.
+  RunBundle helper coverage, docs/onboarding maintenance commands, and that
+  this plan still includes the contributor quick command.
 - `tests/test_docs_index.py` verifies the `CONTRIBUTING.md` docs route exposes
   validation report commands with `uv run` prefixes.
 

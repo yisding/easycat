@@ -40,6 +40,14 @@ def _contributing_runbundle_section() -> str:
     )[0]
 
 
+def _contributing_docs_onboarding_section() -> str:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    return contributing.split("## Maintaining docs and onboarding maps", 1)[1].split(
+        "## Parallel runs and xdist safety",
+        1,
+    )[0]
+
+
 def _marker_name_is_documented(section: str, marker: str) -> bool:
     return re.search(rf"`{re.escape(marker)}(?:\([^`]*\))?`", section) is not None
 
@@ -157,6 +165,60 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
     )
     assert ".easycat/validation/runs/<run_id>/report.json" in contributing
     assert "uv run easycat validate report <path>" not in contributing
+
+
+def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> None:
+    section = _contributing_docs_onboarding_section()
+    normalized = re.sub(r"\s+", " ", section)
+    commands = (
+        "uv run pytest "
+        "tests/test_quickstart_e2e.py::"
+        "test_readme_choose_your_path_routes_primary_onboarding_surfaces "
+        "tests/test_docs_index.py "
+        "tests/cli/test_app.py::test_docs_command "
+        "tests/cli/test_app.py::test_docs_command_json",
+        "uv run pytest "
+        "tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix "
+        "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path",
+        "uv run pytest "
+        "tests/cli/test_templates.py "
+        "tests/cli/test_init.py::test_list_templates "
+        "tests/cli/test_init.py::test_list_templates_json",
+        "uv run pytest "
+        "tests/test_contributing.py "
+        "tests/test_docs_index.py::"
+        "test_contributing_docs_route_matches_validation_report_commands "
+        "tests/test_validation_plan.py",
+        "uv run pytest tests/test_markdown_links.py",
+    )
+
+    assert "narrow guard that owns that surface" in normalized
+    assert "Then run `uv run easycat validate quick` before a PR" in normalized
+    for phrase in (
+        "Root README chooser or docs route map",
+        "Examples chooser or command matrix",
+        "Scaffold templates or template catalog",
+        "Contributor and validation guidance",
+        "Markdown links in maintained docs",
+        "Root onboarding links, `easycat docs`, and JSON route entries",
+        "Generated README sections, line budgets, catalog text, and catalog JSON",
+        "`justfile` parity, validation lanes, docs-route hints, and plan current-state evidence",
+    ):
+        assert phrase in section
+
+    for command in commands:
+        assert command in section
+        parts = shlex.split(command)
+        assert parts[:3] == ["uv", "run", "pytest"]
+        for target in parts[3:]:
+            file_target, _, test_name = target.partition("::")
+            path = REPO_ROOT / file_target
+            assert path.exists(), f"CONTRIBUTING.md docs guard references missing {file_target}"
+            if test_name:
+                text = path.read_text(encoding="utf-8")
+                assert f"def {test_name}" in text, (
+                    f"CONTRIBUTING.md docs guard references missing {target}"
+                )
 
 
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
@@ -291,6 +353,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "## V1: First-Class CLI And CI Artifacts",
         1,
     )[0]
+    normalized_section = re.sub(r"\s+", " ", section)
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     docs_index_tests = (REPO_ROOT / "tests/test_docs_index.py").read_text(encoding="utf-8")
     test_source = (REPO_ROOT / "tests/test_contributing.py").read_text(encoding="utf-8")
@@ -332,15 +395,21 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
     for phrase in (
         "development-loop table",
         "validation chooser table",
+        "docs/onboarding maintenance map",
         "validation-slices table",
         "narrowest useful validation lane",
+        "root README chooser",
+        "docs route map",
+        "examples matrix",
+        "scaffold templates",
+        "maintained Markdown links",
         "strict pytest markers",
         "provider/surface pairing",
         "flaky quarantine metadata",
         "validation slices deselect `flaky`",
         "RunBundle golden-test section",
     ):
-        assert phrase in section
+        assert phrase in normalized_section
     for test_name in (
         "test_contributing_quick_start_points_to_docs_command",
         "test_contributing_validation_report_points_to_latest_artifact",
@@ -349,6 +418,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "test_contributing_validation_slices_track_public_validate_lanes",
         "test_contributing_validation_slice_commands_use_repo_local_uv_run",
         "test_contributing_validation_chooser_tracks_slice_commands",
+        "test_contributing_docs_onboarding_map_lists_resolving_guard_targets",
         "test_contributing_marker_taxonomy_lists_pytest_markers",
         "test_contributing_runbundle_helpers_track_public_testing_exports",
         "test_validation_plan_matches_contributor_quick_command",

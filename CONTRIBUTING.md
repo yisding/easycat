@@ -74,7 +74,24 @@ uv sync --frozen --group dev
 selected environment. Add the extras you are actively working on, for example
 `uv sync --frozen --group dev --extra openai`.
 
-### Parallel runs and xdist safety
+## Maintaining docs and onboarding maps
+
+When a change updates user-facing docs, run the narrow guard that owns that
+surface before the broader validation lane:
+
+| If you change | Run | What it protects |
+| --- | --- | --- |
+| Root README chooser or docs route map | `uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json` | Root onboarding links, `easycat docs`, and JSON route entries |
+| Examples chooser or command matrix | `uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` | Example categories, run commands, and docs-route hints |
+| Scaffold templates or template catalog | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json` | Generated README sections, line budgets, catalog text, and catalog JSON |
+| Contributor and validation guidance | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_report_commands tests/test_validation_plan.py` | `justfile` parity, validation lanes, docs-route hints, and plan current-state evidence |
+| Markdown links in maintained docs | `uv run pytest tests/test_markdown_links.py` | Local links and anchors in maintained Markdown |
+
+Then run `uv run easycat validate quick` before a PR, or choose a broader lane
+from the validation table below when the change touches transports, provider
+contracts, packaging, live canaries, or stress behavior.
+
+## Parallel runs and xdist safety
 
 `just test-fast` and `just cov` use `pytest -n auto --dist loadscope`.
 `loadscope` keeps every test in a module on the **same** worker, which matters
