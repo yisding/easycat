@@ -190,6 +190,7 @@ _INIT_MACHINE_READABLE_HINT = (
 )
 _NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
 _NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
+_NEXT_STEP_APP_BUILDER_DOCS_COMMAND = 'uv run easycat docs --audience "app builders"'
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -336,6 +337,8 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Doctor after cd:[/] {escape(_NEXT_STEP_DOCTOR_COMMAND)}\n"
             f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
             f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
+            f"  [dim]App-builder docs after cd:[/] "
+            f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_COMMAND)}\n"
             f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
         )
     return (
@@ -366,6 +369,7 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         "uv run easycat doctor --env-file .env --json",
         _next_step_check_command(template),
         _NEXT_STEP_DOCS_COMMAND,
+        _NEXT_STEP_APP_BUILDER_DOCS_COMMAND,
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         _next_step_run_command(template),
@@ -808,6 +812,9 @@ def init(
     stderr_console.print(
         "  uv run easycat docs [dim]# find learning, maintenance, validation, "
         "and operations routes[/]"
+    )
+    stderr_console.print(
+        '  uv run easycat docs --audience "app builders" [dim]# app-builder routes only[/]'
     )
     stderr_console.print(
         "  uv run easycat docs --json [dim]# route map with command hints and audience labels[/]"

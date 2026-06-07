@@ -464,6 +464,8 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert "Explore docs and routes" in next_steps
     assert "Explore docs and examples" not in next_steps
     assert "learning, maintenance, validation, and operations routes" in (normalized_next_steps)
+    assert 'uv run easycat docs --audience "app builders"' in next_steps
+    assert "narrow the map to app-building routes" in normalized_next_steps
     assert "uv run easycat docs --json" in next_steps
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps

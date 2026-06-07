@@ -92,6 +92,10 @@ def test_list_templates(cli: CliRunner) -> None:
         assert "Doctor after cd: uv run easycat doctor --env-file .env" in result.stdout
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
         assert "Docs after cd: uv run easycat docs" in result.stdout
+        assert (
+            'App-builder docs after cd: uv run easycat docs --audience "app builders"'
+            in result.stdout
+        )
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 
 
@@ -131,6 +135,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "easycat init demo --template demo[beta]" in rendered
     assert "uv run easycat doctor --env-file .env" in rendered
     assert "uv run easycat docs" in rendered
+    assert 'uv run easycat docs --audience "app builders"' in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
 
 
@@ -861,6 +866,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert "uv run easycat docs" in result.stderr
     assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
     assert "find learning, maintenance, and operations routes" not in normalized_stderr
+    assert 'uv run easycat docs --audience "app builders"' in result.stderr
+    assert "app-builder routes only" in result.stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
     assert "audience labels" in result.stderr
@@ -951,6 +958,7 @@ def test_init_json_next_step_commands_match_template_readme(
         "uv run easycat doctor --env-file .env --json",
         _template_readme_check_command(template),
         "uv run easycat docs",
+        'uv run easycat docs --audience "app builders"',
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         _template_readme_run_command(template),
