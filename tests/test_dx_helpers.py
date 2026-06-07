@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,8 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-dx-onboarding.md").read_text(
         encoding="utf-8"
     )
+    plan_index = (REPO_ROOT / "plan" / "peripherals" / "README.md").read_text(encoding="utf-8")
+    field_count = len(fields(EasyConfig))
     missing_knobs = plan.split("Advanced knobs promised by the plan", 1)[1].split(
         "The high-leverage DX wins",
         1,
@@ -184,6 +187,10 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan
     assert "`record_to=`" not in missing_knobs
+    assert f"currently {field_count} top-level `EasyConfig` fields" in plan
+    assert "target ≤22" in plan
+    assert f"`EasyConfig` remains at {field_count} top-level fields" in plan_index
+    assert "≤22 flattening target" in plan_index
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
