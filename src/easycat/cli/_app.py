@@ -127,6 +127,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_quickstart_e2e.py::"
         "test_readme_choose_your_path_routes_primary_onboarding_surfaces "
         "tests/test_command_hints.py "
+        "tests/test_install_guidance.py::test_readme_cli_command_examples_are_locally_valid "
         "tests/test_docs_index.py "
         "tests/cli/test_app.py::test_docs_command "
         "tests/cli/test_app.py::test_docs_command_json"
