@@ -197,11 +197,10 @@ async def test_ws_client_disconnect_session_shutdown(
             await ws.recv()  # ready
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.05)
+            await stt.wait_for_start_calls(1, timeout=3.0)
 
         # Client disconnected, wait for handler to notice
         await asyncio.wait_for(handler_done.wait(), timeout=3.0)
-        await asyncio.sleep(0.1)
 
         # shutdown() should complete promptly (not hang)
         session = session_holder[0]
@@ -427,6 +426,7 @@ async def test_ws_multi_turn_single_connection(
 
     port = _unused_port()
     result_future: asyncio.Future[list[str]] = asyncio.get_running_loop().create_future()
+    first_turn_done = asyncio.Event()
 
     async def handler(ws) -> None:
         transport = WebSocketConnectionTransport(
@@ -449,6 +449,7 @@ async def test_ws_multi_turn_single_connection(
             finals = []
             f1 = await collector.wait_for(AgentFinal, timeout=3.0)
             finals.append(f1.text)
+            first_turn_done.set()
             f2 = await collector.wait_for(
                 AgentFinal, predicate=lambda e: e.text != f1.text, timeout=3.0
             )
@@ -469,7 +470,7 @@ async def test_ws_multi_turn_single_connection(
             # Turn 1
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.3)
+            await asyncio.wait_for(first_turn_done.wait(), timeout=3.0)
 
             # Turn 2
             await ws.send(make_chunk().data)
@@ -859,7 +860,6 @@ async def test_ws_text_only_no_audio_no_crash(
             await ws.send(json.dumps({"type": "start"}))
             await ws.send(json.dumps({"type": "config", "sample_rate": 16000}))
             await ws.send(json.dumps({"type": "stop"}))
-            await asyncio.sleep(0.1)
 
         await asyncio.wait_for(handler_done.wait(), timeout=3.0)
         assert not session_holder[0].is_running
@@ -976,7 +976,6 @@ async def test_ws_burst_audio_no_crash(
             # Send 50 chunks as fast as possible — many will be dropped
             for _ in range(50):
                 await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
 
         await asyncio.wait_for(handler_done.wait(), timeout=8.0)
         assert not session_holder[0].is_running
@@ -1136,8 +1135,7 @@ async def test_barge_in_calls_transport_clear_audio(
         # Barge-in audio
         await transport.push_audio(make_chunk())
         await collector.wait_for(Interruption, timeout=3.0)
-        # Small yield to let cancel_turn finish (clear_audio is after Interruption emit)
-        await asyncio.sleep(0.05)
+        await transport.wait_for_clear_count(clear_before + 1, timeout=3.0)
 
         # clear_audio should have been called
         assert transport.clear_calls > clear_before

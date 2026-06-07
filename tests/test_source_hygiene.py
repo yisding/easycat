@@ -677,6 +677,20 @@ def test_websocket_session_integration_waits_on_server_result() -> None:
     assert "result = await asyncio.wait_for(server_result" in source
 
 
+def test_websocket_transport_e2e_keeps_only_intentional_timing_sleeps() -> None:
+    """WebSocket transport e2e waits should use events except intentional timing delays."""
+    source = (REPO_ROOT / "tests" / "integration" / "test_ws_transport_e2e.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert source.count("asyncio.sleep(") == 2
+    assert source.count("await asyncio.sleep(0.05)") == 2
+    assert "await asyncio.sleep(0.1)" not in source
+    assert "await asyncio.sleep(0.3)" not in source
+    assert "first_turn_done.wait()" in source
+    assert "wait_for_clear_count" in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

@@ -116,6 +116,7 @@ class QueueTransport:
         self._fail_after_n_sends = fail_after_n_sends
         self._send_count = 0
         self._sent_changed = asyncio.Event()
+        self._clear_changed = asyncio.Event()
 
     async def connect(self) -> None:
         self.connected = True
@@ -144,6 +145,7 @@ class QueueTransport:
 
     async def clear_audio(self) -> None:
         self.clear_calls += 1
+        self._clear_changed.set()
 
     def version_info(self) -> dict[str, str]:
         return {
@@ -166,6 +168,14 @@ class QueueTransport:
             self._sent_changed,
             timeout=timeout,
             message=f"timed out waiting for {count} sent audio chunks",
+        )
+
+    async def wait_for_clear_count(self, count: int, *, timeout: float = 2.0) -> None:
+        await _wait_for_change(
+            lambda: self.clear_calls >= count,
+            self._clear_changed,
+            timeout=timeout,
+            message=f"timed out waiting for {count} clear_audio calls",
         )
 
 
