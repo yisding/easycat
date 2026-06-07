@@ -11,7 +11,7 @@
 - [Chapter 14.](../14-bring-your-own-agent/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
-- After setting provider keys, run `uv run easycat doctor` from the repo root.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
 
 > **Minimum to skip the ladder:** chapter 13 (you need a
 > `create_session` user) and chapter 11 (the debugger UI consumes

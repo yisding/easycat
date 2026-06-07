@@ -9,7 +9,7 @@
 - [Chapter 6](../06-streaming-agent/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
-- After setting provider keys, run `uv run easycat doctor` from the repo root.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
 
 > **Minimum to skip the ladder:** chapter 6 (the streaming-agent
 > surface). Chapters 7-9 are mutually orthogonal — you can read

@@ -11,7 +11,7 @@ build movement (chapters 6-9) exists to close this gap.
 - [Chapter 4](../04-vad-preroll/)
 - `uv sync --extra quickstart --extra deepgram --group dev`
 - `OPENAI_API_KEY` (LLM + TTS) and `DEEPGRAM_API_KEY` (STT)
-- After setting provider keys, run `uv run easycat doctor` from the repo root.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
 
 > **Minimum to skip the ladder:** chapter 4 alone (VAD-gated
 > turns). You can read this chapter without chapter 3's

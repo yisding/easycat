@@ -8,6 +8,7 @@ Dependencies:
     uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
     export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
     uv run easycat doctor
+    uv run easycat doctor --env-file .env  # if keys live in .env
 """
 
 from __future__ import annotations

@@ -262,16 +262,45 @@ def test_teaching_chapter_prerequisites_cover_script_setup() -> None:
     assert not stale, "Teaching chapter prerequisites drifted from scripts: " + "; ".join(stale)
 
 
-def test_teaching_script_key_docstrings_run_doctor() -> None:
+def test_teaching_chapter_key_prerequisites_document_env_file_doctor() -> None:
     stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        prerequisites = _chapter_prerequisites(readme)
+        if not _API_KEY_RE.search(prerequisites):
+            continue
+        if "uv run easycat doctor" not in prerequisites:
+            continue
+        if "uv run easycat doctor --env-file .env" not in prerequisites:
+            stale.append(chapter_dir.name)
+
+    assert not stale, (
+        "Teaching chapter key prerequisites missing .env doctor preflight: " + ", ".join(stale)
+    )
+
+
+def test_teaching_script_key_docstrings_run_doctor() -> None:
+    missing_doctor: list[str] = []
+    missing_env_file: list[str] = []
 
     for chapter_dir in _chapter_dirs():
         for script in sorted(chapter_dir.glob("*.py")):
             doc, _ = _python_docstring_and_key_literals(script)
-            if _API_KEY_RE.search(doc) and "uv run easycat doctor" not in doc:
-                stale.append(script.relative_to(REPO_ROOT).as_posix())
+            if not _API_KEY_RE.search(doc):
+                continue
+            path = script.relative_to(REPO_ROOT).as_posix()
+            if "uv run easycat doctor" not in doc:
+                missing_doctor.append(path)
+            if "uv run easycat doctor --env-file .env" not in doc:
+                missing_env_file.append(path)
 
-    assert not stale, "Teaching script key setup missing doctor preflight: " + ", ".join(stale)
+    assert not missing_doctor, "Teaching script key setup missing doctor preflight: " + ", ".join(
+        missing_doctor
+    )
+    assert not missing_env_file, (
+        "Teaching script key setup missing .env doctor preflight: " + ", ".join(missing_env_file)
+    )
 
 
 def test_chapter_13_provider_mix_documents_required_extras() -> None:

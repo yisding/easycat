@@ -10,7 +10,7 @@
   extra installs `numpy` + `onnxruntime`, which smart-turn needs.
   The 8 MB ONNX model ships bundled in `src/easycat/models/`.
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
-- After setting provider keys, run `uv run easycat doctor` from the repo root.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
 
 > **Minimum to skip the ladder:** chapter 4 (VAD basics).
 > Smart-turn is independent of chapters 5-7 — drop it on top of

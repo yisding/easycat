@@ -2,7 +2,8 @@
 
 Sends a bundle's transcript to an LLM with a 1-5 rubric and prints
 the structured score. Requires OPENAI_API_KEY; after setting it, run
-``uv run easycat doctor`` from the repo root.
+``uv run easycat doctor`` from the repo root. If the key lives in
+``.env``, run ``uv run easycat doctor --env-file .env``.
 
     uv run python docs/teaching/12-evals-and-latency/llm_judge.py \\
         docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle

@@ -11,7 +11,7 @@
   `src/easycat/stt/factory.py`; add that provider's extra, such as
   `--extra deepgram`, and its API key, such as `DEEPGRAM_API_KEY`,
   when you switch).
-- After setting provider keys, run `uv run easycat doctor` from the repo root.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
 
 > **Minimum to skip the ladder:** chapter 1 for the `Transport`
 > protocol. You can read this chapter without chapter 0's PCM math.
@@ -49,6 +49,7 @@
 +    uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
 +    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
 +    uv run easycat doctor
++    uv run easycat doctor --env-file .env  # if keys live in .env
  """
  
  from __future__ import annotations
