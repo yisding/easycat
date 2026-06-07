@@ -361,6 +361,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["command"] == "docs"
     assert payload["status"] == "ok"
     assert payload["command_note"] == _DOCS_COMMAND_NOTE
+    assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     assert payload["audience_filter"] is None
     assert "learners" in payload["available_audiences"]
     assert "operators" in payload["available_audiences"]
@@ -539,6 +540,7 @@ def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
     audiences = {entry["audience"] for entry in payload["entries"]}
 
     assert payload["status"] == "ok"
+    assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     assert payload["audience_filter"] == "maintainers"
     assert "maintainers" in payload["available_audiences"]
     assert "Architecture" in labels
@@ -567,6 +569,7 @@ def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) 
     assert payload["status"] == "error"
     assert payload["command"] == "docs"
     assert payload["audience_filter"] == "time-travelers"
+    assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     assert "Unknown docs audience 'time-travelers'" in payload["message"]
     assert _DOCS_AUDIENCE_ALIAS_NOTE in payload["message"]
     assert "learners" in payload["available_audiences"]

@@ -439,6 +439,7 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     assert "command-specific fields" in normalized_readme
     assert "`entries`, `commands`, `catalog`" in normalized_readme
     assert "`command_note`" in normalized_readme
+    assert "`audience_alias_note`" in normalized_readme
     assert "`base_requirement`, `create_command`, `repo_create_command`" in normalized_readme
     assert "`next_step_commands`" in normalized_readme
     assert "`pyproject_name`, `run_command`" in normalized_readme
@@ -479,6 +480,7 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
         assert readme_phrase in normalized_readme
     assert "`audience_filter`" in normalized_readme
     assert "`available_audiences`" in normalized_readme
+    assert "`audience_alias_note`" in normalized_readme
 
 
 def test_readme_cli_debug_json_examples_are_copyable() -> None:

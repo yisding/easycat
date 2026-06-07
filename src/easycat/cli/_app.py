@@ -561,6 +561,7 @@ def docs_command(
             message,
             json_output=json_output,
             available_audiences=list(_available_docs_audiences()),
+            audience_alias_note=_DOCS_AUDIENCE_ALIAS_NOTE,
             audience_filter=audience,
         )
         raise typer.Exit(2)
@@ -574,6 +575,7 @@ def docs_command(
                 command_note=_DOCS_COMMAND_NOTE,
                 audience_filter=audience,
                 available_audiences=list(_available_docs_audiences()),
+                audience_alias_note=_DOCS_AUDIENCE_ALIAS_NOTE,
             )
         )
         return

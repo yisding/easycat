@@ -300,6 +300,7 @@ def test_explain_meta_json_schema_documents_error_fix(
     assert result.exit_code == 0
     assert "Successful commands may add command-specific fields" in result.stdout
     assert "`entries`, `source_url`, `command_note`" in result.stdout
+    assert "`available_audiences`, `audience_alias_note`" in stdout
     assert "easycat docs --json" in result.stdout
     assert "`label`, `path`, `audience`" in stdout
     assert "`description`, `url`, and optional `commands`" in stdout
@@ -309,6 +310,7 @@ def test_explain_meta_json_schema_documents_error_fix(
     assert "in onboarding order" in result.stdout
     assert "bare installed CLI hints, repo-local `uv run` hints" in stdout
     assert "uppercase placeholders such as PATH" in stdout
+    assert "multi-word audience filters accept hyphens or underscores" in stdout
     assert "`templates`, `catalog`, `command_note`" in result.stdout
     assert "easycat init --list-templates --json" in result.stdout
     assert "catalog entries include" in result.stdout
@@ -377,16 +379,18 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert payload["schema_version"] == 1
     assert payload["command"] == "explain"
     assert payload["slug"] == "json-schema"
+    normalized_body = re.sub(r"\s+", " ", payload["body"])
     assert "`entries`, `source_url`, `command_note`" in payload["body"]
+    assert "`available_audiences`, `audience_alias_note`" in normalized_body
     assert "`label`, `path`, `audience`" in payload["body"]
     assert "`description`, `url`, and optional `commands`" in payload["body"]
-    normalized_body = re.sub(r"\s+", " ", payload["body"])
     assert "`commands` in onboarding order" in normalized_body
     assert "`audience` labels the intended reader" in normalized_body
     assert "optional `commands`" in payload["body"]
     assert "in onboarding order" in payload["body"]
     assert "bare installed CLI hints, repo-local `uv run` hints" in normalized_body
     assert "uppercase placeholders such as PATH" in normalized_body
+    assert "multi-word audience filters accept hyphens or underscores" in normalized_body
     assert "`templates`, `catalog`, `command_note`" in payload["body"]
     catalog_block = _json_schema_catalog_block(payload["body"])
     for key in _catalog_entry_keys_from_cli(cli):

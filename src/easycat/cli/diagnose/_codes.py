@@ -122,7 +122,8 @@ Successful commands may add command-specific fields. Common automation
 entry points include:
 
   `entries`, `source_url`, `command_note`, `audience_filter`,
-                            `available_audiences` - `easycat docs --json`
+                            `available_audiences`, `audience_alias_note` -
+                            `easycat docs --json`
                             and `easycat docs --audience learners --json`;
                             each docs entry has `label`, `path`, `audience`,
                             `description`, `url`, and optional `commands`
@@ -130,7 +131,9 @@ entry points include:
                             labels the intended reader, and `command_note`
                             explains bare installed CLI hints, repo-local
                             `uv run` hints, and uppercase placeholders such
-                            as PATH
+                            as PATH; `audience_alias_note` explains that
+                            multi-word audience filters accept hyphens or
+                            underscores
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `name`, `mode`, `transport`,

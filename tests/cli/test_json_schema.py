@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from easycat.cli._app import _DOCS_COMMAND_NOTE, app
+from easycat.cli._app import _DOCS_AUDIENCE_ALIAS_NOTE, _DOCS_COMMAND_NOTE, app
 from easycat.cli.scaffold import init as init_module
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.validation.report import (
@@ -326,6 +326,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     _assert_envelope(payload, "docs")
     assert isinstance(payload["entries"], list)
     assert payload["command_note"] == _DOCS_COMMAND_NOTE
+    assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
     entries = [{key: entry[key] for key in ("label", "path")} for entry in payload["entries"]]
     assert {"label": "Start here", "path": "README.md#choose-your-path"} in entries
     assert {"label": "CLI and scaffolds", "path": "README.md#cli"} in entries
