@@ -691,6 +691,23 @@ def test_websocket_transport_e2e_keeps_only_intentional_timing_sleeps() -> None:
     assert "wait_for_clear_count" in source
 
 
+def test_session_lifecycle_e2e_keeps_only_intentional_timing_sleeps() -> None:
+    """Session lifecycle e2e waits should use events except intentional timing delays."""
+    source = (REPO_ROOT / "tests" / "integration" / "test_session_lifecycle_e2e.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert source.count("asyncio.sleep(") == 2
+    assert "await asyncio.sleep(self._delay)" in source
+    assert "await asyncio.sleep(0.05)" in source
+    assert "await asyncio.sleep(0.1)" not in source
+    assert "await asyncio.sleep(0.2)" not in source
+    assert "await asyncio.sleep(0.3)" not in source
+    assert "wait_for_start_calls" in source
+    assert "agent_started.wait()" in source
+    assert "pipeline_task = session._audio_router.pipeline_task" in source
+
+
 def test_session_smoke_waits_for_pipeline_completion_event() -> None:
     """The full-session smoke test should wait for the pipeline event, not a sleep."""
     source = (REPO_ROOT / "tests" / "session" / "test_session_smoke.py").read_text(

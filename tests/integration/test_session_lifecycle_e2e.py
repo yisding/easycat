@@ -62,10 +62,13 @@ class UpperAgent:
 class SlowAgent:
     """Agent that takes a configurable time to respond."""
 
-    def __init__(self, delay: float = 2.0) -> None:
+    def __init__(self, delay: float = 2.0, *, started: asyncio.Event | None = None) -> None:
         self._delay = delay
+        self._started = started
 
     async def run(self, text: str) -> str:
+        if self._started is not None:
+            self._started.set()
         await asyncio.sleep(self._delay)
         return text.upper()
 
@@ -104,8 +107,9 @@ async def test_is_running_becomes_false_after_disconnect(
 
         # Wait for client disconnect
         await ws.wait_closed()
-        # Give pipeline task time to notice the sentinel
-        await asyncio.sleep(0.3)
+        pipeline_task = session._audio_router.pipeline_task
+        assert pipeline_task is not None
+        await asyncio.wait_for(pipeline_task, timeout=3.0)
 
         # is_running should be False now (pipeline exited)
         if not result_future.done():
@@ -118,7 +122,7 @@ async def test_is_running_becomes_false_after_disconnect(
             await ws.recv()  # ready
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.2)
+            await stt.wait_for_start_calls(1, timeout=3.0)
 
         is_running = await asyncio.wait_for(result_future, timeout=5.0)
         assert not is_running, "is_running should be False after transport disconnect"
@@ -167,7 +171,7 @@ async def test_poll_is_running_then_stop(
             await ws.recv()  # ready
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
+            await stt.wait_for_start_calls(1, timeout=3.0)
 
         # This should complete — not hang
         await asyncio.wait_for(session_stopped.wait(), timeout=5.0)
@@ -191,6 +195,7 @@ async def test_stop_completes_after_slow_agent_disconnect(
     port = _unused_port()
     stop_result: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     handler_done = asyncio.Event()
+    agent_started = asyncio.Event()
 
     async def handler(ws) -> None:
         transport = WebSocketConnectionTransport(
@@ -199,7 +204,7 @@ async def test_stop_completes_after_slow_agent_disconnect(
         session = create_session(
             make_test_config(
                 transport=transport,
-                agent=SlowAgent(),
+                agent=SlowAgent(started=agent_started),
                 turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
             )
         )
@@ -220,8 +225,7 @@ async def test_stop_completes_after_slow_agent_disconnect(
             assert ready["type"] == "ready"
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            # Disconnect while agent is still processing
-            await asyncio.sleep(0.1)
+            await asyncio.wait_for(agent_started.wait(), timeout=3.0)
 
         await asyncio.wait_for(handler_done.wait(), timeout=10.0)
         assert stop_result.result() == "ok"
@@ -276,7 +280,7 @@ async def test_session_double_stop_is_safe(
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
             await ws.recv()  # ready
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
+            await stt.wait_for_start_calls(1, timeout=3.0)
 
         await asyncio.wait_for(handler_done.wait(), timeout=5.0)
     finally:
@@ -329,7 +333,7 @@ async def test_session_stop_then_shutdown_is_safe(
         async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
             await ws.recv()
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
+            await stt.wait_for_start_calls(1, timeout=3.0)
 
         await asyncio.wait_for(handler_done.wait(), timeout=5.0)
     finally:
@@ -351,6 +355,7 @@ async def test_session_shutdown_without_stop(
 
     port = _unused_port()
     handler_done = asyncio.Event()
+    agent_started = asyncio.Event()
 
     async def handler(ws) -> None:
         transport = WebSocketConnectionTransport(
@@ -361,7 +366,7 @@ async def test_session_shutdown_without_stop(
         session = create_session(
             make_test_config(
                 transport=transport,
-                agent=SlowAgent(delay=0.3),
+                agent=SlowAgent(delay=0.3, started=agent_started),
                 turn_taking=TurnManagerConfig(end_of_turn_silence_ms=FAST_TURN_MS),
             )
         )
@@ -378,7 +383,7 @@ async def test_session_shutdown_without_stop(
             await ws.recv()
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
-            await asyncio.sleep(0.1)
+            await asyncio.wait_for(agent_started.wait(), timeout=3.0)
 
         await asyncio.wait_for(handler_done.wait(), timeout=8.0)
     finally:
