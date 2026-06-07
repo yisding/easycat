@@ -355,7 +355,8 @@ Current verified state:
   guidance, command-hint extraction, docs route map, examples matrix, examples
   README support files, script smoke checks, teaching ladder, generated teaching
   blocks, scaffold templates, init next-step output, template catalog next steps,
-  contributor guide, validation docs, or maintained Markdown links; the named
+  contributor guide commands, source-layout hints, architecture hints, validation
+  docs, or maintained Markdown links; the named
   `just` recipes are `guard-docs`, `guard-teaching`, `guard-examples`,
   `guard-templates`, `guard-contributing`, and `guard-markdown`.
 - The marker taxonomy documents strict pytest markers from `pyproject.toml`,

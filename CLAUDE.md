@@ -27,13 +27,13 @@ just guard-docs                  # Guard root onboarding docs, install guidance,
 just guard-teaching              # Guard teaching ladder chapters and generated blocks
 just guard-examples              # Guard examples README, support files, script smoke, and route hints
 just guard-templates             # Guard scaffold READMEs, init output, and catalog next steps
-just guard-contributing          # Guard contributor docs, agent commands, and validation state
+just guard-contributing          # Guard contributor docs, agent guide contracts, and validation state
 just guard-markdown              # Guard maintained Markdown links
 uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json  # Raw fallback for just guard-docs
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras  # Raw fallback for just guard-teaching
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path  # Raw fallback for just guard-examples
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json tests/cli/test_init.py::test_init_list_templates_json_catalog_includes_next_step_commands tests/cli/test_init.py::test_init_next_steps_match_template_readme_run_command tests/cli/test_init.py::test_init_next_steps_match_template_readme_check_command tests/cli/test_init.py::test_init_json_next_step_commands_match_template_readme  # Raw fallback for just guard-templates
-uv run pytest tests/test_contributing.py tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py  # Raw fallback for just guard-contributing
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'  # Raw fallback for just guard-contributing
 uv run pytest tests/test_markdown_links.py  # Raw fallback for just guard-markdown
 uv run pytest                    # Run full test suite
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file

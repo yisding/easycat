@@ -85,9 +85,9 @@ guard-examples:
 guard-templates:
     uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json tests/cli/test_init.py::test_init_list_templates_json_catalog_includes_next_step_commands tests/cli/test_init.py::test_init_next_steps_match_template_readme_run_command tests/cli/test_init.py::test_init_next_steps_match_template_readme_check_command tests/cli/test_init.py::test_init_json_next_step_commands_match_template_readme
 
-# Guard contributor guidance, agent guide commands, validation state, and route hints.
+# Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
-    uv run pytest tests/test_contributing.py tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py
+    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 
 # Guard maintained Markdown links and anchors.
 guard-markdown:

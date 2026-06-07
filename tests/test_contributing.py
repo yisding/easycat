@@ -239,8 +239,8 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "catalog text, catalog JSON, and catalog next-step commands"
         ),
         (
-            "`justfile` parity, agent guide command hints, validation lanes, "
-            "docs-route hints, and plan current-state evidence"
+            "`justfile` parity, agent guide command, source-layout, and architecture hints, "
+            "validation lanes, docs-route hints, and plan current-state evidence"
         ),
     ):
         assert phrase in section
@@ -340,12 +340,14 @@ def test_contributing_development_loop_command_hints_are_locally_valid() -> None
 def test_contributing_pytest_target_validator_checks_node_ids() -> None:
     problems = _pytest_target_problems(
         (
+            "uv run pytest tests/test_install_guidance.py -k 'agent_guide or claude_' && "
             "uv run pytest tests/test_contributing.py::missing_test "
             "tests/test_contributing_missing.py"
         ),
         label="Broken pytest command",
     )
 
+    assert not any("agent_guide or claude_" in problem for problem in problems)
     assert (
         "Broken pytest command: missing pytest node tests/test_contributing.py::missing_test"
         in problems
