@@ -339,8 +339,8 @@ stdout and corrupting `jq` consumers.
 **Checks.**
 - `--json` output from `init`, `doctor`, `docs`, `explain` (both
   single-code and `--list`), `bundles list`, `bundles show`,
-  `bundles export`, `inspect`, `replay`, `validate quick`, and
-  `validate report` all include
+  `bundles export`, `inspect`, `replay`, `validate quick`,
+  `validate contracts`, `validate release`, and `validate report` all include
   `schema_version: 1`, a `command` field matching the command name,
   and a `status` in {ok, error}.
 - The JSON payload appears on stdout; stderr is either empty or

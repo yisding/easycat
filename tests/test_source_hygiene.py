@@ -142,6 +142,34 @@ def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     assert "tests/test_docs_index.py" in docs_plan
 
 
+def test_cli_test_plan_names_validation_json_lanes() -> None:
+    """Keep the CLI JSON plan aligned with the public validation JSON lanes."""
+    plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
+    json_plan = plan.split("## Plan 12 — JSON envelope stability", 1)[1].split("---", 1)[0]
+    validate_plan = plan.split("## Plan 13 — `validate` command and report rendering", 1)[1].split(
+        "---", 1
+    )[0]
+
+    for command in (
+        "validate quick",
+        "validate contracts",
+        "validate release",
+        "validate report",
+    ):
+        assert command in json_plan
+
+    for command in (
+        "easycat validate quick --json",
+        "easycat validate contracts --json",
+        "easycat validate release --json",
+        "easycat validate report .easycat/validation/latest.json --json",
+    ):
+        assert command in validate_plan
+
+    assert "test_validate.py" in validate_plan
+    assert "command-specific CLI suites" in json_plan
+
+
 def test_peripheral_cli_package_layout_lists_top_level_cli_modules() -> None:
     """Keep the maintainer-facing CLI layout aligned with the package tree."""
     plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
