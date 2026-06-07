@@ -1003,6 +1003,10 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
         assert command in validation_section
         assert command in route_commands
 
+    for command in RAW_ONBOARDING_GUARD_COMMANDS:
+        assert command in validation_section
+        assert command in route_commands
+
     for command in validation_commands:
         assert command in validation_section
         assert command in route_commands

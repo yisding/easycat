@@ -186,7 +186,17 @@ just guard-markdown      # maintained Markdown links and anchors
 
 If `just` is not installed, use the raw command table in
 [`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop) for the equivalent
-`uv run pytest ...` command behind each guard.
+`uv run pytest ...` command behind each guard, or run the matching command
+directly:
+
+```bash
+uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_primary_onboarding_surfaces tests/test_docs_index.py tests/cli/test_app.py::test_docs_command tests/cli/test_app.py::test_docs_command_json
+uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
+uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py
+uv run pytest tests/test_markdown_links.py
+```
 
 The quick validation lane runs deterministic local tests only: no live
 credentials, no localhost socket lane, no slow tests, and no flaky quarantine.

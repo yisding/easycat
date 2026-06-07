@@ -450,6 +450,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "just guard-templates",
         "just guard-contributing",
         "just guard-markdown",
+        *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
         "uv run easycat validate quick",
         "uv run easycat validate socket",
         "uv run easycat validate stress",
