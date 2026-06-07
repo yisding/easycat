@@ -229,7 +229,10 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
         "Example categories, README command hints, run commands, and docs-route hints",
         "Generated README sections, line budgets, catalog text, and catalog JSON",
-        "`justfile` parity, validation lanes, docs-route hints, and plan current-state evidence",
+        (
+            "`justfile` parity, agent guide command hints, validation lanes, "
+            "docs-route hints, and plan current-state evidence"
+        ),
     ):
         assert phrase in section
 

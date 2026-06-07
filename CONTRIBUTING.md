@@ -54,7 +54,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Guard teaching docs | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json` |
-| Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py` |
+| Guard contributor docs | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py` |
 | Guard Markdown links | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
@@ -94,7 +94,7 @@ surface before the broader validation lane:
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
 | Examples chooser or command matrix | `just guard-examples` | Example categories, README command hints, run commands, and docs-route hints |
 | Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, catalog text, and catalog JSON |
-| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, validation lanes, docs-route hints, and plan current-state evidence |
+| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command hints, validation lanes, docs-route hints, and plan current-state evidence |
 | Markdown links in maintained docs | `just guard-markdown` | Local links and anchors in maintained Markdown |
 
 If `just` is not installed, use the raw command table in

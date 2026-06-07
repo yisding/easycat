@@ -180,7 +180,7 @@ just guard-docs          # root README chooser, docs route map, docs CLI JSON
 just guard-teaching      # teaching ladder, generated blocks, learner routes
 just guard-examples      # examples chooser, README command hints, docs-route hints
 just guard-templates     # scaffold template READMEs and template catalog
-just guard-contributing  # contributor guidance, validation plan, route hints
+just guard-contributing  # contributor guidance, agent commands, validation state
 just guard-markdown      # maintained Markdown links and anchors
 ```
 
@@ -194,7 +194,7 @@ uv run pytest tests/test_quickstart_e2e.py::test_readme_choose_your_path_routes_
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py::test_examples_readme_choose_example_table_tracks_matrix tests/test_examples.py::test_examples_readme_command_hints_are_locally_valid tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py::test_list_templates tests/cli/test_init.py::test_list_templates_json
-uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py
+uv run pytest tests/test_contributing.py tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py
 uv run pytest tests/test_markdown_links.py
 ```
 

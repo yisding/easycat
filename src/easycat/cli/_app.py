@@ -154,6 +154,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
     (
         "uv run pytest "
         "tests/test_contributing.py "
+        "tests/test_install_guidance.py::test_agent_guide_command_hints_are_locally_valid "
         "tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands "
         "tests/test_validation_plan.py"
     ),
