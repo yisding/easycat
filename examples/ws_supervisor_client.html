@@ -214,6 +214,10 @@
         <label for="sessionId">Session ID</label>
         <input id="sessionId" type="text" placeholder="session-abc123" autocomplete="off">
       </div>
+      <div class="field">
+        <label for="supervisorToken">Supervisor Token</label>
+        <input id="supervisorToken" type="password" placeholder="optional" autocomplete="off">
+      </div>
 
       <div class="actions">
         <button id="connectBtn">Start Monitoring</button>
@@ -258,6 +262,7 @@ var logEl = document.getElementById("log");
 var callerFramesEl = document.getElementById("callerFrames");
 var assistantFramesEl = document.getElementById("assistantFrames");
 var attachedSessionEl = document.getElementById("attachedSession");
+var supervisorTokenInput = document.getElementById("supervisorToken");
 
 function setStatus(text, kind) {
   statusEl.className = "status " + kind;
@@ -346,7 +351,18 @@ async function connectSupervisor() {
   ws.onmessage = function (event) {
     var msg = JSON.parse(event.data);
     if (msg.type === "hello") {
-      ws.send(JSON.stringify({ type: "subscribe", session_id: sessionId }));
+      var token = supervisorTokenInput.value.trim();
+      if (msg.auth_required && !token) {
+        setStatus("Enter supervisor token", "error");
+        logLine("Supervisor token is required");
+        ws.close();
+        return;
+      }
+      var subscribe = { type: "subscribe", session_id: sessionId };
+      if (token) {
+        subscribe.token = token;
+      }
+      ws.send(JSON.stringify(subscribe));
       return;
     }
     if (msg.type === "subscribed") {

@@ -551,7 +551,8 @@ context. Several bullets are known stale; use the current-state list above and
 
 ### 6.5 Productize Supervisor Audio
 
-- Add auth for supervisor listeners.
+- Done: the WebSocket supervisor example supports optional token auth for
+  listener subscribe requests.
 - Done: supervisor audio exposes per-listener drop counters and logs listener
   drop counts on detach.
 - Add recording consent and redaction hooks.

@@ -1210,7 +1210,7 @@ def test_ws_server_uses_config_server_helper() -> None:
 
     assert "run_websocket_config_server" in source
     assert "create_session" not in source
-    assert 'require_env("OPENAI_API_KEY")' not in source
+    assert 'require_env("OPENAI_API_KEY")' in source
 
 
 def test_ws_server_settings_default_to_loopback(monkeypatch: pytest.MonkeyPatch):
@@ -1355,6 +1355,28 @@ def test_ws_supervisor_server_example_imports():
     import examples.ws_supervisor_server as ws_supervisor_server
 
     assert callable(ws_supervisor_server.main)
+
+
+def test_ws_supervisor_server_auth_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    import examples.ws_supervisor_server as ws_supervisor_server
+
+    monkeypatch.delenv(ws_supervisor_server.SUPERVISOR_TOKEN_ENV, raising=False)
+    assert ws_supervisor_server._supervisor_auth_token() is None
+    assert ws_supervisor_server._supervisor_auth_ok({"type": "subscribe"}, None)
+
+    monkeypatch.setenv(ws_supervisor_server.SUPERVISOR_TOKEN_ENV, " secret ")
+    assert ws_supervisor_server._supervisor_auth_token() == "secret"
+    assert ws_supervisor_server._supervisor_auth_ok({"token": "secret"}, "secret")
+    assert not ws_supervisor_server._supervisor_auth_ok({"token": "wrong"}, "secret")
+    assert not ws_supervisor_server._supervisor_auth_ok({"token": 123}, "secret")
+
+
+def test_ws_supervisor_client_supports_optional_token() -> None:
+    html = (REPO_ROOT / "examples" / "ws_supervisor_client.html").read_text(encoding="utf-8")
+
+    assert 'id="supervisorToken"' in html
+    assert "auth_required" in html
+    assert "subscribe.token = token" in html
 
 
 def test_webrtc_observability_example_imports():

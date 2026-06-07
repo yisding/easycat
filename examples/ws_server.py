@@ -14,11 +14,13 @@ For non-local deployments, set EASYCAT_WS_TOKEN and send it as:
   Authorization: Bearer <token>
 """
 
-from easycat import EasyConfig
+from easycat import EasyConfig, require_env
 from easycat.transports import run_websocket_config_server
 
 
 def main() -> None:
+    require_env("OPENAI_API_KEY")
+
     def config(transport):
         from agents import Agent  # type: ignore[import-untyped]
 

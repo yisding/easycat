@@ -4,17 +4,13 @@ This example keeps EasyCat's existing "one session per caller connection"
 model.  A second WebSocket endpoint fans session audio out to passive
 supervisors that subscribe by ``session_id``.
 
-.. warning::
-
-    This example has **no authentication**.  Any WebSocket client that
-    knows (or guesses) a ``session_id`` can subscribe to a live call and
-    hear both caller and assistant audio.  Before deploying anywhere
-    reachable from the public internet, add auth on the supervisor
-    endpoint (token in the subscribe message, signed URLs, or an HTTP
-    gate in front of the WebSocket).
+By default, the supervisor endpoint is unauthenticated for local demos. Set
+``EASYCAT_SUPERVISOR_TOKEN`` to require that token in supervisor subscribe
+messages before exposing this example beyond localhost.
 
 Setup:
     export OPENAI_API_KEY="..."
+    export EASYCAT_SUPERVISOR_TOKEN="..."  # optional but recommended
     uv sync --extra openai --extra openai-agents --group dev
     uv run easycat doctor
     uv run easycat doctor --env-file .env  # if keys live in .env
@@ -33,8 +29,10 @@ import asyncio
 import base64
 import contextlib
 import functools
+import hmac
 import json
 import logging
+import os
 import signal
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -58,6 +56,7 @@ logger = logging.getLogger(__name__)
 HTTP_PORT = 8080
 CALLER_WS_PORT = 8765
 SUPERVISOR_WS_PORT = 8766
+SUPERVISOR_TOKEN_ENV = "EASYCAT_SUPERVISOR_TOKEN"
 _STATIC_DIR = str(Path(__file__).parent)
 
 
@@ -85,6 +84,21 @@ def _serialize_audio_frame(frame) -> str:  # noqa: ANN001
     )
 
 
+def _supervisor_auth_token() -> str | None:
+    token = os.environ.get(SUPERVISOR_TOKEN_ENV, "").strip()
+    return token or None
+
+
+def _supervisor_auth_ok(msg: dict[str, object], expected_token: str | None) -> bool:
+    if expected_token is None:
+        return True
+    supplied_token = msg.get("token")
+    return isinstance(supplied_token, str) and hmac.compare_digest(
+        supplied_token,
+        expected_token,
+    )
+
+
 async def _close_with_error(
     ws: ServerConnection,
     *,
@@ -105,6 +119,14 @@ async def main() -> None:
 
     manager: SessionManager[str] = SessionManager()
     broadcasters: dict[str, SessionAudioBroadcaster] = {}
+    supervisor_token = _supervisor_auth_token()
+    if supervisor_token is None:
+        logger.warning(
+            "Supervisor endpoint is unauthenticated; set %s before exposing it.",
+            SUPERVISOR_TOKEN_ENV,
+        )
+    else:
+        logger.info("Supervisor token auth is enabled.")
 
     http_thread = threading.Thread(target=_run_http_server, daemon=True)
     http_thread.start()
@@ -148,6 +170,7 @@ async def main() -> None:
                 {
                     "type": "hello",
                     "role": "supervisor",
+                    "auth_required": supervisor_token is not None,
                     "message": 'Send {"type":"subscribe","session_id":"..."}',
                 }
             )
@@ -190,6 +213,15 @@ async def main() -> None:
                 code=4400,
                 reason="Invalid subscribe message",
                 message='Expected {"type":"subscribe","session_id":"..."}.',
+            )
+            return
+
+        if not _supervisor_auth_ok(msg, supervisor_token):
+            await _close_with_error(
+                ws,
+                code=4401,
+                reason="Unauthorized",
+                message="Supervisor token is missing or invalid.",
             )
             return
 
