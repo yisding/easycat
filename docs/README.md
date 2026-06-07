@@ -77,10 +77,10 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,
   `just guard-teaching`, `just guard-examples`, `just guard-templates`,
-  `just guard-contributing`, `just guard-contracts`, `just guard-ops`,
-  `just guard-markdown`), marker taxonomy, cassettes, and provider-addition
-  checklist. If `just` is not installed, use its raw command table for the
-  equivalent `uv run pytest ...` commands.
+  `just guard-contributing`, `just guard-validation`, `just guard-contracts`,
+  `just guard-ops`, `just guard-markdown`), marker taxonomy, cassettes, and
+  provider-addition checklist. If `just` is not installed, use its raw command
+  table for the equivalent `uv run pytest ...` commands.
 - Operating sessions in production: read
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md) for journal CLI commands, the debugger UI,
@@ -99,7 +99,8 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   envelope. Then use the validation workflow in the
   [root README](../README.md#validation-workflow) and the
   [validation reference](../plan/validation/reference.md) for provider and
-  report vocabulary.
+  report vocabulary. Run `just guard-validation` when editing these
+  validation-facing docs or the validate CLI behavior they describe.
 
 ## Maintainer Notes
 

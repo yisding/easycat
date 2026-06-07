@@ -210,6 +210,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-validation",
         "guard-contracts",
         "guard-ops",
         "guard-markdown",
@@ -226,6 +227,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "Examples chooser or command matrix",
         "Scaffold templates or template catalog",
         "Contributor and validation guidance",
+        "Validation workflow, validation reference, or validate CLI behavior",
         "Provider protocols, cassettes, contract matrix, or bridge event grammar",
         "Operator deployment, observability, or journal durability docs",
         "Markdown links in maintained docs",
@@ -247,6 +249,11 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         (
             "`justfile` parity, agent guide command, source-layout, and architecture hints, "
             "validation lanes, docs-route hints, and plan current-state evidence"
+        ),
+        (
+            "README validation workflow, validation reference route hints, "
+            "validation plan current state, validate CLI reports, JSON envelopes, "
+            "latency options, and error handling"
         ),
         (
             "Provider contract docs-route hints, contributor provider guidance, "
@@ -307,6 +314,7 @@ def test_docs_route_guard_commands_match_contributing_table() -> None:
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-validation",
         "guard-contracts",
         "guard-ops",
         "guard-markdown",
@@ -562,6 +570,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "guard-examples",
         "guard-templates",
         "guard-contributing",
+        "guard-validation",
         "guard-contracts",
         "guard-ops",
         "guard-markdown",
@@ -580,6 +589,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "teaching ladder",
         "examples matrix",
         "scaffold templates",
+        "validation reference",
         "provider contract docs",
         "operator docs",
         "maintained Markdown links",

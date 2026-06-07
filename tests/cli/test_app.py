@@ -271,6 +271,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/onboarding guards" in result.stdout
     assert "just guard-docs" in result.stdout
     assert "just guard-contributing" in result.stdout
+    assert "just guard-validation" in result.stdout
     assert "just guard-contracts" in result.stdout
     assert "just guard-ops" in result.stdout
     assert "docs/deployment/docker.md" in result.stdout

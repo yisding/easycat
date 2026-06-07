@@ -118,6 +118,7 @@ _DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (
     "just guard-examples",
     "just guard-templates",
     "just guard-contributing",
+    "just guard-validation",
     "just guard-contracts",
     "just guard-ops",
     "just guard-markdown",
@@ -162,6 +163,16 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_validation_plan.py && "
         "uv run pytest tests/test_install_guidance.py -k "
         "'agent_guide or agent_guides or claude_'"
+    ),
+    (
+        "uv run pytest "
+        "tests/test_docs_index.py::test_validation_docs_route_matches_"
+        "validation_workflow_commands "
+        "tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid "
+        "tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands "
+        "tests/test_validation_plan.py "
+        "tests/cli/test_validate.py "
+        "tests/cli/test_latency_validation.py"
     ),
     (
         "uv run pytest "

@@ -89,6 +89,10 @@ guard-templates:
 guard-contributing:
     uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 
+# Guard validation workflow docs, validation reference docs, and validate CLI behavior.
+guard-validation:
+    uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
+
 # Guard provider contract docs, offline contract suite, and provider wiring matrix.
 guard-contracts:
     uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/integration/test_provider_contract_matrix.py
