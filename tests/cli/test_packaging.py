@@ -1,4 +1,4 @@
-"""Plan 16 — wheel packaging ships template dotfiles and release metadata.
+"""Plan 16 — wheel packaging ships template dotfiles, metadata, and clean contents.
 
 Run with ``pytest -m integration_local tests/cli/test_packaging.py``.
 Skipped by default to keep the fast test suite fast; the wheel build

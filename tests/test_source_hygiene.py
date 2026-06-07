@@ -228,7 +228,8 @@ def test_cli_test_plan_names_packaging_artifact_hygiene() -> None:
     """Keep the packaging plan aligned with wheel artifact rejection checks."""
     plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
     packaging_plan = plan.split(
-        "## Plan 16 — Packaging — wheel ships template dotfiles and metadata", 1
+        "## Plan 16 — Packaging — wheel ships template dotfiles, metadata, and clean contents",
+        1,
     )[1].split("---", 1)[0]
     normalized = " ".join(packaging_plan.split())
 
