@@ -337,6 +337,8 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert result.exit_code == 0
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "--json" in result.stdout
+    assert "--audience" in result.stdout
+    assert "learners operators or maintainers" in help_text
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
     assert "command hints" in help_text
@@ -350,6 +352,10 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert payload["command"] == "docs"
     assert payload["status"] == "ok"
     assert payload["command_note"] == _DOCS_COMMAND_NOTE
+    assert payload["audience_filter"] is None
+    assert "learners" in payload["available_audiences"]
+    assert "operators" in payload["available_audiences"]
+    assert "maintainers" in payload["available_audiences"]
     assert [entry["label"] for entry in payload["entries"]] == [
         entry["label"] for entry in _DOCS_LINKS
     ]
@@ -378,6 +384,12 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert all(entry.get("audience") for entry in payload["entries"])
     assert all(entry.get("url") for entry in payload["entries"])
     commands = {entry["path"]: entry.get("commands", []) for entry in payload["entries"]}
+    assert commands["docs/README.md"] == [
+        "easycat docs",
+        "easycat docs --audience learners",
+        "easycat docs --json",
+        "easycat docs --audience maintainers --json",
+    ]
     assert commands["README.md#choose-your-path"] == [
         "uv sync --extra quickstart --group dev",
         "uv run easycat doctor",
@@ -479,6 +491,50 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio"
     )
     assert payload["source_url"] == "https://github.com/yisding/easycat"
+
+
+def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "operators"])
+
+    assert result.exit_code == 0
+    assert "Audience filter: operators" in result.stdout
+    assert "Deployment" in result.stdout
+    assert "Observability" in result.stdout
+    assert "Journal durability" in result.stdout
+    assert "Teaching ladder" not in result.stdout
+    assert "First lesson" not in result.stdout
+
+
+def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "maintainers", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    labels = {entry["label"] for entry in payload["entries"]}
+    audiences = {entry["audience"] for entry in payload["entries"]}
+
+    assert payload["status"] == "ok"
+    assert payload["audience_filter"] == "maintainers"
+    assert "maintainers" in payload["available_audiences"]
+    assert "Architecture" in labels
+    assert "Provider contracts" in labels
+    assert "Journal durability" in labels
+    assert "Validation reference" in labels
+    assert "Teaching ladder" not in labels
+    assert all("maintainers" in audience for audience in audiences)
+
+
+def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["docs", "--audience", "time-travelers", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert payload["command"] == "docs"
+    assert payload["audience_filter"] == "time-travelers"
+    assert "Unknown docs audience 'time-travelers'" in payload["message"]
+    assert "learners" in payload["available_audiences"]
+    assert "operators" in payload["available_audiences"]
 
 
 def test_docs_route_paths_resolve_to_local_sources() -> None:

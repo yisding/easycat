@@ -466,7 +466,9 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat doctor --json    # emit machine-readable environment checks",
         "easycat doctor --env-file .env --json # emit checks with project .env loaded",
         "easycat docs             # show docs for learning, maintenance, validation, operations",
+        "easycat docs --audience learners # show docs for one reader audience",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
+        "easycat docs --audience maintainers --json # emit a filtered docs route map",
         "easycat explain E102     # look up errors and CLI schema topics",
         "easycat explain json-schema # document the --json envelope and command metadata",
         "easycat bundles list      # list captured debug bundles and crash dumps",
@@ -493,6 +495,8 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     for line in stale_cli_lines:
         assert line not in cli_section
     assert "easycat docs --json" in cli_section
+    assert "easycat docs --audience learners" in cli_section
+    assert "easycat docs --audience maintainers --json" in cli_section
 
     missing = sorted(
         command_name

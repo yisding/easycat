@@ -108,7 +108,9 @@ easycat doctor           # check API keys, optional extras, provider reachabilit
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat docs             # show docs for learning, maintenance, validation, operations
+easycat docs --audience learners # show docs for one reader audience
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
+easycat docs --audience maintainers --json # emit a filtered docs route map
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
 easycat explain --list   # list every error code and meta topic
@@ -145,13 +147,16 @@ Add `--json` when a script or coding agent needs the same environment/check
 rows without Rich formatting; use `easycat doctor --env-file .env --json`
 when both apply.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
-with audience labels and command hints, and `easycat explain json-schema`
-documents the standard `--json` envelope. It covers the docs route map,
+with audience labels and command hints. Use `easycat docs --audience learners`
+or `easycat docs --audience maintainers --json` to narrow the same map before
+scanning or parsing it. `easycat explain json-schema` documents the standard
+`--json` envelope. It covers the docs route map,
 template catalog, scaffold output, doctor environment/checks output,
 validation quick/contracts/release/report output, bundle list/show/export,
 inspect, and replay command families, including command-specific fields such
-as `entries`, `commands`, `catalog`, `audience`, `command_note`,
-`base_requirement`, `create_command`, `repo_create_command`,
+as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
+`available_audiences`, `command_note`, `base_requirement`, `create_command`,
+`repo_create_command`,
 `next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
 `environment`, `checks`, `validation`, `source_path`, and
 `fidelity_effective`, and error fields such as `report_path`, `path`, and

@@ -457,6 +457,7 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
 
     command_family_mentions = {
         "easycat docs --json": "docs route map",
+        "easycat docs --audience learners --json": "docs route map",
         "easycat init --list-templates --json": "template catalog",
         "easycat init NAME --json": "scaffold output",
         "easycat doctor --json": "doctor environment/checks output",
@@ -476,6 +477,8 @@ def test_readme_json_guidance_covers_schema_command_families() -> None:
     for schema_command, readme_phrase in command_family_mentions.items():
         assert schema_command in schema_body
         assert readme_phrase in normalized_readme
+    assert "`audience_filter`" in normalized_readme
+    assert "`available_audiences`" in normalized_readme
 
 
 def test_readme_cli_debug_json_examples_are_copyable() -> None:

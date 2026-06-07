@@ -121,7 +121,9 @@ EASYCAT_Exxx code.
 Successful commands may add command-specific fields. Common automation
 entry points include:
 
-  `entries`, `source_url`, `command_note` - `easycat docs --json`;
+  `entries`, `source_url`, `command_note`, `audience_filter`,
+                            `available_audiences` - `easycat docs --json`
+                            and `easycat docs --audience learners --json`;
                             each docs entry has `label`, `path`, `audience`,
                             `description`, `url`, and optional `commands`
                             in onboarding order; `audience`

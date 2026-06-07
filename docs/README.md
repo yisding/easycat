@@ -6,7 +6,10 @@ From this repository, `uv run easycat docs` prints the same map; in an
 installed app environment, use `easycat docs`. Use
 `uv run easycat docs --json` when a script or coding agent needs the route map
 with command hints and audience labels. Replace uppercase placeholders in
-command hints, such as `PATH`, before running them.
+command hints, such as `PATH`, before running them. Use
+`uv run easycat docs --audience learners` to narrow the human map, or
+`uv run easycat docs --audience maintainers --json` when automation needs only
+maintainer-facing route entries.
 
 ## Choose Your Path
 

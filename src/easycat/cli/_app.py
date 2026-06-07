@@ -16,7 +16,13 @@ import typer
 from rich.markup import escape
 
 from easycat.cli._errors import handle_easycat_error
-from easycat.cli._output import emit_json, json_envelope, stderr_console, stdout_console
+from easycat.cli._output import (
+    emit_command_error,
+    emit_json,
+    json_envelope,
+    stderr_console,
+    stdout_console,
+)
 from easycat.errors import EasyCatError
 
 
@@ -189,7 +195,12 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "docs/README.md",
         "audience": "all readers",
         "description": "Choose the maintained guide for your current task.",
-        "commands": ("easycat docs", "easycat docs --json"),
+        "commands": (
+            "easycat docs",
+            "easycat docs --audience learners",
+            "easycat docs --json",
+            "easycat docs --audience maintainers --json",
+        ),
     },
     {
         "label": "Teaching ladder",
@@ -442,6 +453,28 @@ def _docs_entries() -> list[_DocsEntry]:
     return [{**entry, "url": _docs_url_for(entry["path"])} for entry in _DOCS_LINKS]
 
 
+def _normalize_docs_audience(value: str) -> str:
+    """Normalize an audience filter or label for forgiving CLI matching."""
+    return " ".join(value.casefold().split())
+
+
+def _available_docs_audiences() -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {entry["audience"] for entry in _DOCS_LINKS},
+            key=lambda value: _normalize_docs_audience(value),
+        )
+    )
+
+
+def _filter_docs_entries(entries: list[_DocsEntry], audience: str | None) -> list[_DocsEntry]:
+    if audience is None:
+        return entries
+
+    needle = _normalize_docs_audience(audience)
+    return [entry for entry in entries if needle in _normalize_docs_audience(entry["audience"])]
+
+
 def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
     commands = entry.get("commands")
     command_line = ""
@@ -461,16 +494,22 @@ def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:
     )
 
 
-def _format_docs_menu() -> str:
-    entries = _docs_entries()
+def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None = None) -> str:
     label_width = max(len(entry["label"]) for entry in entries)
     routes = "\n".join(_format_docs_entry(entry, label_width=label_width) for entry in entries)
+    filter_note = (
+        f"Audience filter: {audience_filter}\n"
+        if audience_filter is not None
+        else "Filter by audience: easycat docs --audience learners\n"
+    )
     return f"""[bold]EasyCat documentation[/]
 
 {routes}
 
 Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
+Filtered machine-readable routes: easycat docs --audience maintainers --json
+{filter_note}
 {_DOCS_COMMAND_NOTE}
 """
 
@@ -486,19 +525,42 @@ def docs_command(
         "--json",
         help="Emit the machine-readable docs route map with audiences and command hints.",
     ),
+    audience: str | None = typer.Option(
+        None,
+        "--audience",
+        help="Filter routes by audience label, such as learners, operators, or maintainers.",
+    ),
 ) -> None:
     """Show docs for learning, maintenance, validation, and operations."""
+    entries = _docs_entries()
+    filtered_entries = _filter_docs_entries(entries, audience)
+    if not filtered_entries:
+        available = ", ".join(_available_docs_audiences())
+        message = f"Unknown docs audience {audience!r}. Available audiences: {available}."
+        emit_command_error(
+            "docs",
+            message,
+            json_output=json_output,
+            available_audiences=list(_available_docs_audiences()),
+            audience_filter=audience,
+        )
+        raise typer.Exit(2)
+
     if json_output:
         emit_json(
             json_envelope(
                 "docs",
-                entries=_docs_entries(),
+                entries=filtered_entries,
                 source_url=_DOCS_SOURCE_URL,
                 command_note=_DOCS_COMMAND_NOTE,
+                audience_filter=audience,
+                available_audiences=list(_available_docs_audiences()),
             )
         )
         return
-    stdout_console.print(_format_docs_menu(), soft_wrap=True)
+    stdout_console.print(
+        _format_docs_menu(filtered_entries, audience_filter=audience), soft_wrap=True
+    )
 
 
 @app.callback(invoke_without_command=True)
