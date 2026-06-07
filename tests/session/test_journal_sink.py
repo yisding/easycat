@@ -135,6 +135,41 @@ async def test_journal_sink_records_error_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_journal_sink_records_error_runtime_context() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    exc = RuntimeError("agent failed")
+    await bus.emit(
+        Error(
+            exception=exc,
+            stage=ErrorStage.AGENT,
+            turn_id="t1",
+            elapsed_ms=12.3456,
+            sequence=42,
+            record_key="cp_42",
+        )
+    )
+
+    record = journal.read()[0]
+    assert record.data["elapsed_ms"] == 12.3456
+    assert record.data["sequence"] == 42
+    assert record.data["record_ref"] == "cp_42"
+    assert record.error is not None
+    assert record.error.notes == (
+        "stage=agent\nturn_id=t1\nelapsed_ms=12.346\nsequence=42\nrecord_key=cp_42"
+    )
+
+
+@pytest.mark.asyncio
 async def test_journal_sink_normalizes_structured_output() -> None:
     """``structured_output`` (Any-typed) must be normalized to a JSON-native
     shape so SQLite (json.dumps default=str) and in-memory store the same

@@ -73,6 +73,10 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   arguments so a session can be faithfully replayed and debugged.
 - It is gated by `debug=` (see orthogonality below): `debug="off"` does not
   journal; `debug="light"`/`debug="full"` do.
+- Error records preserve PEP 678 exception notes in `ErrorInfo.notes`. Runtime
+  `Error` events attach `stage`, `provider`, `code`, `session_id`, and
+  `turn_id` when known; stage wrappers also attach `elapsed_ms` on re-raised
+  provider failures.
 - CLI entry points:
   `easycat bundles list`,
   `easycat bundles show <path>`,

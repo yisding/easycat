@@ -403,6 +403,24 @@ def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     assert "`exc`" in config
 
 
+def test_observability_doc_tracks_error_note_context() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for token in (
+        "PEP 678 exception notes",
+        "`ErrorInfo.notes`",
+        "`stage`",
+        "`provider`",
+        "`turn_id`",
+        "`elapsed_ms`",
+    ):
+        assert token in journal
+
+
 @pytest.mark.parametrize(
     "forbidden",
     ["session_id", "turn_id", "transcript", "provider_request_id", "phone_number"],
@@ -1001,9 +1019,14 @@ async def test_session_errors_counter_increments_on_dispatch_failure(
     meter = _FakeMeter()
     monkeypatch.setattr(observability, "_get_meter", lambda: meter)
     session = create_text_session(agent=_BrokenAgent(), debug="off")
-    with pytest.raises(RuntimeError, match="dispatch-broke"):
+    with pytest.raises(RuntimeError, match="dispatch-broke") as exc_info:
         await session.send_text("hi")
 
+    notes = exc_info.value.__notes__
+    assert "stage=agent" in notes
+    assert any(note.startswith("elapsed_ms=") for note in notes)
+    assert any(note.startswith("session_id=") for note in notes)
+    assert any(note.startswith("turn_id=turn-") for note in notes)
     err_counter = meter.counters.get("easycat.session.errors.total")
     assert err_counter is not None
     assert err_counter.adds, "expected session.errors.total to be incremented"

@@ -244,6 +244,15 @@ class SessionJournalSink:
                     # ``data`` so exported journals stay machine-correlatable
                     # (ErrorInfo has no dedicated field for it).
                     data["code"] = code
+                elapsed_ms = getattr(event, "elapsed_ms", None)
+                if elapsed_ms is not None:
+                    data["elapsed_ms"] = elapsed_ms
+                sequence = getattr(event, "sequence", None)
+                if sequence is not None:
+                    data["sequence"] = sequence
+                record_key = getattr(event, "record_key", None)
+                if record_key:
+                    data["record_ref"] = record_key
                 error = ErrorInfo.from_exception(exc)
             self.journal.append(
                 kind=kind,

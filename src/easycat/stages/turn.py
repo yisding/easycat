@@ -14,6 +14,7 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
+    annotate_stage_exception,
     journal_append_control_signal,
     journal_append_event,
     put_artifact,
@@ -73,6 +74,13 @@ class TurnStage:
             result = await self._provider.detect(input)
         except Exception as exc:
             result_attr = "fail"
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            annotate_stage_exception(
+                exc,
+                stage=self.name,
+                provider=type(self._provider).__name__.lower(),
+                elapsed_ms=elapsed_ms,
+            )
             observability.increment_counter(
                 "easycat.provider.errors.total",
                 attributes={
@@ -88,6 +96,7 @@ class TurnStage:
                 turn_id=turn.id,
                 state_before=state_before,
                 error=str(exc),
+                data_extra={"elapsed_ms": elapsed_ms},
             )
             raise
         finally:

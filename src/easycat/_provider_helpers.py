@@ -69,15 +69,9 @@ class ProviderErrorEmitter:
         bus = self._resolve_event_bus()
         if bus is None:
             return
-        from easycat.events import Error
+        from easycat.events import Error, _add_exception_notes
 
-        for key, value in context.items():
-            if value is None:
-                continue
-            try:
-                exc.add_note(f"{key}={value}")  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - pre-3.11
-                pass
+        _add_exception_notes(exc, **context)
         try:
             task = asyncio.create_task(
                 bus.emit(

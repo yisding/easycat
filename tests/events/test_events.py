@@ -268,6 +268,34 @@ def test_error_event_notes_include_context_and_dedupe_existing_notes():
     ]
 
 
+def test_error_event_notes_include_runtime_record_context():
+    exc = RuntimeError("boom")
+
+    Error(
+        exception=exc,
+        stage=ErrorStage.AGENT,
+        elapsed_ms=12.3456,
+        sequence=42,
+        record_key="cp_42",
+    )
+
+    assert exc.__notes__ == [
+        "stage=agent",
+        "elapsed_ms=12.346",
+        "sequence=42",
+        "record_key=cp_42",
+    ]
+
+
+def test_error_event_dedupes_notes_by_key():
+    exc = RuntimeError("boom")
+    exc.add_note("elapsed_ms=1")
+
+    Error(exception=exc, stage=ErrorStage.AGENT, elapsed_ms=2)
+
+    assert exc.__notes__ == ["elapsed_ms=1", "stage=agent"]
+
+
 def test_event_base_fields_are_keyword_only():
     ts = 123.456
     exc = RuntimeError("boom")

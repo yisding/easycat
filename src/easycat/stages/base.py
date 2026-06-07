@@ -195,6 +195,19 @@ def put_artifact(
     return ref or None
 
 
+def annotate_stage_exception(
+    exc: BaseException,
+    *,
+    stage: str,
+    provider: str | None = None,
+    elapsed_ms: float | None = None,
+) -> None:
+    """Attach common PEP 678 context for stage-raised exceptions."""
+    from easycat.events import _add_exception_notes
+
+    _add_exception_notes(exc, stage=stage, provider=provider, elapsed_ms=elapsed_ms)
+
+
 def journal_append_event(
     ctx: RunContext,
     *,

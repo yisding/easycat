@@ -449,6 +449,9 @@ class Error(Event):
     stage: ErrorStage = ErrorStage.PIPELINE
     provider: str | None = None
     code: str | None = None
+    elapsed_ms: float | None = None
+    sequence: int | None = None
+    record_key: str | None = None
 
     def __post_init__(self) -> None:
         if self.code is None:
@@ -464,24 +467,36 @@ class Error(Event):
             code=self.code,
             session_id=self.session_id,
             turn_id=self.turn_id,
+            elapsed_ms=self.elapsed_ms,
+            sequence=self.sequence,
+            record_key=self.record_key,
         )
 
 
-def _add_exception_notes(exc: BaseException, **context: str | None) -> None:
+def _add_exception_notes(exc: BaseException, **context: Any) -> None:
     """Attach deduplicated PEP 678 notes to journal-visible exceptions."""
     existing = getattr(exc, "__notes__", None)
     if not isinstance(existing, list):
         existing = []
     for key, value in context.items():
-        if not value:
+        rendered = _render_exception_note_value(value)
+        if rendered is None:
             continue
-        note = f"{key}={value}"
-        if note in existing:
+        note = f"{key}={rendered}"
+        if any(str(existing_note).startswith(f"{key}=") for existing_note in existing):
             continue
         try:
             exc.add_note(note)
         except Exception:  # pragma: no cover - Python <3.11 compatibility
             return
+
+
+def _render_exception_note_value(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, float):
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    return str(value)
 
 
 # Session actions (agent-requested)

@@ -716,6 +716,7 @@ class TurnRunner:
                 )
             result_attr = "pass"
         except Exception as exc:
+            elapsed_ms = (time.monotonic() - t0) * 1000
             logger.exception("Agent error in text_session send_text")
             observability.increment_counter(
                 "easycat.session.errors.total",
@@ -730,6 +731,7 @@ class TurnRunner:
                     stage=ErrorStage.AGENT,
                     session_id=self._session_id,
                     turn_id=turn_id,
+                    elapsed_ms=elapsed_ms,
                 )
             )
             raise

@@ -506,11 +506,18 @@ class TestStageExecuteRecording:
         ctx = _make_ctx(journal=journal)
         turn = _make_turn()
         stage = AgentStage(_FailingAgent(), journal=journal)
-        with pytest.raises(ValueError, match="boom"):
+        with pytest.raises(ValueError, match="boom") as exc_info:
             await stage.execute("hello", ctx, turn)
         records = journal.read()
         names = [r.name for r in records]
         assert "stage_error" in names
+        stage_error = next(r for r in records if r.name == "stage_error")
+        assert stage_error.data["stage"] == "agent"
+        assert stage_error.data["elapsed_ms"] >= 0
+        notes = exc_info.value.__notes__
+        assert "stage=agent" in notes
+        assert "provider=agentrunner" in notes
+        assert any(note.startswith("elapsed_ms=") for note in notes)
 
     async def test_no_journal_does_not_error(self):
         """Stages should work fine with no journal."""
