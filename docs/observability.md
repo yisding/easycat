@@ -139,7 +139,7 @@ C for forensics.
 
 ## Configuration and orthogonality
 
-There are two independent knobs, and they control different things:
+There are three independent knobs, and they control different things:
 
 - **`EASYCAT_LOG_LEVEL`** — controls layer A only (the stdlib `easycat` logger
   level). Accepts `debug`, `info`, `warning`, `warn`, `error`, and `critical`
@@ -163,6 +163,11 @@ There are two independent knobs, and they control different things:
   | `session_id` | bound session id, or `-` |
   | `turn_id` | bound turn id, or `-` |
   | `exc` | formatted traceback (only present when an exception is attached) |
+
+- **`EASYCAT_ENV=dev|prod`** — selects the default layer A renderer when
+  `EASYCAT_LOG_FORMAT` is not set. `prod` / `production` uses single-line JSON
+  for log pipelines; `dev` / unset keeps the human renderer. An explicit
+  `EASYCAT_LOG_FORMAT` always wins.
 
 - **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`) — controls the
   journal (C) and the optional debugger UI. It is **orthogonal to log level**:

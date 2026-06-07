@@ -111,12 +111,13 @@ def _make_handler() -> logging.Handler:
     """Build the console handler.
 
     ``EASYCAT_LOG_FORMAT=json`` selects the structured formatter regardless of
-    TTY/color (JSON is an explicit opt-in, never auto-enabled).  Otherwise a
-    :class:`rich.logging.RichHandler` is used on a color-capable stderr and a
-    plain :class:`logging.StreamHandler` falls back everywhere else.  The color
-    decision is the shared policy in :mod:`easycat._console`.
+    TTY/color.  When the format is not explicit, ``EASYCAT_ENV=prod`` selects
+    JSON for log pipelines while ``dev``/unset keeps the human renderer.
+    Otherwise a :class:`rich.logging.RichHandler` is used on a color-capable
+    stderr and a plain :class:`logging.StreamHandler` falls back everywhere
+    else.  The color decision is the shared policy in :mod:`easycat._console`.
     """
-    if os.getenv("EASYCAT_LOG_FORMAT") == "json":
+    if _wants_json_logs():
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(_JsonFormatter())
         return handler
@@ -140,3 +141,10 @@ def _make_handler() -> logging.Handler:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     return handler
+
+
+def _wants_json_logs() -> bool:
+    log_format = os.getenv("EASYCAT_LOG_FORMAT", "").strip().lower()
+    if log_format:
+        return log_format == "json"
+    return os.getenv("EASYCAT_ENV", "").strip().lower() in {"prod", "production"}

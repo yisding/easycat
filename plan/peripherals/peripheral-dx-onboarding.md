@@ -39,6 +39,9 @@ Shipped:
   instead of a `.text()` classmethod because the config itself
   requires STT/TTS providers that a text session skips.
 - `EASYCAT_LOG_LEVEL` env var honoured by `run()` (`helpers.py`).
+- `EASYCAT_ENV=prod|production` selects the single-line JSON console logger by
+  default while `dev`/unset keeps the human renderer; explicit
+  `EASYCAT_LOG_FORMAT` still wins (`_logging.py`, `docs/observability.md`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
   stop/shutdown when debug journaling is enabled (`config/_factory.py`).
 - `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to
@@ -57,8 +60,8 @@ Still remaining:
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation and deeper PEP 678 annotations
   such as elapsed time, sequence, and captured-input record keys.
-- Full structlog dev/prod renderer split; today the logger is stdlib-
-  only.
+- Full structlog dev/prod renderer split remains; today's stdlib logger has
+  the `EASYCAT_ENV=prod` JSON-renderer behavior but not structlog processors.
 - Advanced knobs promised by the plan that aren't yet config fields:
   `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
 

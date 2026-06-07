@@ -30,6 +30,7 @@ from easycat._logging import (
     _coerce_level,
     _JsonFormatter,
     _make_handler,
+    _wants_json_logs,
     enable_console_logging,
     set_easycat_log_level,
 )
@@ -440,10 +441,24 @@ def test_make_handler_uses_json_formatter_when_env_set(monkeypatch: pytest.Monke
     assert isinstance(handler.formatter, _JsonFormatter)
 
 
+def test_make_handler_uses_json_formatter_in_prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("EASYCAT_ENV", "prod")
+    handler = _make_handler()
+    assert isinstance(handler.formatter, _JsonFormatter)
+
+
+def test_explicit_log_format_overrides_prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASYCAT_LOG_FORMAT", "text")
+    monkeypatch.setenv("EASYCAT_ENV", "prod")
+    assert _wants_json_logs() is False
+
+
 def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     from rich.logging import RichHandler
 
     monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("EASYCAT_ENV", "dev")
     monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
     assert isinstance(_make_handler(), RichHandler)
 
@@ -451,6 +466,7 @@ def test_make_handler_uses_rich_when_color_enabled(monkeypatch: pytest.MonkeyPat
 def test_make_handler_rich_renders_correlation_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     """The interactive (color) path must still surface session/turn ids."""
     monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("EASYCAT_ENV", "dev")
     monkeypatch.setattr("easycat._console.color_enabled", lambda: True)
     handler = _make_handler()
     record = logging.LogRecord(
@@ -471,6 +487,7 @@ def test_make_handler_rich_renders_correlation_ids(monkeypatch: pytest.MonkeyPat
 
 def test_make_handler_plain_stream_when_color_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EASYCAT_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("EASYCAT_ENV", "dev")
     monkeypatch.setattr("easycat._console.color_enabled", lambda: False)
     handler = _make_handler()
     assert isinstance(handler, logging.StreamHandler)

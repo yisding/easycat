@@ -398,6 +398,8 @@ def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     assert not missing_json_fields, "Observability guide missing JSON log fields: " + ", ".join(
         missing_json_fields
     )
+    assert "`EASYCAT_ENV=dev|prod`" in config
+    assert "`prod` / `production` uses single-line JSON" in config
     assert "`exc`" in config
 
 
