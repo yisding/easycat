@@ -702,7 +702,10 @@ def init(
     list_templates: bool = typer.Option(
         False,
         "--list-templates",
-        help="Show template guidance, extras, env vars, files, and commands.",
+        help=(
+            "Show template guidance, base package requirements, extras, env vars, files, "
+            "and preflight/check/docs/run commands."
+        ),
     ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."

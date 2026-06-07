@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import tomllib
 from io import StringIO
@@ -33,14 +34,16 @@ def _render_rich_markup(markup: str) -> str:
 def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
     result = cli.invoke(app, ["init", "--help"])
     help_text = " ".join(result.stdout.split())
+    help_words = re.sub(r"\W+", " ", result.stdout)
 
     assert result.exit_code == 0
     assert "--list-templates" in result.stdout
     assert "template guidance" in help_text
+    assert "base package requirements" in help_words
     assert "extras" in help_text
     assert "env vars" in help_text
     assert "files" in help_text
-    assert "commands." in help_text
+    assert "preflight check docs run commands" in help_words
     assert "explain" in help_text
     assert "init-schema" in help_text
 
