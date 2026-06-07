@@ -35,20 +35,20 @@ top-level verb, no rename of `EasyConfig`, no removal of capability: the existin
 |---|---|---|---|
 | Install | `uv sync --extra quickstart` *(only works inside a cloned repo; no `pip install`/`uv add` documented)* | clone-the-repo, which-extra | 1 |
 | Env | `export OPENAI_API_KEY="..."` | 1 env var | 1 |
-| Code (README's prominent quickstart, `README.md:101-117`) | see below — **ends at `create_session`, never started, hardcoded key → silence** | EasyConfig, `create_session`, openai_api_key kwarg | ~6 |
+| Code (README's old prominent quickstart) | see below — **ends at `create_session`, never started, hardcoded key → silence** | EasyConfig, `create_session`, openai_api_key kwarg | ~6 |
 | Run | (no runnable invocation shown in that block) | — | 0 |
 
 ```python
-# README.md:101-117 — the FIRST thing a reader copies. It produces silence.
+# README old prominent quickstart — the first thing a reader copied. It produced silence.
 from easycat import EasyConfig, create_session
 
 config = EasyConfig(openai_api_key="your-api-key", agent=my_agent)
 session = create_session(config)   # never .start(); no run(); hardcoded placeholder key
 ```
 
-The actually-runnable form (`run(EasyConfig.mic(agent=...))`) lives ~560 lines lower
-(`README.md:663-670`) and in `examples/openai_agents_voice.py:14-20`, using a *different*
-shape. **Three competing "fastest path" claims** at `README.md:27`, `:127`, and `:664`.
+The actually-runnable form (`run(EasyConfig.mic(agent=...))`) used to live much later in
+`README.md` and in `examples/openai_agents_voice.py`, using a *different* shape. **Three
+competing "fastest path" claims** appeared across the README quickstart and example sections.
 **Concept count: ~5 (EasyConfig vs create_session vs run, hardcoded-vs-env key, which-quickstart).**
 
 ### After (one anointed, runnable shape everywhere)
@@ -86,9 +86,10 @@ run(EasyConfig.mic(agent=Agent(name="assistant",
 ```
 
 **Concept count: 2 (EasyConfig, run).** Same auto-wiring (`OPENAI_API_KEY` → Realtime STT +
-OpenAI TTS, `config.py:553-561`), same hidden lifecycle (`helpers.py:55-102`), but a single
-shape with an in-editor breadcrumb to the next rung. The `agents` import is annotated so a
-reader knows it is the `openai-agents` SDK.
+OpenAI TTS, owned by `src/easycat/config/easy.py::EasyConfig.__post_init__`), same hidden
+lifecycle (`src/easycat/helpers.py::run`), but a single shape with an in-editor breadcrumb to
+the next rung. The `agents` import is annotated so a reader knows it is the `openai-agents`
+SDK.
 
 ---
 
@@ -103,8 +104,8 @@ leaving the editor**.
 | **0 — Talking bot, zero config** | Empty dir → hearing a reply; smallest code, one credential. | `EasyConfig.mic(agent=...)` + `run(...)`. `easycat init` scaffolds the same shape. | `run(EasyConfig.mic(agent=Agent(name="assistant", instructions="Be helpful.")))` | README's first block, the package `__doc__`, and `easycat init` output all share this shape. No create_session-vs-run-vs-init choice. |
 | **1 — Add a tool / swap a provider** | Make the bot *do* something, or use Deepgram/ElevenLabs. | Tools: your framework's `@function_tool` on the Agent (passed through untouched by `auto_adapt_agent`). Providers: string shortcut `stt="deepgram/nova-2"`; `available_stt_providers()`/`available_tts_providers()` enumerate names; bad name → `EASYCAT_E104` fuzzy "did you mean"; missing key → `EASYCAT_E203` naming the env var. | `run(EasyConfig.mic(agent=my_agent, stt="deepgram/nova-2", tts="elevenlabs"))` | `bot.py`'s `# Next, try:` block + "tools live on YOUR Agent, not EasyCat" note mark the framework boundary. `stt=` line is honest that it needs the key **and** the extra. |
 | **2 — Change the surface (mic → browser → phone)** | Serve the same bot to a browser or a phone call. | `EasyConfig.browser()` / `EasyConfig.phone()` presets (each `setdefault`s a transport; browser also flips echo cancellation on). | `config = EasyConfig.browser(agent=my_agent)` | Presets sit next to `.mic()` in autocomplete. Their docstrings now carry: "browser/phone need a server process + the webrtc/telephony extra — see `examples/webrtc_server.py` / `twilio_app.py`," so the real process-model jump is visible. |
-| **3 — Observe and debug** | See what the pipeline did; capture a recording when it breaks. | `debug="light"\|"full"` (single flag, `config.py:483`), `record_to=PATH`. CLI: `easycat inspect`, `easycat bundles`. `RunBundle.load()` for replay. | `run(EasyConfig.mic(agent=my_agent, debug="full", record_to="./recordings"))` then `easycat inspect ./recordings/<run>.bundle` | `bot.py` names `debug="full"`. The TTY "what got wired" line shows the resolved providers. `easycat doctor` on a green run prints a success-path next step. |
-| **4 — Own the lifecycle (advanced)** | Subscribe to events, run inside an existing loop, do work between turns. | `create_session(EasyConfig)` + the **one** teardown idiom `async with session:` (already wired via `Session.__aenter__/__aexit__`, `_session.py:1113-1132`). `session.subscribe_event(...)`. | `async with easycat.create_session(EasyConfig.mic(agent=my_agent)) as session: session.subscribe_event(STTFinal, ...); await session.wait_closed()` | `run()`'s docstring already points here. The README's create_session block is relabelled **"Advanced: own the lifecycle"** instead of competing as a second "fastest path". |
+| **3 — Observe and debug** | See what the pipeline did; capture a recording when it breaks. | `debug="light"\|"full"` (single flag on `src/easycat/config/easy.py::EasyConfig`), `record_to=PATH`. CLI: `easycat inspect`, `easycat bundles`. `RunBundle.load()` for replay. | `run(EasyConfig.mic(agent=my_agent, debug="full", record_to="./recordings"))` then `easycat inspect ./recordings/<run>.bundle` | `bot.py` names `debug="full"`. The TTY "what got wired" line shows the resolved providers. `easycat doctor` on a green run prints a success-path next step. |
+| **4 — Own the lifecycle (advanced)** | Subscribe to events, run inside an existing loop, do work between turns. | `create_session(EasyConfig)` + the **one** teardown idiom `async with session:` (already wired via `src/easycat/session/_session.py::Session.__aenter__` / `Session.__aexit__`). `session.subscribe_event(...)`. | `async with easycat.create_session(EasyConfig.mic(agent=my_agent)) as session: session.subscribe_event(STTFinal, ...); await session.wait_closed()` | `run()`'s docstring already points here. The README's create_session block is relabelled **"Advanced: own the lifecycle"** instead of competing as a second "fastest path". |
 | **5 — Explicit providers (full escape hatch)** | Inject hand-built provider instances; bypass all auto-wiring. | `SessionConfig` (holds live provider *instances*) + `Session(...)`. Protocols in `easycat.providers` for typing your own. Same `async with` teardown. | `Session(SessionConfig(stt=DeepgramSTT(...), tts=my_custom_tts, transport=my_transport, agent=auto_adapt_agent(my_agent)))` | `SessionConfig`'s docstring opens: "Lowest rung: you supply live provider instances. EasyConfig auto-wires these for you one rung up." Bidirectional with `EasyConfig`'s "drop to SessionConfig for hand-built providers." **Preserved verbatim — no capability lost.** |
 
 ---
@@ -150,10 +151,10 @@ parameterized template).
 
 **Before**
 ```python
-# README.md:101-117 — first block, never started, hardcoded key
+# README old first block — never started, hardcoded key
 config = EasyConfig(openai_api_key="your-api-key", agent=my_agent)
 session = create_session(config)
-# plus contradictory "fastest path" claims at README.md:27, :127, :664
+# plus contradictory "fastest path" claims across README quickstart/example sections
 ```
 **After**
 ```python
@@ -172,24 +173,27 @@ form); `src/easycat/cli/scaffold/templates/openai-agents/agent.py` (emit the `ru
 
 **Verifier verdict.** Feasible; genuinely simpler (−2 concepts on the happy path); breaks no
 power user. **Caveats folded in:** drop the "byte-identical to `easycat init`" claim — the
-scaffold is a parameterized `string.Template` (`init.py:249-280`) and must stay so; aim for
+scaffold is parameterized through `src/easycat/cli/scaffold/init.py::_render_text` and copied by
+`src/easycat/cli/scaffold/init.py::_copy_template`; it must stay parameterized, so aim for
 *same shape*, with README and `examples/` byte-identical to each other. Note that bare
-`EasyConfig(agent=...)` already equals `.mic()` for local (`config.py:461`), so promoting
+`EasyConfig(agent=...)` already equals `.mic()` for local
+(`src/easycat/config/easy.py::EasyConfig`), so promoting
 `.mic()` is a readability choice, not a bug fix — do not imply the bare form was broken. Keep
-`create_session` fully documented (it is the documented advanced entry in `helpers.py:69-71`).
+`create_session` fully documented (it is the advanced entry exposed by
+`src/easycat/helpers.py::run` and `src/easycat/config/_factory.py::create_session`).
 
 **Zen.** #11 one obvious way.
 
 ---
 
-### 5.2 — Make `EasyCatError` carry its fix + `explain` hint on programmatic tracebacks  *(adopt-with-changes)*
+### 5.2 — Make `EasyCatError` carry its fix + `explain` hint on programmatic tracebacks  *(landed; guarded)*
 
 **What / why.** The doctor→explain teaching loop fires only inside the Typer CLI
-(`cli/_output.py:71-74`). A `python bot.py` user who hits even a good code like `EASYCAT_E203`
+(`src/easycat/cli/_output.py::error`). A `python bot.py` user who hits even a good code like `EASYCAT_E203`
 sees a bare `EASYCAT_E203: Missing API key: OPENAI_API_KEY` traceback with no fix and no hint
 that `easycat explain` exists. Render the registry fix onto the exception itself.
 
-**Before** (`errors.py:37-41`)
+**Before** (`src/easycat/errors.py::EasyCatError.__init__`, old behavior)
 ```python
 def __init__(self, code, message, **context):
     self.code, self.message, self.context = code, message, context
@@ -215,29 +219,31 @@ def _render(self):
 
 **Files touched.** `src/easycat/errors.py`.
 
-**Verifier verdict.** Feasible and safe — 220 tests pass; the CLI/JSON output reads
+**Verifier verdict.** Landed and guarded by
+`tests/cli/test_errors.py::test_rendered_message_carries_fix_and_explain_hint` and
+`tests/cli/test_errors.py::test_render_survives_braced_fix_missing_context`. The CLI/JSON output reads
 `.code/.message/.context`, never `str(err)`, so it is byte-identical there; the
 `EasyCatError`-before-`REGISTRY` ordering is fine because `_render` reads the module global at
-call time. **Caveat folded in (required before merge):** the `entry.fix.format(**context)` is
-guarded with `try/except`, mirroring the factory's headline guard (`errors.py:96-101`), so a
-future fix template that gains a `{key}` not in context cannot turn into a constructor-time
-`KeyError`. `EasyCatError` stays subclassing `Exception` (do **not** stealth-subclass
-`ValueError`). Not a write-time simplification — it improves the runtime traceback only.
+call time. **Caveat folded in:** the `entry.fix.format(**context)` path is guarded, mirroring
+`src/easycat/errors.py::register`, so a future fix template that gains a `{key}` not in context
+cannot turn into a constructor-time `KeyError`. `EasyCatError` stays subclassing `Exception`
+(do **not** stealth-subclass `ValueError`). Not a write-time simplification — it improves the
+runtime traceback only.
 
 **Zen.** #9 errors should never pass silently; #7 readability counts.
 
 ---
 
-### 5.3 — Route the missing/empty-key path through `EASYCAT_E203` (corrected)  *(adopt-with-changes; the original snippet was infeasible)*
+### 5.3 — Route the missing/empty-key path through `EASYCAT_E203` (corrected)  *(landed; guarded)*
 
 **What / why.** The statistically #1 first-run mistake — forgetting `OPENAI_API_KEY` on
 `EasyConfig.mic(agent=...)` — raises `ValueError: STT configuration is required.`
-(`config.py:599`), which names a symptom the user never touched and never mentions the key.
+in the old dataclass path, which names a symptom the user never touched and never mentions the key.
 `EASYCAT_E203` already exists with a substituted fix and is already raised on the string path.
 Wire the dataclass path into the same catalog so identical intent yields one identical,
 actionable error.
 
-**Before** (`config.py:598-606`)
+**Before** (`src/easycat/config/easy.py::EasyConfig._validate`, old behavior)
 ```python
 def _validate(self):
     if self.stt is None:
@@ -268,17 +274,19 @@ def _validate(self):
             raise ValueError(f"{_provider_display_name(cfg, kind)} requires an API key.")
 ```
 
-**Files touched.** `src/easycat/config.py`; `tests/test_config.py` (the empty-key assertions
+**Files touched.** `src/easycat/config/easy.py`; `tests/test_config.py` (the empty-key assertions
 that still expect a `ValueError` stay green because we keep the per-provider `ValueError`);
-`tests/test_examples.py:429-434` only needs review if the no-key stderr assertion is exercised
-with a genuinely-missing key.
+`tests/test_examples.py` only needs review if the no-key stderr assertion is exercised with a
+genuinely-missing key.
 
-**Verifier verdict.** The **original snippet was infeasible** — it referenced an undefined
-`_provider_env_var(cfg, kind)` (only `_provider_display_name` exists, `config.py:421-439`) and
-an unimported `EASYCAT_E203` (both `NameError`). **Corrections folded in:** add the import; put
-the coded error only in the None/no-key branch; **leave the per-provider empty-key branch as a
-`ValueError`** to avoid the missing helper and preserve the stage-specific message and the
-existing `pytest.raises(ValueError, ...)` tests (`tests/test_config.py:622-635`). Because
+**Verifier verdict.** Landed and guarded by
+`tests/test_config.py::test_missing_openai_key_with_no_stt_tts_raises_e203`. The **original
+snippet was infeasible** — it referenced an undefined `_provider_env_var(cfg, kind)` (only
+`src/easycat/config/easy.py::_provider_display_name` exists) and an unimported `EASYCAT_E203`
+(both `NameError`). **Corrections folded in:** add the import; put the coded error only in the
+None/no-key branch; **leave the per-provider empty-key branch as a `ValueError`** to avoid the
+missing helper and preserve the stage-specific message and the existing `pytest.raises(ValueError, ...)`
+tests. Because
 `EasyCatError` subclasses `Exception` (not `ValueError`), the no-key flip from `ValueError` to
 `EasyCatError` is an intentional, documented break, not a back-compat hedge.
 
@@ -288,8 +296,9 @@ existing `pytest.raises(ValueError, ...)` tests (`tests/test_config.py:622-635`)
 
 ### 5.4 — Warn at the silent env-pickup site (folded into the `_validate` message)  *(adopt-with-changes)*
 
-**What / why.** `config.py:536-537` is a bare `if` with no `else`, so a missing key is swallowed
-at the pickup site and resurfaces two steps later. The verifier showed that bolting a separate
+**What / why.** The old `EasyConfig.__post_init__` env-pickup branch was a bare `if` with no
+`else`, so a missing key was swallowed at the pickup site and resurfaced two steps later. The
+verifier showed that bolting a separate
 `logger.warning(... explain E203)` here produces *two* messages for one fault **and** misdirects
 to E203 in the exact case that raises a plain `ValueError`, not E203.
 
@@ -300,7 +309,7 @@ breadcrumb at the pickup site is still wanted, it must say only "no `OPENAI_API_
 no `stt`/`tts` configured" with **no** `explain E203` reference (since that branch may raise a
 plain `ValueError`).
 
-**Files touched.** `src/easycat/config.py` (none beyond #5.3 if we adopt the single-message
+**Files touched.** `src/easycat/config/easy.py` (none beyond #5.3 if we adopt the single-message
 route, which the verifier recommends as simpler and more faithful to Zen #9/#11).
 
 **Verifier verdict.** The bolt-on warning is feasible but **not simpler** and misdirects;
@@ -312,12 +321,13 @@ adopt the single-message route in #5.3 instead.
 
 ### 5.5 — Filter the scaffold's template copy so cache artifacts stop shipping  *(adopt)*
 
-**What / why.** `_copy_template` walks the live template dir with `rglob("*")` and copies every
-non-dir file byte-for-byte with no ignore filter (`init.py:296`), so `__pycache__/*.pyc` and a
+**What / why.** `_copy_template` walks the live template dir and used to copy every
+non-dir file byte-for-byte with no ignore filter
+(`src/easycat/cli/scaffold/init.py::_copy_template`), so `__pycache__/*.pyc` and a
 foreign tool's `.ruff_cache/` that sit in the template source at install time ship into a
 brand-new "clean" project — the first artifact the recommended CLI door produces.
 
-**Before** (`init.py:296`)
+**Before** (`src/easycat/cli/scaffold/init.py::_copy_template`, old behavior)
 ```python
 for source in sorted(src_root.rglob("*")):
     if source.is_dir():
@@ -337,7 +347,7 @@ for source in sorted(src_root.rglob("*")):
 
 **Files touched.** `src/easycat/cli/scaffold/init.py`; **add a regression test** asserting no
 generated path contains `__pycache__`/`.ruff_cache` or ends in `.pyc` (`tests/cli/test_init.py`
-currently only does a subset check at `:95`).
+currently only does a subset check for known generated cache directories).
 
 **Verifier verdict.** Bug reproduced live; the filter drops exactly the 4 cache artifacts and
 keeps the 5 real files (the legitimate top-level `.gitignore` survives). Adopt; pair with the
@@ -350,22 +360,24 @@ robust but the denylist is the minimal shippable fix.)
 
 ### 5.6 — Render scaffolded agent instructions with non-ASCII intact  *(adopt)*
 
-**What / why.** `_python_string_literal_contents` uses `json.dumps(value)[1:-1]` (`init.py:246`),
+**What / why.** `_python_string_literal_contents` used `json.dumps(value)[1:-1]`
+(`src/easycat/cli/scaffold/init.py::_python_string_literal_contents`),
 which defaults to `ensure_ascii=True`, so the default instruction's em-dash renders as a literal
 `—`-style escape in the generated `agent.py` — the exact line the scaffold README's #1 next
 step tells the newcomer to edit.
 
-**Before** (`init.py:246`) → **After**
+**Before** (`src/easycat/cli/scaffold/init.py::_python_string_literal_contents`, old behavior) → **After**
 ```python
 return json.dumps(value, ensure_ascii=False)[1:-1]
 ```
 
-**Files touched.** `src/easycat/cli/scaffold/init.py` (one line; optional docstring tweak at
-`:244` noting non-ASCII now passes through).
+**Files touched.** `src/easycat/cli/scaffold/init.py` (one line; optional docstring tweak noting
+non-ASCII now passes through).
 
 **Verifier verdict.** Clean one-line fix; round-trips to the identical runtime string; escaping
 of `\`, `"`, newline is preserved; `ruff` clean under the generated project's config; the
-escaping test (`tests/cli/test_init.py:118`) stays green. Adopt.
+escaping test (`tests/cli/test_init.py::test_template_python_string_literal_escaping`) stays
+green. Adopt.
 
 **Zen.** #7 readability; #1 beautiful.
 
@@ -377,7 +389,7 @@ escaping test (`tests/cli/test_init.py:118`) stays green. Adopt.
 lazy-import curation policy (a maintainer concern), not a "start here." Lead with the runnable
 snippet and the EasyConfig-vs-SessionConfig steer.
 
-**Before** (`__init__.py:1-10`) → **After**
+**Before** (`src/easycat/__init__.py` module docstring, old behavior) → **After**
 ```python
 """EasyCat — a voice bot in three lines.
 
@@ -397,7 +409,7 @@ cheap.
 """
 ```
 
-**Files touched.** `src/easycat/__init__.py:1-10`.
+**Files touched.** `src/easycat/__init__.py`.
 
 **Verifier verdict.** Clean, single-file, zero-risk; serves #11 and #2. **Caveat folded in:**
 include the install hint (`uv add 'easycat[quickstart]'`) so the teaser is honestly runnable —
@@ -410,7 +422,7 @@ copy-paste without `openai-agents` would otherwise raise a raw `ModuleNotFoundEr
 
 ### 5.8 — Add in-code "Next:" signposts forming an in-editor ladder  *(adopt-with-changes)*
 
-**What / why.** `examples/openai_agents_voice.py:1-20` dead-ends in-code (docstring repeats
+**What / why.** `examples/openai_agents_voice.py` dead-ends in-code (docstring repeats
 setup/run only); the rich "Next steps" content exists only in the scaffold-generated README.
 Add a trailing `# Next, try:` block to the canonical example and one-line `Next:` notes to the
 `mic()/browser()/phone()` and `SessionConfig` docstrings.
@@ -422,7 +434,7 @@ Add a trailing `# Next, try:` block to the canonical example and one-line `Next:
 - `SessionConfig`: "Lowest rung: you supply live provider instances. EasyConfig auto-wires
   these for you one rung up."
 
-**Files touched.** `examples/openai_agents_voice.py`; `src/easycat/config.py` (preset
+**Files touched.** `examples/openai_agents_voice.py`; `src/easycat/config/easy.py` (preset
 docstrings); `src/easycat/session/_types.py` (`SessionConfig` docstring).
 
 **Verifier verdict.** Feasible, low-risk (comments/docstrings only — no behavior change). Not a
@@ -436,15 +448,15 @@ differ in field *type* (live providers vs descriptors), not just convenience.
 
 ---
 
-### 5.9 — Validate the agent's shape at construction (fail-fast, honestly scoped)  *(adopt-with-changes)*
+### 5.9 — Validate the agent's shape at construction (fail-fast, honestly scoped)  *(landed; guarded)*
 
 **What / why.** `agent=` is the one required happy-path field and the least validated: a bogus
 `object()` constructs a valid-looking `Session` and dies with an `AttributeError` seconds into
 the first turn. The `@runtime_checkable` `Agent` protocol already exists
-(`session/_types.py:32-36`).
+(`src/easycat/session/_types.py::Agent`).
 
-**After** (placed **before** the `AgentRunner` wrap, in *both* `create_session` *and*
-`create_text_session`)
+**After** (placed in `src/easycat/config/_factory.py::_validate_agent_shape`, before the
+`AgentRunner` wrap, in *both* `create_session` *and* `create_text_session`)
 ```python
 import inspect
 from easycat.session._types import Agent as _AgentProto
@@ -454,22 +466,28 @@ if config.wrap_agent and not isinstance(adapted, ExternalAgentBridge):
     run_attr = getattr(adapted, "run", None)
     if not (isinstance(adapted, _AgentProto)
             and inspect.iscoroutinefunction(run_attr)):
-        raise EasyConfigError(  # match config.py's existing error style
+        raise EasyConfigError(  # match EasyConfig's existing error style
             "agent must expose `async run(text) -> str` or be a recognized "
             "framework agent (see auto_adapt_agent's supported list)."
         )
 ```
 
-**Files touched.** `src/easycat/config.py` (both factories, `:769` and `:1129`); optionally
+**Files touched.** `src/easycat/config/_factory.py` (both `create_session` and
+`src/easycat/config/_factory.py::create_text_session` via
+`src/easycat/config/_factory.py::_validate_agent_shape`); optionally
 `src/easycat/errors.py` if a coded error is preferred over `EasyConfigError`.
 
-**Verifier verdict.** Feasible, harmless to power users, but **oversold** — `@runtime_checkable`
-only checks *method-name presence*, so a sync `run`, a wrong-arity `run`, or a non-callable
+**Verifier verdict.** Landed and guarded by
+`tests/test_config.py::test_create_session_rejects_bogus_agent`,
+`tests/test_config.py::test_create_session_rejects_sync_run_agent`, and
+`tests/test_config.py::test_create_session_skips_agent_check_when_wrap_agent_false`. The
+original proposal was **oversold** — `@runtime_checkable` only checks *method-name presence*,
+so a sync `run`, a wrong-arity `run`, or a non-callable
 `run` still pass a bare `isinstance`. **Corrections folded in:** (1) placement is load-bearing —
 the check must run on `adapted` **before** the `AgentRunner` wrap (`AgentRunner` satisfies both
 `Agent` and `ExternalAgentBridge`, so a post-wrap check is a no-op); (2) tighten beyond bare
 `isinstance` with `inspect.iscoroutinefunction` (and ideally a 1-arg signature check) to catch
-the realistic mistakes; (3) apply to both factories; (4) reconcile with `config.py`'s existing
+the realistic mistakes; (3) apply to both factories; (4) reconcile with `src/easycat/config/easy.py`'s existing
 `EasyConfigError`; (5) keep the `wrap_agent=False` skip so deliberate custom flows pass. This is
 fail-fast DX, **not** an onramp simplification (concept delta ≈ 0).
 
@@ -477,30 +495,33 @@ fail-fast DX, **not** an onramp simplification (concept delta ≈ 0).
 
 ---
 
-### 5.10 — Print a "what got wired" summary on the TTY happy path  *(adopt-with-changes)*
+### 5.10 — Print a "what got wired" summary on the TTY happy path  *(landed)*
 
 **What / why.** `EasyConfig` silently derives STT/TTS/echo-cancellation from one key
-(`config.py:553-565`) with no echo of what it chose. Make the auto-wiring audible on a TTY.
+(`src/easycat/config/easy.py::EasyConfig.__post_init__`) with no echo of what it chose. Make the
+auto-wiring audible on a TTY.
 
-**After** (`helpers.py:88`, reusing the existing TTY/PYTEST guard)
+**After** (`src/easycat/helpers.py::run`, reusing the existing TTY/PYTEST guard)
 ```python
 if sys.stderr.isatty() and not os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("EASYCAT_QUIET"):
     print(_wired_summary(config), file=sys.stderr)   # lazy import of the catalogs inside
     attach_runtime_feedback(session)
 ```
 
-**Files touched.** `src/easycat/helpers.py` (new private `_wired_summary`);
-`src/easycat/config.py` / `stt/factory.py` / `tts/factory.py` (reuse `_provider_display_name`,
-`config.py:421-439`).
+**Files touched.** `src/easycat/helpers.py` (private `src/easycat/helpers.py::_wired_summary`);
+`src/easycat/config/easy.py` / `stt/factory.py` / `tts/factory.py` (reuse
+`src/easycat/config/easy.py::_provider_display_name`).
 
-**Verifier verdict.** Feasible, gated, breaks nothing (the pytest short-circuit keeps tests
+**Verifier verdict.** Landed and gated; breaks nothing (the pytest short-circuit keeps tests
 silent). **Corrections folded in:** (1) the proposed `echo-cancel=auto` string is **wrong at
 print time** — `echo_cancellation` is already resolved to `enabled=True/False`
-(`config.py:564-565`); print the resolved on/off, annotating `(auto)` only when
-`enable_echo_cancellation is None`. (2) There is **no transport name registry** (`config.py:325`
-is a type→factory dict), so `_wired_summary` must own a small `type → label` map
+by `src/easycat/config/easy.py::EasyConfig.__post_init__`; print the resolved on/off, annotating
+`(auto)` only when `enable_echo_cancellation is None`. (2) There is **no transport name registry**
+(`src/easycat/config/_factory.py::_transport_factories` is a type→factory dict), so
+`_wired_summary` must own a small `type → label` map
 (`LocalTransportConfig→local-mic`, `WebRTCTransportConfig→browser`, `TwilioTransportConfig→phone`,
-…). (3) Add the `EASYCAT_QUIET` opt-out; honor `NO_COLOR`/`CI` to match `_output.py:36-42`. It
+…). (3) Add the `EASYCAT_QUIET` opt-out; honor `NO_COLOR`/`CI` to match
+`src/easycat/_console.py::color_enabled`. It
 is a comprehension win, not a line/concept reduction.
 
 **Zen.** #2 explicit is better than implicit.
@@ -509,14 +530,14 @@ is a comprehension win, not a line/concept reduction.
 
 ### 5.11 — Collapse teardown to one public idiom: `async with session:`  *(adopt-with-changes)*
 
-**What / why.** `Session` exposes five teardown-ish verbs (`start/stop/shutdown/close/destroy`,
-`_session.py:1187/1270/1340/1421/1439`); `close()` *sounds* like the canonical "I'm done" call
+**What / why.** `Session` exposes multiple teardown-ish verbs (`start` / `stop` / `shutdown` /
+`close` / `destroy`); `close()` *sounds* like the canonical "I'm done" call
 but tears down no backends (its own docstring warns callers off it), and `stop`/`shutdown` are
 near-duplicates. Make `async with session:` the one documented public idiom.
 
 **After**
 ```python
-async with create_session(cfg) as session:   # __aenter__/__aexit__ already wired (_session.py:1113-1132)
+async with create_session(cfg) as session:   # Session.__aenter__/__aexit__ already wired
     await session.wait_closed()
 # Keep ONE explicit verb stop(force=False); demote close()/destroy() to underscore-private
 # (bodies UNCHANGED so postmortem-journal teardown semantics are preserved).
@@ -536,11 +557,12 @@ deliberate (documented) change since they are currently public.
 
 ---
 
-### 5.12 — Extract a shared base for the 9 duplicated config fields (Part A only)  *(adopt Part A; drop Part B)*
+### 5.12 — Extract a shared base for the 9 duplicated config fields (Part A only)  *(landed Part A; Part B dropped)*
 
 **What / why.** `EasyConfig` and `TextSessionConfig` re-declare the same 9 agent/journal/debug
-fields with no shared base, and the docstring literally tells users to "copy the shared fields
-across" (`config.py:1024`). Extract `_AgentSessionConfig` and have both inherit it.
+fields with no shared base, and the old docstring literally told users to "copy the shared
+fields across". Extract `src/easycat/config/easy.py::_AgentSessionConfig` and have both inherit
+it.
 
 **After**
 ```python
@@ -562,15 +584,17 @@ class EasyConfig(_AgentSessionConfig): ...          # audio fields (all with def
 class TextSessionConfig(_AgentSessionConfig): ...
 ```
 
-**Files touched.** `src/easycat/config.py`.
+**Files touched.** `src/easycat/config/easy.py`.
 
-**Verifier verdict.** **Part A (the base) is safe and a clean DRY win** — every construction site
-is keyword-only, nothing relies on field order, and the snapshot path uses a name-keyed
-allowlist (`config.py:680-687`), not `astuple`. Lets you delete the "copy the shared fields
-across" docstring. **Part B is DROPPED:** removing `create_text_session`'s loose-kwargs branch
-**breaks** the shipped text-chat scaffold (`text-chat/agent.py:12` uses `create_text_session(agent=agent)`),
-~15+ tests, and the explicit regression test `tests/test_config.py:649`, and would force
-newcomers onto `TextSessionConfig` (not even in `__all__` today) — a worse onramp. Keep the dual
+**Verifier verdict.** **Part A (the base) has landed and is a clean DRY win** — every
+construction site is keyword-only, nothing relies on field order, and the snapshot path uses a
+name-keyed allowlist (`src/easycat/config/_factory.py::_safe_config_ns`), not `astuple`. Lets you
+delete the "copy the shared fields across" docstring. **Part B is DROPPED:** removing
+`create_text_session`'s loose-kwargs branch **breaks** the shipped text-chat scaffold
+(`src/easycat/cli/scaffold/templates/text-chat/agent.py` uses
+`create_text_session(agent=agent)`), ~15+ tests, and explicit regression tests in
+`tests/test_config.py`, and would force newcomers onto `TextSessionConfig` (not even in
+`__all__` today) — a worse onramp. Keep the dual
 signature exactly as-is. **Caveat:** this is a maintainer-facing DRY win, essentially invisible to
 a newcomer — do not sell it as concept reduction. Future maintainers must keep base fields
 all-defaulted so the subclass `field(default_factory=...)` audio fields compose.
@@ -599,39 +623,39 @@ with no torch line.
 
 ---
 
-## 6. Recommended first PR
+## 6. Shipped first PR
 
-**Ship §5.2 + §5.3 together: make the most common first-run failure teach the fix, on the path
-beginners actually take.** This is the single highest-leverage change because (a) the forgotten
-`OPENAI_API_KEY` is statistically the #1 first-run error, (b) the fix re-uses machinery that
-already exists (`EASYCAT_E203` + its substituted fix template), and (c) it lands the benefit on
-the *programmatic* path (`python bot.py` / `run()`), not just the CLI.
+**§5.2 + §5.3 shipped together: the most common first-run failure now teaches the fix, on the
+path beginners actually take.** This remains the single highest-leverage change because (a) the
+forgotten `OPENAI_API_KEY` is statistically the #1 first-run error, (b) the fix re-uses machinery
+that already exists (`EASYCAT_E203` + its substituted fix template), and (c) it lands the benefit
+on the *programmatic* path (`python bot.py` / `run()`), not just the CLI.
 
-**Concrete diff-level sketch (implementable today):**
+**Landed shape:**
 
-1. `src/easycat/errors.py` — add the `_render()` method to `EasyCatError` (§5.2), with the
+1. `src/easycat/errors.py` — `EasyCatError` has the `_render()` method from §5.2, with the
    `try/except (KeyError, IndexError)` guard around `entry.fix.format(**self.context)` mirroring
-   the factory guard at `errors.py:96-101`. Keep `EasyCatError(Exception)` (do not subclass
+   `src/easycat/errors.py::register`. Keep `EasyCatError(Exception)` (do not subclass
    `ValueError`).
-2. `src/easycat/config.py` —
-   - add `from easycat.errors import EASYCAT_E203` (top of file or local, matching existing
-     callers);
-   - in `_validate` (`config.py:598-606`), insert the no-key/None branch
+2. `src/easycat/config/easy.py` —
+   - imports `EASYCAT_E203`;
+   - `EasyConfig._validate` has the no-key/None branch
      `if (self.stt is None or self.tts is None) and not self.openai_api_key: raise EASYCAT_E203(var="OPENAI_API_KEY")`
      **before** the two `ValueError` lines;
    - **leave** the per-provider empty-key `ValueError` (with `_provider_display_name`) untouched —
      there is no `(cfg, kind) → env-var` helper today and the None branch captures ~all the
      leverage.
 3. `tests/` —
-   - `tests/test_config.py` — add a case asserting `EASYCAT_E203` (an `EasyCatError`) is raised
+   - `tests/test_config.py` has a case asserting `EASYCAT_E203` (an `EasyCatError`) is raised
      when no key and no `stt`/`tts` are supplied; verify the existing `pytest.raises(ValueError, ...)`
-     empty-key cases at `:622-635` still pass (they do, because that branch is unchanged);
-   - `tests/test_examples.py:429-434` — review only if a no-key stderr assertion is exercised.
+     empty-key cases still pass (they do, because that branch is unchanged);
+   - `tests/test_examples.py` — review only if a no-key stderr assertion is exercised.
 4. Manual check: `OPENAI_API_KEY= python bot.py` now prints
    `EASYCAT_E203: Missing API key: OPENAI_API_KEY\n  Fix: Set the env var: ...\n  Run \`easycat explain EASYCAT_E203\` for details.`
    instead of `ValueError: STT configuration is required.`
 
-This PR is self-contained (`errors.py` + `config.py` + tests), introduces no new public name, no
+This PR is self-contained (`src/easycat/errors.py` + `src/easycat/config/easy.py` + tests),
+introduces no new public name, no
 new concept, and breaks no power user — the CLI/JSON output reads `.code/.message/.context`, not
 `str(err)`.
 

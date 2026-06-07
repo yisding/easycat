@@ -221,6 +221,48 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
         assert callable(symbol)
 
 
+def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
+    """Keep the DX onramp plan from drifting back to brittle source line refs."""
+    from easycat.config._factory import _validate_agent_shape, create_session, create_text_session
+    from easycat.config.easy import EasyConfig, _AgentSessionConfig
+    from easycat.errors import EasyCatError, register
+    from easycat.helpers import _wired_summary, run
+
+    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    line_refs = re.findall(r"`?[\w./-]+\.(?:py|md):\d+(?:-\d+)?`?", plan)
+
+    assert not line_refs, "DX onramp plan uses brittle file-line refs: " + ", ".join(line_refs)
+    assert "src/easycat/config.py" not in plan
+    assert "`config.py`" not in plan
+
+    symbol_refs = {
+        "src/easycat/config/easy.py::EasyConfig.__post_init__": EasyConfig.__post_init__,
+        "src/easycat/config/easy.py::EasyConfig._validate": EasyConfig._validate,
+        "src/easycat/config/easy.py::_AgentSessionConfig": _AgentSessionConfig,
+        "src/easycat/config/_factory.py::create_session": create_session,
+        "src/easycat/config/_factory.py::create_text_session": create_text_session,
+        "src/easycat/config/_factory.py::_validate_agent_shape": _validate_agent_shape,
+        "src/easycat/errors.py::EasyCatError.__init__": EasyCatError.__init__,
+        "src/easycat/errors.py::register": register,
+        "src/easycat/helpers.py::run": run,
+        "src/easycat/helpers.py::_wired_summary": _wired_summary,
+    }
+    for symbol_ref, symbol in symbol_refs.items():
+        assert symbol_ref in plan
+        assert callable(symbol)
+
+    landed_statuses = {
+        "5.2": "landed; guarded",
+        "5.3": "landed; guarded",
+        "5.9": "landed; guarded",
+        "5.10": "landed",
+        "5.12": "landed Part A; Part B dropped",
+    }
+    for number, status in landed_statuses.items():
+        pattern = rf"^### {re.escape(number)} .* \*\({re.escape(status)}\)\*$"
+        assert re.search(pattern, plan, re.MULTILINE), f"section {number} status drifted"
+
+
 # ── Debugger auto-launch on debug="full" ─────────────────────────
 
 
