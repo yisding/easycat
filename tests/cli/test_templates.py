@@ -83,6 +83,8 @@ _VOICE_TEMPLATE_PRESETS: dict[str, str] = {
 }
 _GITIGNORE_PATTERNS: tuple[str, ...] = (
     ".env",
+    ".env.*",
+    "!.env.example",
     ".venv/",
     ".agents/",
     ".claude/",
