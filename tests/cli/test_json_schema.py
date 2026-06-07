@@ -167,6 +167,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
     assert isinstance(payload["git"], bool)
     assert payload["run_command"] == "uv run --env-file .env python agent.py"
     assert payload["check_command"] == "uv run ruff check agent.py"
+    assert payload["fix_command"] == "uv run ruff check --fix agent.py"
     assert payload["next_step_commands"] == [
         f"cd {shlex.quote(str(tmp_path / 'demo'))}",
         "cp .env.example .env",
@@ -181,6 +182,7 @@ def test_init_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.Monke
         "uv run --env-file .env python agent.py",
     ]
     assert "after cd into the scaffolded project" in payload["command_note"]
+    assert "fix_command run after cd into the scaffolded project" in payload["command_note"]
 
 
 def test_init_list_templates_envelope(cli: CliRunner) -> None:
@@ -210,6 +212,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         "next_step_commands",
         "run_command",
         "check_command",
+        "fix_command",
     }
     for entry in payload["catalog"]:
         assert required_keys <= set(entry)
@@ -232,6 +235,7 @@ def test_init_list_templates_envelope(cli: CliRunner) -> None:
         ]
         assert entry["run_command"].startswith("uv run ")
         assert entry["check_command"].startswith("uv run ruff check ")
+        assert entry["fix_command"].startswith("uv run ruff check --fix ")
         assert isinstance(entry["best_for"], str)
         assert entry["best_for"]
         assert isinstance(entry["base_extras"], list)
@@ -367,7 +371,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "env requirements" in descriptions["README.md#cli"]
     assert "optional env knobs" in descriptions["README.md#cli"]
     assert "generated files" in descriptions["README.md#cli"]
-    assert "copyable create/preflight/check/docs/run commands" in descriptions["README.md#cli"]
+    assert "copyable create/preflight/check/fix/docs/run commands" in descriptions["README.md#cli"]
     assert audiences["README.md#choose-your-path"] == "all readers"
     assert audiences["README.md#install"] == "new users"
     assert audiences["README.md#cli"] == "app builders"

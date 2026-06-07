@@ -277,6 +277,7 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "copy/sync/doctor/check/docs/json-schema/run" in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
+    assert "`fix_command`" in result.stdout
     assert "accepted `--config` input shape" in stdout
     assert "EASYCAT_E102" in result.stdout
     assert "agent.py" in result.stdout
@@ -335,6 +336,7 @@ def test_explain_meta_json_schema_documents_error_fix(
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in result.stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
+    assert "`fix_command`" in result.stdout
     assert "`next_step_commands`" in result.stdout
     for key in _doctor_keys_from_cli(cli, tmp_path, monkeypatch):
         assert f"`{key}`" in result.stdout
@@ -416,6 +418,7 @@ def test_explain_meta_json_schema_json_includes_command_specific_fields(
     assert "`path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`" in payload["body"]
     assert "`run_command`" in payload["body"]
     assert "`check_command`" in payload["body"]
+    assert "`fix_command`" in payload["body"]
     assert "`next_step_commands`" in payload["body"]
     for key in _doctor_keys_from_cli(cli, tmp_path, monkeypatch):
         assert f"`{key}`" in payload["body"]

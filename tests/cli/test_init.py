@@ -43,7 +43,7 @@ def test_init_help_describes_template_catalog_commands(cli: CliRunner) -> None:
     assert "extras" in help_text
     assert "env vars" in help_text
     assert "files" in help_text
-    assert "preflight check docs run commands" in help_words
+    assert "preflight check fix docs run commands" in help_words
     assert "explain" in help_text
     assert "init-schema" in help_text
 
@@ -83,7 +83,7 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "JSON catalog next_step_commands previews the my-agent post-create sequence" in (
         result.stdout
     )
-    assert "Doctor, Check, Docs, and Run after cd are run inside the scaffolded project" in (
+    assert "Doctor, Check, Fix, Docs, and Run after cd are run inside the scaffolded project" in (
         result.stdout
     )
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
@@ -94,6 +94,9 @@ def test_list_templates(cli: CliRunner) -> None:
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
         assert "Doctor after cd: uv run easycat doctor --env-file .env" in result.stdout
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
+        assert f"Fix if needed after cd: {_template_readme_fix_command(template)}" in (
+            result.stdout
+        )
         assert "Docs after cd: uv run easycat docs" in result.stdout
         assert (
             "App-builder docs after cd: uv run easycat docs --audience app-builders"
@@ -120,6 +123,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
             "create_command": "easycat init demo --template demo[beta]",
             "repo_create_command": "uv run easycat init demo --template demo[beta]",
             "check_command": "uv add 'easycat[openai-agents]'",
+            "fix_command": "uv run ruff check --fix agent[beta].py",
             "run_command": "uv run --env-file .env python agent.py",
         }
     ]
@@ -137,6 +141,7 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "SDK[OPTIONAL]" in rendered
     assert "easycat init demo --template demo[beta]" in rendered
     assert "uv run easycat doctor --env-file .env" in rendered
+    assert "uv run ruff check --fix agent[beta].py" in rendered
     assert "uv run easycat docs" in rendered
     assert "uv run easycat docs --audience app-builders" in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
@@ -153,6 +158,7 @@ def test_list_templates_json(cli: CliRunner) -> None:
         "catalog next_step_commands preview the my-agent post-create sequence"
         in payload["command_note"]
     )
+    assert "fix_command run after cd into the scaffolded project" in payload["command_note"]
     assert "after cd into the scaffolded project" in payload["command_note"]
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
@@ -853,6 +859,15 @@ def _template_readme_check_command(template: str) -> str:
     return commands[0]
 
 
+def _template_readme_fix_command(template: str) -> str:
+    readme = (init_module._templates_root() / template / "README.md").read_text(encoding="utf-8")
+    check_section = readme.split("## Check", 1)[1].split("## Next steps", 1)[0]
+    commands = re.findall(r"`(uv run ruff check --fix [^`]+)`", check_section)
+
+    assert len(commands) == 1, f"{template}/README.md should have one fix command"
+    return commands[0]
+
+
 def test_init_next_steps_load_env_for_doctor(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -866,6 +881,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert "parseable setup checks" in result.stderr
     assert "uv run ruff check agent.py" in result.stderr
     assert "lint and syntax check" in result.stderr
+    assert "uv run ruff check --fix agent.py" in result.stderr
+    assert "auto-fix Ruff issues if the check reports them" in normalized_stderr
     assert "uv run python -m py_compile" not in result.stderr
     assert "uv run easycat docs" in result.stderr
     assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
@@ -937,6 +954,7 @@ def test_init_next_steps_match_template_readme_check_command(
 
     assert result.exit_code == 0, result.stderr
     assert _template_readme_check_command(template) in " ".join(result.stderr.split())
+    assert _template_readme_fix_command(template) in " ".join(result.stderr.split())
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
@@ -969,6 +987,7 @@ def test_init_json_next_step_commands_match_template_readme(
     ]
     assert payload["run_command"] == _template_readme_run_command(template)
     assert payload["check_command"] == _template_readme_check_command(template)
+    assert payload["fix_command"] == _template_readme_fix_command(template)
     assert payload["next_step_commands"] == expected_commands
     assert "after cd into the scaffolded project" in payload["command_note"]
 
@@ -1011,3 +1030,4 @@ def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRu
         )
         assert catalog[template]["run_command"] == _template_readme_run_command(template)
         assert catalog[template]["check_command"] == _template_readme_check_command(template)
+        assert catalog[template]["fix_command"] == _template_readme_fix_command(template)

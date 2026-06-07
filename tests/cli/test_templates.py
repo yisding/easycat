@@ -167,6 +167,7 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
         assert entry["next_step_commands"] == _next_step_commands(Path("my-agent"), name)
         assert entry["run_command"]
         assert entry["check_command"]
+        assert entry["fix_command"]
         assert entry["required_env"] == _TEMPLATE_CATALOG[name]["required_env"]
         assert entry["optional_env"] == _TEMPLATE_CATALOG[name]["optional_env"]
 
@@ -238,6 +239,15 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
         if target not in files:
             problems.append(f"{name}: check_command target {target} is not generated")
 
+    fix_tokens = shlex.split(str(entry["fix_command"]))
+    if fix_tokens[:5] != ["uv", "run", "ruff", "check", "--fix"]:
+        problems.append(f"{name}: fix_command is not a repo-local ruff auto-fix command")
+    for target in fix_tokens[5:]:
+        if target not in files:
+            problems.append(f"{name}: fix_command target {target} is not generated")
+    if fix_tokens[:4] == check_tokens[:4] and fix_tokens[5:] != check_tokens[4:]:
+        problems.append(f"{name}: fix_command targets do not match check_command targets")
+
     run_tokens = shlex.split(str(entry["run_command"]))
     if run_tokens[:4] != ["uv", "run", "--env-file", ".env"]:
         problems.append(f"{name}: run_command does not load .env through uv")
@@ -282,6 +292,7 @@ def test_template_catalog_command_validator_checks_generated_targets() -> None:
         "repo_create_command": "easycat init my-agent --template broken",
         "next_step_commands": ("cd my-agent", "uv sync"),
         "check_command": "uv run ruff check missing.py",
+        "fix_command": "uv run ruff check --fix missing.py",
         "run_command": "uv run --env-file .env python missing.py",
     }
 
@@ -291,6 +302,7 @@ def test_template_catalog_command_validator_checks_generated_targets() -> None:
     assert "broken: repo_create_command is not repo-local CLI form" in problems
     assert "broken: next_step_commands are not the canonical post-create sequence" in problems
     assert "broken: check_command target missing.py is not generated" in problems
+    assert "broken: fix_command target missing.py is not generated" in problems
     assert "broken: run_command Python target missing.py is not generated" in problems
 
 

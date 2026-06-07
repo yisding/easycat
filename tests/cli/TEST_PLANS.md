@@ -175,7 +175,7 @@ first run.
   (mode, transport, framework, best-fit guidance, base package requirement,
   base extras, required environment variables, optional environment knobs,
   generated files, description, and copyable create commands plus
-  post-scaffold doctor/check/docs/run commands), and `--json` exposes the same
+  post-scaffold doctor/check/fix/docs/run commands), and `--json` exposes the same
   catalog for tooling.
 - `pyproject.toml` pins `easycat[<extra>]`.
 - `pyproject.toml` includes a `dev` dependency group with Ruff so

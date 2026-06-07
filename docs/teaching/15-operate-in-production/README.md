@@ -452,7 +452,7 @@ Run easycat explain json-schema for CLI JSON.
   you need to compare transports and agent frameworks; the list includes
   base `easycat[...]` package requirements and extras, required environment
   variables, optional environment knobs, generated files, and copyable
-  create/preflight/check/docs/run commands for each template. Use
+  create/preflight/check/fix/docs/run commands for each template. Use
   `uv run easycat init --list-templates --json` when a script or coding agent
   needs the same template catalog and post-scaffold command previews.
 - **`uv run easycat doctor`** — checks API keys, Python version, optional

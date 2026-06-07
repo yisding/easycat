@@ -95,10 +95,12 @@ context. Each `catalog` row includes:
 `base_requirement`, `required_env`, `optional_env`, `files`, `description`,
 `create_command` (installed CLI form), `repo_create_command`
 (repo-local `uv run` form from the repository root), `next_step_commands`
-(a `my-agent` preview sequence), `run_command`, and `check_command`.
+(a `my-agent` preview sequence), `run_command`, `check_command`, and
+`fix_command`.
 Successful `easycat init NAME --json` also includes
 `next_step_commands`, an ordered copy/sync/doctor/check/docs/json-schema/run
-sequence matching the human success footer.
+normal-path sequence from the human success footer, plus `fix_command` for
+Ruff-fixable lint findings.
 Bump `schema_version` when the accepted `--config` input shape changes;
 keep older input schemas documented before accepting a newer version.
 """
@@ -143,11 +145,12 @@ entry points include:
                          `base_extras`, `base_requirement`, `required_env`,
                          `optional_env`, `files`, `create_command`,
                          `repo_create_command`, `next_step_commands`,
-                         `run_command`, and `check_command`;
+                         `run_command`, `check_command`, and `fix_command`;
                          `command_note` explains installed creation, repo-root
                          creation, and post-scaffold command context
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
-  `run_command`, `check_command`, `next_step_commands`, `command_note` -
+  `run_command`, `check_command`, `fix_command`, `next_step_commands`,
+  `command_note` -
                          `easycat init NAME --json`
   `environment`, `checks` - `easycat doctor --json`; each check row has
                          `name`, `status`, and `detail`, and may include

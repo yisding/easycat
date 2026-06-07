@@ -108,6 +108,7 @@ class _TemplateCatalogEntry(_TemplateCatalogMetadata):
     next_step_commands: list[str]
     run_command: str
     check_command: str
+    fix_command: str
 
 
 _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
@@ -178,12 +179,12 @@ _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
 _INIT_COMMAND_NOTE = (
     "create_command uses installed CLI form; repo_create_command runs from this repository "
     "root; catalog next_step_commands preview the my-agent post-create sequence; "
-    "run_command and check_command run after cd into the scaffolded project."
+    "run_command, check_command, and fix_command run after cd into the scaffolded project."
 )
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "JSON catalog next_step_commands previews the my-agent post-create sequence; "
-    "Doctor, Check, Docs, and Run after cd are run inside the scaffolded project."
+    "Doctor, Check, Fix, Docs, and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"
@@ -297,6 +298,7 @@ def _available_template_catalog() -> list[_TemplateCatalogEntry]:
                 "next_step_commands": _next_step_commands(Path("my-agent"), name),
                 "run_command": _next_step_run_command(name),
                 "check_command": _next_step_check_command(name),
+                "fix_command": _next_step_fix_command(name),
                 **metadata,
             }
         )
@@ -336,6 +338,7 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"
             f"  [dim]Doctor after cd:[/] {escape(_NEXT_STEP_DOCTOR_COMMAND)}\n"
             f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
+            f"  [dim]Fix if needed after cd:[/] {escape(entry['fix_command'])}\n"
             f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
             f"  [dim]App-builder docs after cd:[/] "
             f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_COMMAND)}\n"
@@ -357,6 +360,12 @@ def _next_step_check_command(template: str) -> str:
     """Return the scaffold-local lint/syntax check command for the success footer."""
     filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
     return "uv run ruff check " + " ".join(filenames)
+
+
+def _next_step_fix_command(template: str) -> str:
+    """Return the scaffold-local auto-fix command for Ruff-fixable lint findings."""
+    filenames = _TEMPLATE_CHECK_FILES.get(template, ("agent.py",))
+    return "uv run ruff check --fix " + " ".join(filenames)
 
 
 def _next_step_commands(target: Path, template: str) -> list[str]:
@@ -704,7 +713,7 @@ def init(
         "--list-templates",
         help=(
             "Show template guidance, base package requirements, extras, env vars, files, "
-            "and preflight/check/docs/run commands."
+            "and preflight/check/fix/docs/run commands."
         ),
     ),
     force: bool = typer.Option(
@@ -785,6 +794,7 @@ def init(
                 git=git_ok,
                 run_command=_next_step_run_command(cfg.template),
                 check_command=_next_step_check_command(cfg.template),
+                fix_command=_next_step_fix_command(cfg.template),
                 next_step_commands=_next_step_commands(target, cfg.template),
                 command_note=_INIT_COMMAND_NOTE,
             )
@@ -811,6 +821,10 @@ def init(
     )
     stderr_console.print(
         f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
+    )
+    stderr_console.print(
+        f"  {_next_step_fix_command(cfg.template)} "
+        "[dim]# auto-fix Ruff issues if the check reports them[/]"
     )
     stderr_console.print(
         "  uv run easycat docs [dim]# find learning, maintenance, validation, "

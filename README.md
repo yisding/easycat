@@ -102,7 +102,7 @@ them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
 easycat init my-agent    # scaffold a new project from a template
-easycat init --list-templates # compare templates, base package requirements, env vars, files, preflight/check/docs/run commands
+easycat init --list-templates # compare templates, base package requirements, env vars, files, preflight/check/fix/docs/run commands
 easycat init --list-templates --json # emit the machine-readable template catalog
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat doctor --json    # emit machine-readable environment checks
@@ -138,7 +138,7 @@ From an empty directory, `easycat init --list-templates` shows the available
 scaffolds with best-fit guidance, the base `easycat[...]` package requirement
 and extras, required environment variables, optional environment knobs,
 generated files, transport, framework, and copyable
-create/preflight/check/docs/run commands.
+create/preflight/check/fix/docs/run commands.
 `easycat init my-agent` scaffolds the same one shown below: the canonical
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
@@ -159,7 +159,7 @@ as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
 `audience_alias_note`, `command_note`, `base_requirement`, `create_command`,
 `repo_create_command`,
 `next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
-`environment`, `checks`, `validation`, `source_path`, and
+`fix_command`, `environment`, `checks`, `validation`, `source_path`, and
 `fidelity_effective`, and error fields such as `report_path`, `path`, and
 `output_path`. Replace uppercase placeholders in command hints, such as `PATH`,
 and angle-bracket placeholders such as `<session_id>`, before running them.

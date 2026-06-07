@@ -528,7 +528,7 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run easycat init my-agent" in intro
     assert "uv run easycat init --list-templates --json" in intro
     assert "same template catalog" in normalized_intro
-    assert "copyable create/preflight/check/docs/run commands" in intro
+    assert "copyable create/preflight/check/fix/docs/run commands" in intro
     assert "browser WebRTC" in normalized_intro
     assert "Twilio" in intro
     assert commands == [
