@@ -92,6 +92,17 @@ through `uv run` so the command uses the checked-out EasyCat package and its
 managed virtualenv. Each slice writes a JSON + JUnit report under
 `.easycat/validation/`:
 
+| If your change touches | Run | Why |
+| --- | --- | --- |
+| Most code, docs, CLI help, unit behavior | `uv run easycat validate quick` | deterministic local PR gate |
+| WebSocket, WebRTC, transports, or localhost server behavior | `uv run easycat validate socket` | socket and local integration coverage |
+| Provider protocols, cassettes, contract matrix, or agent bridges | `uv run easycat validate contracts` | offline provider/protocol/bridge contracts |
+| Queues, load, reliability sampling, or saturation behavior | `uv run easycat validate stress` | local stress and saturation signals |
+| Live latency budgets or end-to-end timing | `uv run easycat validate latency --smoke` | low-cost live latency probe |
+| Live provider adapters, credentials, or provider/surface canaries | `uv run easycat validate live --provider openai` | live provider behavior |
+| Packaging, release workflows, or installed-wheel behavior | `uv run easycat validate release` | strict installed-wheel aggregate gate |
+| A saved validation artifact | `uv run easycat validate report .easycat/validation/latest.json` | latest report summary |
+
 | Slice | Command | Marker selection |
 | --- | --- | --- |
 | `quick` | `uv run easycat validate quick` | not integration_socket / live / slow / stress / flaky |

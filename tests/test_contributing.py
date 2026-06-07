@@ -15,6 +15,9 @@ _DEV_LOOP_ROW_RE = re.compile(
 _VALIDATION_ROW_RE = re.compile(
     r"^\| `(?P<slice>[^`]+)` \| `(?P<command>[^`]+)` \| (?P<markers>[^|]+) \|$"
 )
+_VALIDATION_CHOOSER_ROW_RE = re.compile(
+    r"^\| (?P<touches>[^|]+) \| `(?P<command>[^`]+)` \| (?P<why>[^|]+) \|$"
+)
 
 
 def _pytest_marker_names() -> set[str]:
@@ -65,6 +68,24 @@ def _validation_slice_rows() -> list[dict[str, str]]:
             rows.append(match.groupdict())
 
     assert rows, "CONTRIBUTING.md validation-slices table was not found"
+    return rows
+
+
+def _validation_chooser_rows() -> list[dict[str, str]]:
+    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    section = contributing.split("## Validation slices", 1)[1].split("## ", 1)[0]
+    rows: list[dict[str, str]] = []
+
+    for line in section.splitlines():
+        match = _VALIDATION_CHOOSER_ROW_RE.match(line)
+        if (
+            match is not None
+            and match.group("touches") != "If your change touches"
+            and not match.group("touches").strip().startswith("`")
+        ):
+            rows.append(match.groupdict())
+
+    assert rows, "CONTRIBUTING.md validation chooser table was not found"
     return rows
 
 
@@ -205,6 +226,32 @@ def test_contributing_validation_slice_commands_use_repo_local_uv_run() -> None:
     assert not stale, "CONTRIBUTING.md validation commands should use uv run: " + "; ".join(stale)
 
 
+def test_contributing_validation_chooser_tracks_slice_commands() -> None:
+    slice_commands = {row["slice"]: row["command"] for row in _validation_slice_rows()}
+    chooser_rows = _validation_chooser_rows()
+    chooser_commands = {row["command"] for row in chooser_rows}
+
+    for slice_name in ("quick", "socket", "stress", "contracts", "latency", "live", "release"):
+        assert slice_commands[slice_name] in chooser_commands
+    assert "uv run easycat validate report .easycat/validation/latest.json" in chooser_commands
+    for row in chooser_rows:
+        assert row["command"].startswith("uv run easycat validate ")
+        assert row["touches"].strip()
+        assert row["why"].strip()
+    normalized_rows = " ".join(" ".join(row.values()) for row in chooser_rows)
+    for phrase in (
+        "Most code, docs, CLI help, unit behavior",
+        "WebSocket, WebRTC, transports",
+        "Provider protocols, cassettes, contract matrix, or agent bridges",
+        "Queues, load, reliability sampling, or saturation behavior",
+        "Live latency budgets or end-to-end timing",
+        "Live provider adapters, credentials, or provider/surface canaries",
+        "Packaging, release workflows, or installed-wheel behavior",
+        "A saved validation artifact",
+    ):
+        assert phrase in normalized_rows
+
+
 def test_contributing_marker_taxonomy_lists_pytest_markers() -> None:
     section = _contributing_marker_taxonomy()
     missing = sorted(
@@ -284,7 +331,9 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         assert f"`{token}`" in section
     for phrase in (
         "development-loop table",
+        "validation chooser table",
         "validation-slices table",
+        "narrowest useful validation lane",
         "strict pytest markers",
         "provider/surface pairing",
         "flaky quarantine metadata",
@@ -299,6 +348,7 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "test_contributing_development_loop_lists_public_just_recipes",
         "test_contributing_validation_slices_track_public_validate_lanes",
         "test_contributing_validation_slice_commands_use_repo_local_uv_run",
+        "test_contributing_validation_chooser_tracks_slice_commands",
         "test_contributing_marker_taxonomy_lists_pytest_markers",
         "test_contributing_runbundle_helpers_track_public_testing_exports",
         "test_validation_plan_matches_contributor_quick_command",
