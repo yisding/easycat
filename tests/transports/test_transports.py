@@ -23,9 +23,11 @@ import websockets
 
 import easycat.transports.local as local_mod
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
-from easycat.events import DTMF, EventBus, PlaybackMarkAck
+from easycat.events import DTMF, EventBus, PlaybackMarkAck, TransportDegraded
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import (
+    _DEGRADED_TWILIO_SEQUENCE_GAP,
+    _DEGRADED_TWILIO_TIMESTAMP_GAP,
     TWILIO_STREAM_TOKEN_PARAMETER,
     TwilioConnectionTransport,
     TwilioStreamTokenStore,
@@ -545,14 +547,25 @@ def _twilio_start_msg(
     )
 
 
-def _twilio_media_msg(mulaw_data: bytes, stream_sid: str = "MZ123") -> str:
+def _twilio_media_msg(
+    mulaw_data: bytes,
+    stream_sid: str = "MZ123",
+    *,
+    sequence_number: str = "2",
+    timestamp: str = "0",
+) -> str:
     payload = base64.b64encode(mulaw_data).decode("ascii")
     return json.dumps(
         {
             "event": "media",
-            "sequenceNumber": "2",
+            "sequenceNumber": sequence_number,
             "streamSid": stream_sid,
-            "media": {"track": "inbound", "chunk": "1", "timestamp": "0", "payload": payload},
+            "media": {
+                "track": "inbound",
+                "chunk": "1",
+                "timestamp": timestamp,
+                "payload": payload,
+            },
         }
     )
 
@@ -590,6 +603,12 @@ def _twilio_stop_msg(stream_sid: str = "MZ123") -> str:
 
 def _twilio_mark_msg(name: str, stream_sid: str = "MZ123") -> str:
     return json.dumps({"event": "mark", "streamSid": stream_sid, "mark": {"name": name}})
+
+
+async def _drain_transport_diagnostics(
+    transport: TwilioTransport | TwilioConnectionTransport,
+) -> None:
+    await transport._drain_emit_tasks()
 
 
 class _DummyTwilioWebSocket:
@@ -735,6 +754,103 @@ class TestTwilioDtmfParsingInTransports:
         )
 
         assert digits == ["B"]
+
+
+class TestTwilioStreamGapDiagnostics:
+    @pytest.mark.asyncio
+    async def test_server_transport_emits_sequence_and_timestamp_gap_diagnostics(self) -> None:
+        event_bus = EventBus()
+        degraded: list[TransportDegraded] = []
+        event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
+        transport = TwilioTransport(event_bus=event_bus)
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="3",
+                timestamp="0",
+            )
+        )
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="4",
+                timestamp="60",
+            )
+        )
+        await _drain_transport_diagnostics(transport)
+
+        assert [event.reason for event in degraded] == [
+            _DEGRADED_TWILIO_SEQUENCE_GAP,
+            _DEGRADED_TWILIO_TIMESTAMP_GAP,
+        ]
+        assert degraded[0].provider == "telephony"
+        assert "expected sequenceNumber 2, got 3" in degraded[0].detail
+        assert "expected media timestamp 20ms, got 60ms" in degraded[1].detail
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_emits_sequence_gap_for_active_controls(self) -> None:
+        event_bus = EventBus()
+        degraded: list[TransportDegraded] = []
+        event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=event_bus)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(
+            json.dumps(
+                {
+                    "event": "dtmf",
+                    "sequenceNumber": "4",
+                    "streamSid": "STREAM1",
+                    "dtmf": {"digit": "5"},
+                }
+            )
+        )
+        await _drain_transport_diagnostics(transport)
+
+        assert [event.reason for event in degraded] == [_DEGRADED_TWILIO_SEQUENCE_GAP]
+        assert "expected sequenceNumber 2, got 4" in degraded[0].detail
+
+    @pytest.mark.asyncio
+    async def test_malformed_media_metadata_breaks_gap_tracking_continuity(self) -> None:
+        event_bus = EventBus()
+        degraded: list[TransportDegraded] = []
+        event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
+        transport = TwilioTransport(event_bus=event_bus)
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="2",
+                timestamp="0",
+            )
+        )
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="",
+                timestamp="",
+            )
+        )
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="4",
+                timestamp="40",
+            )
+        )
+        await _drain_transport_diagnostics(transport)
+
+        assert degraded == []
 
 
 @pytest.mark.integration_socket

@@ -40,6 +40,9 @@ logger = logging.getLogger(__name__)
 MULAW_8K = AudioFormat(sample_rate=8000, channels=1, sample_width=1, encoding="mulaw")
 TWILIO_PREFERRED_TTS_OUTPUT_FORMAT = PCM16_MONO_8K
 _TWILIO_OUTBOUND_TRACKS = {"outbound", "outbound_track"}
+_DEGRADED_TWILIO_SEQUENCE_GAP = "twilio_sequence_gap"
+_DEGRADED_TWILIO_TIMESTAMP_GAP = "twilio_timestamp_gap"
+_TWILIO_MULAW_BYTES_PER_MS = 8
 TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
 
 
@@ -220,6 +223,112 @@ def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportCon
         return False
 
 
+def _parse_twilio_int(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _mulaw_duration_ms(mulaw_data: bytes) -> int:
+    if not mulaw_data:
+        return 0
+    return max(1, round(len(mulaw_data) / _TWILIO_MULAW_BYTES_PER_MS))
+
+
+def _observe_twilio_sequence_gap(
+    msg: dict[str, Any],
+    *,
+    previous_sequence: int | None,
+    emit_degraded: Callable[..., None],
+) -> int | None:
+    sequence = _parse_twilio_int(msg.get("sequenceNumber"))
+    if sequence is None:
+        return None
+    if previous_sequence is not None and sequence != previous_sequence + 1:
+        emit_degraded(
+            _DEGRADED_TWILIO_SEQUENCE_GAP,
+            (
+                f"streamSid={msg.get('streamSid')!s} expected sequenceNumber "
+                f"{previous_sequence + 1}, got {sequence}"
+            ),
+        )
+    return sequence
+
+
+def _observe_twilio_timestamp_gap(
+    media: dict[str, Any],
+    *,
+    stream_sid: str | None,
+    previous_timestamp_ms: int | None,
+    previous_duration_ms: int | None,
+    emit_degraded: Callable[..., None],
+) -> int | None:
+    timestamp_ms = _parse_twilio_int(media.get("timestamp"))
+    if timestamp_ms is None:
+        return None
+    if (
+        previous_timestamp_ms is not None
+        and previous_duration_ms is not None
+        and previous_duration_ms > 0
+    ):
+        expected_timestamp_ms = previous_timestamp_ms + previous_duration_ms
+        if timestamp_ms != expected_timestamp_ms:
+            emit_degraded(
+                _DEGRADED_TWILIO_TIMESTAMP_GAP,
+                (
+                    f"streamSid={stream_sid!s} expected media timestamp "
+                    f"{expected_timestamp_ms}ms, got {timestamp_ms}ms"
+                ),
+            )
+    return timestamp_ms
+
+
+class _TwilioStreamDiagnostics:
+    def __init__(self, emit_degraded: Callable[..., None]) -> None:
+        self._emit_degraded = emit_degraded
+        self._last_sequence_number: int | None = None
+        self._last_media_timestamp_ms: int | None = None
+        self._last_media_duration_ms: int | None = None
+
+    def reset(self) -> None:
+        self._last_sequence_number = None
+        self._last_media_timestamp_ms = None
+        self._last_media_duration_ms = None
+
+    def start(self, msg: dict[str, Any]) -> None:
+        self.reset()
+        self._last_sequence_number = _parse_twilio_int(msg.get("sequenceNumber"))
+
+    def observe_sequence(self, msg: dict[str, Any]) -> None:
+        self._last_sequence_number = _observe_twilio_sequence_gap(
+            msg,
+            previous_sequence=self._last_sequence_number,
+            emit_degraded=self._emit_degraded,
+        )
+
+    def observe_media_timestamp(
+        self,
+        media: dict[str, Any],
+        *,
+        stream_sid: str | None,
+        mulaw_data: bytes,
+    ) -> None:
+        duration_ms = _mulaw_duration_ms(mulaw_data)
+        self._last_media_timestamp_ms = _observe_twilio_timestamp_gap(
+            media,
+            stream_sid=stream_sid,
+            previous_timestamp_ms=self._last_media_timestamp_ms,
+            previous_duration_ms=self._last_media_duration_ms,
+            emit_degraded=self._emit_degraded,
+        )
+        self._last_media_duration_ms = duration_ms
+
+
 async def _emit_twilio_call_ended(
     event_bus: EventBus | None,
     *,
@@ -300,15 +409,7 @@ def _is_active_twilio_stream_event(
 async def _emit_parsed_twilio_dtmf(
     msg: dict[str, Any],
     event_bus: EventBus | None,
-    *,
-    active_stream_sid: str | None,
 ) -> None:
-    if not _is_active_twilio_stream_event(
-        msg,
-        active_stream_sid=active_stream_sid,
-        event_name="dtmf",
-    ):
-        return
     event = parse_twilio_dtmf_message(msg)
     if event is None:
         logger.debug("Ignoring Twilio DTMF with invalid payload")
@@ -375,6 +476,7 @@ class TwilioTransport(_ServerTransportBase):
         self._identity_sink: Any = None
         self._answered_at: float | None = None
         self._call_ended_emitted = False
+        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
 
         self._mark_counter = 0
 
@@ -407,6 +509,7 @@ class TwilioTransport(_ServerTransportBase):
         self._call_sid = None
         self._call_identity = None
         self._call_ended_emitted = False
+        self._diagnostics.reset()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
@@ -520,6 +623,7 @@ class TwilioTransport(_ServerTransportBase):
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
+            self._diagnostics.reset()
             self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
@@ -547,6 +651,7 @@ class TwilioTransport(_ServerTransportBase):
                 event_name="stop",
             ):
                 return
+            self._diagnostics.observe_sequence(msg)
             logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
             # Emit the inbound-direction mirror of the outbound call
             # manager's ``CallEnded`` event so observers like
@@ -557,6 +662,7 @@ class TwilioTransport(_ServerTransportBase):
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
+            self._diagnostics.reset()
             self._enqueue_sentinel()
         elif event == "mark":
             if not _is_active_twilio_stream_event(
@@ -565,6 +671,7 @@ class TwilioTransport(_ServerTransportBase):
                 event_name="mark",
             ):
                 return
+            self._diagnostics.observe_sequence(msg)
             mark = msg.get("mark", {})
             if not isinstance(mark, dict):
                 logger.debug("Ignoring Twilio mark with non-object payload")
@@ -620,6 +727,7 @@ class TwilioTransport(_ServerTransportBase):
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
+        self._diagnostics.start(msg)
         identity, caller, called = _parse_twilio_start_identity(
             start,
             self._call_sid,
@@ -648,6 +756,7 @@ class TwilioTransport(_ServerTransportBase):
         media = _accepted_twilio_media(msg, active_stream_sid=self._stream_sid)
         if media is None:
             return
+        self._diagnostics.observe_sequence(msg)
         payload = media.get("payload", "")
         if not payload:
             return
@@ -657,6 +766,11 @@ class TwilioTransport(_ServerTransportBase):
         except Exception:
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return
+        self._diagnostics.observe_media_timestamp(
+            media,
+            stream_sid=self._stream_sid,
+            mulaw_data=mulaw_data,
+        )
         pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
 
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
@@ -675,11 +789,13 @@ class TwilioTransport(_ServerTransportBase):
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
         """Emit a DTMF event for the pressed digit."""
-        await _emit_parsed_twilio_dtmf(
+        if _is_active_twilio_stream_event(
             msg,
-            self._event_bus,
             active_stream_sid=self._stream_sid,
-        )
+            event_name="dtmf",
+        ):
+            self._diagnostics.observe_sequence(msg)
+            await _emit_parsed_twilio_dtmf(msg, self._event_bus)
 
     # ── Properties ────────────────────────────────────────────────
 
@@ -815,6 +931,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._mark_counter = 0
         self._receive_task: asyncio.Task[None] | None = None
         self._init_audio_queue(self._config.max_pending_chunks)
+        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
 
     @property
     def call_identity(self) -> Any | None:
@@ -854,6 +971,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._call_identity = None
         self._answered_at = None
         self._call_ended_emitted = False
+        self._diagnostics.reset()
         try:
             await self._ws.close()
         except Exception:
@@ -934,6 +1052,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
+            self._diagnostics.reset()
             self._enqueue_sentinel()
 
     async def _handle_message(self, raw: str) -> None:
@@ -958,10 +1077,12 @@ class TwilioConnectionTransport(_AudioQueueMixin):
                 event_name="stop",
             ):
                 return
+            self._diagnostics.observe_sequence(msg)
             await self._emit_call_ended_once()
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
+            self._diagnostics.reset()
             self._enqueue_sentinel()
         elif event == "mark":
             if not _is_active_twilio_stream_event(
@@ -970,6 +1091,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
                 event_name="mark",
             ):
                 return
+            self._diagnostics.observe_sequence(msg)
             mark = msg.get("mark", {})
             if not isinstance(mark, dict):
                 logger.debug("Ignoring Twilio mark with non-object payload")
@@ -995,6 +1117,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         self._call_sid = start.get("callSid")
         self._answered_at = time.monotonic()
         self._call_ended_emitted = False
+        self._diagnostics.start(msg)
         identity, caller, called = _parse_twilio_start_identity(
             start,
             self._call_sid,
@@ -1022,6 +1145,7 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         media = _accepted_twilio_media(msg, active_stream_sid=self._stream_sid)
         if media is None:
             return
+        self._diagnostics.observe_sequence(msg)
         payload = media.get("payload", "")
         if not payload:
             return
@@ -1030,6 +1154,11 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         except Exception:
             logger.warning("Ignoring Twilio media frame with invalid base64 payload")
             return
+        self._diagnostics.observe_media_timestamp(
+            media,
+            stream_sid=self._stream_sid,
+            mulaw_data=mulaw_data,
+        )
         pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
         self._enqueue_chunk(chunk, context="Twilio")
@@ -1046,11 +1175,13 @@ class TwilioConnectionTransport(_AudioQueueMixin):
         )
 
     async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
-        await _emit_parsed_twilio_dtmf(
+        if _is_active_twilio_stream_event(
             msg,
-            self._event_bus,
             active_stream_sid=self._stream_sid,
-        )
+            event_name="dtmf",
+        ):
+            self._diagnostics.observe_sequence(msg)
+            await _emit_parsed_twilio_dtmf(msg, self._event_bus)
 
     @property
     def stream_sid(self) -> str | None:

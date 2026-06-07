@@ -543,11 +543,11 @@ context. Several bullets are known stale; use the current-state list above and
 
 - Done: Twilio transports validate DTMF using the existing parser instead of
   emitting raw digits.
-- Validate stream id and active stream state before accepting media/control
-  frames.
-- Track Twilio sequence and timestamp gaps as metrics.
-- Add tests for invalid stream ids, stale stream ids, invalid DTMF, sequence
-  gaps, and stop/start races.
+- Done: Twilio transports validate stream id and active stream state before
+  accepting media/control frames.
+- Done: Twilio transports emit `TransportDegraded` diagnostics for sequence and
+  timestamp gaps.
+- Add remaining tests for stale stream ids and stop/start races.
 
 ### 6.5 Productize Supervisor Audio
 
