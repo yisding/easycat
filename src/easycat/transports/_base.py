@@ -309,6 +309,7 @@ class _ServerTransportBase(_AudioQueueMixin):
             self._handle_connection,
             self._host,
             self._port,
+            compression=None,
         )
         self._connected = True
         logger.info(

@@ -5,6 +5,7 @@ import asyncio
 import pytest
 import websockets
 
+import easycat.transports.websocket as websocket_module
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
@@ -38,6 +39,38 @@ async def _connect_with_retry(uri: str):
             await asyncio.sleep(0.05)
     assert last is not None
     raise last
+
+
+@pytest.mark.asyncio
+async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeServer:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_serve(*_args: object, **kwargs: object) -> FakeServer:
+        calls.append(kwargs)
+        return FakeServer()
+
+    stop_event = asyncio.Event()
+    stop_event.set()
+    monkeypatch.setattr(websocket_module.websockets, "serve", fake_serve)
+
+    await serve_websocket_sessions(
+        lambda _ws: _FakeSession(),
+        WebSocketSessionServerConfig(port=0),
+        stop_event=stop_event,
+        runtime_feedback=False,
+        announce=False,
+    )
+
+    assert len(calls) == 1
+    assert callable(calls[0]["process_request"])
+    assert calls[0]["compression"] is None
 
 
 @pytest.mark.asyncio

@@ -138,7 +138,8 @@ context. Several bullets are known stale; use the current-state list above and
   `allow_remote=True` or equivalent.
 - Add a shared `ConnectionPolicy` covering origin, path, query/session token,
   max payload size, compression, ping timeout, close timeout, and close reason.
-- Disable compression by default for audio WebSockets.
+- Done: EasyCat-owned audio WebSocket servers pass `compression=None` by
+  default.
 - For WebRTC, avoid wildcard CORS around TURN credentials and default to
   same-origin unless configured.
 - For Twilio Media Streams, add a signed one-time stream token in TwiML and

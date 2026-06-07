@@ -162,6 +162,7 @@ async def serve_websocket_sessions(
         settings.host,
         settings.port,
         process_request=process_request,
+        compression=None,
     )
     if announce:
         print(f"\nServer ready. Connect WebSocket clients to ws://{settings.host}:{settings.port}")

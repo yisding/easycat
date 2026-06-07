@@ -268,6 +268,31 @@ def test_websocket_transport_config_defaults_to_loopback():
     assert config.host == "127.0.0.1"
 
 
+@pytest.mark.asyncio
+async def test_server_websocket_transports_disable_compression(monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict[str, object]] = []
+
+    class FakeServer:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def fake_serve(*_args: object, **kwargs: object) -> FakeServer:
+        calls.append(kwargs)
+        return FakeServer()
+
+    monkeypatch.setattr("easycat.transports._base.websockets.serve", fake_serve)
+
+    transport = WebSocketTransport(WebSocketTransportConfig())
+    await transport.connect()
+    try:
+        assert calls == [{"compression": None}]
+    finally:
+        await transport.disconnect()
+
+
 @pytest.mark.integration_socket
 class TestWebSocketTransport:
     """Tests for WebSocketTransport with a real test client."""
