@@ -81,6 +81,21 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `easycat inspect <path> --json`, `easycat replay <path> --json`, or
   `easycat bundles export <path> --output DIR --json` when a script or coding
   agent needs a parseable summary.
+- Optional debugger UI:
+  install the extra with `uv sync --extra debugger --group dev` from this repo,
+  or `uv add 'easycat[debugger]'` in an app. Then import
+  `serve_bundle` for an offline bundle or `serve_session` for a live session:
+
+  ```python
+  from easycat.debugger import serve_bundle, serve_session
+
+  serve_bundle("runs/session.bundle", port=8765)
+  serve_session(session, port=8765, in_thread=True)
+  ```
+
+  The debugger is loopback-only by default and has no auth. Keep it on
+  `127.0.0.1` unless you have a controlled, private debugging environment and
+  explicitly choose `allow_remote=True`.
 
 ### D — OpenTelemetry facade
 

@@ -445,6 +445,7 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
         "easycat replay PATH --json",
         "easycat bundles export PATH",
         "easycat bundles export PATH --output DIR --json",
+        "uv sync --extra debugger --group dev",
     ):
         documented_command = command.replace("PATH", "<path>")
         assert f"`{documented_command}`" in cli_section
@@ -452,6 +453,9 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
 
     assert "easycat bundles show <path>" not in route_commands
     assert "easycat bundles export <path>" not in route_commands
+    assert "serve_bundle" in cli_section
+    assert "serve_session" in cli_section
+    assert "allow_remote=True" in cli_section
 
 
 def test_journal_durability_docs_route_matches_inspection_commands() -> None:

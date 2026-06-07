@@ -336,6 +336,25 @@ def test_observability_doc_lists_journal_cli_entry_points() -> None:
     assert "parseable summary" in journal
 
 
+def test_observability_doc_lists_debugger_ui_entry_points() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    journal = doc.split("### C — ExecutionJournal", 1)[1].split(
+        "### D — OpenTelemetry facade",
+        1,
+    )[0]
+
+    for token in (
+        "uv sync --extra debugger --group dev",
+        "uv add 'easycat[debugger]'",
+        "from easycat.debugger import serve_bundle, serve_session",
+        'serve_bundle("runs/session.bundle", port=8765)',
+        "serve_session(session, port=8765, in_thread=True)",
+        "loopback-only by default",
+        "allow_remote=True",
+    ):
+        assert token in journal
+
+
 def test_observability_doc_tracks_logging_configuration_vocabulary() -> None:
     from easycat._logging import _JsonFormatter
     from easycat.config.easy import _EASYCAT_LOG_LEVELS, _VALID_DEBUG

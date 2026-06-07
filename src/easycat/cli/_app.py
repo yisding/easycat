@@ -366,6 +366,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat replay PATH --json",
             "easycat bundles export PATH",
             "easycat bundles export PATH --output DIR --json",
+            "uv sync --extra debugger --group dev",
         ),
     },
     {
