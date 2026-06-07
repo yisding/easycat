@@ -183,11 +183,13 @@ _INIT_COMMAND_NOTE = (
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "JSON catalog next_step_commands previews the my-agent post-create sequence; "
-    "Check after cd and Run after cd are run inside the scaffolded project."
+    "Doctor, Check, Docs, and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"
 )
+_NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
+_NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
 
 # Templates that accept ``stt`` / ``tts`` / ``mcp_servers`` because they
 # instantiate :class:`EasyConfig`.  Text-only templates (REPLs) bypass
@@ -331,7 +333,9 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]{escape(metadata)}[/]\n"
             f"  [dim]Create:[/] {escape(entry['create_command'])}\n"
             f"  [dim]Repo create:[/] {escape(entry['repo_create_command'])}\n"
+            f"  [dim]Doctor after cd:[/] {escape(_NEXT_STEP_DOCTOR_COMMAND)}\n"
             f"  [dim]Check after cd:[/] {escape(entry['check_command'])}\n"
+            f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
             f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
         )
     return (
@@ -358,10 +362,10 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         f"cd {shlex.quote(str(target))}",
         "cp .env.example .env",
         "uv sync",
-        "uv run easycat doctor --env-file .env",
+        _NEXT_STEP_DOCTOR_COMMAND,
         "uv run easycat doctor --env-file .env --json",
         _next_step_check_command(template),
-        "uv run easycat docs",
+        _NEXT_STEP_DOCS_COMMAND,
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         _next_step_run_command(template),

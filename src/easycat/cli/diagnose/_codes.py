@@ -89,7 +89,7 @@ wire them into templates yet. Add LLM or tool setup directly in the
 generated `agent.py` for now.
 Run `easycat init --list-templates --json` for the current
 machine-readable template catalog.  The top-level `command_note`
-explains installed vs repo-local creation and post-scaffold check/run
+explains installed vs repo-local creation and post-scaffold command
 context. Each `catalog` row includes:
 `name`, `mode`, `transport`, `framework`, `best_for`, `base_extras`,
 `base_requirement`, `required_env`, `optional_env`, `files`, `description`,
@@ -138,7 +138,7 @@ entry points include:
                          `repo_create_command`, `next_step_commands`,
                          `run_command`, and `check_command`;
                          `command_note` explains installed creation, repo-root
-                         creation, and post-scaffold check/run context
+                         creation, and post-scaffold command context
   `path`, `template`, `pyproject_name`, `files`, `agent_lines`, `git`,
   `run_command`, `check_command`, `next_step_commands`, `command_note` -
                          `easycat init NAME --json`

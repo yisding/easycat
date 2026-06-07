@@ -126,7 +126,8 @@ easycat validate report .easycat/validation/latest.json # render latest validati
 From an empty directory, `easycat init --list-templates` shows the available
 scaffolds with best-fit guidance, the base `easycat[...]` package requirement
 and extras, required environment variables, optional environment knobs,
-generated files, transport, framework, and copyable create/check/run commands.
+generated files, transport, framework, and copyable
+create/preflight/check/docs/run commands.
 `easycat init my-agent` scaffolds the same one shown below: the canonical
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your

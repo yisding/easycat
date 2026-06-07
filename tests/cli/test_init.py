@@ -80,14 +80,18 @@ def test_list_templates(cli: CliRunner) -> None:
     assert "JSON catalog next_step_commands previews the my-agent post-create sequence" in (
         result.stdout
     )
-    assert "Run after cd are run inside the scaffolded project" in result.stdout
+    assert "Doctor, Check, Docs, and Run after cd are run inside the scaffolded project" in (
+        result.stdout
+    )
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
         result.stdout
     )
     for template in available_templates():
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
+        assert "Doctor after cd: uv run easycat doctor --env-file .env" in result.stdout
         assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
+        assert "Docs after cd: uv run easycat docs" in result.stdout
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 
 
@@ -125,6 +129,8 @@ def test_template_catalog_renders_bracketed_text_literally() -> None:
     assert "SDK[KEY]" in rendered
     assert "SDK[OPTIONAL]" in rendered
     assert "easycat init demo --template demo[beta]" in rendered
+    assert "uv run easycat doctor --env-file .env" in rendered
+    assert "uv run easycat docs" in rendered
     assert "uv add 'easycat[openai-agents]'" in rendered
 
 

@@ -173,7 +173,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": (
             "Scaffold projects, compare templates with base package requirements, "
             "extras, env requirements, optional env knobs, generated files, and "
-            "copyable create/check/run commands, and learn CLI JSON envelopes."
+            "copyable create/preflight/check/docs/run commands, and learn CLI JSON envelopes."
         ),
         "commands": (
             "easycat init --list-templates",

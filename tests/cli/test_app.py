@@ -233,7 +233,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "env requirements" in result.stdout
     assert "optional env knobs" in result.stdout
     assert "generated files" in result.stdout
-    assert "copyable create/check/run commands" in result.stdout
+    assert "copyable create/preflight/check/docs/run commands" in result.stdout
     assert "learn CLI JSON envelopes" in result.stdout
     assert "Commands:" in result.stdout
     assert "README.md#choose-your-path" in result.stdout
@@ -424,7 +424,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert audiences["CLAUDE.md"] == "maintainers"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
-    assert "copyable create/check/run commands" in descriptions["README.md#cli"]
+    assert "copyable create/preflight/check/docs/run commands" in descriptions["README.md#cli"]
     assert "right first route" in descriptions["README.md#choose-your-path"]
     assert "maintenance" in descriptions["README.md#choose-your-path"]
     assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
