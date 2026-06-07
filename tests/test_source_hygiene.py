@@ -599,6 +599,18 @@ def test_focused_transport_tests_use_pytest_port_factory() -> None:
         assert "unused_tcp_port_factory" in source
 
 
+def test_websocket_session_server_tests_wait_for_bound_server() -> None:
+    """Focused WebSocket server tests should not poll client connects while startup races."""
+    source = (REPO_ROOT / "tests" / "transports" / "test_websocket_session_server.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "asyncio.sleep(" not in source
+    assert "_patch_serve_started" in source
+    assert "server_started.wait()" in source
+    assert "_connect_with_retry" not in source
+
+
 def test_integration_socket_tests_use_pytest_port_factory() -> None:
     """Keep migrated integration socket tests off bind-close port helpers."""
     for path in (

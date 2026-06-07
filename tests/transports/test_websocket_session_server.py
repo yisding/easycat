@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 import websockets
@@ -28,16 +29,17 @@ class _FakeSession:
         self.stopped.set()
 
 
-async def _connect_with_retry(uri: str):
-    last: OSError | None = None
-    for _ in range(20):
-        try:
-            return await websockets.connect(uri)
-        except OSError as exc:
-            last = exc
-            await asyncio.sleep(0.05)
-    assert last is not None
-    raise last
+def _patch_serve_started(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    server_started = asyncio.Event()
+    original_serve = websocket_module.websockets.serve
+
+    async def serve_and_signal(*args: Any, **kwargs: Any) -> Any:
+        server = await original_serve(*args, **kwargs)
+        server_started.set()
+        return server
+
+    monkeypatch.setattr(websocket_module.websockets, "serve", serve_and_signal)
+    return server_started
 
 
 @pytest.mark.asyncio
@@ -74,6 +76,7 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_serve_websocket_sessions_manages_session_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
     unused_tcp_port_factory: Callable[[], int],
 ) -> None:
     port = unused_tcp_port_factory()
@@ -85,6 +88,7 @@ async def test_serve_websocket_sessions_manages_session_lifecycle(
         sessions.append(session)
         return session
 
+    server_started = _patch_serve_started(monkeypatch)
     task = asyncio.create_task(
         serve_websocket_sessions(
             session_factory,
@@ -95,8 +99,8 @@ async def test_serve_websocket_sessions_manages_session_lifecycle(
         )
     )
     try:
-        ws = await _connect_with_retry(f"ws://127.0.0.1:{port}")
-        async with ws:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(f"ws://127.0.0.1:{port}"):
             assert sessions
             await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
         await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
@@ -132,6 +136,7 @@ async def test_serve_websocket_config_sessions_builds_connection_transport(
 
     monkeypatch.setattr(config_module, "create_session", create_session)
 
+    server_started = _patch_serve_started(monkeypatch)
     task = asyncio.create_task(
         serve_websocket_config_sessions(
             config_factory,
@@ -143,8 +148,8 @@ async def test_serve_websocket_config_sessions_builds_connection_transport(
         )
     )
     try:
-        ws = await _connect_with_retry(f"ws://127.0.0.1:{port}")
-        async with ws:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(f"ws://127.0.0.1:{port}"):
             assert sessions
             await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
             assert len(configs) == 1
