@@ -85,7 +85,7 @@ with the codebase. Counts below come from tracked files and exclude
 - `Session` is reduced from the older cleanup note but still large at roughly
   1,358 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
-  151 lines, with the lazy-export registry isolated in `easycat._public_api`.
+  156 lines, with the lazy-export registry isolated in `easycat._public_api`.
   The public surface is still broad at 85 lazy top-level exports, but it is
   pinned by a golden snapshot and documented in `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now

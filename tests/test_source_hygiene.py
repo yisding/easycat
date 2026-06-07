@@ -34,6 +34,10 @@ def _tracked_file_count(*patterns: str) -> int:
     return len([line for line in result.stdout.splitlines() if line])
 
 
+def _line_count(path: Path) -> int:
+    return len(path.read_text(encoding="utf-8").splitlines())
+
+
 def test_gitignore_covers_local_generated_state() -> None:
     """Keep contributor-local automation and cache state out of routine git status."""
     patterns = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -179,14 +183,31 @@ def test_cli_test_plan_describes_integration_local_marker_selection() -> None:
 
 def test_roadmap_current_code_status_tracks_inventory_and_wheel_hygiene() -> None:
     """Keep the current-code snapshot aligned with tracked files and release hygiene."""
+    from easycat._public_api import LAZY_EXPORTS
+
     status = (REPO_ROOT / "plan" / "roadmap" / "current-code-status.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(status.split())
     source_count = _tracked_file_count("src/easycat/**/*.py", "src/easycat/*.py")
     test_count = _tracked_file_count("tests/**/test_*.py", "tests/test_*.py")
+    session_lines = _line_count(REPO_ROOT / "src" / "easycat" / "session" / "_session.py")
+    init_lines = _line_count(REPO_ROOT / "src" / "easycat" / "__init__.py")
 
     assert f"`src/easycat/` contains {source_count} tracked Python files." in status
     assert f"`tests/` contains {test_count} tracked `test_*.py` files." in status
+    assert (
+        f"`Session` is reduced from the older cleanup note but still large at roughly "
+        f"{session_lines:,} lines."
+    ) in normalized
+    assert (
+        f"`src/easycat/__init__.py` is smaller than the older cleanup note at roughly "
+        f"{init_lines:,} lines"
+    ) in normalized
+    assert (
+        f"The public surface is still broad at {len(LAZY_EXPORTS)} lazy top-level exports"
+        in normalized
+    )
     assert "cache/workspace artifacts" not in status
     assert "local/generated/secret artifacts leaking into release wheels" in status
 
