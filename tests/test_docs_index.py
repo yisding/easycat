@@ -495,6 +495,9 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "development commands, docs/onboarding guard recipes" in normalized
     assert "validation commands, and PR expectations" in normalized
     assert "docs/onboarding guard recipes" in normalized
+    assert "If `just` is not installed" in text
+    assert "raw command table" in normalized
+    assert "equivalent `uv run pytest ...` commands" in normalized
     for recipe in ONBOARDING_GUARD_COMMANDS:
         assert recipe in text
     assert "uv run easycat explain json-schema" in text
