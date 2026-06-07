@@ -27,6 +27,9 @@ CURRENT_PLAN_SOURCE_TEST_PATH_RE = re.compile(
     r"(?::(?P<line>[0-9]+(?:-[0-9]+)?))?"
     r"(?:::[A-Za-z_][A-Za-z0-9_]*)?`"
 )
+SOURCE_LINE_REF_RE = re.compile(
+    r"\b(?:src/easycat/|tests/|docs/)?[A-Za-z0-9_./-]+\.py:[0-9]+(?:-[0-9]+)?\b"
+)
 
 
 def _tracked_file_count(*patterns: str) -> int:
@@ -86,6 +89,40 @@ def test_library_source_references_config_package_not_removed_module() -> None:
                 stale.append(f"{rel}:{line_number}: {line.strip()}")
 
     assert not stale, "Library source should reference config/, not config.py:\n" + "\n".join(
+        stale
+    )
+
+
+def test_current_tests_and_docs_avoid_brittle_source_line_refs() -> None:
+    """Use names or symbols for current maintainer references, not stale line numbers."""
+    roots = (
+        SOURCE_ROOT,
+        REPO_ROOT / "tests",
+        REPO_ROOT / "docs",
+    )
+    root_files = (
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "AGENTS.md",
+        REPO_ROOT / "CLAUDE.md",
+        REPO_ROOT / "CONTRIBUTING.md",
+    )
+    stale: list[str] = []
+
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if path.suffix not in {".py", ".md"}:
+                continue
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if SOURCE_LINE_REF_RE.search(line):
+                    stale.append(f"{rel}:{line_number}: {line.strip()}")
+    for path in root_files:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if SOURCE_LINE_REF_RE.search(line):
+                stale.append(f"{rel}:{line_number}: {line.strip()}")
+
+    assert not stale, "Current tests/docs should not use brittle source line refs:\n" + "\n".join(
         stale
     )
 

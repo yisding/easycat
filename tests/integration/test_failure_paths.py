@@ -349,7 +349,7 @@ async def test_agent_notify_interruption_failure_swallowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When agent.notify_interruption raises, the exception should be
-    swallowed (session.py:1886) and the session should continue."""
+    swallowed by notify_bridge_interruption and the session should continue."""
     transport = QueueTransport()
     stt = ScriptedSTT(["first", "second"])
     tts = RecordingTTS(
