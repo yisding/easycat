@@ -691,6 +691,17 @@ def test_websocket_transport_e2e_keeps_only_intentional_timing_sleeps() -> None:
     assert "wait_for_clear_count" in source
 
 
+def test_session_smoke_waits_for_pipeline_completion_event() -> None:
+    """The full-session smoke test should wait for the pipeline event, not a sleep."""
+    source = (REPO_ROOT / "tests" / "session" / "test_session_smoke.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "asyncio.sleep(" not in source
+    assert "pipeline_done.wait()" in source
+    assert "BotStoppedSpeaking" in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(

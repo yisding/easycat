@@ -174,6 +174,12 @@ async def test_full_session_smoke():
 
     # Collect all events in order
     timeline: list[Event] = []
+    pipeline_done = asyncio.Event()
+
+    def record_event(event: Event) -> None:
+        timeline.append(event)
+        if isinstance(event, BotStoppedSpeaking):
+            pipeline_done.set()
 
     for event_type in [
         AudioIn,
@@ -188,7 +194,7 @@ async def test_full_session_smoke():
         BotStoppedSpeaking,
         TurnEnded,
     ]:
-        session.event_bus.subscribe(event_type, lambda e: timeline.append(e))
+        session.event_bus.subscribe(event_type, record_event)
 
     # ── Run session ────────────────────────────────────────────
     assert session.turn_state == TurnState.IDLE
@@ -196,8 +202,7 @@ async def test_full_session_smoke():
     await session.start()
     assert session.is_running
 
-    # Wait for pipeline to complete
-    await asyncio.sleep(0.3)
+    await asyncio.wait_for(pipeline_done.wait(), timeout=1.0)
     await session.stop()
 
     # ── Verify event sequence ──────────────────────────────────
