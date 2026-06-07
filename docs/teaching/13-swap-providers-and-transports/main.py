@@ -33,7 +33,8 @@ Dependencies:
     DEEPGRAM_API_KEY, ELEVENLABS_API_KEY (for deepgram-eleven mix)
     TWIML/Twilio credentials (for twilio transport)
     uv run easycat doctor
-    uv run easycat doctor --env-file .env  # if keys live in .env
+    uv run easycat doctor --env-file .env         # if keys live in .env
+    uv run easycat doctor --env-file .env --json  # for parseable checks
 """
 
 from __future__ import annotations

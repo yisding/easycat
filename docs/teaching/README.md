@@ -31,6 +31,11 @@ repository root:
 uv run python docs/teaching/00-hello-audio/main.py
 ```
 
+For only Chapter 0, its README uses the smaller
+`uv sync --extra local --group dev` setup. Use the full `quickstart`
+prerequisites below when you want to continue through the provider-backed
+chapters.
+
 After editing a chapter, changing its copied code, or using one as a starting
 point, run the repository validation lane from the root:
 

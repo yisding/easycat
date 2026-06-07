@@ -760,7 +760,7 @@ def test_teaching_ladder_docs_route_matches_learner_start_commands() -> None:
         assert command in route_commands
 
     for command in (
-        "uv sync --extra quickstart --group dev",
+        "uv sync --extra local --group dev",
         "uv run python docs/teaching/00-hello-audio/main.py",
     ):
         assert command in first_lesson

@@ -101,6 +101,11 @@ class LocalTransport(_AudioQueueMixin):
             extra="local",
             purpose="LocalTransport audio I/O",
         )
+        np = require_module(
+            "numpy",
+            extra="local",
+            purpose="LocalTransport audio I/O",
+        )
 
         loop = asyncio.get_running_loop()
         frame_size = self._frame_samples
@@ -109,8 +114,6 @@ class LocalTransport(_AudioQueueMixin):
         def _input_callback(
             indata: object, frames: int, time_info: object, status: object
         ) -> None:
-            import numpy as np  # type: ignore[import-untyped]
-
             arr = indata  # type: ignore[assignment]
             if hasattr(arr, "copy"):
                 arr = arr.copy()  # type: ignore[union-attr]
@@ -139,8 +142,6 @@ class LocalTransport(_AudioQueueMixin):
         def _output_callback(
             outdata: object, frames: int, time_info: object, status: object
         ) -> None:
-            import numpy as np  # type: ignore[import-untyped]
-
             try:
                 queued = self._out_queue.get_nowait()
             except thread_queue.Empty:

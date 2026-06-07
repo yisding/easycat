@@ -352,7 +352,7 @@ def test_quickstart_guidance_does_not_readd_bundled_extras() -> None:
     """``quickstart`` already includes common local extras; avoid redundant setup."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
-    bundled_extras = ("rnnoise", "smart-turn")
+    bundled_extras = ("local", "rnnoise", "smart-turn")
     for extra in bundled_extras:
         assert set(extras[extra]).issubset(set(extras["quickstart"]))
 

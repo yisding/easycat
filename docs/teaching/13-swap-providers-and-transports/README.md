@@ -15,7 +15,7 @@
 - `--extra telephony` for the Twilio transport.
 - `OPENAI_API_KEY` always; `DEEPGRAM_API_KEY` + `ELEVENLABS_API_KEY`
   for the `deepgram-eleven` mix.
-- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 
 > **Minimum to skip the ladder:** chapter 6 (you need a streaming
 > pipeline to swap) plus chapter 12 (so you can measure the

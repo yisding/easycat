@@ -432,7 +432,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat explain json-schema",
     ]
     assert commands["docs/teaching/00-hello-audio/"] == [
-        "uv sync --extra quickstart --group dev",
+        "uv sync --extra local --group dev",
         "uv run python docs/teaching/00-hello-audio/main.py",
     ]
     assert commands["README.md#validation-workflow"] == [

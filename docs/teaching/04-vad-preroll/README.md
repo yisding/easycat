@@ -10,7 +10,7 @@
 - `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
   extra pulls in `onnxruntime`, which Silero VAD needs.
 - `OPENAI_API_KEY` (TTS) and `DEEPGRAM_API_KEY` (STT).
-- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 
 > **Minimum to skip the ladder:** chapter 2 (STT events). Chapter
 > 3 is the motivation; you can read its README without running

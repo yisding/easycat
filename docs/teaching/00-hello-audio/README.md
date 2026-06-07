@@ -6,11 +6,10 @@
 ## Prerequisites
 
 - Python 3.11+.
-- `uv sync --extra quickstart --group dev` from the repo root.
-  The `quickstart` extra bundles `sounddevice` (mic/speaker),
-  `numpy` (sample buffers), plus what later chapters need. On
-  Linux you may also need `libportaudio2` from your package
-  manager.
+- `uv sync --extra local --group dev` from the repo root.
+  The `local` extra bundles `sounddevice` (mic/speaker) and
+  `numpy` (sample buffers). On Linux you may also need
+  `libportaudio2` from your package manager.
 - A working microphone and speakers.
 
 ## Run it

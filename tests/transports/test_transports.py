@@ -21,6 +21,7 @@ import struct
 import pytest
 import websockets
 
+import easycat.transports.local as local_mod
 from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, PCM16_MONO_24K, AudioChunk
 from easycat.events import DTMF, EventBus, PlaybackMarkAck
 from easycat.transports.local import LocalTransport, LocalTransportConfig
@@ -90,6 +91,26 @@ class TestLocalTransport:
             assert transport.is_connected
             await transport.disconnect()
             assert not transport.is_connected
+
+    @pytest.mark.asyncio
+    async def test_connect_preflights_numpy_before_starting_streams(self, monkeypatch):
+        """The local extra must cover both sounddevice and numpy before audio callbacks run."""
+        transport = LocalTransport()
+        requested: list[str] = []
+
+        def fake_require_module(module_name: str, **kwargs: object) -> object:
+            requested.append(module_name)
+            if module_name == "sounddevice":
+                return object()
+            raise ImportError("LocalTransport audio I/O requires the numpy package.")
+
+        monkeypatch.setattr(local_mod, "require_module", fake_require_module)
+
+        with pytest.raises(ImportError, match="numpy"):
+            await transport.connect()
+
+        assert requested == ["sounddevice", "numpy"]
+        assert not transport.is_connected
 
     @pytest.mark.asyncio
     async def test_disconnect_idempotent(self):

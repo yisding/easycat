@@ -167,7 +167,9 @@ def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> 
 
     assert "No API keys needed" in chapters["11-journal"]
     assert "without API keys, without a mic" in normalized_chapters["11-journal"]
-    assert "uv sync --extra quickstart --group dev" in chapters["00-hello-audio"]
+    assert "uv sync --extra local --group dev" in chapters["00-hello-audio"]
+    assert "sounddevice" in chapters["00-hello-audio"]
+    assert "numpy" in chapters["00-hello-audio"]
     assert "A working microphone and speakers" in chapters["00-hello-audio"]
     assert "OPENAI_API_KEY" in chapters["02-transcribe"]
     assert "or any other provider" in _chapter_prerequisites(chapters["02-transcribe"])

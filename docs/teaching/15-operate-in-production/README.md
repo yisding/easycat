@@ -11,7 +11,7 @@
 - [Chapter 14.](../14-bring-your-own-agent/)
 - `uv sync --extra quickstart --group dev`.
 - `OPENAI_API_KEY`.
-- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`.
+- After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 
 > **Minimum to skip the ladder:** chapter 13 (you need a
 > `create_session` user) and chapter 11 (the debugger UI consumes
@@ -459,9 +459,8 @@ Run easycat explain json-schema for CLI JSON.
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
   something's not working. If a scaffolded app stores keys in `.env`, run
-  `uv run easycat doctor --env-file .env`. Use
-  `uv run easycat doctor --json` when a script or coding agent needs parseable
-  first-run environment checks; use
+  `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --json`
+  when a script or coding agent needs parseable first-run environment checks; use
   `uv run easycat doctor --env-file .env --json` when both apply.
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching

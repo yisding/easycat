@@ -69,7 +69,7 @@ uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --ext
 
 Optional dependencies you may need depending on providers, transports, agent
 frameworks, and debugging/audio-processing features:
-- sounddevice (LocalTransport): `uv sync --extra local --group dev`
+- sounddevice + numpy (LocalTransport and local audio buffers): `uv sync --extra local --group dev`
 - aiortc + aiohttp (WebRTCTransport): `uv sync --extra webrtc --group dev`
 - aioquic (WebTransportTransport): `uv sync --extra webtransport --group dev`
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
@@ -161,8 +161,8 @@ as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
 `next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
 `environment`, `checks`, `validation`, `source_path`, and
 `fidelity_effective`, and error fields such as `report_path`, `path`, and
-`output_path`. Replace uppercase or angle-bracket placeholders in command
-hints, such as `PATH` or `<session_id>`, before running them.
+`output_path`. Replace uppercase placeholders in command hints, such as `PATH`,
+and angle-bracket placeholders such as `<session_id>`, before running them.
 
 ## Validation Workflow
 

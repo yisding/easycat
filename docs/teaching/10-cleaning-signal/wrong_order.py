@@ -27,7 +27,8 @@ Dependencies:
     export OPENAI_API_KEY=...
     export DEEPGRAM_API_KEY=...
     uv run easycat doctor
-    uv run easycat doctor --env-file .env  # if keys live in .env
+    uv run easycat doctor --env-file .env         # if keys live in .env
+    uv run easycat doctor --env-file .env --json  # for parseable checks
 """
 
 from __future__ import annotations

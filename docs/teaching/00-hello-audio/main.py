@@ -5,7 +5,7 @@ then replay at different chunk sizes so the reader can *hear* the
 latency difference.
 
 Dependency:
-    uv sync --extra quickstart --group dev
+    uv sync --extra local --group dev
 """
 
 from __future__ import annotations
