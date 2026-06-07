@@ -6,11 +6,12 @@ Historical phase plans for splitting `Session` into smaller runtime
 collaborators. Use the overview first, then the phase plans when you need
 implementation rationale or follow-up cleanup context.
 
-Status from static inspection on 2026-05-21: substantial decomposition has
-landed. The current code has `AudioRouter`, `STTCommitter`, `TTSScheduler`,
-`CancelOrchestrator`, `TurnRunner`, and `SessionJournalSink`; `Session`
-remains the public lifecycle owner at roughly 1,773 lines, so this folder is
-still useful for cleanup work that shrinks or clarifies residual ownership.
+Status from the 2026-06-07 current-code snapshot: substantial decomposition
+has landed. The current code has `AudioRouter`, `STTCommitter`,
+`TTSScheduler`, `CancelOrchestrator`, `TurnRunner`, and `SessionJournalSink`;
+`Session` remains the public lifecycle owner at roughly 1,358 lines, so this
+folder is still useful for cleanup work that shrinks or clarifies residual
+ownership.
 
 Do not treat the unchecked phase task lists as the current backlog without
 checking `src/easycat/session/` first. They are retained as design records.

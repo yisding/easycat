@@ -212,6 +212,49 @@ def test_roadmap_current_code_status_tracks_inventory_and_wheel_hygiene() -> Non
     assert "local/generated/secret artifacts leaking into release wheels" in status
 
 
+def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
+    """Keep current-facing planning summaries aligned with the canonical snapshot."""
+    session_lines = _line_count(REPO_ROOT / "src" / "easycat" / "session" / "_session.py")
+    init_lines = _line_count(REPO_ROOT / "src" / "easycat" / "__init__.py")
+    session_lines_text = f"{session_lines:,}"
+    init_lines_text = f"{init_lines:,}"
+    files = {
+        "combined": REPO_ROOT / "plan" / "roadmap" / "combined-cleanup-tasks.md",
+        "workstreams": REPO_ROOT / "plan" / "workstreams" / "README.md",
+        "workstream-3": REPO_ROOT / "plan" / "workstreams" / "workstream-3-stage-refactor.md",
+        "session-index": REPO_ROOT / "plan" / "session-decomposition" / "README.md",
+        "session-overview": REPO_ROOT
+        / "plan"
+        / "session-decomposition"
+        / "session-decomp-overview.md",
+    }
+    texts = {name: path.read_text(encoding="utf-8") for name, path in files.items()}
+    normalized = {name: " ".join(text.split()) for name, text in texts.items()}
+
+    assert f"roughly {session_lines_text} lines, not 2,961" in normalized["combined"]
+    assert (
+        f"`src/easycat/__init__.py` is now {init_lines_text} lines, not 578." in texts["combined"]
+    )
+    assert f"roughly {session_lines_text} lines" in normalized["workstreams"]
+    assert f"{session_lines_text} lines in the 2026-06-07 snapshot" in normalized["workstream-3"]
+    assert f"roughly {session_lines_text} lines" in normalized["session-index"]
+    assert (
+        f"roughly {session_lines_text} lines in the current snapshot"
+        in normalized["session-overview"]
+    )
+
+    combined_text = "\n".join(texts.values())
+    for stale_phrase in (
+        "2026-06-05 snapshot",
+        "Static inspection on 2026-05-21",
+        "roughly 1,390 lines",
+        "roughly 1,773 lines",
+        "`src/easycat/__init__.py` is now 280 lines",
+        "Session is **~1,770 lines** after Phase 5",
+    ):
+        assert stale_phrase not in combined_text
+
+
 def test_cli_test_plan_names_docs_route_map_coverage() -> None:
     """Keep the onboarding docs command visible in the CLI coverage map."""
     plan = (REPO_ROOT / "tests" / "cli" / "TEST_PLANS.md").read_text(encoding="utf-8")
