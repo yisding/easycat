@@ -33,6 +33,9 @@ Shipped:
 - `ErrorInfo.from_exception(ExceptionGroup(...))` now preserves the grouped
   child error tree for journal, SQLite, bundle, and debugger consumers while
   retaining the flat notes summary (`runtime/records.py`, `runtime/journal.py`).
+- Streaming agent turns now emit journal-visible `Error` events for TTS
+  synthesis failures, and emit a pipeline `ExceptionGroup` when agent and TTS
+  branches both fail in the same turn (`session/_turn_runner.py`).
 - `debug="light" | "full"`, `export_debug_bundle()` (`config/easy.py`,
   `src/easycat/session/_session.py::export_debug_bundle`).
 - `async with session:` context-manager support
@@ -62,8 +65,8 @@ Still remaining:
   raw line-count shrinkage remains open.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
-- Pipeline-wide `ExceptionGroup` propagation and remaining exception paths
-  outside the stage wrappers.
+- Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS
+  turn path and remaining exception paths outside the stage wrappers.
 - Full structlog dev/prod renderer split remains; today's stdlib logger has
   the `EASYCAT_ENV=prod` JSON-renderer behavior but not structlog processors.
 - Advanced knobs promised by the plan that aren't yet config fields:

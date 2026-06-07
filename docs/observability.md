@@ -77,7 +77,9 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `Error` events attach `stage`, `provider`, `code`, `session_id`, and
   `turn_id` when known; stage wrappers also attach `elapsed_ms`, `sequence`,
   and `record_key` on re-raised provider failures so a traceback points back
-  to the journal record that captured the failing input.
+  to the journal record that captured the failing input. When streaming agent
+  and TTS branches both fail in one turn, EasyCat emits a pipeline
+  `ExceptionGroup` error that preserves both child errors.
 - CLI entry points:
   `easycat bundles list`,
   `easycat bundles show <path>`,

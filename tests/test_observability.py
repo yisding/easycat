@@ -420,6 +420,8 @@ def test_observability_doc_tracks_error_note_context() -> None:
         "`sequence`",
         "`record_key`",
         "failing input",
+        "`ExceptionGroup`",
+        "both child errors",
     ):
         assert token in journal
 

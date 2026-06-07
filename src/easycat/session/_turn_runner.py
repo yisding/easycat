@@ -357,6 +357,7 @@ class TurnRunner:
         tts_playback_cut_short = False
         tts_chunks: list[TtsChunk] = []
         tts_should_stop = False
+        tts_error: Exception | None = None
 
         # ── TTS consumer task ──
 
@@ -364,6 +365,7 @@ class TurnRunner:
             nonlocal tts_should_stop
             nonlocal tts_playback_started
             nonlocal tts_playback_cut_short
+            nonlocal tts_error
             started = False
             # Snapshot the gate state at first-payload time and reuse it in
             # the post-loop branch.  ``_is_gated`` is time-varying (the
@@ -416,8 +418,10 @@ class TurnRunner:
                 pass
             except TTSTimeoutError:
                 await self._tts.cancel()
-            except Exception:
+            except Exception as exc:
+                tts_error = exc
                 logger.exception("TTS streaming error")
+                await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
 
             # Decide whether playback was cut short by a barge-in *now* — while
             # still inside _process_tts and before ``finalize_speaking_turn``
@@ -542,6 +546,18 @@ class TurnRunner:
             await tts_task
         except asyncio.CancelledError:
             pass
+
+        if agent_error is not None and tts_error is not None:
+            await self._emit(
+                Error(
+                    exception=ExceptionGroup(
+                        "streaming turn failed",
+                        [agent_error, tts_error],
+                    ),
+                    stage=ErrorStage.PIPELINE,
+                    turn_id=turn.id,
+                )
+            )
 
         interruption_notification = estimate_and_notify_interruption(
             self._agent_stage,

@@ -471,6 +471,29 @@ class _RaisingAgent(_TestBridgeBase):
         yield  # pragma: no cover
 
 
+class _FailingAfterDeltaAgent(_TestBridgeBase):
+    async def run(self, text: str) -> str:
+        return ""
+
+    async def invoke(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None = None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        _ = turn_input, recorder, cancel_token
+        yield AgentBridgeEvent(kind="text_delta", text="Hello.")
+        await asyncio.sleep(0)
+        raise RuntimeError("agent failed after delta")
+
+
+class _FailingTTS(FakeTTS):
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+        self.synthesized_texts.append(payload.text)
+        raise RuntimeError("tts failed")
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())  # pragma: no cover
+
+
 @pytest.mark.asyncio
 async def test_agent_failure_emits_error_event() -> None:
     session = Session(_config(agent=_RaisingAgent()))
@@ -481,6 +504,43 @@ async def test_agent_failure_emits_error_event() -> None:
     await session._turn_runner.run_streaming_agent("hello", token=None)
 
     assert any(e.stage == ErrorStage.AGENT for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_tts_streaming_failure_emits_error_event() -> None:
+    session = Session(_config(tts=_FailingTTS()))
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+
+    session._turn = TurnContext("turn-tts-err", CancelToken())
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert any(e.stage == ErrorStage.TTS for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_agent_and_tts_streaming_failures_emit_pipeline_exception_group() -> None:
+    session = Session(_config(agent=_FailingAfterDeltaAgent(), tts=_FailingTTS()))
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, lambda e: errors.append(e))
+
+    session._turn = TurnContext("turn-group-err", CancelToken())
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    groups = [
+        e.exception
+        for e in errors
+        if e.stage == ErrorStage.PIPELINE and isinstance(e.exception, ExceptionGroup)
+    ]
+    assert groups, errors
+    group = groups[0]
+    assert [type(exc).__name__ for exc in group.exceptions] == ["RuntimeError", "RuntimeError"]
+    assert [str(exc) for exc in group.exceptions] == [
+        "agent failed after delta",
+        "tts failed",
+    ]
+    assert "stage=agent" in getattr(group.exceptions[0], "__notes__", [])
+    assert "stage=tts" in getattr(group.exceptions[1], "__notes__", [])
 
 
 @pytest.mark.asyncio
