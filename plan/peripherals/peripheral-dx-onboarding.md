@@ -60,6 +60,9 @@ Shipped:
   instead of silently falling back (`_logging.py`, `docs/observability.md`).
 - `EasyConfig(record_to=...)` auto-captures a debug bundle on clean
   stop/shutdown when debug journaling is enabled (`config/_factory.py`).
+- `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
+  and loads the timestamped bundle after shutdown instead of manually calling
+  `session.export_debug_bundle(...)`.
 - `smart_turn=True` and `smart_turn_sensitivity=0..1` now normalize to
   `SmartTurnConfig(enabled=True, threshold=1-sensitivity)` so common endpoint
   tuning does not require importing the lower-level config class.
@@ -72,8 +75,9 @@ Still remaining:
   `openai_agents_voice.py` ≤7, `pydantic_ai_voice.py` ≤8, and
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
   Provider shortcut and PydanticAI slim examples have shed duplicate key
-  preflights; broader raw line-count shrinkage remains open, especially in
-  server and protocol-heavy examples.
+  preflights, and the debug bundle example uses `record_to=` auto-capture;
+  broader raw line-count shrinkage remains open, especially in server and
+  protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

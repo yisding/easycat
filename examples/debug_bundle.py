@@ -1,9 +1,10 @@
-"""Record a session with debug capture, export a bundle, and inspect it.
+"""Record a session with debug capture, auto-export a bundle, and inspect it.
 
 End-to-end debug-capture workflow:
   1. Run a local mic/speaker session with ``debug="light"`` so every
      pipeline stage records to the journal.
-  2. After ``Ctrl+C`` stops the session, export a ``RunBundle`` zip.
+  2. After ``Ctrl+C`` stops the session, ``record_to=`` writes a
+     timestamped ``RunBundle`` zip.
   3. Load the bundle back in the same process and print a per-turn
      summary plus a replay of the TTS audio the user heard.
 
@@ -25,7 +26,6 @@ from pathlib import Path
 
 from easycat import (
     EasyConfig,
-    LocalTransportConfig,
     attach_runtime_feedback,
     create_session,
     require_env,
@@ -33,10 +33,10 @@ from easycat import (
 )
 from easycat.debug.bundle import RunBundle
 
-BUNDLE_PATH = Path("run.zip")
+BUNDLE_DIR = Path("runs")
 
 
-def _summarize(bundle: RunBundle) -> None:
+def _summarize(bundle: RunBundle, path: Path) -> None:
     """Walk the journal and print per-turn STT finals + TTS audio totals."""
     stt_finals: dict[str | None, list[str]] = defaultdict(list)
     agent_replies: dict[str | None, list[str]] = defaultdict(list)
@@ -59,7 +59,7 @@ def _summarize(bundle: RunBundle) -> None:
             if text:
                 agent_replies[turn_id].append(text)
 
-    print(f"\nBundle: {BUNDLE_PATH}")
+    print(f"\nBundle: {path}")
     print(f"  provider_versions: {bundle.manifest.provider_versions}")
     print(f"  turns recorded:    {len(turn_ids)}")
 
@@ -83,22 +83,23 @@ async def main() -> None:
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    config = EasyConfig(
-        transport=LocalTransportConfig(),
-        agent=agent,
-        debug="light",  # enables journal + in-memory artifact store
+    session = create_session(
+        EasyConfig.mic(
+            agent=agent,
+            record_to=BUNDLE_DIR,
+            debug="light",
+        )
     )
-    session = create_session(config)
     attach_runtime_feedback(session)
 
     await session.start()
-    print("Recording session. Press Ctrl+C to stop and export the bundle.\n")
+    print(f"Recording session. Press Ctrl+C to stop and export a bundle under {BUNDLE_DIR}/.\n")
     await wait_for_shutdown_signal(session)
 
-    session.export_debug_bundle(str(BUNDLE_PATH), overwrite=True)
-    print(f"\nExported bundle to {BUNDLE_PATH}")
+    bundle_path = max(BUNDLE_DIR.glob(f"{session.session_id}-*.zip"))
+    print(f"\nExported bundle to {bundle_path}")
 
-    _summarize(RunBundle.load(BUNDLE_PATH))
+    _summarize(RunBundle.load(bundle_path), bundle_path)
 
 
 if __name__ == "__main__":

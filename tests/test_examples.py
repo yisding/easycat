@@ -1519,6 +1519,16 @@ def test_debug_bundle_example_imports():
     assert callable(debug_bundle.main)
 
 
+def test_debug_bundle_example_uses_record_to_auto_capture():
+    source = (REPO_ROOT / "examples/debug_bundle.py").read_text(encoding="utf-8")
+
+    assert "EasyConfig.mic(" in source
+    assert "record_to=BUNDLE_DIR" in source
+    assert 'debug="light"' in source
+    assert "session.export_debug_bundle(" not in source
+    assert 'BUNDLE_DIR.glob(f"{session.session_id}-*.zip")' in source
+
+
 def test_journal_ui_example_imports():
     pytest.importorskip("agents")
     import examples.journal_ui as journal_ui
