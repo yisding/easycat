@@ -39,8 +39,10 @@ uv run --env-file .env python examples/openai_agents_voice.py
 After changing an example or using one as a starting point, run
 `uv run easycat validate quick` and inspect
 `uv run easycat validate report .easycat/validation/latest.json`. Use
-`uv run easycat validate report .easycat/validation/latest.json --json` when a
-script or coding agent needs the saved report inside the standard CLI envelope.
+`uv run easycat validate quick --json` when a script or coding agent needs the
+current quick validation run inside the standard CLI envelope; use
+`uv run easycat validate report .easycat/validation/latest.json --json` to
+re-emit the saved report in that same envelope.
 
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
 RNNoise, NumPy, and ONNX Runtime. It does not install every framework/provider

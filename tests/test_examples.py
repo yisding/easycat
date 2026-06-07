@@ -456,11 +456,16 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in fast_path
     assert "After changing an example or using one as a starting point" in fast_path
     assert "uv run easycat validate quick" in fast_path
+    assert "uv run easycat validate quick --json" in fast_path
     assert "uv run easycat validate report .easycat/validation/latest.json" in fast_path
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in fast_path
-    assert "script or coding agent needs the saved report inside the standard CLI envelope" in (
-        re.sub(r"\s+", " ", fast_path)
+    normalized_fast_path = re.sub(r"\s+", " ", fast_path)
+    current_run_phrase = (
+        "script or coding agent needs the current quick validation run inside "
+        "the standard CLI envelope"
     )
+    assert current_run_phrase in normalized_fast_path
+    assert "re-emit the saved report in that same envelope" in normalized_fast_path
 
 
 def test_examples_readme_choose_example_table_tracks_matrix() -> None:

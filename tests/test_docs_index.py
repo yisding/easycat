@@ -353,6 +353,7 @@ def test_examples_docs_route_matches_examples_fast_path() -> None:
         "uv run easycat doctor",
         "uv run python examples/openai_agents_voice.py",
         "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ):
