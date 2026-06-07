@@ -154,12 +154,24 @@ For normal PR work, run the public quick validation lane:
 uv run easycat validate quick
 ```
 
-This runs deterministic local tests only: no live credentials, no localhost
-socket lane, no slow tests, and no flaky quarantine. Each run writes an
-isolated report under `.easycat/validation/runs/<run_id>/report.json`, plus
-JUnit and stdout/stderr logs, and updates `.easycat/validation/latest.json`
-after the report is complete. `.easycat/validation/` is ignored by git; remove
-old run directories when you no longer need the artifacts.
+For docs and onboarding-only edits, run the narrower guard that owns the
+surface first, then run quick validation before a PR:
+
+```bash
+just guard-docs          # root README chooser, docs route map, docs CLI JSON
+just guard-examples      # examples chooser and docs-route example hints
+just guard-templates     # scaffold template READMEs and template catalog
+just guard-contributing  # contributor guidance, validation plan, route hints
+just guard-markdown      # maintained Markdown links and anchors
+```
+
+The quick validation lane runs deterministic local tests only: no live
+credentials, no localhost socket lane, no slow tests, and no flaky quarantine.
+Each run writes an isolated report under
+`.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
+logs, and updates `.easycat/validation/latest.json` after the report is
+complete. `.easycat/validation/` is ignored by git; remove old run directories
+when you no longer need the artifacts.
 
 Use the socket lane when touching WebSocket, transport, or localhost
 integration behavior:

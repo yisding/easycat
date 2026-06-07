@@ -356,6 +356,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat explain json-schema",
     ]
     assert commands["README.md#validation-workflow"] == [
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
         "uv run easycat validate quick",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",
@@ -387,6 +392,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert audiences["docs/observability.md"] == "operators"
     assert "copyable create/check/run commands" in descriptions["README.md#cli"]
     assert "right first route" in descriptions["README.md#choose-your-path"]
+    assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
     assert "docs/onboarding guards" in descriptions["CONTRIBUTING.md"]

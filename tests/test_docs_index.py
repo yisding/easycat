@@ -345,6 +345,16 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     route_commands = entries["README.md#validation-workflow"].get("commands", ())
 
     for command in (
+        "just guard-docs",
+        "just guard-examples",
+        "just guard-templates",
+        "just guard-contributing",
+        "just guard-markdown",
+    ):
+        assert command in validation_section
+        assert command in route_commands
+
+    for command in (
         "uv run easycat validate quick",
         "uv run easycat validate report .easycat/validation/latest.json",
         "uv run easycat validate report .easycat/validation/latest.json --json",

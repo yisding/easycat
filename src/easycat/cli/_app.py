@@ -306,9 +306,15 @@ _DOCS_LINKS: list[_DocsLink] = [
         "path": "README.md#validation-workflow",
         "audience": "contributors",
         "description": (
-            "Run the right validation lane and inspect .easycat/validation/latest.json."
+            "Run docs/onboarding guards, the right validation lane, and inspect "
+            ".easycat/validation/latest.json."
         ),
         "commands": (
+            "just guard-docs",
+            "just guard-examples",
+            "just guard-templates",
+            "just guard-contributing",
+            "just guard-markdown",
             "uv run easycat validate quick",
             "uv run easycat validate report .easycat/validation/latest.json",
             "uv run easycat validate report .easycat/validation/latest.json --json",
