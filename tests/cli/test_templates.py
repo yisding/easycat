@@ -109,6 +109,9 @@ _GITIGNORE_PATTERNS: tuple[str, ...] = (
     "htmlcov/",
     "dist/",
     "build/",
+    "site/",
+    "mutants/",
+    ".mutmut-cache",
     ".easycat/",
 )
 _CODE_SPAN_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
@@ -919,6 +922,7 @@ def test_template_copy_filter_omits_local_artifact_directories() -> None:
         ".easycat",
         ".hypothesis",
         ".mypy_cache",
+        ".mutmut-cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
@@ -926,6 +930,8 @@ def test_template_copy_filter_omits_local_artifact_directories() -> None:
         "build",
         "dist",
         "htmlcov",
+        "mutants",
+        "site",
     }
 
     assert expected <= _COPY_IGNORE
@@ -955,6 +961,9 @@ def test_template_sources_skip_generated_artifacts(
         "build/generated.py",
         "dist/package.whl",
         "htmlcov/index.html",
+        "site/index.html",
+        "mutants/state.json",
+        ".mutmut-cache/cache",
         ".coverage",
         ".coverage.worker",
         "coverage.xml",

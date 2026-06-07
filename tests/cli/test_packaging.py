@@ -156,6 +156,7 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
         ".github",
         ".hypothesis",
         ".mypy_cache",
+        ".mutmut-cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
@@ -166,6 +167,8 @@ def test_wheel_does_not_ship_cache_or_workspace_artifacts(built_wheel: Path) -> 
         "coverage.xml",
         "dist",
         "htmlcov",
+        "mutants",
+        "site",
         "tests",
     }
     offenders = []

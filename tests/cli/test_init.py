@@ -492,6 +492,7 @@ def test_init_omits_cache_artifacts(
         ".easycat",
         ".hypothesis",
         ".mypy_cache",
+        ".mutmut-cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
@@ -500,6 +501,8 @@ def test_init_omits_cache_artifacts(
         "coverage.xml",
         "dist",
         "htmlcov",
+        "mutants",
+        "site",
     }
     for path in project.rglob("*"):
         parts = set(path.relative_to(project).parts)

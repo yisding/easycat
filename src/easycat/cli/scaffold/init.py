@@ -238,6 +238,7 @@ _COPY_IGNORE: frozenset[str] = frozenset(
         ".easycat",
         ".hypothesis",
         ".mypy_cache",
+        ".mutmut-cache",
         ".pipecat-bench",
         ".pytest_cache",
         ".ruff_cache",
@@ -245,6 +246,8 @@ _COPY_IGNORE: frozenset[str] = frozenset(
         "build",
         "dist",
         "htmlcov",
+        "mutants",
+        "site",
     }
 )
 _COPY_FILE_IGNORE: frozenset[str] = frozenset({".coverage", "coverage.xml"})

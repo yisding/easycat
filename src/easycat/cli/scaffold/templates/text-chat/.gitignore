@@ -21,4 +21,7 @@ coverage.xml
 htmlcov/
 dist/
 build/
+site/
+mutants/
+.mutmut-cache
 .easycat/
