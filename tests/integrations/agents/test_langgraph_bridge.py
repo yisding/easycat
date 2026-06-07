@@ -334,7 +334,7 @@ class TestLangGraphBridgeInvoke:
                         "metadata": {"langgraph_node": "research", "checkpoint_id": "cp-1"},
                     }
                     yield _model_stream("partial ", run_id="m1", parent="n1", node="research")
-                    await asyncio.sleep(999)
+                    await asyncio.Event().wait()
                     yield _node_end("research", "n1")  # pragma: no cover
 
                 return _gen()
@@ -1597,7 +1597,7 @@ class TestLangGraphBridgePartialTurnOnCancel:
                 async def _gen() -> AsyncIterator[dict[str, Any]]:
                     yield _node_start("answer", "n1")
                     yield _model_stream("partial reply", run_id="m1", parent="n1", node="answer")
-                    await asyncio.sleep(999)
+                    await asyncio.Event().wait()
                     yield _node_end("answer", "n1")  # pragma: no cover
 
                 return _gen()
@@ -1630,7 +1630,7 @@ class TestLangGraphBridgePartialTurnOnCancel:
             def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
                 async def _gen() -> AsyncIterator[dict[str, Any]]:
                     yield _node_start("answer", "n1")
-                    await asyncio.sleep(999)
+                    await asyncio.Event().wait()
                     yield _node_end("answer", "n1")  # pragma: no cover
 
                 return _gen()
@@ -1658,7 +1658,7 @@ class TestLangGraphBridgePartialTurnOnCancel:
             def astream_events(self, input: Any, **kwargs: Any) -> AsyncIterator[dict[str, Any]]:
                 async def _gen() -> AsyncIterator[dict[str, Any]]:
                     yield _node_start("answer", "n1")
-                    await asyncio.sleep(999)
+                    await asyncio.Event().wait()
                     yield _node_end("answer", "n1")  # pragma: no cover
 
                 return _gen()

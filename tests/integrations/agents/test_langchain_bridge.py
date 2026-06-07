@@ -1041,7 +1041,7 @@ class TestLangChainBridgeInvoke:
                     "parent_ids": ["seq"],
                     "data": {},
                 }
-                await asyncio.sleep(999)
+                await asyncio.Event().wait()
                 yield {  # pragma: no cover — cancelled before this fires
                     "event": "on_chain_end",
                     "name": "RunnableSequence",
@@ -2154,7 +2154,7 @@ class TestLangChainBridgePartialTurnOnCancel:
                     "parent_ids": [],
                     "data": {"chunk": _MockAIMessageChunk(content="Hello world")},
                 }
-                await asyncio.sleep(999)
+                await asyncio.Event().wait()
 
             async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -2196,7 +2196,7 @@ class TestLangChainBridgePartialTurnOnCancel:
                     "parent_ids": [],
                     "data": {},
                 }
-                await asyncio.sleep(999)  # never emits a token
+                await asyncio.Event().wait()
 
             async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -2355,7 +2355,7 @@ class TestLangChainBridgeHistoryStoreSync:
                     "data": {"chunk": _MockAIMessageChunk(content="Hello world")},
                 }
                 # Run never ends → wrapper's save listener never fires.
-                await asyncio.sleep(999)
+                await asyncio.Event().wait()
 
             async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
 
