@@ -608,12 +608,21 @@ def _available_docs_audience_filters() -> tuple[str, ...]:
     return tuple(_docs_audience_filter_alias(value) for value in _available_docs_audiences())
 
 
+def _docs_audience_matches(audience_filter: str, audience_label: str) -> bool:
+    needle = _normalize_docs_audience(audience_filter)
+    normalized_label = _normalize_docs_audience(audience_label)
+    if needle == normalized_label:
+        return True
+    if needle in {"maintainers", "operators"}:
+        return needle in normalized_label.split()
+    return False
+
+
 def _filter_docs_entries(entries: list[_DocsEntry], audience: str | None) -> list[_DocsEntry]:
     if audience is None:
         return entries
 
-    needle = _normalize_docs_audience(audience)
-    return [entry for entry in entries if needle in _normalize_docs_audience(entry["audience"])]
+    return [entry for entry in entries if _docs_audience_matches(audience, entry["audience"])]
 
 
 def _format_docs_entry(entry: _DocsEntry, *, label_width: int) -> str:

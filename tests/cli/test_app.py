@@ -609,6 +609,18 @@ def test_docs_command_accepts_underscored_json_audience_filter(cli: CliRunner) -
     assert payload["entries"][0]["audience"] == "provider maintainers"
 
 
+def test_docs_command_rejects_partial_audience_filters(cli: CliRunner) -> None:
+    for audience in ("maint", "agent"):
+        result = cli.invoke(app, ["docs", "--audience", audience, "--json"])
+
+        assert result.exit_code == 2
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+        assert payload["audience_filter"] == audience
+        assert "Unknown docs audience" in payload["message"]
+        assert "Available filters:" in payload["message"]
+
+
 def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) -> None:
     result = cli.invoke(app, ["docs", "--audience", "time-travelers", "--json"])
 
