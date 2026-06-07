@@ -154,6 +154,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "The human docs menu also prints the available audience labels" in normalized
     assert "uv run easycat docs --audience app-builders" in text
     assert 'uv run easycat docs --audience "app builders"' in text
+    assert "`maintainers` and `operators` filters also include compound labels" in normalized
     assert "uv run easycat doctor --env-file .env" in text
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in text
     assert "easycat doctor --json" in text

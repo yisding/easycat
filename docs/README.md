@@ -14,7 +14,9 @@ maintainer-facing route entries. The human docs menu also prints the available
 audience labels so readers can choose a narrower route map without switching
 to JSON first. Multi-word audience filters accept hyphens or underscores, so
 `uv run easycat docs --audience app-builders` is equivalent to
-`uv run easycat docs --audience "app builders"`.
+`uv run easycat docs --audience "app builders"`. The `maintainers` and
+`operators` filters also include compound labels such as `provider maintainers`,
+`release maintainers`, and `operators and maintainers`.
 
 ## Choose Your Path
 

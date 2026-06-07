@@ -149,7 +149,9 @@ when both apply.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints. Use `easycat docs --audience learners`
 or `easycat docs --audience maintainers --json` to narrow the same map before
-scanning or parsing it. `easycat explain json-schema` documents the standard
+scanning or parsing it; the `maintainers` and `operators` filters also include
+compound labels such as `provider maintainers`, `release maintainers`, and
+`operators and maintainers`. `easycat explain json-schema` documents the standard
 `--json` envelope. It covers the docs route map,
 template catalog, scaffold output, doctor environment/checks output,
 validation quick/contracts/release/report output, bundle list/show/export,

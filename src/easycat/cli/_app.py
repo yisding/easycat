@@ -564,7 +564,9 @@ _DOCS_COMMAND_NOTE = (
     "and <session_id> before running."
 )
 _DOCS_AUDIENCE_ALIAS_NOTE = (
-    "Multi-word audiences also accept hyphens or underscores, such as app-builders."
+    "Multi-word audiences also accept hyphens or underscores, such as app-builders. "
+    "The maintainers and operators filters also include compound labels such as "
+    "provider maintainers, release maintainers, and operators and maintainers."
 )
 
 
@@ -684,9 +686,10 @@ def docs_command(
         None,
         "--audience",
         help=(
-            "Filter routes by audience label, such as learners, app builders, coding agents, "
-            "contributors, operators, or maintainers. Multi-word labels also accept hyphens "
-            "or underscores."
+            "Filter routes by exact audience label or broad operators/maintainers role, "
+            "such as learners, app builders, coding agents, contributors, operators, "
+            "or maintainers. "
+            "Multi-word labels also accept hyphens or underscores."
         ),
     ),
 ) -> None:

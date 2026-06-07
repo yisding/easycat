@@ -360,6 +360,7 @@ def test_docs_help_names_primary_routes(cli: CliRunner) -> None:
     assert "learners app builders coding agents contributors operators or maintainers" in (
         help_text
     )
+    assert "exact audience label or broad operators maintainers role" in help_text
     assert "Multi word labels also accept hyphens or underscores" in help_text
     assert "machine-readable docs route map" in result.stdout
     assert "audiences and command hints" in help_text
@@ -588,6 +589,8 @@ def test_docs_command_filters_json_routes_by_audience(cli: CliRunner) -> None:
 
     assert payload["status"] == "ok"
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
+    assert "compound labels" in payload["audience_alias_note"]
+    assert "operators and maintainers" in payload["audience_alias_note"]
     assert "maintainers" in payload["available_audience_filters"]
     assert payload["audience_filter"] == "maintainers"
     assert "maintainers" in payload["available_audiences"]
@@ -630,6 +633,7 @@ def test_docs_command_unknown_audience_reports_available_labels(cli: CliRunner) 
     assert payload["command"] == "docs"
     assert payload["audience_filter"] == "time-travelers"
     assert payload["audience_alias_note"] == _DOCS_AUDIENCE_ALIAS_NOTE
+    assert "provider maintainers" in payload["audience_alias_note"]
     assert payload["available_audience_filters"] == list(_available_docs_audience_filters())
     assert "Unknown docs audience 'time-travelers'" in payload["message"]
     assert "Available filters:" in payload["message"]
