@@ -123,7 +123,10 @@ order stops putting onboarding paths first.
 - `easycat docs --json` emits a standard envelope with every route,
   including `label`, `path`, `audience`, `description`, `commands`,
   `url`, `source_url`, and `command_note`; maintainer and coding-agent
-  routes include docs-map and onboarding guard commands.
+  routes include docs-map, parseable doctor/schema/validation-report
+  commands, and onboarding guard commands.
+- Provider contract routes include the focused contract validation and
+  factory/session wiring commands that appear in `tests/contracts/README.md`.
 - Routes are unique, resolve to local sources, and match GitHub
   heading anchors for fragments.
 - Command hints are valid local commands, appear on their target pages,
