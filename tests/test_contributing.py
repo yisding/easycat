@@ -10,6 +10,7 @@ from easycat.cli._app import (
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
 )
 from tests._justfile import just_recipe_commands
+from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEV_LOOP_ROW_RE = re.compile(
@@ -137,54 +138,8 @@ def _registered_easycat_commands() -> set[str]:
     return commands
 
 
-def _pytest_target_tokens(command: str) -> list[str]:
-    targets: list[str] = []
-    options_with_values = {"-m", "-n", "--dist", "--cov-report"}
-
-    for segment in re.split(r"\s+&&\s+", command):
-        tokens = shlex.split(segment)
-        if tokens[:3] != ["uv", "run", "pytest"]:
-            continue
-
-        index = 3
-        while index < len(tokens):
-            token = tokens[index]
-            if token in options_with_values:
-                index += 2
-                continue
-            if token.startswith("-"):
-                index += 1
-                continue
-            targets.append(token)
-            index += 1
-
-    return targets
-
-
 def _pytest_target_problems(command: str, *, label: str) -> list[str]:
-    problems: list[str] = []
-
-    for target in _pytest_target_tokens(command):
-        file_target, _, node_id = target.partition("::")
-        path = REPO_ROOT / file_target
-        if not path.exists():
-            problems.append(f"{label}: missing pytest target {file_target}")
-            continue
-        if not node_id:
-            continue
-
-        text = path.read_text(encoding="utf-8")
-        for node_part in node_id.split("::"):
-            node_name = node_part.split("[", 1)[0]
-            if node_name.startswith("Test"):
-                pattern = rf"\bclass\s+{re.escape(node_name)}\b"
-            else:
-                pattern = rf"\bdef\s+{re.escape(node_name)}\b"
-            if re.search(pattern, text) is None:
-                problems.append(f"{label}: missing pytest node {target}")
-                break
-
-    return problems
+    return pytest_target_problems(command, repo_root=REPO_ROOT, label=label)
 
 
 def test_contributing_quick_start_points_to_docs_command() -> None:

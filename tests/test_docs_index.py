@@ -20,6 +20,7 @@ from easycat.cli._app import (
 )
 from tests._justfile import just_recipe_commands
 from tests._markdown import github_markdown_heading_anchors
+from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)\n]+)\)")
@@ -321,13 +322,8 @@ def _validate_uv_run_hint(
         case ["python", script, *_]:
             if not (REPO_ROOT / script).exists():
                 problems.append(f"{label}: missing python script {script}")
-        case ["pytest", *paths]:
-            for path in paths:
-                if path.startswith("-"):
-                    continue
-                target_path = path.split("::", 1)[0]
-                if not (REPO_ROOT / target_path).exists():
-                    problems.append(f"{label}: missing pytest target {path}")
+        case ["pytest", *_]:
+            problems.extend(pytest_target_problems(command, repo_root=REPO_ROOT, label=label))
         case ["ruff", *_]:
             return
         case _:
@@ -1097,6 +1093,30 @@ def test_cli_docs_command_hint_validator_checks_nested_easycat_commands() -> Non
 
     assert "Broken nested hints: unknown easycat validate command not-a-lane" in problems
     assert "Broken nested hints: unknown easycat bundles command not-a-bundle-command" in problems
+
+
+def test_cli_docs_command_hint_validator_checks_pytest_node_ids() -> None:
+    problems = _cli_docs_command_hint_problems(
+        [
+            {
+                "label": "Broken pytest hint",
+                "path": "README.md#validation-workflow",
+                "audience": "contributors",
+                "description": "Regression fixture for pytest node validation.",
+                "commands": (
+                    "uv run pytest tests/test_docs_index.py::missing_test "
+                    "tests/test_docs_index_missing.py",
+                ),
+            }
+        ]
+    )
+
+    assert "Broken pytest hint: missing pytest node tests/test_docs_index.py::missing_test" in (
+        problems
+    )
+    assert "Broken pytest hint: missing pytest target tests/test_docs_index_missing.py" in (
+        problems
+    )
 
 
 def test_cli_docs_command_hint_validator_checks_docs_audience_filters() -> None:
