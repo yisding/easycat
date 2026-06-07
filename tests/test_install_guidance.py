@@ -451,6 +451,28 @@ def test_silero_guidance_uses_bundled_onnx_not_torch() -> None:
     assert not stale, "Silero guidance should use bundled ONNX, not torch:\n" + "\n".join(stale)
 
 
+def test_reader_guidance_lets_easyconfig_read_openai_env_key() -> None:
+    """Reader-facing EasyConfig snippets should rely on OPENAI_API_KEY setup."""
+    exceptions = {
+        # create_app(api_key=...) intentionally supports injection without
+        # mutating process env, so this example must pass the key explicitly.
+        REPO_ROOT / "examples" / "twilio_app.py",
+    }
+    stale: list[str] = []
+
+    for path in _iter_reader_guidance_files():
+        if path in exceptions:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if "openai_api_key=" in text:
+            stale.append(path.relative_to(REPO_ROOT).as_posix())
+
+    assert not stale, (
+        "Reader-facing EasyConfig snippets should let EasyConfig read OPENAI_API_KEY:\n"
+        + "\n".join(stale)
+    )
+
+
 def test_docs_json_guidance_points_to_schema_contract() -> None:
     """Automation route-map hints should also teach the JSON envelope contract."""
     missing: list[str] = []
