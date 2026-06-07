@@ -7,7 +7,10 @@ import re
 import tomllib
 from pathlib import Path
 
-from easycat.cli._app import _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
+from easycat.cli._app import (
+    _DOCS_ONBOARDING_GUARD_COMMANDS,
+    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
+)
 from easycat.cli.diagnose._codes import META_ENTRIES
 from tests._justfile import just_recipe_names
 
@@ -616,14 +619,7 @@ def test_agent_guide_command_examples_are_current() -> None:
         )
         assert "just check" in command_section
         assert "just validate-quick" in command_section
-        for recipe in (
-            "just guard-docs",
-            "just guard-teaching",
-            "just guard-examples",
-            "just guard-templates",
-            "just guard-contributing",
-            "just guard-markdown",
-        ):
+        for recipe in _DOCS_ONBOARDING_GUARD_COMMANDS:
             assert recipe in command_section, filename
         for command in _DOCS_ONBOARDING_RAW_GUARD_COMMANDS:
             assert command in command_section, filename

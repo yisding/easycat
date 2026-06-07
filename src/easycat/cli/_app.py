@@ -112,6 +112,15 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 _JOURNEY_FOOTER = tuple(_rich_cli_hint(command, purpose) for command, purpose in _CLI_HINTS)
 
+_DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (
+    "just guard-docs",
+    "just guard-teaching",
+    "just guard-examples",
+    "just guard-templates",
+    "just guard-contributing",
+    "just guard-markdown",
+)
+
 _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
     (
         "uv run pytest "
@@ -324,12 +333,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat bundles export PATH --output DIR --json",
             "uv run easycat replay PATH --json",
             "uv run pytest tests/test_install_guidance.py",
-            "just guard-docs",
-            "just guard-teaching",
-            "just guard-examples",
-            "just guard-templates",
-            "just guard-contributing",
-            "just guard-markdown",
+            *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
@@ -357,12 +361,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat bundles show PATH --json",
             "uv run easycat bundles export PATH --output DIR --json",
             "uv run easycat replay PATH --json",
-            "just guard-docs",
-            "just guard-teaching",
-            "just guard-examples",
-            "just guard-templates",
-            "just guard-contributing",
-            "just guard-markdown",
+            *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
@@ -408,12 +407,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "Follow the development loop, docs/onboarding guards, and validation slices."
         ),
         "commands": (
-            "just guard-docs",
-            "just guard-teaching",
-            "just guard-examples",
-            "just guard-templates",
-            "just guard-contributing",
-            "just guard-markdown",
+            *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat docs --audience contributors",
             "uv run pytest",
@@ -486,12 +480,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             ".easycat/validation/latest.json."
         ),
         "commands": (
-            "just guard-docs",
-            "just guard-teaching",
-            "just guard-examples",
-            "just guard-templates",
-            "just guard-contributing",
-            "just guard-markdown",
+            *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
             "uv run easycat validate socket",

@@ -24,6 +24,7 @@ from easycat.cli._app import (
     _DOCS_AUDIENCE_ALIAS_NOTE,
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
+    _DOCS_ONBOARDING_GUARD_COMMANDS,
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
     _JOURNEY_SECTIONS,
     _available_docs_audience_filters,
@@ -444,12 +445,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run python docs/teaching/00-hello-audio/main.py",
     ]
     assert commands["README.md#validation-workflow"] == [
-        "just guard-docs",
-        "just guard-teaching",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
+        *_DOCS_ONBOARDING_GUARD_COMMANDS,
         *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
         "uv run easycat validate quick",
         "uv run easycat validate socket",
@@ -479,12 +475,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run pytest tests/integration/test_provider_contract_matrix.py",
     ]
     assert commands["CONTRIBUTING.md"] == [
-        "just guard-docs",
-        "just guard-teaching",
-        "just guard-examples",
-        "just guard-templates",
-        "just guard-contributing",
-        "just guard-markdown",
+        *_DOCS_ONBOARDING_GUARD_COMMANDS,
         *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
         "uv run easycat docs --audience contributors",
         "uv run pytest",

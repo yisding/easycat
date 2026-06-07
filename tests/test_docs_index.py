@@ -11,6 +11,7 @@ from typer.main import get_command
 from easycat.cli._app import (
     _DOCS_COMMAND_NOTE,
     _DOCS_LINKS,
+    _DOCS_ONBOARDING_GUARD_COMMANDS,
     _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
     _available_docs_audience_filters,
     _docs_entries,
@@ -31,14 +32,7 @@ EXAMPLE_README_ROW_RE = re.compile(
     r"\| (?P<install>[^|]+) "
     r"\| (?P<env>[^|]+) \|$"
 )
-ONBOARDING_GUARD_COMMANDS = (
-    "just guard-docs",
-    "just guard-teaching",
-    "just guard-examples",
-    "just guard-templates",
-    "just guard-contributing",
-    "just guard-markdown",
-)
+ONBOARDING_GUARD_COMMANDS = _DOCS_ONBOARDING_GUARD_COMMANDS
 RAW_ONBOARDING_GUARD_COMMANDS = _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
 DOCS_MAP_COMMANDS = ("uv run easycat docs", "uv run easycat docs --json")
 AGENT_GUIDE_MACHINE_COMMANDS = (
