@@ -37,6 +37,11 @@ async def _collect(ait):
     return result
 
 
+async def _wait_forever() -> None:
+    """Wait until cancelled by the timeout under test."""
+    await asyncio.Event().wait()
+
+
 # ── TimeoutConfig ──────────────────────────────────────────────────
 
 
@@ -80,7 +85,7 @@ class TestAgentTimeout:
 
     async def test_timeout_fires_when_agent_hangs(self):
         async def hanging_agent():
-            await asyncio.sleep(10)
+            await _wait_forever()
             return "never"
 
         with pytest.raises(AgentTimeoutError) as exc_info:
@@ -98,7 +103,7 @@ class TestAgentTimeout:
         event_bus.subscribe(Error, handler)
 
         async def hanging():
-            await asyncio.sleep(10)
+            await _wait_forever()
             return "never"
 
         with pytest.raises(AgentTimeoutError):
@@ -119,7 +124,7 @@ class TestTTSTimeout:
 
     async def test_timeout_fires_when_first_byte_delayed(self):
         async def slow_first_byte():
-            await asyncio.sleep(10)
+            await _wait_forever()
             yield b"chunk1"
 
         with pytest.raises(TTSTimeoutError) as exc_info:
@@ -149,7 +154,7 @@ class TestTTSTimeout:
         event_bus.subscribe(Error, handler)
 
         async def stalling():
-            await asyncio.sleep(10)
+            await _wait_forever()
             yield b"never"
 
         with pytest.raises(TTSTimeoutError):
@@ -193,7 +198,7 @@ class TestTTSTimeout:
         event_bus.subscribe(Error, lambda e: errors.append(e))
 
         async def stalling():
-            await asyncio.sleep(10)
+            await _wait_forever()
             yield b"never"
 
         with pytest.raises(TTSTimeoutError):

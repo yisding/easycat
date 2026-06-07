@@ -735,6 +735,15 @@ def test_session_tests_use_events_for_never_complete_tasks() -> None:
     assert "yield to allow the task to start" not in combined
 
 
+def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
+    """Timeout tests should model stuck work with cancellation-friendly events."""
+    source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
+
+    assert "async def _wait_forever" in source
+    assert "await _wait_forever()" in source
+    assert "await asyncio.sleep(10)" not in source
+
+
 def test_scaffold_smoke_ruff_uses_generated_project_config() -> None:
     """The scaffold smoke matrix should lint with the generated project's config."""
     source = (REPO_ROOT / "tests" / "cli" / "e2e" / "test_scaffold_smoke.py").read_text(
