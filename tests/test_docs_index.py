@@ -361,6 +361,12 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run easycat init my-agent" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )
+    assert "uv run easycat docs --audience maintainers" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
+    assert "uv run easycat docs --audience coding-agents" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
     assert "uv run easycat doctor --env-file .env" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )

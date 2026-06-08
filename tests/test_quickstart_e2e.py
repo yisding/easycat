@@ -235,9 +235,9 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
             "[Contributing](CONTRIBUTING.md)",
             "uv run easycat validate quick",
         ),
-        "Maintain architecture or package boundaries": (
-            "[Architecture map](CLAUDE.md)",
-            "provider registries, session lifecycle",
+        "Maintain architecture, package boundaries, or coding-agent context": (
+            "[Architecture map](CLAUDE.md) and [agent guide](AGENTS.md)",
+            "uv run easycat docs --audience maintainers",
         ),
         "Operate or debug sessions": (
             "[Observability](docs/observability.md)",
@@ -254,12 +254,14 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "examples/README.md",
         "CONTRIBUTING.md",
         "CLAUDE.md",
+        "AGENTS.md",
         "docs/observability.md",
         "docs/deployment/docker.md",
     ):
         assert (REPO_ROOT / route.rstrip("/")).exists()
     assert "uv sync --extra quickstart --group dev" in section
     assert "uv sync --extra debugger --group dev" in section
+    assert "uv run easycat docs --audience coding-agents" in section
     assert "uv run easycat init my-agent" in section
 
 

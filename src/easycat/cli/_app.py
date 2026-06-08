@@ -253,6 +253,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run --env-file .env python examples/openai_agents_voice.py",
             "uv run easycat init --list-templates",
             "uv run easycat init my-agent",
+            "uv run easycat docs --audience maintainers",
+            "uv run easycat docs --audience coding-agents",
             "uv run easycat validate quick",
             "uv run pytest tests/test_install_guidance.py",
             "easycat bundles list",

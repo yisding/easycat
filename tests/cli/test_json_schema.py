@@ -383,6 +383,8 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert audiences["README.md#validation-workflow"] == "contributors"
     assert "uv run easycat init --list-templates" in commands["README.md#choose-your-path"]
     assert "uv run easycat init my-agent" in commands["README.md#choose-your-path"]
+    assert "uv run easycat docs --audience maintainers" in commands["README.md#choose-your-path"]
+    assert "uv run easycat docs --audience coding-agents" in commands["README.md#choose-your-path"]
     assert "uv run easycat doctor --env-file .env" in commands["README.md#choose-your-path"]
     assert (
         "uv run --env-file .env python examples/openai_agents_voice.py"
