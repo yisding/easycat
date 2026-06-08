@@ -21,16 +21,9 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
-from easycat import (
-    EasyConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from easycat import EasyConfig, require_env, run
 from easycat.events import TTSEvent
 from easycat.providers import TTSProvider
 from easycat.tts.input import TTSInput
@@ -69,24 +62,19 @@ class LoggingTTS:
         return {**self._inner.version_info(), "wrapper": "logging"}
 
 
-async def main() -> None:
+def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
-    inner_tts = OpenAITTS(OpenAITTSConfig(api_key=api_key))
-    tts = LoggingTTS(inner_tts)
-
-    config = EasyConfig.mic(
-        tts=tts,
-        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+    tts = LoggingTTS(OpenAITTS(OpenAITTSConfig(api_key=api_key)))
+    run(
+        EasyConfig.mic(
+            tts=tts,
+            agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+        )
     )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -84,6 +84,10 @@ Shipped:
 - `examples/journal_demo.py` now keeps the no-key journal inspection path on
   `EasyConfig.mic(...)` while using `async with create_session(config) as
   session:` instead of manual `start()` / `stop()` lifecycle code.
+- `examples/custom_{stt,tts,vad}_provider.py` keep the provider-wrapper
+  protocol examples but now hand execution to `run(EasyConfig.mic(...))`
+  instead of teaching manual session creation, runtime feedback attachment,
+  shutdown-signal handling, and `asyncio.run(...)`.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -102,10 +106,10 @@ Still remaining:
   Provider shortcut and PydanticAI slim examples have shed duplicate key
   preflights, the canonical WebSocket server uses the config-server helper, the
   debug bundle example uses `record_to=` auto-capture, the no-key journal demo
-  uses the scoped `async with create_session(...)` lifecycle, and scaffold
-  debug guidance points all generated-project users at `record_to=`; broader
-  raw line-count shrinkage remains open in non-canonical server and
-  protocol-heavy examples.
+  uses the scoped `async with create_session(...)` lifecycle, the custom
+  provider examples use `run(EasyConfig.mic(...))`, and scaffold debug guidance
+  points all generated-project users at `record_to=`; broader raw line-count
+  shrinkage remains open in non-canonical server and protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

@@ -21,16 +21,9 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
-from easycat import (
-    EasyConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from easycat import EasyConfig, require_env, run
 from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent
 from easycat.providers import STTProvider
@@ -70,26 +63,19 @@ class LoggingSTT:
         return {**self._inner.version_info(), "wrapper": "logging"}
 
 
-async def main() -> None:
+def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
 
-    inner_stt = OpenAIRealtimeSTT(
-        OpenAIRealtimeSTTConfig(api_key=api_key),
+    stt = LoggingSTT(OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key=api_key)))
+    run(
+        EasyConfig.mic(
+            stt=stt,
+            agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+        )
     )
-    stt = LoggingSTT(inner_stt)
-
-    config = EasyConfig.mic(
-        stt=stt,
-        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
-    )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -1455,10 +1455,19 @@ def test_custom_provider_examples_use_easyconfig_surface():
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
     ):
-        source = (REPO_ROOT / relpath).read_text(encoding="utf-8")
+        path = REPO_ROOT / relpath
+        source = path.read_text(encoding="utf-8")
 
+        assert _visible_code_line_count(path) <= 45
         assert "EasyConfig.mic(" in source
-        assert "create_session(config)" in source
+        assert "from easycat import EasyConfig, require_env, run" in source
+        assert "run(" in source
+        assert "create_session" not in source
+        assert "attach_runtime_feedback" not in source
+        assert "wait_for_shutdown_signal" not in source
+        assert "asyncio.run(" not in source
+        assert "await session.start()" not in source
+        assert "await session.stop()" not in source
         assert "SessionConfig" not in source
         assert "Session(" not in source
         assert "AgentRunner(" not in source
