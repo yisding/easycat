@@ -283,6 +283,7 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
 
 def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
     """Keep the DX onramp plan from drifting back to brittle source line refs."""
+    import easycat
     from easycat.config._factory import _validate_agent_shape, create_session, create_text_session
     from easycat.config.easy import EasyConfig, _AgentSessionConfig
     from easycat.errors import EasyCatError, register
@@ -294,6 +295,12 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
     assert not line_refs, "DX onramp plan uses brittle file-line refs: " + ", ".join(line_refs)
     assert "src/easycat/config.py" not in plan
     assert "`config.py`" not in plan
+    assert f"{len(easycat.__all__)} flat alphabetical names" in plan
+    assert f"curated {len(easycat.__all__)}" in plan
+    assert f"tested {len(easycat.__all__)}-name `__all__` contract" in plan
+    assert "84 flat alphabetical names" not in plan
+    assert "curated 84" not in plan
+    assert "tested 84-name `__all__` contract" not in plan
 
     symbol_refs = {
         "src/easycat/config/easy.py::EasyConfig.__post_init__": EasyConfig.__post_init__,
