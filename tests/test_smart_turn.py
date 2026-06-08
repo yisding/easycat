@@ -1,12 +1,41 @@
 """Smart Turn runtime loading tests."""
 
 import asyncio
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.smart_turn import SmartTurnConfig, SmartTurnONNX, SmartTurnResult
+
+_WORKER_EVENT_TIMEOUT = 2.0
+
+
+def _complete_future(future: asyncio.Future[None]) -> None:
+    if not future.done():
+        future.set_result(None)
+
+
+def _route_default_executor(
+    loop: asyncio.AbstractEventLoop,
+    executor: ThreadPoolExecutor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_run_in_executor = loop.run_in_executor
+
+    def run_in_executor(
+        executor_arg: Any,
+        func: Callable[..., Any],
+        *args: Any,
+    ) -> asyncio.Future[Any]:
+        selected = executor if executor_arg is None else executor_arg
+        return original_run_in_executor(selected, func, *args)
+
+    monkeypatch.setattr(loop, "run_in_executor", run_in_executor)
 
 
 def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
@@ -157,46 +186,68 @@ def test_chunks_to_float32_16k_truncates_before_concatenate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_detection_keeps_executor_slot_until_worker_finishes() -> None:
+async def test_cancelled_detection_keeps_executor_slot_until_worker_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Cancellation should not let more executor detections pile up."""
 
-    import threading
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    _route_default_executor(loop, executor, monkeypatch)
 
     class BlockingSmartTurn(SmartTurnONNX):
         def __init__(self) -> None:
             super().__init__(model_path="unused.onnx", timeout_s=0.05)
-            self.started = threading.Event()
+            self.started: asyncio.Future[None] = loop.create_future()
             self.finish = threading.Event()
+            self.finished = threading.Event()
+            self.semaphore_released: asyncio.Future[None] = loop.create_future()
             self.calls = 0
 
         def _detect_sync(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
             self.calls += 1
-            self.started.set()
-            self.finish.wait(timeout=1)
-            return SmartTurnResult(prediction=1, probability=0.9)
+            loop.call_soon_threadsafe(_complete_future, self.started)
+            try:
+                self.finish.wait(timeout=1)
+                return SmartTurnResult(prediction=1, probability=0.9)
+            finally:
+                self.finished.set()
+
+        def _release_detect_semaphore(self, future: asyncio.Future[object]) -> None:
+            super()._release_detect_semaphore(future)
+            _complete_future(self.semaphore_released)
 
     provider = BlockingSmartTurn()
     chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
-    first = asyncio.create_task(provider.detect([chunk]))
-    while not provider.started.is_set():
-        await asyncio.sleep(0.01)
-
     try:
-        first.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await first
+        first = asyncio.create_task(provider.detect([chunk]))
 
-        result = await provider.detect([chunk])
+        try:
+            await asyncio.wait_for(provider.started, timeout=_WORKER_EVENT_TIMEOUT)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
 
-        assert result == SmartTurnResult(prediction=0, probability=0.0)
-        assert provider.calls == 1
+            result = await provider.detect([chunk])
+
+            assert result == SmartTurnResult(prediction=0, probability=0.0)
+            assert provider.calls == 1
+        finally:
+            provider.finish.set()
+            assert provider.finished.wait(timeout=_WORKER_EVENT_TIMEOUT)
+            await asyncio.wait_for(
+                provider.semaphore_released,
+                timeout=_WORKER_EVENT_TIMEOUT,
+            )
     finally:
-        provider.finish.set()
-        await asyncio.sleep(0.05)
+        executor.shutdown(wait=True)
 
 
 @pytest.mark.asyncio
-async def test_timed_out_worker_that_raises_is_not_logged_as_unretrieved(caplog) -> None:
+async def test_timed_out_worker_that_raises_is_not_logged_as_unretrieved(
+    caplog,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A worker that raises after the timeout fallback must not leak a future error.
 
     When detection times out, ``detect`` keeps the executor future alive and
@@ -208,39 +259,55 @@ async def test_timed_out_worker_that_raises_is_not_logged_as_unretrieved(caplog)
 
     import gc
     import logging
-    import threading
+
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    _route_default_executor(loop, executor, monkeypatch)
 
     class FailingSmartTurn(SmartTurnONNX):
         def __init__(self) -> None:
             super().__init__(model_path="unused.onnx", timeout_s=0.05)
-            self.started = threading.Event()
             self.may_raise = threading.Event()
+            self.worker_done = threading.Event()
+            self.semaphore_released: asyncio.Future[None] = loop.create_future()
 
         def _detect_sync(self, audio_chunks: list[AudioChunk]) -> SmartTurnResult:
-            self.started.set()
             # Block past the timeout, then raise so the exception lands on the
             # future only after detect() has returned its fallback result.
-            self.may_raise.wait(timeout=1)
-            raise RuntimeError("smart-turn worker boom")
+            try:
+                self.may_raise.wait(timeout=1)
+                raise RuntimeError("smart-turn worker boom")
+            finally:
+                self.worker_done.set()
+
+        def _release_detect_semaphore(self, future: asyncio.Future[object]) -> None:
+            super()._release_detect_semaphore(future)
+            _complete_future(self.semaphore_released)
 
     provider = FailingSmartTurn()
     chunk = AudioChunk(data=b"\0" * 640, format=PCM16_MONO_16K)
 
     # Capture all log records (asyncio logs the unretrieved-future error).
-    with caplog.at_level(logging.DEBUG):
-        result = await provider.detect([chunk])
-        # Times out -> fallback to the silence timer (incomplete).
-        assert result == SmartTurnResult(prediction=0, probability=0.0)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            try:
+                result = await provider.detect([chunk])
+                # Times out -> fallback to the silence timer (incomplete).
+                assert result == SmartTurnResult(prediction=0, probability=0.0)
 
-        # Let the still-running worker raise, then force the future through GC.
-        provider.may_raise.set()
-        for _ in range(100):
-            await asyncio.sleep(0.01)
-            if provider._detect_semaphore._value == 1:
-                break
-        # Drop references and collect so any unretrieved-future log would fire.
-        gc.collect()
-        await asyncio.sleep(0.01)
+                # Let the still-running worker raise, then force the future through GC.
+                provider.may_raise.set()
+                assert provider.worker_done.wait(timeout=_WORKER_EVENT_TIMEOUT)
+                await asyncio.wait_for(
+                    provider.semaphore_released,
+                    timeout=_WORKER_EVENT_TIMEOUT,
+                )
+                # Drop references and collect so any unretrieved-future log would fire.
+                gc.collect()
+            finally:
+                provider.may_raise.set()
+    finally:
+        executor.shutdown(wait=True)
 
     unretrieved = [
         record

@@ -797,6 +797,17 @@ def test_cli_run_lifecycle_tests_do_not_sleep_for_signals() -> None:
     assert "os.kill" not in source
 
 
+def test_smart_turn_tests_wait_on_worker_events() -> None:
+    """Smart-turn worker tests should use explicit events instead of polling sleeps."""
+    source = (REPO_ROOT / "tests" / "test_smart_turn.py").read_text(encoding="utf-8")
+
+    assert "def _complete_future(" in source
+    assert "loop.call_soon_threadsafe(_complete_future, self.started)" in source
+    assert "ThreadPoolExecutor(max_workers=1)" in source
+    assert "provider.semaphore_released" in source
+    assert "await asyncio.sleep(" not in source
+
+
 def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     """Timeout tests should model stuck work with cancellation-friendly events."""
     source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
