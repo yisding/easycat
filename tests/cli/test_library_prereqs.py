@@ -13,8 +13,6 @@ See ``TEST_PLANS.md`` §14 and §15.
 
 from __future__ import annotations
 
-import asyncio
-import signal
 from unittest.mock import patch
 
 import pytest
@@ -76,6 +74,18 @@ class _StubSession:
         self.events.append("subscribe")
 
 
+def _install_immediate_shutdown(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    installs: list[str] = []
+
+    def install_shutdown(_loop, stop_event) -> bool:  # noqa: ANN001
+        installs.append("install")
+        stop_event.set()
+        return True
+
+    monkeypatch.setattr("easycat.helpers._install_shutdown_signal_handlers", install_shutdown)
+    return installs
+
+
 def test_run_uses_session_async_context(monkeypatch: pytest.MonkeyPatch) -> None:
     """Happy-path lifecycle: create → async-enter/start → wait → force-stop."""
     session = _StubSession()
@@ -85,27 +95,10 @@ def test_run_uses_session_async_context(monkeypatch: pytest.MonkeyPatch) -> None
 
     # Suppress the feedback hook; it's tested separately.
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
-
-    # Fire SIGTERM a tick after start() completes so _run exits cleanly.
-    async def trigger_shutdown() -> None:
-        await asyncio.sleep(0.05)
-        import os
-
-        os.kill(os.getpid(), signal.SIGTERM)
-
-    # Patch asyncio.run so we can drive the coroutine inside a test loop
-    # that also schedules our shutdown trigger.
-    real_run = asyncio.run
-
-    def fake_run(coro):
-        async def main():
-            await asyncio.gather(coro, trigger_shutdown())
-
-        return real_run(main())
-
-    monkeypatch.setattr("easycat.helpers.asyncio.run", fake_run)
+    installs = _install_immediate_shutdown(monkeypatch)
 
     easycat.run(EasyConfig(openai_api_key="stub"))
+    assert installs == ["install"]
     assert "start" in session.events
     assert "stop(force=True)" in session.events
     # Stop must come after start.
@@ -122,22 +115,7 @@ def test_run_does_not_attach_feedback_under_pytest(
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
     with patch("easycat.helpers.attach_runtime_feedback") as attach:
-        # Synthesize a shutdown so the coroutine returns.
-        async def trigger() -> None:
-            await asyncio.sleep(0.02)
-            import os
-
-            os.kill(os.getpid(), signal.SIGTERM)
-
-        real_run = asyncio.run
-
-        def fake_run(coro):
-            async def main():
-                await asyncio.gather(coro, trigger())
-
-            return real_run(main())
-
-        monkeypatch.setattr("easycat.helpers.asyncio.run", fake_run)
+        _install_immediate_shutdown(monkeypatch)
         easycat.run(EasyConfig(openai_api_key="stub"))
 
     attach.assert_not_called()

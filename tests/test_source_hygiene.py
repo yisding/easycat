@@ -787,6 +787,16 @@ def test_health_check_periodic_tests_wait_for_events() -> None:
     assert "await asyncio.sleep(" not in source
 
 
+def test_cli_run_lifecycle_tests_do_not_sleep_for_signals() -> None:
+    """The public run() lifecycle tests should synthesize shutdown without timing sleeps."""
+    source = (REPO_ROOT / "tests" / "cli" / "test_library_prereqs.py").read_text(encoding="utf-8")
+
+    assert "def _install_immediate_shutdown(" in source
+    assert '"easycat.helpers._install_shutdown_signal_handlers"' in source
+    assert "await asyncio.sleep(" not in source
+    assert "os.kill" not in source
+
+
 def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     """Timeout tests should model stuck work with cancellation-friendly events."""
     source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
