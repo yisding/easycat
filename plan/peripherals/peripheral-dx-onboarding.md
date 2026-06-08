@@ -130,8 +130,9 @@ Shipped:
   example's guarded visible-code budget is now ≤75 instead of ≤94.
 - `examples/twilio_app.py` now keeps the inbound/outbound call teaching path
   while delegating signed form parsing and stream caller metadata to reusable
-  webhook request helpers; the example's guarded visible-code budget is now
-  ≤180 instead of ≤205.
+  webhook request helpers and env-derived Twilio app settings to
+  `twilio_app_settings_from_env(...)`; the example's guarded visible-code
+  budget is now ≤150 instead of ≤205.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
   `session.end_turn()` lesson while using `async with create_session(config) as
   session:` and `run_stdin_push_to_talk(...)` instead of carrying stdin

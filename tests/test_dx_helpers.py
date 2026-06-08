@@ -336,7 +336,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "visible-code budget is now ≤75 instead of ≤94" in status
     assert "examples/twilio_app.py" in status
     assert "reusable webhook request helpers" in normalized_status
-    assert "visible-code budget is now ≤180 instead of ≤205" in normalized_status
+    assert "`twilio_app_settings_from_env(...)`" in status
+    assert "visible-code budget is now ≤150 instead of ≤205" in normalized_status
     assert "examples/push_to_talk.py" in status
     assert "`run_stdin_push_to_talk(...)`" in status
     assert "visible-code budget is now ≤35 instead of ≤90" in normalized_status

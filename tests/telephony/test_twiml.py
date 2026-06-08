@@ -10,6 +10,7 @@ from easycat.events import DTMF, EventBus
 from easycat.telephony import (
     TwilioWebhookSignatureError,
     compute_twilio_webhook_signature,
+    twilio_app_settings_from_env,
     twilio_form_items_from_request,
     twilio_public_url_from_request,
     twilio_stream_parameters_from_form,
@@ -64,6 +65,91 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         "From": "+15551234567",
     }
     assert issubclass(TwilioWebhookSignatureError, ValueError)
+
+
+def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
+    settings = twilio_app_settings_from_env(
+        environ={
+            "TWILIO_STREAM_URL": "wss://voice.example.com/stream",
+            "TWILIO_ACCOUNT_SID": "AC123",
+            "TWILIO_AUTH_TOKEN": "token",
+            "TWILIO_VOICE_FROM": "+15551234567",
+            "TWILIO_TWIML_URL": "https://voice.example.com/twiml",
+            "TWILIO_STATUS_CALLBACK_URL": "https://voice.example.com/status",
+            "TWILIO_CALL_API_TOKEN": "call-token",
+            "TWILIO_SMS_FROM": "+15557654321",
+            "TWILIO_STREAM_TOKEN_SECRET": "stream-secret",
+        }
+    )
+
+    assert settings.stream_url == "wss://voice.example.com/stream"
+    assert settings.account_sid == "AC123"
+    assert settings.stream_token_secret_or_auth_token == "stream-secret"
+    assert settings.outbound_calling_enabled is True
+    assert settings.twilio_actions_enabled is True
+    assert settings.call_api_token == "call-token"
+    actions = settings.twilio_session_actions()
+    assert actions is not None
+    assert actions.account_sid == "AC123"
+    assert actions.auth_token == "token"
+    assert actions.sms_from_number == "+15557654321"
+
+
+def test_twilio_app_settings_stream_url_override_and_missing_error() -> None:
+    settings = twilio_app_settings_from_env(
+        stream_url="wss://override.example.com/stream",
+        environ={"TWILIO_STREAM_URL": "wss://ignored.example.com/stream"},
+    )
+
+    assert settings.stream_url == "wss://override.example.com/stream"
+
+    with pytest.raises(RuntimeError, match="TWILIO_STREAM_URL is required"):
+        twilio_app_settings_from_env(environ={})
+
+
+def test_twilio_app_settings_optional_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = twilio_app_settings_from_env(
+        environ={
+            "TWILIO_STREAM_URL": "wss://voice.example.com/stream",
+            "TWILIO_ACCOUNT_SID": "AC123",
+            "TWILIO_AUTH_TOKEN": "token",
+            "TWILIO_VOICE_FROM": "+15551234567",
+            "TWILIO_TWIML_URL": "https://voice.example.com/twiml",
+            "TWILIO_STATUS_CALLBACK_URL": "https://voice.example.com/status",
+        }
+    )
+    calls: list[tuple[EventBus, dict[str, str]]] = []
+
+    class _Manager:
+        def __init__(self, event_bus: EventBus, **kwargs: str) -> None:
+            calls.append((event_bus, kwargs))
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+    monkeypatch.setattr("easycat.telephony.outbound.OutboundCallManager", _Manager)
+
+    bus = EventBus()
+    manager = settings.start_outbound_manager(bus)
+
+    assert manager is not None
+    assert manager.started is True
+    assert calls == [
+        (
+            bus,
+            {
+                "from_number": "+15551234567",
+                "twilio_account_sid": "AC123",
+                "twilio_auth_token": "token",
+                "twiml_url": "https://voice.example.com/twiml",
+                "status_callback_url": "https://voice.example.com/status",
+            },
+        )
+    ]
+    disabled = twilio_app_settings_from_env(environ={"TWILIO_STREAM_URL": "wss://x"})
+    assert disabled.start_outbound_manager(EventBus()) is None
+    assert disabled.twilio_session_actions() is None
 
 
 def test_twilio_public_url_from_request_uses_framework_url_without_proxy() -> None:
