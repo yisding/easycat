@@ -107,9 +107,11 @@ Still remaining:
 - Advanced knobs promised by the plan that aren't yet config fields:
   `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
 
-The high-leverage DX wins are shipped; the remaining work is either
-ecosystem-gated (offline preset on Kyutai) or mechanical cleanup
-(structlog, field flattening).
+The high-leverage DX wins are shipped; the remaining work is deliberately
+narrower: ecosystem-gated offline preset wiring, cross-pipeline
+`ExceptionGroup` propagation, full structlog adoption, non-canonical example
+shrinkage, and the advanced `warmup=`, `max_session_cost_usd=`, and
+`latency_budget=` knobs.
 
 >
 > **Sibling peripheral docs:**

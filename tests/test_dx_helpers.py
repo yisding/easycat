@@ -221,6 +221,11 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
         "The high-leverage DX wins",
         1,
     )[0]
+    remaining_summary = plan.split("The high-leverage DX wins are shipped;", 1)[1].split(
+        ">",
+        1,
+    )[0]
+    normalized_remaining_summary = " ".join(remaining_summary.split())
 
     assert "session_policy" in field_names
     assert "audio_processing" in field_names
@@ -254,6 +259,14 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert field_count <= 22
     assert f"`EasyConfig` remains at {field_count} top-level fields" in plan_index
     assert "≤22 flattening target" in plan_index
+    assert "field flattening" not in remaining_summary
+    assert "ecosystem-gated offline preset wiring" in remaining_summary
+    assert "cross-pipeline" in remaining_summary
+    assert "full structlog adoption" in remaining_summary
+    assert "non-canonical example shrinkage" in normalized_remaining_summary
+    assert "`warmup=`" in remaining_summary
+    assert "`max_session_cost_usd=`" in remaining_summary
+    assert "`latency_budget=`" in remaining_summary
 
 
 def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
