@@ -817,6 +817,18 @@ def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     assert "await asyncio.sleep(10)" not in source
 
 
+def test_tts_first_byte_timeout_test_does_not_sleep_after_first_byte() -> None:
+    """The post-first-byte TTS timeout test should spy on wait_for, not sleep."""
+    source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
+    test_body = source.split("async def test_no_timeout_after_first_byte", 1)[1].split(
+        "async def test_timeout_emits_error_event",
+        1,
+    )[0]
+
+    assert "wait_for_timeouts == [0.1]" in test_body
+    assert "await asyncio.sleep(" not in test_body
+
+
 def test_runtime_and_generic_workflow_tests_use_events_for_never_complete_tasks() -> None:
     """Long-lived cancellation tests should use events instead of long sleeps."""
     files = (

@@ -132,17 +132,26 @@ class TestTTSTimeout:
 
         assert exc_info.value.timeout == 0.05
 
-    async def test_no_timeout_after_first_byte(self):
-        """After the first byte arrives, subsequent delays should not trigger timeout."""
+    async def test_no_timeout_after_first_byte(self, monkeypatch):
+        """After the first byte arrives, subsequent events are not wrapped in wait_for."""
+        original_wait_for = asyncio.wait_for
+        wait_for_timeouts: list[float] = []
 
-        async def slow_subsequent():
+        async def track_wait_for(awaitable, timeout=None):  # noqa: ANN001
+            if timeout is not None:
+                wait_for_timeouts.append(timeout)
+            return await original_wait_for(awaitable, timeout=timeout)
+
+        monkeypatch.setattr("easycat.timeouts.asyncio.wait_for", track_wait_for)
+
+        async def source():
             yield b"chunk1"
-            await asyncio.sleep(0.15)
             yield b"chunk2"
 
-        # First-byte timeout is 0.1s, but second chunk is 0.15s later — should not fail
-        result = await _collect(with_tts_timeout(slow_subsequent(), timeout=0.1))
+        result = await _collect(with_tts_timeout(source(), timeout=0.1))
+
         assert result == [b"chunk1", b"chunk2"]
+        assert wait_for_timeouts == [0.1]
 
     async def test_timeout_emits_error_event(self):
         event_bus = EventBus()
