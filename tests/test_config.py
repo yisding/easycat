@@ -452,6 +452,22 @@ def test_create_text_session_forwards_observability_advanced_aliases():
     assert session._easycat_config.warmup is False
     assert session._easycat_config.max_session_cost_usd == 0.25
     assert session._run_ctx.latency_budgets == (budget,)
+    assert session._config.warmup is False
+    assert session._warmup.enabled is False
+
+
+def test_create_session_forwards_warmup_to_runtime_config():
+    session = create_session(
+        EasyConfig(
+            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
+            tts=OpenAITTSConfig(api_key="test-key"),
+            transport=_IdentitySinkTransport(),
+            warmup=False,
+        )
+    )
+
+    assert session._config.warmup is False
+    assert session._warmup.enabled is False
 
 
 @pytest.mark.asyncio

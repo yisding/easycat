@@ -42,6 +42,7 @@ from easycat.session._opt_out import OptOutPolicy
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_runner import TurnRunner
+from easycat.session._warmup import WarmupRunner
 from easycat.session._wiring import _SessionTurnHandle, build_wiring
 from easycat.stages.agent import AgentStage
 from easycat.stages.audio import AudioStage
@@ -73,6 +74,7 @@ class SessionComponents:
     no_turn: TurnContext
     journal_sink: SessionJournalSink
     cost_budget: CostBudgetEnforcer
+    warmup: WarmupRunner
     outbound_queue: BoundedAudioQueue
 
     stt_stage: STTStage
@@ -133,6 +135,20 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
     )
     journal_sink.on_cost_budget_exceeded = cost_budget.on_exceeded
     journal_sink.subscribe()
+    warmup = WarmupRunner(
+        enabled=cfg.warmup,
+        journal_sink=journal_sink,
+        components=(
+            ("stt", session.stt),
+            ("tts", session.tts),
+            ("vad", session.vad),
+            ("noise_reducer", session.noise_reducer),
+            ("echo_canceller", session.echo_canceller),
+            ("transport", session.transport),
+            ("agent", session.agent),
+            ("turn_detector", session._turn_manager.endpoint_detector),
+        ),
+    )
 
     # Outbound (played-back) audio queue.  Shared between the TTS
     # synthesizer (producer) and the AudioRouter (drain consumer); built
@@ -320,6 +336,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         no_turn=no_turn,
         journal_sink=journal_sink,
         cost_budget=cost_budget,
+        warmup=warmup,
         outbound_queue=outbound_queue,
         stt_stage=stt_stage,
         tts_stage=tts_stage,

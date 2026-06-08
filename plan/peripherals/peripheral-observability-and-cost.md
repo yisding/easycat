@@ -228,10 +228,17 @@ first utterance. This wrecks latency budgets on short sessions (demos,
 call-center transfers, one-shot queries) where the first turn *is* the
 whole conversation.
 
+Current implementation: `Session.start()` runs structural provider/model
+`warmup()` hooks when `warmup=True`, after the transport connects and before
+audio ingress is armed. Startup records `warmup_completed` with per-component
+timing for supported hooks, and records `warmup_failed` before re-raising if a
+hook fails. Provider-native warmup coverage is still opt-in through this hook,
+so concrete providers can add WebSocket handshakes, ONNX priming, or zero-byte
+TTS requests without widening the public config surface.
+
 ### `WarmupStage` Responsibilities
 
-Runs immediately after session construction, before the transport is
-armed to emit turns:
+Provider hooks should use the session warmup point for:
 
 - Open STT and TTS provider WebSockets (or equivalents) and complete
   the handshake.
@@ -240,7 +247,7 @@ armed to emit turns:
 - Run a zero-byte TTS request against the TTS provider to prime the
   TLS session and token bucket.
 - Precompile any lazy-imported modules the hot path needs.
-- Emit a `WarmupCompleted` journal record with per-substage timing so
+- Emit `warmup_completed` journal data with per-substage timing so
   cold-start regressions show up in CI the same way hot-path
   regressions do.
 
@@ -272,7 +279,7 @@ forgets to pre-handshake) fail CI.
 | Latency Budget targets, `budget_exceeded=True` tagging | essential Phase 3 (stage records) |
 | CI latency assertions | `easycat.testing` (see eval file) + stage records |
 | `WarmupStage` | essential Phase 3 (stage model) |
-| `WarmupCompleted` journal record | Phase 1 schema, Phase 3 stage |
+| `warmup_completed` journal record | Phase 1 schema, Phase 3 stage |
 
 ## Suggested Sequencing
 

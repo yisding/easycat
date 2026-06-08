@@ -139,6 +139,7 @@ class SessionConfig:
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
     latency_budget: Sequence[Any] = ()
+    warmup: bool = True
     max_session_cost_usd: float | None = None
     # Auto-export a timestamped debug bundle to this directory during stop().
     # No-op when the session has no debug journal.

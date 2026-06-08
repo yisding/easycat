@@ -353,7 +353,7 @@ def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
         in texts["combined"]
     )
     assert f"roughly {session_lines_text} lines" in normalized["workstreams"]
-    assert f"{session_lines_text} lines in the 2026-06-07 snapshot" in normalized["workstream-3"]
+    assert f"{session_lines_text} lines in the 2026-06-08 snapshot" in normalized["workstream-3"]
     assert f"roughly {session_lines_text} lines" in normalized["session-index"]
     assert (
         f"roughly {session_lines_text} lines in the current snapshot"

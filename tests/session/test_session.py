@@ -89,6 +89,24 @@ class FakeTransport:
         pass
 
 
+class WarmupTransport(FakeTransport):
+    def __init__(self, calls: list[str]) -> None:
+        super().__init__()
+        self._calls = calls
+
+    async def connect(self) -> None:
+        self._calls.append("transport.connect")
+        await super().connect()
+
+    async def warmup(self) -> None:
+        self._calls.append("transport.warmup")
+
+    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        self._calls.append("transport.receive")
+        return
+        yield
+
+
 class FakePlaybackAckTransport(FakeTransport):
     def __init__(self, chunks: list[AudioChunk] | None = None) -> None:
         super().__init__(chunks=chunks)
@@ -145,6 +163,15 @@ class FakeSTT:
             if event is None:
                 break
             yield event
+
+
+class WarmupSTT(FakeSTT):
+    def __init__(self, calls: list[str]) -> None:
+        super().__init__()
+        self._calls = calls
+
+    async def warmup(self) -> None:
+        self._calls.append("stt.warmup")
 
 
 class SegmentingSTT:
@@ -231,6 +258,14 @@ class FakeTTS:
 
     async def cancel(self) -> None:
         pass
+
+
+class WarmupTTS(FakeTTS):
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def warmup(self) -> None:
+        self._calls.append("tts.warmup")
 
 
 class MarkerTTS(FakeTTS):
@@ -324,6 +359,36 @@ def test_stt_segment_silence_ms_forwarded_to_committer():
         )
     )
     assert session._stt_committer._segment_silence_ms == 250
+
+
+@pytest.mark.asyncio
+async def test_start_runs_provider_warmup_before_audio_ingress():
+    calls: list[str] = []
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            stt=WarmupSTT(calls),
+            tts=WarmupTTS(calls),
+            transport=WarmupTransport(calls),
+            journal=journal,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0)
+    await session.stop(force=True)
+
+    assert "transport.receive" in calls
+    assert calls.index("transport.connect") < calls.index("stt.warmup")
+    assert calls.index("stt.warmup") < calls.index("tts.warmup")
+    assert calls.index("tts.warmup") < calls.index("transport.warmup")
+    assert calls.index("transport.warmup") < calls.index("transport.receive")
+    record = next(record for record in journal.read() if record.name == "warmup_completed")
+    assert [component["component"] for component in record.data["components"]] == [
+        "stt",
+        "tts",
+        "transport",
+    ]
 
 
 def test_enable_noise_reduction_with_passthrough_does_not_raise():

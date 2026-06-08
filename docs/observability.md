@@ -200,8 +200,11 @@ There are three independent knobs, and they control different things:
   emits `cost_budget_warning` / `cost_budget_exceeded` records when appended
   cost records cross the configured thresholds. When `cost_budget_exceeded`
   fires, Session also records `cost_budget_stop_requested` and schedules
-  `stop(force=True)` through the runtime task scope. Provider cost-record
-  emission, aggregate turn budgets, and warmup execution are still planned.
+  `stop(force=True)` through the runtime task scope. `warmup=True` runs
+  structural provider/model `warmup()` hooks during `Session.start()` before
+  audio ingress and emits `warmup_completed` timing records. Provider
+  cost-record emission, aggregate turn budgets, and provider-specific warmup
+  coverage are still planned.
 
 ### Correlation ids in logs
 

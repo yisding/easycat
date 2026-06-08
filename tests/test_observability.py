@@ -471,9 +471,11 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
         "`cost_budget_warning` / `cost_budget_exceeded`",
         "`cost_budget_stop_requested`",
         "`stop(force=True)`",
+        "structural provider/model `warmup()` hooks",
+        "`warmup_completed` timing records",
         (
-            "Provider cost-record emission, aggregate turn budgets, and warmup execution "
-            "are still planned"
+            "Provider cost-record emission, aggregate turn budgets, and provider-specific warmup "
+            "coverage are still planned"
         ),
     ):
         assert token in config_text

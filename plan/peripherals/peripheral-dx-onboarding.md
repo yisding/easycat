@@ -175,6 +175,11 @@ Shipped:
   when explicit cost records cross the configured thresholds; once the
   exceeded alert fires, Session records `cost_budget_stop_requested` and
   schedules `stop(force=True)` through the runtime task scope.
+- `warmup=` now reaches `SessionConfig`, and `Session.start()` runs structural
+  provider/model `warmup()` hooks before audio ingress when the flag is enabled,
+  emitting `warmup_completed` timing records and `warmup_failed` control records
+  on startup failure. Provider-native warmup coverage is opt-in through that
+  hook and can expand without changing the public config surface.
 
 Still remaining:
 
@@ -205,16 +210,14 @@ Still remaining:
 - Full structlog processor adoption remains; today's stdlib logger now has an
   explicit dev/prod renderer split (`json`, plain `text`, Rich-capable
   `human`) without adding a structlog dependency.
-- Runtime enforcement for advanced observability knobs remains:
-  `warmup=` currently records intent but does not execute provider/model warmup,
-  aggregate `latency_budget=` gates such as `total_ms`, `llm_ttft_ms`, and
-  `tts_ttfb_ms` remain validation concepts rather than runtime alerts.
+- Runtime enforcement for advanced observability knobs remains: aggregate
+  `latency_budget=` gates such as `total_ms`, `llm_ttft_ms`, and `tts_ttfb_ms`
+  remain validation concepts rather than runtime alerts.
 
 The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
 `ExceptionGroup` propagation, full structlog adoption, non-canonical example
-shrinkage, and runtime enforcement for advanced observability knobs:
-`warmup=` and aggregate `latency_budget=` alerts.
+shrinkage, and runtime enforcement for aggregate `latency_budget=` alerts.
 
 >
 > **Sibling peripheral docs:**

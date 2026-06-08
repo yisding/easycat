@@ -316,6 +316,7 @@ class Session:
         self._no_turn = components.no_turn
         self._journal_sink = components.journal_sink
         self._cost_budget = components.cost_budget
+        self._warmup = components.warmup
         self._outbound_queue = components.outbound_queue
         self._stt_stage = components.stt_stage
         self._tts_stage = components.tts_stage
@@ -962,6 +963,8 @@ class Session:
                 )
                 self._tts_scheduler.replace_outbound_queue(self._outbound_queue)
                 self._audio_router.replace_outbound_queue(self._outbound_queue)
+
+            await self._warmup.run()
 
             for name, provider in (
                 ("stt", self.stt),

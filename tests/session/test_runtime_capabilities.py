@@ -13,6 +13,8 @@ from easycat.runtime.capabilities import (
     health_checkable,
     playback_acknowledgements,
     transport_reports_audio_delivery,
+    warmup_if_supported,
+    warmupable,
 )
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
@@ -156,6 +158,22 @@ class _CapabilityProxy:
         return getattr(self._target, name)
 
 
+class _AsyncWarmupProvider:
+    def __init__(self) -> None:
+        self.warmed = False
+
+    async def warmup(self) -> None:
+        self.warmed = True
+
+
+class _SyncWarmupProvider:
+    def __init__(self) -> None:
+        self.warmed = False
+
+    def warmup(self) -> None:
+        self.warmed = True
+
+
 def _config(**overrides: object) -> SessionConfig:
     values = {
         "stt": _ActiveSTT(),
@@ -267,3 +285,17 @@ async def test_capability_helpers_support_getattr_delegation() -> None:
     await aclose_if_supported(proxy)
     assert target.closed is True
     assert transport_reports_audio_delivery(proxy) is True
+
+
+@pytest.mark.asyncio
+async def test_warmup_capability_accepts_sync_and_async_hooks() -> None:
+    async_provider = _AsyncWarmupProvider()
+    sync_provider = _SyncWarmupProvider()
+
+    assert warmupable(async_provider) is async_provider
+    assert warmupable(sync_provider) is sync_provider
+    assert await warmup_if_supported(async_provider) is True
+    assert await warmup_if_supported(sync_provider) is True
+    assert await warmup_if_supported(object()) is False
+    assert async_provider.warmed is True
+    assert sync_provider.warmed is True

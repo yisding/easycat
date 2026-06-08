@@ -5,7 +5,7 @@ Status: historical record index.
 Operational slices for the debug-first runtime redesign. These are ordered
 roughly by dependency.
 
-Current note: the 2026-06-07 snapshot in
+Current note: the 2026-06-08 snapshot in
 [../roadmap/current-code-status.md](../roadmap/current-code-status.md) shows
 many workstream outcomes have landed, but the detailed checklists are not
 authoritative source truth. Use that snapshot before turning any item into new
@@ -18,7 +18,7 @@ Known drift from the records:
 - The old root `src/easycat/agent_runner.py` and `src/easycat/agents/` are
   gone, but `easycat.integrations.agents._agent_runner.AgentRunner` remains
   active.
-- `Session` is reduced but still roughly 1,434 lines, so the historical
+- `Session` is reduced but still roughly 1,437 lines, so the historical
   `<500` target was not met.
 - `easycat inspect`, `easycat replay`, `easycat validate`, and
   `python -m easycat` exist.

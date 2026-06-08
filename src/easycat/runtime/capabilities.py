@@ -28,6 +28,15 @@ class HealthCheckable(Protocol):
         ...
 
 
+@runtime_checkable
+class Warmupable(Protocol):
+    """Provider capability for startup warmup work."""
+
+    def warmup(self) -> Any:
+        """Prime provider resources before first user traffic."""
+        ...
+
+
 def is_passthrough_provider(provider: Any) -> bool:
     """Return True when a provider explicitly marks itself as no-op/passthrough."""
     return bool(getattr(provider, "is_passthrough_provider", False))
@@ -71,6 +80,25 @@ def health_checkable(provider: Any) -> HealthCheckable | None:
     if callable(getattr(provider, "health_check", None)):
         return cast(HealthCheckable, provider)
     return None
+
+
+def warmupable(provider: Any) -> Warmupable | None:
+    """Return the warmup capability when supported."""
+    if callable(getattr(provider, "warmup", None)):
+        return cast(Warmupable, provider)
+    return None
+
+
+async def warmup_if_supported(provider: Any) -> bool:
+    """Run ``provider.warmup()`` when exposed, accepting sync or async hooks."""
+    warmup_provider = warmupable(provider)
+    if warmup_provider is None:
+        return False
+
+    result = warmup_provider.warmup()
+    if inspect.isawaitable(result):
+        await result
+    return True
 
 
 async def aclose_if_supported(provider: Any) -> None:
