@@ -415,6 +415,7 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         _NEXT_STEP_DOCTOR_COMMAND,
         _NEXT_STEP_DOCTOR_JSON_COMMAND,
         _next_step_check_command(template),
+        _next_step_fix_command(template),
         _NEXT_STEP_DOCS_COMMAND,
         _NEXT_STEP_APP_BUILDER_DOCS_COMMAND,
         _NEXT_STEP_DOCS_JSON_COMMAND,

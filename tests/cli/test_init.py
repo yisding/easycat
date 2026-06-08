@@ -992,6 +992,7 @@ def test_init_json_next_step_commands_match_template_readme(
         "uv run easycat doctor --env-file .env",
         "uv run easycat doctor --env-file .env --json",
         _template_readme_check_command(template),
+        _template_readme_fix_command(template),
         "uv run easycat docs",
         "uv run easycat docs --audience app-builders",
         "uv run easycat docs --json",

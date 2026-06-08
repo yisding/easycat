@@ -41,7 +41,6 @@ from easycat.cli.scaffold.init import (
     _base_requirement,
     _easycat_version_floor,
     _next_step_commands,
-    _next_step_fix_command,
     _render_text,
     _substitutions,
     _template_file_names,
@@ -244,6 +243,7 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
     ]
     expected_middle = [
         str(entry["check_command"]),
+        str(entry["fix_command"]),
         "uv run easycat docs",
         "uv run easycat docs --audience app-builders",
         "uv run easycat docs --json",
@@ -701,7 +701,6 @@ def test_readme_command_hints_match_scaffold_next_steps(name: str) -> None:
         for command in _next_step_commands(Path("my-agent"), name)
         if not command.startswith("cd ")
     ]
-    expected_commands.append(_next_step_fix_command(name))
 
     missing = [command for command in expected_commands if command not in commands]
 
