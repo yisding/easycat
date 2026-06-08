@@ -126,6 +126,11 @@ Shipped:
   tuning does not require importing the lower-level config class.
 - Config flattening pass meets the target: currently 22 top-level `EasyConfig` fields
   against the target ≤22.
+- Advanced observability knobs are now config-addressable without widening the
+  top-level `EasyConfig` field budget: `ObservabilityConfig` carries
+  `latency_budget=`, `warmup=`, and `max_session_cost_usd=`, while
+  `EasyConfig(...)` and `create_text_session(...)` keep top-level aliases for
+  first-run ergonomics and safe debug-bundle snapshots preserve the values.
 
 Still remaining:
 
@@ -152,14 +157,16 @@ Still remaining:
 - Full structlog processor adoption remains; today's stdlib logger now has an
   explicit dev/prod renderer split (`json`, plain `text`, Rich-capable
   `human`) without adding a structlog dependency.
-- Advanced knobs promised by the plan that aren't yet config fields:
-  `warmup=`, `max_session_cost_usd=`, `latency_budget=`.
+- Runtime enforcement for advanced observability knobs remains:
+  `warmup=` currently records intent but does not execute provider/model warmup,
+  `max_session_cost_usd=` does not yet emit cost-budget alerts, and
+  `latency_budget=` does not yet tag stage records when a budget is exceeded.
 
 The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
 `ExceptionGroup` propagation, full structlog adoption, non-canonical example
-shrinkage, and the advanced `warmup=`, `max_session_cost_usd=`, and
-`latency_budget=` knobs.
+shrinkage, and runtime enforcement for advanced observability knobs:
+`warmup=`, `max_session_cost_usd=`, and `latency_budget=`.
 
 >
 > **Sibling peripheral docs:**

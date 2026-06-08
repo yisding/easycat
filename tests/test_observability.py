@@ -449,6 +449,29 @@ def test_observability_doc_tracks_record_to_auto_capture() -> None:
         assert token in journal
 
 
+def test_observability_doc_tracks_advanced_config_knobs() -> None:
+    doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
+    config = doc.split("## Configuration and orthogonality", 1)[1].split(
+        "### Correlation ids",
+        1,
+    )[0]
+    caveats = doc.split("## Honesty caveats", 1)[1]
+    config_text = " ".join(config.split())
+
+    for token in (
+        "`ObservabilityConfig`",
+        "`latency_budget=LatencyBudget(...)`",
+        "`warmup=False`",
+        "`max_session_cost_usd=0.50`",
+        "safe debug-bundle config snapshots",
+        "runtime budget enforcement and warmup execution are still planned",
+    ):
+        assert token in config_text
+
+    assert "configuration, not enforcement yet" in caveats
+    assert "`latency_budget=LatencyBudget(...)`" in caveats
+
+
 @pytest.mark.parametrize(
     "forbidden",
     ["session_id", "turn_id", "transcript", "provider_request_id", "phone_number"],

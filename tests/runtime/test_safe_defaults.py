@@ -25,6 +25,9 @@ class _FakeConfig:
     stt: str = "openai"
     tts: str = "openai"
     smart_turn_sensitivity: float = 0.8
+    latency_budget: str = "LatencyBudget(total_ms)"
+    warmup: bool = False
+    max_session_cost_usd: float = 0.5
     openai_api_key: str = "sk-secret-12345"
     secret_token: str = "tok-9999"
     timeouts: str = "default"
@@ -38,6 +41,9 @@ class TestSafeConfigSnapshot:
         assert "stt" in snap
         assert "tts" in snap
         assert "smart_turn_sensitivity" in snap
+        assert "latency_budget" in snap
+        assert "warmup" in snap
+        assert "max_session_cost_usd" in snap
         assert "timeouts" in snap
 
     def test_excludes_secret_fields(self):

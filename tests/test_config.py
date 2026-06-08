@@ -14,6 +14,7 @@ from easycat import (
     ObservabilityConfig,
     SessionPolicyConfig,
     create_session,
+    create_text_session,
 )
 from easycat.audio_format import AudioChunk
 from easycat.config import TelephonyConfig
@@ -39,6 +40,7 @@ from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.input import TTSInputPolicy
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig, TurnMode
+from easycat.validation import LatencyBudget
 
 
 class _DummyAgent:
@@ -396,6 +398,59 @@ def test_easyconfig_observability_keeps_legacy_top_level_aliases():
 
     assert config.observability.debug == "light"
     assert config.observability.journal_retention == "archive"
+
+
+def test_easyconfig_observability_carries_advanced_runtime_knobs():
+    budget = LatencyBudget(stage="total_ms", max_ms=1600.0, percentile="p90")
+    config = EasyConfig(
+        openai_api_key="test-key",
+        observability=ObservabilityConfig(
+            latency_budget=[budget],
+            warmup=False,
+            max_session_cost_usd=0.5,
+        ),
+    )
+
+    assert config.latency_budget == (budget,)
+    assert config.warmup is False
+    assert config.max_session_cost_usd == 0.5
+
+
+def test_easyconfig_observability_advanced_knobs_keep_top_level_aliases():
+    budget = LatencyBudget(stage="tts_ttfb_ms", max_ms=120.0)
+    config = EasyConfig(
+        openai_api_key="test-key",
+        observability=ObservabilityConfig(warmup=True, max_session_cost_usd=2.0),
+        latency_budget=budget,
+        warmup=False,
+        max_session_cost_usd=1.0,
+    )
+
+    assert config.observability.latency_budget == (budget,)
+    assert config.observability.warmup is False
+    assert config.observability.max_session_cost_usd == 1.0
+
+
+def test_observability_rejects_invalid_advanced_knobs():
+    with pytest.raises(ValueError, match="max_session_cost_usd must be positive"):
+        ObservabilityConfig(max_session_cost_usd=0)
+
+    with pytest.raises(ValueError, match="latency_budget must be a LatencyBudget"):
+        ObservabilityConfig(latency_budget="total_ms")
+
+
+def test_create_text_session_forwards_observability_advanced_aliases():
+    budget = LatencyBudget(stage="total_ms", max_ms=1000.0)
+    session = create_text_session(
+        agent=_DummyAgent(),
+        latency_budget=budget,
+        warmup=False,
+        max_session_cost_usd=0.25,
+    )
+
+    assert session._easycat_config.latency_budget == (budget,)
+    assert session._easycat_config.warmup is False
+    assert session._easycat_config.max_session_cost_usd == 0.25
 
 
 @pytest.mark.asyncio

@@ -217,7 +217,10 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     plan_index = (REPO_ROOT / "plan" / "peripherals" / "README.md").read_text(encoding="utf-8")
     field_names = {field.name for field in fields(EasyConfig)}
     field_count = len(field_names)
-    missing_knobs = plan.split("Advanced knobs promised by the plan", 1)[1].split(
+    runtime_knobs = plan.split(
+        "Runtime enforcement for advanced observability knobs remains:",
+        1,
+    )[1].split(
         "The high-leverage DX wins",
         1,
     )[0]
@@ -253,7 +256,7 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     }.isdisjoint(field_names)
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan
-    assert "`record_to=`" not in missing_knobs
+    assert "`record_to=`" not in runtime_knobs
     assert f"currently {field_count} top-level `EasyConfig` fields" in plan
     assert "target ≤22" in plan
     assert field_count <= 22
@@ -264,6 +267,7 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "cross-pipeline" in remaining_summary
     assert "full structlog adoption" in remaining_summary
     assert "non-canonical example shrinkage" in normalized_remaining_summary
+    assert "runtime enforcement for advanced observability knobs" in remaining_summary
     assert "`warmup=`" in remaining_summary
     assert "`max_session_cost_usd=`" in remaining_summary
     assert "`latency_budget=`" in remaining_summary
@@ -291,6 +295,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/debug_bundle.py" in status
     assert "through `run(EasyConfig.mic(...))`" in status
     assert "instead of manually starting a session" in normalized_status
+    assert "Advanced observability knobs are now config-addressable" in status
+    assert "`ObservabilityConfig` carries" in status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

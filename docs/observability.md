@@ -188,6 +188,13 @@ There are three independent knobs, and they control different things:
   the debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
   console log is. Turning one up does not turn the other up.
 
+- **Advanced observability knobs** live on `ObservabilityConfig` and keep
+  top-level `EasyConfig` aliases for first-run ergonomics:
+  `latency_budget=LatencyBudget(...)`, `warmup=False`, and
+  `max_session_cost_usd=0.50`. These values are validated and preserved in safe
+  debug-bundle config snapshots today; runtime budget enforcement and warmup
+  execution are still planned.
+
 ### Correlation ids in logs
 
 When a session/turn is active, log records emitted within that async context are
@@ -212,10 +219,11 @@ ids, but EasyCat avoids that boundary.
   A pluggable full `RedactionPolicy` is still planned. Do not attach journal
   bundles to public issues or send them to third parties until you have manually
   scrubbed them.
-- **Per-stage latency budgets are guidance, not enforcement.** Any latency
-  targets you see documented elsewhere are advisory; nothing in the pipeline
-  rejects or alerts on a stage that exceeds them. Use the OTel latency
-  histograms (D) to observe real numbers.
+- **Per-stage latency budgets are configuration, not enforcement yet.** You can
+  pass `latency_budget=LatencyBudget(...)` so sessions and bundles carry the
+  intended policy, but nothing in the pipeline rejects or alerts on a stage that
+  exceeds it. Use the OTel latency histograms (D) to observe real numbers until
+  runtime budget tagging lands.
 - **`gen_ai.*` attributes are development status.** The committed
   `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system` span keys
   track the OpenTelemetry GenAI semantic conventions, which are themselves still

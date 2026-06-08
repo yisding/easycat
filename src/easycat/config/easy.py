@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from easycat.telephony.ivr import AgentCallback, DTMFDelivery
     from easycat.telephony.retry import RetryStrategyConfig
     from easycat.telephony.session_actions import TwilioSessionActionConfig
+    from easycat.validation.latency import LatencyBudget
 
 logger = logging.getLogger("easycat.config")
 
@@ -148,6 +149,27 @@ def _require_non_negative(name: str, value: float) -> None:
     """Raise ``ValueError`` if ``value`` is negative."""
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _normalize_latency_budgets(value: Any) -> tuple[LatencyBudget, ...]:
+    """Normalize ``latency_budget`` to a tuple without importing by default."""
+    if value is None or value == ():
+        return ()
+
+    from easycat.validation.latency import LatencyBudget
+
+    if isinstance(value, LatencyBudget):
+        return (value,)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ValueError("latency_budget must be a LatencyBudget or a sequence of LatencyBudget.")
+
+    budgets = tuple(value)
+    for budget in budgets:
+        if not isinstance(budget, LatencyBudget):
+            raise ValueError(
+                "latency_budget must be a LatencyBudget or a sequence of LatencyBudget."
+            )
+    return budgets
 
 
 def _validate_common(
@@ -462,6 +484,17 @@ class ObservabilityConfig:
     debug: Literal["off", "light", "full"] = "off"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
+    latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = ()
+    warmup: bool = True
+    max_session_cost_usd: float | None = None
+
+    def __post_init__(self) -> None:
+        self._normalize_and_validate()
+
+    def _normalize_and_validate(self) -> None:
+        self.latency_budget = _normalize_latency_budgets(self.latency_budget)
+        if self.max_session_cost_usd is not None:
+            _require_positive("max_session_cost_usd", self.max_session_cost_usd)
 
 
 _SESSION_POLICY_ALIAS_FIELDS = frozenset(
@@ -491,6 +524,9 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "debug",
         "journal_backend",
         "journal_retention",
+        "latency_budget",
+        "warmup",
+        "max_session_cost_usd",
     }
 )
 
@@ -545,6 +581,9 @@ class _AgentSessionConfig:
     debug: InitVar[Literal["off", "light", "full"] | None] = None
     journal_backend: InitVar[Literal["sqlite", "sqlite+litestream", "libsql"] | None] = None
     journal_retention: InitVar[Literal["archive", "delete"] | None] = None
+    latency_budget: InitVar[LatencyBudget | Sequence[LatencyBudget] | None] = None
+    warmup: InitVar[bool | None] = None
+    max_session_cost_usd: InitVar[float | None] = None
 
     def __getattribute__(self, name: str) -> Any:
         if name in _OBSERVABILITY_ALIAS_FIELDS:
@@ -566,6 +605,9 @@ class _AgentSessionConfig:
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
+        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
+        warmup: bool | None,
+        max_session_cost_usd: float | None,
     ) -> None:
         if debug is not None:
             self.debug = debug
@@ -573,6 +615,13 @@ class _AgentSessionConfig:
             self.journal_backend = journal_backend
         if journal_retention is not None:
             self.journal_retention = journal_retention
+        if latency_budget is not None:
+            self.latency_budget = latency_budget
+        if warmup is not None:
+            self.warmup = warmup
+        if max_session_cost_usd is not None:
+            self.max_session_cost_usd = max_session_cost_usd
+        self.observability._normalize_and_validate()
 
 
 @dataclass(kw_only=True)
@@ -672,6 +721,9 @@ class EasyConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
+        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
+        warmup: bool | None,
+        max_session_cost_usd: float | None,
         vad: VADConfig | VADProvider | None,
         noise_reduction: NoiseReducerConfig | NoiseReducer | None,
         echo_cancellation: EchoCancellationConfig | EchoCanceller | None,
@@ -685,7 +737,14 @@ class EasyConfig(_AgentSessionConfig):
         opt_out_phrases: tuple[str, ...] | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
-        self._apply_observability_aliases(debug, journal_backend, journal_retention)
+        self._apply_observability_aliases(
+            debug,
+            journal_backend,
+            journal_retention,
+            latency_budget,
+            warmup,
+            max_session_cost_usd,
+        )
         if vad is not None:
             self.vad = vad
         if noise_reduction is not None:
@@ -909,8 +968,18 @@ class TextSessionConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
+        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
+        warmup: bool | None,
+        max_session_cost_usd: float | None,
     ) -> None:
-        self._apply_observability_aliases(debug, journal_backend, journal_retention)
+        self._apply_observability_aliases(
+            debug,
+            journal_backend,
+            journal_retention,
+            latency_budget,
+            warmup,
+            max_session_cost_usd,
+        )
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
@@ -931,6 +1000,9 @@ class TextSessionConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] = "off",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
+        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = None,
+        warmup: bool | None = None,
+        max_session_cost_usd: float | None = None,
         wrap_agent: bool = True,
         agent_runner: AgentRunnerConfig | None = None,
         agent_model: str | None = None,
@@ -955,6 +1027,9 @@ class TextSessionConfig(_AgentSessionConfig):
                 "debug": (debug, "off"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
+                "latency_budget": (latency_budget, None),
+                "warmup": (warmup, None),
+                "max_session_cost_usd": (max_session_cost_usd, None),
                 "wrap_agent": (wrap_agent, True),
                 "agent_runner": (agent_runner, None),
                 "agent_model": (agent_model, None),
@@ -976,6 +1051,9 @@ class TextSessionConfig(_AgentSessionConfig):
             debug=debug,
             journal_backend=journal_backend,
             journal_retention=journal_retention,
+            latency_budget=latency_budget,
+            warmup=warmup,
+            max_session_cost_usd=max_session_cost_usd,
             wrap_agent=wrap_agent,
             agent_runner=agent_runner,
             agent_model=agent_model,
