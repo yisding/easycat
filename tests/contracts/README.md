@@ -31,6 +31,10 @@ From the repository root, run `uv run easycat validate contracts` for the
 offline provider, protocol, and bridge contract lane. Use
 `uv run easycat validate contracts --json` when a script or coding agent needs
 the same contract run inside the standard CLI envelope. Use
+`uv run easycat docs --audience provider-maintainers` to narrow the maintained
+docs map to provider-facing routes, or
+`uv run easycat docs --audience provider-maintainers --json` when automation
+needs that smaller route map with command hints. Use
 `uv run pytest tests/contracts` for the focused contract suite, and
 `uv run pytest tests/integration/test_provider_contract_matrix.py` when you
 need to verify the separate factory/session wiring matrix.

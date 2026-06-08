@@ -636,6 +636,8 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
     route_commands = entries["tests/contracts/README.md"].get("commands", ())
 
     for command in (
+        "uv run easycat docs --audience provider-maintainers",
+        "uv run easycat docs --audience provider-maintainers --json",
         "uv run easycat validate contracts",
         "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
@@ -840,6 +842,7 @@ def test_validation_reference_docs_route_matches_json_commands() -> None:
     route_commands = entries["plan/validation/reference.md"].get("commands", ())
 
     for command in (
+        "easycat docs --audience release-maintainers --json",
         "easycat validate quick --json",
         "easycat validate contracts --json",
         "easycat validate release --json",

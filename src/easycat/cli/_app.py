@@ -445,6 +445,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "Maintain offline provider, protocol, cassette, and bridge contract coverage."
         ),
         "commands": (
+            "uv run easycat docs --audience provider-maintainers",
+            "uv run easycat docs --audience provider-maintainers --json",
             "uv run easycat validate contracts",
             "uv run easycat validate contracts --json",
             "uv run pytest tests/contracts",
@@ -557,6 +559,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "release maintainers",
         "description": "Read provider and report vocabulary used by validation.",
         "commands": (
+            "easycat docs --audience release-maintainers --json",
             "easycat validate quick --json",
             "easycat validate contracts --json",
             "easycat validate release --json",

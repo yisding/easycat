@@ -168,6 +168,7 @@ machine-readable stdout envelope. Persisted validation reports should use
 JSON envelope smoke check:
 
 ```bash
+easycat docs --audience release-maintainers --json
 easycat validate quick --json
 easycat validate contracts --json
 easycat validate release --json
