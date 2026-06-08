@@ -87,8 +87,10 @@ Shipped:
   shutdown instead of manually starting a session, attaching feedback, waiting
   for signals, or calling `session.export_debug_bundle(...)`.
 - `examples/journal_demo.py` now keeps the no-key journal inspection path on
-  `EasyConfig.mic(...)` while using `async with create_session(config) as
-  session:` instead of manual `start()` / `stop()` lifecycle code.
+  `EasyConfig.mic(...)` while using reusable
+  `scripted_turn_providers(...)` and `async with create_session(config) as
+  session:` instead of custom protocol stubs or manual `start()` / `stop()`
+  lifecycle code; the guarded visible-code budget is now ≤40 instead of ≤90.
 - `examples/custom_{stt,tts,vad}_provider.py` keep the provider-wrapper
   protocol examples but now hand execution to `run(EasyConfig.mic(...))`
   instead of teaching manual session creation, runtime feedback attachment,
@@ -166,7 +168,8 @@ Still remaining:
   Provider shortcut and PydanticAI slim examples have shed duplicate key
   preflights, the canonical WebSocket server uses the config-server helper, the
   debug bundle example uses `record_to=` auto-capture, the no-key journal demo
-  uses the scoped `async with create_session(...)` lifecycle, the custom
+  uses reusable scripted providers plus the scoped `async with
+  create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
   direct-session subscription/debugger and browser-transport examples use
   `run_session(session)`; the WebTransport server uses a config-server helper;

@@ -1652,7 +1652,8 @@ def test_journal_demo_uses_easyconfig_provider_instance_surface():
     path = REPO_ROOT / "examples/journal_demo.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 90
+    assert _visible_code_line_count(path) <= 40
+    assert "scripted_turn_providers(" in source
     assert "EasyConfig.mic(" in source
     assert 'debug="light"' in source
     assert "turn_taking=TurnManagerConfig" in source
@@ -1664,6 +1665,7 @@ def test_journal_demo_uses_easyconfig_provider_instance_surface():
     assert "SessionConfig" not in source
     assert "Session(" not in source
     assert "InMemoryRingBuffer" not in source
+    assert "class Stub" not in source
 
 
 def test_reconnecting_ws_client_example_imports():

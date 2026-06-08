@@ -315,6 +315,9 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/debug_bundle.py" in status
     assert "through `run(EasyConfig.mic(...))`" in status
     assert "instead of manually starting a session" in normalized_status
+    assert "examples/journal_demo.py" in status
+    assert "`scripted_turn_providers(...)`" in status
+    assert "visible-code budget is now ≤40 instead of ≤90" in normalized_status
     assert "Advanced observability knobs are now config-addressable" in status
     assert "`ObservabilityConfig` carries" in status
     assert "`latency_budget_exceeded`" in status
