@@ -10,7 +10,7 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 187 tracked Python files.
+- `src/easycat/` contains 188 tracked Python files.
 - `tests/` contains 206 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
@@ -71,6 +71,9 @@ with the codebase. Counts below come from tracked files and exclude
   than replacing the object that `receive_audio()` may be awaiting.
 - VAD/noise-reduction backend typo validation and echo-cancellation fallback
   policy are implemented and tested.
+- Runtime observability now includes stage-record latency-budget tags,
+  turn-level `total_ms` latency-budget alert records, session cost-budget
+  stop enforcement, and startup `warmup()` hook execution.
 - README provider drift called out in the April cleanup note appears fixed:
   Cartesia is listed, TEN VAD is described as non-permissive, and the
   quickstart extra says it does not include TEN VAD.

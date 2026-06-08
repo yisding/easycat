@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
 
@@ -51,6 +52,7 @@ from easycat.session.actions import SessionActions
 from easycat.timeouts import TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
+from easycat.validation import LatencyBudget
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
@@ -590,6 +592,44 @@ async def test_send_text_task_is_runtime_scoped_and_journaled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_text_records_total_latency_budget_alert() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            agent=_SimpleStreamingAgent(),
+            journal=journal,
+            latency_budget=(LatencyBudget(stage="total_ms", max_ms=0.0),),
+        )
+    )
+
+    assert await session.send_text("hello") == "Reply."
+
+    metric = next(record for record in journal.read() if record.name == "text_turn_latency_ms")
+    assert metric.data["surface"] == "text_session"
+    assert metric.data["latency_budget_exceeded"] is True
+    assert metric.data["latency_budget_violations"] == [
+        {
+            "stage": "total_ms",
+            "observed_ms": metric.data["value"],
+            "budget_ms": 0.0,
+            "percentile": "p95",
+            "scope": "turn_metric",
+        }
+    ]
+    alert = next(record for record in journal.read() if record.name == "latency_budget_exceeded")
+    assert alert.turn_id == metric.turn_id
+    assert alert.data == {
+        "stage": "total_ms",
+        "observed_ms": metric.data["value"],
+        "budget_ms": 0.0,
+        "percentile": "p95",
+        "scope": "turn_metric",
+        "trigger_record_name": "text_turn_latency_ms",
+    }
+
+
+@pytest.mark.asyncio
 async def test_send_text_dispatches_tool_events_with_correlation() -> None:
     """The text path translates tool events via the shared dispatch.
 
@@ -694,6 +734,32 @@ async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
     session._turn = TurnContext("turn-stop2", CancelToken())
     await session._turn_runner.run_streaming_agent("hello", token=None)
     assert len(stopped) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_records_total_latency_budget_alert() -> None:
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(
+        _config(
+            journal=journal,
+            latency_budget=(LatencyBudget(stage="total_ms", max_ms=0.0),),
+        )
+    )
+    turn = TurnContext("turn-total-budget", CancelToken())
+    turn.end_time = time.monotonic() - 1.0
+    session._turn = turn
+
+    await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    metric = next(record for record in journal.read() if record.name == "turn_total_latency_ms")
+    assert metric.turn_id == turn.id
+    assert metric.data["from"] == "turn_ended"
+    assert metric.data["to"] == "first_tts_audio"
+    assert metric.data["latency_budget_exceeded"] is True
+    alert = next(record for record in journal.read() if record.name == "latency_budget_exceeded")
+    assert alert.turn_id == turn.id
+    assert alert.data["trigger_record_name"] == "turn_total_latency_ms"
+    assert alert.data["stage"] == "total_ms"
 
 
 @pytest.mark.asyncio

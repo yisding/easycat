@@ -45,9 +45,9 @@ from easycat.events import (
     TurnStarted,
 )
 from easycat.runtime.context import RunContext
-from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
+from easycat.session._latency_budget import LatencyBudgetMonitor
 from easycat.session._streaming import consume_agent_stream, emit_tool_event
 from easycat.session.interruption import (
     TtsChunk,
@@ -99,6 +99,7 @@ class TurnRunner:
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
+        latency_budget: LatencyBudgetMonitor,
         turn_handle: TurnHandle,
         stt_stage: STTStage,
         session_id: str,
@@ -115,6 +116,7 @@ class TurnRunner:
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
+        self._latency_budget = latency_budget
         self._turn = turn_handle
         self._stt_stage = stt_stage
         self._stt_provider = wiring.stt
@@ -586,10 +588,34 @@ class TurnRunner:
             await self._stop()
             return
 
+        self._record_voice_total_latency(turn)
+
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn.current is turn and self._turn.generation == turn_gen:
             if self._turn_manager.state != TurnManagerState.IDLE:
                 self._reset_turn_state()
+
+    def _record_voice_total_latency(self, turn: TurnContext) -> None:
+        """Record a configured turn total budget from speech end to first audio."""
+        if (
+            not self._journal_enabled
+            or not self._latency_budget.has_budget_for("total_ms")
+            or turn.end_time is None
+            or turn.first_tts_audio_time is None
+        ):
+            return
+        elapsed_ms = max(0.0, (turn.first_tts_audio_time - turn.end_time) * 1000.0)
+        self._latency_budget.record_metric(
+            name="turn_total_latency_ms",
+            turn_id=turn.id,
+            stage="total_ms",
+            observed_ms=elapsed_ms,
+            data={
+                "value": elapsed_ms,
+                "from": "turn_ended",
+                "to": "first_tts_audio",
+            },
+        )
 
     # ── Text mode ──────────────────────────────────────────────────
 
@@ -724,11 +750,12 @@ class TurnRunner:
                 )
             )
             if self._journal_enabled:
-                self._journal_sink.append_record(
-                    kind=JournalRecordKind.METRIC,
+                self._latency_budget.record_metric(
                     name="text_turn_latency_ms",
                     turn_id=turn_id,
-                    data={"value": elapsed_ms},
+                    stage="total_ms",
+                    observed_ms=elapsed_ms,
+                    data={"value": elapsed_ms, "surface": "text_session"},
                 )
             result_attr = "pass"
         except Exception as exc:

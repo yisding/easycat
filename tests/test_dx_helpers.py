@@ -287,8 +287,11 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "cross-pipeline" in remaining_summary
     assert "full structlog adoption" in remaining_summary
     assert "non-canonical example shrinkage" in normalized_remaining_summary
-    assert "runtime enforcement for aggregate `latency_budget=` alerts" in remaining_summary
-    assert "aggregate `latency_budget=` alerts" in remaining_summary
+    assert (
+        "runtime enforcement for first-token/audio `latency_budget=` alerts"
+        in normalized_remaining_summary
+    )
+    assert "first-token/audio `latency_budget=` alerts" in normalized_remaining_summary
     assert "`warmup=`" not in remaining_summary
     assert "`max_session_cost_usd=`" not in remaining_summary
 
@@ -322,6 +325,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "`ObservabilityConfig` carries" in status
     assert "`latency_budget_exceeded`" in status
     assert "`easycat.runtime.cost_budget_status(...)`" in status
+    assert '`latency_budget=LatencyBudget(stage="total_ms", max_ms=...)`' in status
+    assert "turn-level `latency_budget_exceeded` metric records" in status
     assert "`cost_budget_warning`" in status
     assert "`cost_budget_exceeded`" in status
     assert "`cost_budget_stop_requested`" in status

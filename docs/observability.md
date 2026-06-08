@@ -194,17 +194,20 @@ There are three independent knobs, and they control different things:
   `max_session_cost_usd=0.50`. These values are validated and preserved in safe
   debug-bundle config snapshots. Budgets whose `stage` matches a runtime stage
   name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
-  stage records with `latency_budget_exceeded`; the debugger cost rollup reports
-  `max_session_cost_usd` budget status from cost records using the shared
-  `easycat.runtime.cost_budget_status(...)` helper, and the session journal
-  emits `cost_budget_warning` / `cost_budget_exceeded` records when appended
-  cost records cross the configured thresholds. When `cost_budget_exceeded`
-  fires, Session also records `cost_budget_stop_requested` and schedules
-  `stop(force=True)` through the runtime task scope. `warmup=True` runs
-  structural provider/model `warmup()` hooks during `Session.start()` before
-  audio ingress and emits `warmup_completed` timing records. Provider
-  cost-record emission, aggregate turn budgets, and provider-specific warmup
-  coverage are still planned.
+  stage records with `latency_budget_exceeded`; `LatencyBudget(stage="total_ms",
+  max_ms=...)` emits turn-level `latency_budget_exceeded` metric records from
+  text turns and from voice turns once first TTS audio is available. The
+  debugger cost rollup reports `max_session_cost_usd` budget status from cost
+  records using the shared `easycat.runtime.cost_budget_status(...)` helper, and
+  the session journal emits `cost_budget_warning` / `cost_budget_exceeded`
+  records when appended cost records cross the configured thresholds. When
+  `cost_budget_exceeded` fires, Session also records
+  `cost_budget_stop_requested` and schedules `stop(force=True)` through the
+  runtime task scope. `warmup=True` runs structural provider/model `warmup()`
+  hooks during `Session.start()` before audio ingress and emits
+  `warmup_completed` timing records. Provider cost-record emission,
+  first-token/audio runtime budgets, and provider-specific warmup coverage are
+  still planned.
 
 ### Correlation ids in logs
 
@@ -230,14 +233,15 @@ ids, but EasyCat avoids that boundary.
   A pluggable full `RedactionPolicy` is still planned. Do not attach journal
   bundles to public issues or send them to third parties until you have manually
   scrubbed them.
-- **Per-stage latency budgets tag; they do not reject or alert yet.** You can
+- **Latency budgets tag and alert, but they do not reject turns yet.** You can
   pass `latency_budget=LatencyBudget(stage="tts", max_ms=500)` so matching
   stage records carry `elapsed_ms`, a `latency_budget_exceeded` tag, and
   structured `latency_budget_violations` when they exceed the configured
-  budget. Whole-turn and first-token/audio budgets such as `total_ms`,
-  `llm_ttft_ms`, and `tts_ttfb_ms` are still aggregate validation concepts, not
-  per-record runtime gates. Use the OTel latency histograms (D) to observe
-  real numbers until alerting lands.
+  budget. `LatencyBudget(stage="total_ms", max_ms=...)` also emits `total_ms`
+  turn-level `latency_budget_exceeded` metric records. First-token/audio budgets
+  such as `llm_ttft_ms` and `tts_ttfb_ms` are still aggregate validation
+  concepts, not per-record runtime gates. Use the OTel latency histograms (D)
+  to observe real numbers until those alerts land.
 - **`gen_ai.*` attributes are development status.** The committed
   `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system` span keys
   track the OpenTelemetry GenAI semantic conventions, which are themselves still

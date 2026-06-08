@@ -205,10 +205,11 @@ defaults EasyCat ships with.
 ### `LatencyBudget` Config
 
 A `LatencyBudget` config object lets users tighten or loosen individual
-stage budgets. When a turn misses a budget, the waterfall highlights the
-offending stage in red and the journal record is tagged with
-`budget_exceeded=True` so CI assertions and production alerts fire on
-the same signal.
+stage and turn-total budgets. Matching over-budget stage records carry
+`latency_budget_exceeded` and structured `latency_budget_violations`; matching
+over-budget `total_ms` turn metrics emit `latency_budget_exceeded` metric
+records. CI assertions and production alerts can therefore consume the same
+journal vocabulary.
 
 ### Cold-Start Caveat
 
@@ -276,7 +277,7 @@ forgets to pre-handshake) fail CI.
 | `PricingSource` protocol, budget alerts, cost rollups | essential Phase 1 |
 | `JournalToOTelExporter` | essential Phase 1 (journal records stable) |
 | Phoenix CI acceptance test | journal + `CostRecord` shape locked |
-| Latency Budget targets, `budget_exceeded=True` tagging | essential Phase 3 (stage records) |
+| Latency Budget targets, `latency_budget_exceeded` tagging | essential Phase 3 (stage records) |
 | CI latency assertions | `easycat.testing` (see eval file) + stage records |
 | `WarmupStage` | essential Phase 3 (stage model) |
 | `warmup_completed` journal record | Phase 1 schema, Phase 3 stage |
@@ -288,7 +289,7 @@ forgets to pre-handshake) fail CI.
    with Phoenix CI. All three are additive to the journal and pay zero
    integration debt.
 2. **During essential Phase 3**: Latency Budget targets wired to stage
-   records, `budget_exceeded=True` tagging, `WarmupStage`. CI latency
+   records, `latency_budget_exceeded` tagging, `WarmupStage`. CI latency
    assertions land alongside the eval module.
 3. **After essential Phase 3**: `warmup within 20% of steady state` CI
    guardrail enforced against fixture runs.

@@ -38,6 +38,7 @@ from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._cost_budget import CostBudgetEnforcer
 from easycat.session._greeting import GreetingController
 from easycat.session._journal_sink import SessionJournalSink
+from easycat.session._latency_budget import LatencyBudgetMonitor
 from easycat.session._opt_out import OptOutPolicy
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
@@ -124,6 +125,10 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
         max_session_cost_usd=cfg.max_session_cost_usd,
+    )
+    latency_budget = LatencyBudgetMonitor(
+        journal_sink=journal_sink,
+        budgets=tuple(cfg.latency_budget or ()),
     )
     cost_budget = CostBudgetEnforcer(
         session_id=session.session_id,
@@ -287,6 +292,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         journal_sink=journal_sink,
         runtime_scope=session._runtime_scope,
         timeout_config=session._timeout_config,
+        latency_budget=latency_budget,
         turn_handle=_SessionTurnHandle(session),
         stt_stage=stt_stage,
         session_id=session.session_id,

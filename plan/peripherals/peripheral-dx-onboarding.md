@@ -166,6 +166,10 @@ Shipped:
   `latency_budget_exceeded`, `elapsed_ms`, and structured
   `latency_budget_violations`, so debug bundles surface local stage overruns
   without requiring a separate validation run.
+- `latency_budget=LatencyBudget(stage="total_ms", max_ms=...)` now emits
+  turn-level `latency_budget_exceeded` metric records from text turns and from
+  voice turns once first TTS audio is available, so whole-turn latency alerts no
+  longer require a separate validation artifact.
 - `max_session_cost_usd=` now reaches the debugger cost rollup through safe
   config snapshots. When `cost` / `cost_record` journal entries exist,
   `/api/cost` reports `ok` / `warning` / `exceeded` budget status alongside
@@ -210,14 +214,15 @@ Still remaining:
 - Full structlog processor adoption remains; today's stdlib logger now has an
   explicit dev/prod renderer split (`json`, plain `text`, Rich-capable
   `human`) without adding a structlog dependency.
-- Runtime enforcement for advanced observability knobs remains: aggregate
-  `latency_budget=` gates such as `total_ms`, `llm_ttft_ms`, and `tts_ttfb_ms`
-  remain validation concepts rather than runtime alerts.
+- Runtime enforcement for advanced observability knobs remains:
+  first-token/audio `latency_budget=` gates such as `llm_ttft_ms` and
+  `tts_ttfb_ms` remain validation concepts rather than runtime alerts.
 
 The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
 `ExceptionGroup` propagation, full structlog adoption, non-canonical example
-shrinkage, and runtime enforcement for aggregate `latency_budget=` alerts.
+shrinkage, and runtime enforcement for first-token/audio `latency_budget=`
+alerts.
 
 >
 > **Sibling peripheral docs:**
