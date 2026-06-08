@@ -32,6 +32,66 @@ FORBIDDEN_RELEASE_ARTIFACT_PARTS = frozenset(
     }
 )
 FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES = (".key", ".pem", ".pyc", ".pyo")
+SCAFFOLD_COPY_IGNORED_DIRECTORIES = frozenset(
+    {
+        "__pycache__",
+        ".agents",
+        ".claude",
+        ".codex",
+        ".easycat",
+        ".git",
+        ".github",
+        ".hypothesis",
+        ".mypy_cache",
+        ".mutmut-cache",
+        ".pipecat-bench",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".uv-cache",
+        ".venv",
+        "build",
+        "dist",
+        "htmlcov",
+        "mutants",
+        "site",
+    }
+)
+SCAFFOLD_COPY_IGNORED_FILES = frozenset({".coverage", "coverage.xml"})
+SCAFFOLD_COPY_IGNORED_FILE_PREFIXES = (".coverage.",)
+SCAFFOLD_COPY_IGNORED_PART_SUFFIXES = (".egg-info",)
+SCAFFOLD_COPY_IGNORED_SUFFIXES = FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES
+GENERATED_PROJECT_GITIGNORE_PATTERNS = (
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "*.pem",
+    "*.key",
+    ".venv/",
+    "*.egg-info/",
+    ".agents/",
+    ".claude/",
+    ".codex",
+    ".codex/",
+    "__pycache__/",
+    "*.pyc",
+    "*.pyo",
+    ".hypothesis/",
+    ".mypy_cache/",
+    ".pipecat-bench/",
+    ".ruff_cache/",
+    ".pytest_cache/",
+    ".uv-cache/",
+    ".coverage",
+    ".coverage.*",
+    "coverage.xml",
+    "htmlcov/",
+    "dist/",
+    "build/",
+    "site/",
+    "mutants/",
+    ".mutmut-cache",
+    ".easycat/",
+)
 REQUIRED_BUILD_SOURCE_EXCLUDES = frozenset(
     {
         "__pycache__",

@@ -48,6 +48,14 @@ from easycat.cli.scaffold.init import (
     _template_sources,
     _templates_root,
 )
+from tests._release_artifacts import (
+    GENERATED_PROJECT_GITIGNORE_PATTERNS,
+    SCAFFOLD_COPY_IGNORED_DIRECTORIES,
+    SCAFFOLD_COPY_IGNORED_FILE_PREFIXES,
+    SCAFFOLD_COPY_IGNORED_FILES,
+    SCAFFOLD_COPY_IGNORED_PART_SUFFIXES,
+    SCAFFOLD_COPY_IGNORED_SUFFIXES,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -86,38 +94,6 @@ _VOICE_TEMPLATE_PRESETS: dict[str, str] = {
     "pydantic-ai-workflow": "mic",
     "webrtc-browser": "browser",
 }
-_GITIGNORE_PATTERNS: tuple[str, ...] = (
-    ".env",
-    ".env.*",
-    "!.env.example",
-    "*.pem",
-    "*.key",
-    ".venv/",
-    "*.egg-info/",
-    ".agents/",
-    ".claude/",
-    ".codex",
-    ".codex/",
-    "__pycache__/",
-    "*.pyc",
-    "*.pyo",
-    ".hypothesis/",
-    ".mypy_cache/",
-    ".pipecat-bench/",
-    ".ruff_cache/",
-    ".pytest_cache/",
-    ".uv-cache/",
-    ".coverage",
-    ".coverage.*",
-    "coverage.xml",
-    "htmlcov/",
-    "dist/",
-    "build/",
-    "site/",
-    "mutants/",
-    ".mutmut-cache",
-    ".easycat/",
-)
 _CODE_SPAN_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 
 
@@ -933,50 +909,32 @@ def test_template_gitignore_covers_local_artifacts(name: str) -> None:
     """Generated projects should not invite local env/cache artifacts into git."""
     patterns = (_template_dir(name) / ".gitignore").read_text(encoding="utf-8").splitlines()
 
-    for pattern in _GITIGNORE_PATTERNS:
+    for pattern in GENERATED_PROJECT_GITIGNORE_PATTERNS:
         assert pattern in patterns, f"{name}/.gitignore missing {pattern!r}"
 
 
 def test_template_copy_filter_omits_local_artifact_directories() -> None:
     """The scaffold copier should enforce the same local-artifact policy."""
-    expected = {
-        "__pycache__",
-        ".agents",
-        ".claude",
-        ".codex",
-        ".easycat",
-        ".hypothesis",
-        ".mypy_cache",
-        ".mutmut-cache",
-        ".pipecat-bench",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".uv-cache",
-        "build",
-        "dist",
-        "htmlcov",
-        "mutants",
-        "site",
-    }
-
-    assert expected <= _COPY_IGNORE
+    assert SCAFFOLD_COPY_IGNORED_DIRECTORIES <= _COPY_IGNORE
 
 
 def test_template_copy_filter_omits_coverage_report_files() -> None:
-    assert {".coverage", "coverage.xml"} <= _COPY_FILE_IGNORE
-    assert ".coverage." in _COPY_FILE_PREFIX_IGNORE
+    assert SCAFFOLD_COPY_IGNORED_FILES <= _COPY_FILE_IGNORE
+    assert set(SCAFFOLD_COPY_IGNORED_FILE_PREFIXES) <= set(_COPY_FILE_PREFIX_IGNORE)
 
 
 def test_template_copy_filter_omits_package_metadata_directories() -> None:
-    assert ".egg-info" in _COPY_PART_SUFFIX_IGNORE
+    assert set(SCAFFOLD_COPY_IGNORED_PART_SUFFIXES) <= set(_COPY_PART_SUFFIX_IGNORE)
 
 
 def test_template_copy_filter_omits_compiled_bytecode_suffixes() -> None:
-    assert {".pyc", ".pyo"} <= _COPY_SUFFIX_IGNORE
+    expected_suffixes = set(SCAFFOLD_COPY_IGNORED_SUFFIXES)
+    assert {".pyc", ".pyo"} <= expected_suffixes <= _COPY_SUFFIX_IGNORE
 
 
 def test_template_copy_filter_omits_local_secret_suffixes() -> None:
-    assert {".pem", ".key"} <= _COPY_SUFFIX_IGNORE
+    expected_suffixes = set(SCAFFOLD_COPY_IGNORED_SUFFIXES)
+    assert {".pem", ".key"} <= expected_suffixes <= _COPY_SUFFIX_IGNORE
 
 
 def test_template_sources_skip_generated_artifacts(
@@ -991,7 +949,10 @@ def test_template_sources_skip_generated_artifacts(
     for rel in (
         "__pycache__/agent.cpython-312.pyc",
         "demo.egg-info/PKG-INFO",
+        ".git/config",
+        ".github/workflows/ci.yml",
         ".pytest_cache/state",
+        ".venv/pyvenv.cfg",
         "build/generated.py",
         "dist/package.whl",
         "htmlcov/index.html",
