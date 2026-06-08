@@ -41,40 +41,9 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 
 from __future__ import annotations
 
-import os
-
-from easycat import (
-    EasyConfig,
-    ICEServer,
-    WebRTCTransportConfig,
-    create_session,
-    require_env,
-)
+from easycat import EasyConfig, create_session, require_env
 from easycat.helpers import run_session
-
-
-def _build_ice_servers() -> list[ICEServer]:
-    """Build ICE server list from environment variables."""
-    servers: list[ICEServer] = [
-        # Public STUN — always useful for direct connections.
-        ICEServer(urls="stun:stun.l.google.com:19302"),
-    ]
-
-    turn_url = os.getenv("TURN_SERVER_URL")
-    if turn_url:
-        servers.append(
-            ICEServer(
-                urls=turn_url,
-                username=os.getenv("TURN_USERNAME", ""),
-                credential=os.getenv("TURN_CREDENTIAL", ""),
-            )
-        )
-
-    return servers
-
-
-def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+from easycat.transports import webrtc_transport_config_from_env
 
 
 def main() -> None:
@@ -86,27 +55,14 @@ def main() -> None:
         instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
-    signaling_host = os.getenv("SIGNALING_HOST", "127.0.0.1")
-    signaling_port = int(os.getenv("SIGNALING_PORT", "8080"))
-    expose_ice_credentials = _env_flag("WEBRTC_EXPOSE_ICE_CREDENTIALS")
-
-    ice_servers = _build_ice_servers()
-
-    config = EasyConfig(
-        transport=WebRTCTransportConfig(
-            host=signaling_host,
-            port=signaling_port,
-            ice_servers=ice_servers,
-            expose_ice_credentials=expose_ice_credentials,
-        ),
-        agent=agent,
-    )
+    transport = webrtc_transport_config_from_env()
+    config = EasyConfig(transport=transport, agent=agent)
     session = create_session(config)
 
-    print(f"Open http://localhost:{signaling_port} in your browser")
-    if any(any("turn:" in u for u in s.urls) for s in ice_servers):
+    print(f"Open http://localhost:{transport.port} in your browser")
+    if any(any("turn:" in u for u in s.urls) for s in transport.ice_servers):
         print("TURN server:  configured")
-        if expose_ice_credentials:
+        if transport.expose_ice_credentials:
             print("TURN auth:    exposed via /config")
         else:
             print("TURN auth:    hidden from /config")

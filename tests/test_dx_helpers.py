@@ -328,6 +328,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/ws_supervisor_server.py" in status
     assert "serve_supervisor_websocket" in status
     assert "visible-code budget is now ≤140 instead of ≤265" in status
+    assert "`webrtc_transport_config_from_env(...)`" in status
+    assert "visible-code budgets are now ≤30 and ≤60" in normalized_status
     assert "examples/reconnecting_ws_client.py" in status
     assert "`create_shutdown_event()`" in status
     assert "`connect_until_stopped(...)`" in status

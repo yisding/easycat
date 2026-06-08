@@ -25,6 +25,8 @@ _LAZY_ATTR: dict[str, str] = {
     "ICEServer": "easycat.transports.webrtc",
     "WebRTCTransport": "easycat.transports.webrtc",
     "WebRTCTransportConfig": "easycat.transports.webrtc",
+    "webrtc_ice_servers_from_env": "easycat.transports.webrtc",
+    "webrtc_transport_config_from_env": "easycat.transports.webrtc",
     "WebSocketTransport": "easycat.transports.websocket",
     "WebSocketTransportConfig": "easycat.transports.websocket",
     "WebSocketConnectionTransport": "easycat.transports.websocket",
@@ -54,7 +56,13 @@ if TYPE_CHECKING:
         TwilioTransport,
         TwilioTransportConfig,
     )
-    from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
+    from easycat.transports.webrtc import (
+        ICEServer,
+        WebRTCTransport,
+        WebRTCTransportConfig,
+        webrtc_ice_servers_from_env,
+        webrtc_transport_config_from_env,
+    )
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
         WebSocketSessionServerConfig,

@@ -107,6 +107,10 @@ Shipped:
   transport setup and URL guidance while using `run_session(session)` instead
   of manual feedback attachment, signal waiting, `session.start()`, and
   `asyncio.run(...)`.
+- `examples/webrtc_server.py` and `examples/webrtc_observability_server.py`
+  also share `webrtc_transport_config_from_env(...)` for loopback signaling,
+  TURN/STUN setup, and explicit ICE credential exposure; their guarded
+  visible-code budgets are now ≤30 and ≤60.
 - `examples/webtransport_server.py` now keeps TLS/HTTP3 setup and per-client
   config construction while using `run_webtransport_config_server(...)`
   instead of carrying `SessionManager`, feedback attachment, signal handlers,
@@ -172,8 +176,9 @@ Still remaining:
   create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
   direct-session subscription/debugger and browser-transport examples use
-  `run_session(session)`; the WebTransport server uses a config-server helper;
-  multi-client Twilio scaffold/example and WebSocket supervisor example use
+  `run_session(session)`; WebRTC examples share env-derived transport config;
+  the WebTransport server uses a config-server helper; multi-client Twilio
+  scaffold/example and WebSocket supervisor example use
   manager-owned runtime feedback; the WebSocket supervisor example also uses a
   reusable supervisor WebSocket helper for auth, subscribe, and audio fan-out;
   the push-to-talk example keeps manual turn control while using the scoped

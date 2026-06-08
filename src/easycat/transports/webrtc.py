@@ -230,6 +230,51 @@ class WebRTCTransportConfig:
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def webrtc_ice_servers_from_env(
+    *,
+    turn_url_env: str = "TURN_SERVER_URL",
+    turn_username_env: str = "TURN_USERNAME",
+    turn_credential_env: str = "TURN_CREDENTIAL",
+    include_public_stun: bool = True,
+) -> list[ICEServer]:
+    """Build STUN/TURN servers from the standard WebRTC demo environment."""
+    servers: list[ICEServer] = []
+    if include_public_stun:
+        servers.append(ICEServer(urls="stun:stun.l.google.com:19302"))
+
+    turn_url = os.getenv(turn_url_env)
+    if turn_url:
+        servers.append(
+            ICEServer(
+                urls=turn_url,
+                username=os.getenv(turn_username_env, ""),
+                credential=os.getenv(turn_credential_env, ""),
+            )
+        )
+    return servers
+
+
+def webrtc_transport_config_from_env(
+    *,
+    host_env: str = "SIGNALING_HOST",
+    port_env: str = "SIGNALING_PORT",
+    expose_ice_credentials_env: str = "WEBRTC_EXPOSE_ICE_CREDENTIALS",
+    static_dir: str | None = WebRTCTransportConfig._USE_BUNDLED,
+) -> WebRTCTransportConfig:
+    """Build a browser WebRTC transport config from example/deployment env vars."""
+    return WebRTCTransportConfig(
+        host=os.getenv(host_env, "127.0.0.1"),
+        port=int(os.getenv(port_env, "8080")),
+        ice_servers=webrtc_ice_servers_from_env(),
+        static_dir=static_dir,
+        expose_ice_credentials=_env_flag(expose_ice_credentials_env),
+    )
+
+
 # ── Outbound audio track ─────────────────────────────────────────
 
 

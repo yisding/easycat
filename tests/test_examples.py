@@ -1444,17 +1444,23 @@ def test_webrtc_examples_default_signaling_to_loopback():
     )
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
 
-    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' in server
+    assert "webrtc_transport_config_from_env()" in server
     assert "Bind address (default 127.0.0.1)" in server
-    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' in observability
+    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' not in server
+    assert "_build_ice_servers" not in server
+    assert "_env_flag" not in server
+    assert "webrtc_transport_config_from_env(static_dir=_STATIC_DIR)" in observability
+    assert 'os.getenv("SIGNALING_HOST", "127.0.0.1")' not in observability
+    assert "_build_ice_servers" not in observability
+    assert "_env_flag" not in observability
     assert "SIGNALING_HOST=0.0.0.0" in deploy
 
 
 def test_browser_transport_examples_use_run_session_lifecycle():
     budgets = {
         "examples/ws_browser_example.py": 40,
-        "examples/webrtc_server.py": 65,
-        "examples/webrtc_observability_server.py": 80,
+        "examples/webrtc_server.py": 30,
+        "examples/webrtc_observability_server.py": 60,
     }
 
     for relpath, budget in budgets.items():
