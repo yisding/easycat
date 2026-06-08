@@ -841,6 +841,19 @@ def test_journal_follow_stop_event_test_does_not_sleep() -> None:
     assert "await asyncio.sleep(" not in test_body
 
 
+def test_journal_follow_test_does_not_sleep_for_records() -> None:
+    """Journal follow coverage should append records explicitly, not wait on timing sleeps."""
+    source = (REPO_ROOT / "tests" / "runtime" / "test_journal.py").read_text(encoding="utf-8")
+    test_body = source.split("async def test_follow", 1)[1].split(
+        "async def test_follow_stop_event",
+        1,
+    )[0]
+
+    assert "await _yield_to_scheduled_tasks()" in test_body
+    assert "await asyncio.wait_for(follower_task, timeout=2.0)" in test_body
+    assert "await asyncio.sleep(" not in test_body
+
+
 def test_tts_synthesizer_tests_coordinate_cancellation_with_events() -> None:
     """TTS synthesizer cancellation tests should wait on provider events, not sleeps."""
     source = (REPO_ROOT / "tests" / "tts" / "test_tts_synthesizer.py").read_text(encoding="utf-8")

@@ -11,6 +11,13 @@ from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
 
+async def _yield_to_scheduled_tasks() -> None:
+    loop = asyncio.get_running_loop()
+    ready = loop.create_future()
+    loop.call_soon(ready.set_result, None)
+    await ready
+
+
 class TestInMemoryRingBuffer:
     def test_append_and_read(self):
         j = InMemoryRingBuffer(capacity=100)
@@ -317,26 +324,22 @@ class TestJournalView:
         received: list[int] = []
 
         async def follower():
-            async for rec in view.follow(poll_interval=0.01):
+            async for rec in view.follow(poll_interval=0.001):
                 received.append(rec.sequence)
                 if len(received) >= 3:
                     break
 
-        # Append records in a separate task after a small delay
-        async def appender():
-            await asyncio.sleep(0.02)
-            for i in range(3):
-                j.append(
-                    kind=JournalRecordKind.EVENT,
-                    name=f"e{i}",
-                    session_id="s1",
-                )
-                await asyncio.sleep(0.01)
+        follower_task = asyncio.create_task(follower())
+        await _yield_to_scheduled_tasks()
 
-        await asyncio.gather(
-            asyncio.wait_for(follower(), timeout=2.0),
-            appender(),
-        )
+        for i in range(3):
+            j.append(
+                kind=JournalRecordKind.EVENT,
+                name=f"e{i}",
+                session_id="s1",
+            )
+
+        await asyncio.wait_for(follower_task, timeout=2.0)
         assert received == [1, 2, 3]
 
     async def test_follow_stop_event(self):
