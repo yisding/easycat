@@ -538,7 +538,7 @@ is a comprehension win, not a line/concept reduction.
 
 ---
 
-### 5.11 — Collapse teardown to one public idiom: `async with session:`  *(adopt-with-changes)*
+### 5.11 — Collapse teardown to one public idiom: `async with session:`  *(landed; guarded)*
 
 **What / why.** `Session` exposes multiple teardown-ish verbs (`start` / `stop` / `shutdown` /
 `close` / `destroy`); `close()` *sounds* like the canonical "I'm done" call
@@ -555,13 +555,19 @@ async with create_session(cfg) as session:   # Session.__aenter__/__aexit__ alre
 
 **Files touched.** `src/easycat/session/_session.py`; `src/easycat/helpers.py`.
 
-**Verifier verdict.** The context-manager idiom is **already wired** (`__aenter__/__aexit__/
-wait_closed`), so this is surface-curation and signposting, not new code. **Caveats folded in:**
-do **not** "add `__aenter__/__aexit__`" as if from scratch (they exist); keep one explicit
-graceful-vs-force *parameter* (`stop(force=...)`) rather than two same-shaped methods, so the
-advanced capability survives; `run()` still hides all of it for the happy path, so the cost
-lands only on advanced `create_session` users. Treat the `close()/destroy()` demotion as a
-deliberate (documented) change since they are currently public.
+**Verifier verdict.** Landed and guarded by
+`tests/test_dx_helpers.py::test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence`,
+`tests/session/test_async_context_manager.py`, `tests/cli/test_library_prereqs.py`, and
+`tests/teaching/test_ladder_index.py::test_chapter_15_teaches_public_session_lifecycle`. The
+context-manager idiom is wired (`__aenter__` / `__aexit__` / `wait_closed`), `run()` drives
+that same lifecycle, `stop(force=...)` is the single explicit public teardown verb, and
+`shutdown()` is documented as a compatibility alias for `stop(force=True)`. **Caveats folded
+in:** do **not** "add `__aenter__/__aexit__`" as if from scratch (they exist); keep one
+explicit graceful-vs-force *parameter* (`stop(force=...)`) rather than two same-shaped methods,
+so the advanced capability survives; `run()` still hides all of it for the happy path, so the
+cost lands only on advanced `create_session` users. `close()` / `destroy()` are no longer
+public `Session` methods; the backend teardown primitives remain private as `_close()` /
+`_destroy()` so postmortem-journal teardown semantics are preserved.
 
 **Zen.** #11 one obvious way; #13 if hard to explain, it's a bad idea.
 

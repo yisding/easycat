@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 from dataclasses import fields
@@ -330,6 +331,7 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
         "5.8": "landed; guarded",
         "5.9": "landed; guarded",
         "5.10": "landed",
+        "5.11": "landed; guarded",
         "5.12": "landed Part A; Part B dropped",
         "5.13": "landed; guarded",
     }
@@ -381,6 +383,63 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
 
     assert "create_session(...)" in advanced
     assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in advanced
+
+
+def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> None:
+    from easycat.session._session import Session
+
+    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    chapter_15 = (
+        REPO_ROOT / "docs" / "teaching" / "15-operate-in-production" / "README.md"
+    ).read_text(encoding="utf-8")
+    lifecycle = readme.split("## Session lifecycle", 1)[1].split(
+        "## Pre-TTS output processors",
+        1,
+    )[0]
+    section = plan.split("### 5.11", 1)[1].split("### 5.12", 1)[0]
+    stop_signature = inspect.signature(Session.stop)
+
+    assert "*(landed; guarded)*" in section
+    assert "test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence" in section
+
+    assert inspect.iscoroutinefunction(Session.__aenter__)
+    assert inspect.iscoroutinefunction(Session.__aexit__)
+    assert inspect.iscoroutinefunction(Session.wait_closed)
+    assert inspect.iscoroutinefunction(Session.stop)
+    assert inspect.iscoroutinefunction(Session.shutdown)
+    assert stop_signature.parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert stop_signature.parameters["force"].default is False
+    assert not hasattr(Session, "close")
+    assert not hasattr(Session, "destroy")
+    assert callable(Session._close)
+    assert callable(Session._destroy)
+
+    run_doc = run.__doc__ or ""
+    assert "async with session:" in run_doc
+    assert "stop(force=True)" in run_doc
+    assert "await session.shutdown()" not in run_doc
+
+    assert "`async with session:` is the one public teardown idiom" in lifecycle
+    assert "`await session.stop()` is the single public teardown verb" in lifecycle
+    assert "`await session.wait_closed()`" in lifecycle
+    assert "await session.shutdown()" not in lifecycle
+    for stale in ("session.close()", "session.destroy()"):
+        assert stale not in readme
+        assert stale not in chapter_15
+
+    for guide in (agents, claude):
+        assert "`await session.stop()` is the single public teardown verb" in guide
+        assert "`async with session:` is the preferred idiom" in guide
+        assert "session.shutdown()" in guide
+        assert "thin alias for `stop(force=True)`" in guide
+        assert "Session._destroy()" in guide and "Session._close()" in guide
+        assert "not public entry points" in guide
+
+    assert "Compatibility alias for `stop(force=True)`" in chapter_15
+    assert "new docs should usually show `stop(...)` or `async with session:`" in chapter_15
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
