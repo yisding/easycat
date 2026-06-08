@@ -656,7 +656,7 @@ class TestCrashRecovery:
         journal recovers every committed record and emits a RECOVERY marker."""
         n_records = 50
         script = textwrap.dedent(f"""\
-            import sys, time
+            import signal, sys
             sys.path.insert(0, "src")
             from easycat.runtime.journal import SqliteJournal
             from easycat.runtime.records import JournalRecordKind
@@ -671,7 +671,7 @@ class TestCrashRecovery:
             # No manual flush(): the production append() path must commit each
             # record on its own so SIGKILL preserves them (DURABILITY.md).
             print("READY", flush=True)
-            time.sleep(60)
+            signal.pause()
         """)
 
         proc = subprocess.Popen(

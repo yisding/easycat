@@ -17,6 +17,21 @@ def _chunk(data: bytes = b"\x00\x01") -> AudioChunk:
     return AudioChunk(data=data, format=_fmt)
 
 
+def _mark_not_full_wait(
+    q: BoundedAudioQueue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> asyncio.Event:
+    wait_started = asyncio.Event()
+    original_wait = q._not_full.wait
+
+    async def wait_for_space():
+        wait_started.set()
+        return await original_wait()
+
+    monkeypatch.setattr(q._not_full, "wait", wait_for_space)
+    return wait_started
+
+
 # ── Basic queue operations ─────────────────────────────────────────
 
 
@@ -129,34 +144,30 @@ class TestBlock:
         assert result is False
         assert q.drops == 1
 
-    async def test_block_succeeds_when_space_freed(self):
+    async def test_block_succeeds_when_space_freed(self, monkeypatch):
         q = BoundedAudioQueue(max_size=1, policy=DropPolicy.BLOCK, block_timeout=1.0)
         await q.put(_chunk(b"\x01"))
 
-        async def free_space():
-            await asyncio.sleep(0.05)
-            await q.get()
-
-        task = asyncio.create_task(free_space())
-        result = await q.put(_chunk(b"\x02"))
-        await task
+        wait_started = _mark_not_full_wait(q, monkeypatch)
+        task = asyncio.create_task(q.put(_chunk(b"\x02")))
+        await asyncio.wait_for(wait_started.wait(), timeout=0.5)
+        await q.get()
+        result = await task
 
         assert result is True
         assert q.drops == 0
 
-    async def test_block_returns_false_when_closed_mid_wait(self):
+    async def test_block_returns_false_when_closed_mid_wait(self, monkeypatch):
         # A BLOCK-policy producer parked in the wait must not append to a
         # queue that gets closed while it is waiting.
         q = BoundedAudioQueue(max_size=1, policy=DropPolicy.BLOCK, block_timeout=1.0)
         await q.put(_chunk(b"\x01"))
 
-        async def close_later():
-            await asyncio.sleep(0.05)
-            q.close()  # wakes _not_full waiters without freeing space
-
-        task = asyncio.create_task(close_later())
-        result = await q.put(_chunk(b"\x02"))
-        await task
+        wait_started = _mark_not_full_wait(q, monkeypatch)
+        task = asyncio.create_task(q.put(_chunk(b"\x02")))
+        await asyncio.wait_for(wait_started.wait(), timeout=0.5)
+        q.close()  # wakes _not_full waiters without freeing space
+        result = await task
 
         assert result is False
         # The chunk must not have landed in the closed queue.

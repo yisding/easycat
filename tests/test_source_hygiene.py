@@ -751,6 +751,31 @@ def test_session_tests_use_events_for_never_complete_tasks() -> None:
     assert "yield to allow the task to start" not in combined
 
 
+def test_bounded_queue_block_tests_use_wait_probes() -> None:
+    """BLOCK-policy queue tests should park producers deterministically."""
+    source = (REPO_ROOT / "tests" / "test_bounded_queue.py").read_text(encoding="utf-8")
+    block_section = source.split("class TestBlock:", 1)[1].split("# \u2500\u2500 Flush", 1)[0]
+
+    assert "def _mark_not_full_wait(" in source
+    assert 'monkeypatch.setattr(q._not_full, "wait", wait_for_space)' in source
+    assert "wait_started = _mark_not_full_wait(q, monkeypatch)" in block_section
+    assert "asyncio.sleep(" not in block_section
+
+
+def test_sqlite_journal_sigkill_test_waits_for_signal() -> None:
+    """The SIGKILL durability test should pause until killed, not use a sentinel sleep."""
+    source = (REPO_ROOT / "tests" / "runtime" / "test_sqlite_journal.py").read_text(
+        encoding="utf-8"
+    )
+    sigkill_test = source.split("def test_sigkill_preserves_committed_records", 1)[1].split(
+        "class TestRetention",
+        1,
+    )[0]
+
+    assert "signal.pause()" in sigkill_test
+    assert "time.sleep(60)" not in sigkill_test
+
+
 def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     """Timeout tests should model stuck work with cancellation-friendly events."""
     source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
