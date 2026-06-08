@@ -28,7 +28,6 @@ except ImportError as exc:
 from easycat import (
     EasyConfig,
     create_session,
-    require_env,
 )
 from easycat.helpers import run_session
 
@@ -50,7 +49,6 @@ def get_time(timezone_name: str = "UTC") -> str:
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
     session = create_session(
         EasyConfig.mic(
             agent=Agent(

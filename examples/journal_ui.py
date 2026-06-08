@@ -29,14 +29,12 @@ except ImportError as exc:
 from easycat import (
     EasyConfig,
     create_session,
-    require_env,
 )
 from easycat.debugger import serve_session
 from easycat.helpers import run_session
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
     # debug="light" keeps the journal in memory so the UI has something to read.
     session = create_session(
         EasyConfig.mic(

@@ -103,8 +103,11 @@ Shipped:
   helpers; the guarded visible-code budget is now ≤28 instead of ≤30.
 - `examples/agent_event_subscription.py` and `examples/journal_ui.py` now keep
   their direct-session teaching points (agent/tool event subscriptions and
-  debugger UI setup) while using `run_session(session)` instead of manual
-  feedback attachment, signal waiting, `session.start()`, and `asyncio.run(...)`.
+  debugger UI setup) while letting `EasyConfig.mic(...)` own the default
+  OpenAI key validation and using `run_session(session)` instead of duplicate
+  key preflight, manual feedback attachment, signal waiting,
+  `session.start()`, and `asyncio.run(...)`; their guarded visible-code
+  budgets are now ≤48 and ≤23.
 - `examples/ws_browser_example.py`, `examples/webrtc_server.py`, and
   `examples/webrtc_observability_server.py` now keep their browser/WebRTC
   transport setup and URL guidance while using `run_session(session)` instead
