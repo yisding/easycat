@@ -334,6 +334,10 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "`create_shutdown_event()`" in status
     assert "`connect_until_stopped(...)`" in status
     assert "visible-code budget is now ≤75 instead of ≤94" in status
+    assert "examples/vad_backends.py" in status
+    assert "`VADConfig(backend=...)`" in status
+    assert "`run(EasyConfig.mic(vad=...))`" in status
+    assert "visible-code budget is now ≤28 instead of ≤30" in normalized_status
     assert "examples/twilio_app.py" in status
     assert "reusable webhook request helpers" in normalized_status
     assert "`twilio_app_settings_from_env(...)`" in status

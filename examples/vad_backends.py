@@ -29,33 +29,40 @@ from __future__ import annotations
 
 import argparse
 
-from easycat import EasyConfig, require_env, run
+try:
+    from agents import Agent  # type: ignore[import-untyped]
+except ImportError:
+    Agent = None  # type: ignore[assignment]
+
+from easycat import EasyConfig, run
 from easycat.vad import VADConfig, create_vad
+
+BACKENDS = ("auto", "silero", "funasr", "ten", "krisp")
 
 
 def main(backend: str) -> None:
-    require_env("OPENAI_API_KEY")
-
-    from agents import Agent  # type: ignore[import-untyped]
-
-    vad = create_vad(VADConfig(backend=backend))
-    print(f"[vad_backends] requested={backend!r} built={type(vad).__name__}")
-
-    run(
-        EasyConfig.mic(
-            vad=vad,
-            agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+    if Agent is None:
+        raise SystemExit(
+            "openai-agents is required. For an app, run: "
+            "uv add 'easycat[quickstart]'. In this repo, run: "
+            "uv sync --extra quickstart --group dev"
         )
+
+    vad_config = VADConfig(backend=backend)
+    config = EasyConfig.mic(
+        vad=vad_config,
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
     )
+    probe = create_vad(vad_config)
+    print(f"[vad_backends] requested={backend!r} built={type(probe).__name__}")
+    close = getattr(probe, "close", None)
+    if callable(close):
+        close()
+
+    run(config)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--backend",
-        default="auto",
-        choices=["auto", "silero", "funasr", "ten", "krisp"],
-        help="VAD backend to pin (default: auto)",
-    )
-    args = parser.parse_args()
-    main(args.backend)
+    parser.add_argument("--backend", default="auto", choices=BACKENDS)
+    main(parser.parse_args().backend)

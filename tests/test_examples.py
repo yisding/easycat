@@ -1633,15 +1633,18 @@ def test_vad_backends_example_imports():
     assert callable(vad_backends.main)
 
 
-def test_vad_backends_example_uses_easyconfig_provider_instance_surface():
+def test_vad_backends_example_uses_easyconfig_provider_config_surface():
     path = REPO_ROOT / "examples/vad_backends.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 30
-    assert "vad = create_vad(VADConfig(backend=backend))" in source
+    assert _visible_code_line_count(path) <= 28
+    assert "vad_config = VADConfig(backend=backend)" in source
+    assert "probe = create_vad(vad_config)" in source
     assert "EasyConfig.mic(" in source
-    assert "vad=vad" in source
-    assert "from easycat import EasyConfig, require_env, run" in source
+    assert "vad=vad_config" in source
+    assert "vad=vad," not in source
+    assert "require_env" not in source
+    assert "from easycat import EasyConfig, run" in source
     assert "run(" in source
     assert "create_session" not in source
     assert "attach_runtime_feedback" not in source
@@ -1759,6 +1762,7 @@ _REQUIRES_AGENTS = frozenset(
         "examples/elevenlabs_voice.py",
         "examples/output_processors.py",
         "examples/agent_event_subscription.py",
+        "examples/vad_backends.py",
         "examples/noise_reduction_backends.py",
         "examples/echo_cancellation.py",
         "examples/session_actions_openai.py",

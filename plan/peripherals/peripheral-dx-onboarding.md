@@ -96,8 +96,11 @@ Shipped:
   instead of teaching manual session creation, runtime feedback attachment,
   shutdown-signal handling, and `asyncio.run(...)`.
 - `examples/vad_backends.py` now keeps the backend-selection teaching path
-  (`create_vad(VADConfig(backend=...))`) but hands execution to
-  `run(EasyConfig.mic(...))` instead of manual session lifecycle helpers.
+  (`VADConfig(backend=...)` plus a short `create_vad(...)` resolution probe)
+  but hands provider creation for the real session to
+  `run(EasyConfig.mic(vad=...))` instead of duplicating key preflight,
+  passing a prebuilt VAD instance, or teaching manual session lifecycle
+  helpers; the guarded visible-code budget is now ≤28 instead of ≤30.
 - `examples/agent_event_subscription.py` and `examples/journal_ui.py` now keep
   their direct-session teaching points (agent/tool event subscriptions and
   debugger UI setup) while using `run_session(session)` instead of manual
