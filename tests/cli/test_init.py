@@ -18,6 +18,7 @@ from easycat.cli.scaffold import init as init_module
 from easycat.cli.scaffold._schema import available_templates
 from easycat.stt.factory import available_providers as available_stt_providers
 from easycat.tts.factory import available_providers as available_tts_providers
+from tests._release_artifacts import release_artifact_offenders
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -486,43 +487,20 @@ def test_init_omits_cache_artifacts(
     assert result.exit_code == 0, result.stderr
     project = tmp_path / "demo"
 
-    forbidden = {
-        "__pycache__",
-        ".coverage",
-        ".agents",
-        ".claude",
-        ".codex",
-        ".easycat",
-        ".hypothesis",
-        ".mypy_cache",
-        ".mutmut-cache",
-        ".pipecat-bench",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".uv-cache",
-        "build",
-        "coverage.xml",
-        "dist",
-        "htmlcov",
-        "mutants",
-        "site",
-    }
-    for path in project.rglob("*"):
-        parts = set(path.relative_to(project).parts)
-        assert not (parts & forbidden), f"shipped a cache artifact: {path}"
-        assert not any(part.endswith(".egg-info") for part in parts), (
-            f"shipped package metadata artifact: {path}"
-        )
-        assert path.suffix not in {".key", ".pem", ".pyc", ".pyo"}, (
-            f"shipped a generated/secret suffix artifact: {path}"
-        )
+    generated_paths = [
+        path.relative_to(project).as_posix() for path in project.rglob("*") if path != project
+    ]
+    offenders = release_artifact_offenders(generated_paths)
+    assert not offenders, "generated project shipped local/generated artifacts: " + ", ".join(
+        offenders
+    )
 
     # The reported file manifest is equally clean.
     payload = json.loads(result.stdout)
-    for rel in payload["files"]:
-        assert not (set(Path(rel).parts) & forbidden), rel
-        assert not any(part.endswith(".egg-info") for part in Path(rel).parts), rel
-        assert not rel.endswith((".key", ".pem", ".pyc", ".pyo")), rel
+    manifest_offenders = release_artifact_offenders(payload["files"])
+    assert not manifest_offenders, "reported generated-project manifest is not clean: " + (
+        ", ".join(manifest_offenders)
+    )
 
     # The legitimate top-level .gitignore is still shipped.
     assert (project / ".gitignore").exists()
