@@ -21,19 +21,16 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
-
 from easycat import (
     EasyConfig,
     TurnManagerConfig,
     TurnMode,
-    attach_runtime_feedback,
     create_session,
 )
-from easycat.push_to_talk import run_stdin_push_to_talk
+from easycat.push_to_talk import run_stdin_push_to_talk_session
 
 
-async def main() -> None:
+def main() -> None:
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
@@ -42,17 +39,10 @@ async def main() -> None:
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
         agent=agent,
     )
+    session = create_session(config)
 
-    async with create_session(config) as session:
-        attach_runtime_feedback(session)
-        try:
-            await run_stdin_push_to_talk(session)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            pass
+    run_stdin_push_to_talk_session(session)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    main()

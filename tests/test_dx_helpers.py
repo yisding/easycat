@@ -350,10 +350,13 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "visible-code budget is now ≤150 instead of ≤205" in normalized_status
     assert "examples/push_to_talk.py" in status
     assert "`EasyConfig.mic(turn_taking=...)`" in status
+    assert "`create_session(config)`" in status
+    assert "`run_stdin_push_to_talk_session(session)`" in status
     assert "duplicate key preflight" in normalized_status
     assert "explicit local transport setup" in normalized_status
-    assert "`run_stdin_push_to_talk(...)`" in status
-    assert "visible-code budget is now ≤33 instead of ≤90" in normalized_status
+    assert "runtime feedback attachment" in normalized_status
+    assert "`asyncio.run(...)`" in status
+    assert "visible-code budget is now ≤27 instead of ≤90" in normalized_status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

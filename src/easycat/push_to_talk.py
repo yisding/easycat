@@ -7,7 +7,7 @@ import sys
 import threading
 from collections import deque
 from collections.abc import Callable
-from typing import Protocol, TextIO
+from typing import Literal, Protocol, TextIO
 
 
 class PushToTalkSession(Protocol):
@@ -16,6 +16,14 @@ class PushToTalkSession(Protocol):
     async def start_turn(self) -> None: ...
 
     async def end_turn(self) -> None: ...
+
+
+class ManagedPushToTalkSession(PushToTalkSession, Protocol):
+    """Push-to-talk session that also owns the async context lifecycle."""
+
+    async def __aenter__(self) -> ManagedPushToTalkSession: ...
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
 
 async def run_stdin_push_to_talk(
@@ -105,3 +113,52 @@ async def run_stdin_push_to_talk(
     finally:
         if use_reader:
             loop.remove_reader(fd)
+
+
+def run_stdin_push_to_talk_session(
+    session: ManagedPushToTalkSession,
+    *,
+    input_stream: TextIO | None = None,
+    print_fn: Callable[[str], None] = print,
+    feedback: Literal["auto", "on", "off"] = "auto",
+) -> None:
+    """Run a prebuilt session with stdin push-to-talk controls.
+
+    This is the synchronous companion to :func:`run_stdin_push_to_talk`.
+    It mirrors :func:`easycat.helpers.run_session`: it applies the shared
+    console-feedback policy, enters the public ``async with session:``
+    lifecycle, and exits cleanly on Ctrl-C.
+    """
+    from easycat.helpers import (
+        _enable_console_logging_from_env,
+        _feedback_enabled,
+        attach_runtime_feedback,
+    )
+
+    _enable_console_logging_from_env()
+    if _feedback_enabled(feedback):
+        attach_runtime_feedback(session)  # type: ignore[arg-type]
+
+    async def _run() -> None:
+        async with session:
+            try:
+                await run_stdin_push_to_talk(
+                    session,
+                    input_stream=input_stream,
+                    print_fn=print_fn,
+                )
+            except asyncio.CancelledError:
+                pass
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        pass
+
+
+__all__ = [
+    "ManagedPushToTalkSession",
+    "PushToTalkSession",
+    "run_stdin_push_to_talk",
+    "run_stdin_push_to_talk_session",
+]
