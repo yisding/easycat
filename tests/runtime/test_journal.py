@@ -351,7 +351,6 @@ class TestJournalView:
             return seen
 
         task = asyncio.create_task(follower())
-        await asyncio.sleep(0.03)
         stop.set()
         seen = await asyncio.wait_for(task, timeout=2.0)
         # The generator terminated cleanly once stop was set.

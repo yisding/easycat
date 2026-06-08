@@ -829,6 +829,18 @@ def test_tts_first_byte_timeout_test_does_not_sleep_after_first_byte() -> None:
     assert "await asyncio.sleep(" not in test_body
 
 
+def test_journal_follow_stop_event_test_does_not_sleep() -> None:
+    """Journal follow stop-event coverage should use the stop event, not timing sleeps."""
+    source = (REPO_ROOT / "tests" / "runtime" / "test_journal.py").read_text(encoding="utf-8")
+    test_body = source.split("async def test_follow_stop_event", 1)[1].split(
+        "async def test_follow_emits_gap_notice_on_eviction",
+        1,
+    )[0]
+
+    assert "stop.set()" in test_body
+    assert "await asyncio.sleep(" not in test_body
+
+
 def test_runtime_and_generic_workflow_tests_use_events_for_never_complete_tasks() -> None:
     """Long-lived cancellation tests should use events instead of long sleeps."""
     files = (

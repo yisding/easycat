@@ -227,6 +227,12 @@ class JournalView:
                 cursor = rec.sequence + 1
             if stop is not None and stop.is_set():
                 return
+            if stop is not None:
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=poll_interval)
+                    return
+                except TimeoutError:
+                    continue
             await asyncio.sleep(poll_interval)
 
     @property
