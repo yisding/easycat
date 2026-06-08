@@ -841,6 +841,16 @@ def test_journal_follow_stop_event_test_does_not_sleep() -> None:
     assert "await asyncio.sleep(" not in test_body
 
 
+def test_tts_synthesizer_tests_coordinate_cancellation_with_events() -> None:
+    """TTS synthesizer cancellation tests should wait on provider events, not sleeps."""
+    source = (REPO_ROOT / "tests" / "tts" / "test_tts_synthesizer.py").read_text(encoding="utf-8")
+
+    assert "class ControlledTTS" in source
+    assert "tts.first_chunk_ready.wait()" in source
+    assert "tts.release_next.set()" in source
+    assert "await asyncio.sleep(" not in source
+
+
 def test_runtime_and_generic_workflow_tests_use_events_for_never_complete_tasks() -> None:
     """Long-lived cancellation tests should use events instead of long sleeps."""
     files = (

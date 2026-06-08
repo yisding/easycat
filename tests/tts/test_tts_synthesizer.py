@@ -47,13 +47,18 @@ class MarkerTTS:
         pass
 
 
-class SlowTTS:
-    """TTS that yields audio slowly."""
+class ControlledTTS:
+    """TTS that pauses after its first audio chunk until the test releases it."""
+
+    def __init__(self) -> None:
+        self.first_chunk_ready = asyncio.Event()
+        self.release_next = asyncio.Event()
 
     async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-        for _ in range(5):
-            await asyncio.sleep(0.02)
-            yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+        self.first_chunk_ready.set()
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+        await self.release_next.wait()
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
 
     async def cancel(self) -> None:
         pass
@@ -165,41 +170,39 @@ async def test_synthesize_no_audio_returns_false():
 @pytest.mark.asyncio
 async def test_synthesize_stops_on_cancel_token():
     token = CancelToken()
-    tts = SlowTTS()
+    tts = ControlledTTS()
     synth, event_bus, _ = _make_synth(tts=tts)
 
     received: list[TTSAudio] = []
     event_bus.subscribe(TTSAudio, lambda e: received.append(e))
 
-    # Cancel after a short delay
-    async def cancel_later():
-        await asyncio.sleep(0.03)
-        token.cancel()
+    task = asyncio.create_task(synth.synthesize(TTSInput("hello"), token))
+    await asyncio.wait_for(tts.first_chunk_ready.wait(), timeout=0.5)
+    token.cancel()
+    tts.release_next.set()
+    result = await task
 
-    asyncio.create_task(cancel_later())
-    await synth.synthesize(TTSInput("hello"), token)
-
-    # Should have gotten some but not all 5 chunks
-    assert len(received) < 5
+    assert len(received) == 1
+    assert result.completed is False
 
 
 @pytest.mark.asyncio
 async def test_synthesize_stops_on_is_active_false():
     active = True
-    synth, event_bus, _ = _make_synth(tts=SlowTTS())
+    tts = ControlledTTS()
+    synth, event_bus, _ = _make_synth(tts=tts)
 
     received: list[TTSAudio] = []
     event_bus.subscribe(TTSAudio, lambda e: received.append(e))
 
-    async def deactivate_later():
-        await asyncio.sleep(0.03)
-        nonlocal active
-        active = False
+    task = asyncio.create_task(synth.synthesize(TTSInput("hello"), None, is_active=lambda: active))
+    await asyncio.wait_for(tts.first_chunk_ready.wait(), timeout=0.5)
+    active = False
+    tts.release_next.set()
+    result = await task
 
-    asyncio.create_task(deactivate_later())
-    await synth.synthesize(TTSInput("hello"), None, is_active=lambda: active)
-
-    assert len(received) < 5
+    assert len(received) == 1
+    assert result.completed is False
 
 
 @pytest.mark.asyncio
