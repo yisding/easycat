@@ -131,6 +131,11 @@ Shipped:
   `latency_budget=`, `warmup=`, and `max_session_cost_usd=`, while
   `EasyConfig(...)` and `create_text_session(...)` keep top-level aliases for
   first-run ergonomics and safe debug-bundle snapshots preserve the values.
+- `latency_budget=LatencyBudget(stage="tts", max_ms=...)` now reaches the
+  runtime context and tags matching over-budget stage records with
+  `latency_budget_exceeded`, `elapsed_ms`, and structured
+  `latency_budget_violations`, so debug bundles surface local stage overruns
+  without requiring a separate validation run.
 
 Still remaining:
 
@@ -160,13 +165,14 @@ Still remaining:
 - Runtime enforcement for advanced observability knobs remains:
   `warmup=` currently records intent but does not execute provider/model warmup,
   `max_session_cost_usd=` does not yet emit cost-budget alerts, and
-  `latency_budget=` does not yet tag stage records when a budget is exceeded.
+  aggregate `latency_budget=` gates such as `total_ms`, `llm_ttft_ms`, and
+  `tts_ttfb_ms` remain validation concepts rather than runtime alerts.
 
 The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
 `ExceptionGroup` propagation, full structlog adoption, non-canonical example
 shrinkage, and runtime enforcement for advanced observability knobs:
-`warmup=`, `max_session_cost_usd=`, and `latency_budget=`.
+`warmup=`, `max_session_cost_usd=`, and aggregate `latency_budget=` alerts.
 
 >
 > **Sibling peripheral docs:**

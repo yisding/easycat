@@ -464,12 +464,16 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
         "`warmup=False`",
         "`max_session_cost_usd=0.50`",
         "safe debug-bundle config snapshots",
-        "runtime budget enforcement and warmup execution are still planned",
+        '`LatencyBudget(stage="tts", max_ms=500)`',
+        "`latency_budget_exceeded`",
+        "aggregate turn budgets, cost alerts, and warmup execution are still planned",
     ):
         assert token in config_text
 
-    assert "configuration, not enforcement yet" in caveats
-    assert "`latency_budget=LatencyBudget(...)`" in caveats
+    assert "tag; they do not reject or alert yet" in caveats
+    assert '`latency_budget=LatencyBudget(stage="tts", max_ms=500)`' in caveats
+    assert "`latency_budget_violations`" in caveats
+    assert "`total_ms`" in caveats
 
 
 @pytest.mark.parametrize(

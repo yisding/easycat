@@ -192,8 +192,10 @@ There are three independent knobs, and they control different things:
   top-level `EasyConfig` aliases for first-run ergonomics:
   `latency_budget=LatencyBudget(...)`, `warmup=False`, and
   `max_session_cost_usd=0.50`. These values are validated and preserved in safe
-  debug-bundle config snapshots today; runtime budget enforcement and warmup
-  execution are still planned.
+  debug-bundle config snapshots. Budgets whose `stage` matches a runtime stage
+  name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
+  stage records with `latency_budget_exceeded`; aggregate turn budgets, cost
+  alerts, and warmup execution are still planned.
 
 ### Correlation ids in logs
 
@@ -219,11 +221,14 @@ ids, but EasyCat avoids that boundary.
   A pluggable full `RedactionPolicy` is still planned. Do not attach journal
   bundles to public issues or send them to third parties until you have manually
   scrubbed them.
-- **Per-stage latency budgets are configuration, not enforcement yet.** You can
-  pass `latency_budget=LatencyBudget(...)` so sessions and bundles carry the
-  intended policy, but nothing in the pipeline rejects or alerts on a stage that
-  exceeds it. Use the OTel latency histograms (D) to observe real numbers until
-  runtime budget tagging lands.
+- **Per-stage latency budgets tag; they do not reject or alert yet.** You can
+  pass `latency_budget=LatencyBudget(stage="tts", max_ms=500)` so matching
+  stage records carry `elapsed_ms`, a `latency_budget_exceeded` tag, and
+  structured `latency_budget_violations` when they exceed the configured
+  budget. Whole-turn and first-token/audio budgets such as `total_ms`,
+  `llm_ttft_ms`, and `tts_ttfb_ms` are still aggregate validation concepts, not
+  per-record runtime gates. Use the OTel latency histograms (D) to observe
+  real numbers until alerting lands.
 - **`gen_ai.*` attributes are development status.** The committed
   `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system` span keys
   track the OpenTelemetry GenAI semantic conventions, which are themselves still

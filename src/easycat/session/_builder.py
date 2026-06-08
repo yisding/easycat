@@ -109,6 +109,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         runtime_mode=cfg.runtime_mode,
         journal=journal,
         artifact_store=session._artifact_store,
+        latency_budgets=tuple(cfg.latency_budget or ()),
     )
     no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
 

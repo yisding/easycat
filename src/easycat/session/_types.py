@@ -138,6 +138,7 @@ class SessionConfig:
     timeout_config: TimeoutConfig | None = None
     journal: ExecutionJournal | None = None
     artifact_store: ArtifactStore | None = None
+    latency_budget: Sequence[Any] = ()
     # Auto-export a timestamped debug bundle to this directory during stop().
     # No-op when the session has no debug journal.
     record_to: str | Path | None = None

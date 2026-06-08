@@ -133,6 +133,7 @@ class AudioStage:
             "audio_bytes": (
                 len(processed_bytes) if isinstance(processed_bytes, (bytes, bytearray)) else 0
             ),
+            "elapsed_ms": (time.perf_counter() - started) * 1000,
         }
         complete_extra.update(audio_format_fields(result))
         journal_append_event(

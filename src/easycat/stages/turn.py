@@ -123,6 +123,7 @@ class TurnStage:
                 complete_extra[key] = source[key]
         if "prediction" in source:
             self._last_decision = source["prediction"]
+        complete_extra["elapsed_ms"] = (time.perf_counter() - started) * 1000
         journal_append_event(
             ctx,
             stage=self.name,

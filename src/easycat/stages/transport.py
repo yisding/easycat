@@ -133,6 +133,11 @@ class TransportStage:
             )
         result = bool(delivered)
         state_after = self.snapshot_state()
+        complete_extra = {
+            **extra,
+            "delivered": result,
+            "elapsed_ms": (time.perf_counter() - started) * 1000,
+        }
         journal_append_event(
             ctx,
             stage=self.name,
@@ -141,7 +146,7 @@ class TransportStage:
             state_before=state_before,
             state_after=state_after,
             output_ref=output_ref,
-            data_extra={**extra, "delivered": result},
+            data_extra=complete_extra,
         )
         return result
 

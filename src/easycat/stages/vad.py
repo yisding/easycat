@@ -160,7 +160,10 @@ class VADStage:
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
-            data_extra={"events": [_serialize_event(e) for e in events]},
+            data_extra={
+                "events": [_serialize_event(e) for e in events],
+                "elapsed_ms": (time.perf_counter() - started) * 1000,
+            },
         )
         return result
 

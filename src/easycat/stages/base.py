@@ -8,6 +8,7 @@ surface.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
@@ -177,6 +178,9 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder
 # ── Shared capture helpers ───────────────────────────────────────
 
 
+LATENCY_BUDGET_EXCEEDED_TAG = "latency_budget_exceeded"
+
+
 def put_artifact(
     ctx: RunContext,
     payload: bytes | None,
@@ -254,6 +258,7 @@ def journal_append_event(
     input_ref: str | None = None,
     output_ref: str | None = None,
     data_extra: dict[str, Any] | None = None,
+    tags: frozenset[str] = frozenset(),
 ) -> int | None:
     """Append a stage-scoped journal record.
 
@@ -274,6 +279,7 @@ def journal_append_event(
         payload["error"] = error
     if data_extra:
         payload.update(data_extra)
+    tags = _apply_latency_budget_metadata(ctx, stage=stage, payload=payload, tags=tags)
     return ctx.journal.append(
         kind=kind,
         name=name,
@@ -282,7 +288,64 @@ def journal_append_event(
         data=payload,
         input_ref=input_ref,
         output_ref=output_ref,
+        tags=tags,
     )
+
+
+def _apply_latency_budget_metadata(
+    ctx: RunContext,
+    *,
+    stage: str,
+    payload: dict[str, Any],
+    tags: frozenset[str],
+) -> frozenset[str]:
+    elapsed_ms = _float_or_none(payload.get("elapsed_ms"))
+    if elapsed_ms is None:
+        return tags
+
+    violations: list[dict[str, float | str]] = []
+    for budget in getattr(ctx, "latency_budgets", ()) or ():
+        budget_stage = _budget_value(budget, "stage")
+        if not _budget_matches_stage(stage, budget_stage):
+            continue
+        budget_ms = _float_or_none(_budget_value(budget, "max_ms"))
+        if budget_ms is None or elapsed_ms <= budget_ms:
+            continue
+        violations.append(
+            {
+                "stage": str(budget_stage),
+                "observed_ms": elapsed_ms,
+                "budget_ms": budget_ms,
+                "percentile": str(_budget_value(budget, "percentile") or "p95"),
+                "scope": "stage_record",
+            }
+        )
+
+    if not violations:
+        return tags
+    payload["latency_budget_exceeded"] = True
+    payload["latency_budget_violations"] = violations
+    return tags | frozenset({LATENCY_BUDGET_EXCEEDED_TAG})
+
+
+def _budget_matches_stage(stage: str, budget_stage: Any) -> bool:
+    if budget_stage is None:
+        return False
+    key = str(budget_stage).strip()
+    return key in {stage, f"{stage}_ms", f"{stage}_latency_ms"}
+
+
+def _budget_value(budget: Any, name: str) -> Any:
+    if isinstance(budget, Mapping):
+        return budget.get(name)
+    return getattr(budget, name, None)
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def audio_format_fields(audio: Any) -> dict[str, Any]:

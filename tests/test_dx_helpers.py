@@ -268,9 +268,9 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "full structlog adoption" in remaining_summary
     assert "non-canonical example shrinkage" in normalized_remaining_summary
     assert "runtime enforcement for advanced observability knobs" in remaining_summary
+    assert "aggregate `latency_budget=` alerts" in remaining_summary
     assert "`warmup=`" in remaining_summary
     assert "`max_session_cost_usd=`" in remaining_summary
-    assert "`latency_budget=`" in remaining_summary
 
 
 def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
@@ -297,6 +297,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "instead of manually starting a session" in normalized_status
     assert "Advanced observability knobs are now config-addressable" in status
     assert "`ObservabilityConfig` carries" in status
+    assert "`latency_budget_exceeded`" in status
+    assert "structured" in status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

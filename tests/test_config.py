@@ -451,6 +451,7 @@ def test_create_text_session_forwards_observability_advanced_aliases():
     assert session._easycat_config.latency_budget == (budget,)
     assert session._easycat_config.warmup is False
     assert session._easycat_config.max_session_cost_usd == 0.25
+    assert session._run_ctx.latency_budgets == (budget,)
 
 
 @pytest.mark.asyncio

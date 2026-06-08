@@ -99,6 +99,7 @@ class TTSStage:
             return self._wrap_stream(result, ctx, turn.id, state_before, start_sequence)
 
         state_after = self.snapshot_state()
+        elapsed_ms = (time.perf_counter() - started) * 1000
         journal_append_event(
             ctx,
             stage=self.name,
@@ -106,6 +107,7 @@ class TTSStage:
             turn_id=turn.id,
             state_before=state_before,
             state_after=state_after,
+            data_extra={"elapsed_ms": elapsed_ms},
         )
         return result
 
@@ -194,6 +196,7 @@ class TTSStage:
                 {"easycat.stage": self.name, "easycat.result": result_attr},
             )
         state_after = self.snapshot_state()
+        elapsed_ms = (time.perf_counter() - started) * 1000
         journal_append_event(
             ctx,
             stage=self.name,
@@ -201,7 +204,11 @@ class TTSStage:
             turn_id=turn_id,
             state_before=state_before,
             state_after=state_after,
-            data_extra={"frame_count": frame_count, "total_bytes": total_bytes},
+            data_extra={
+                "frame_count": frame_count,
+                "total_bytes": total_bytes,
+                "elapsed_ms": elapsed_ms,
+            },
         )
 
     def snapshot_state(self) -> StageStateSnapshot:

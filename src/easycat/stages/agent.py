@@ -308,6 +308,7 @@ class AgentStage:
             # stops iterating on the ``done`` event — triggering
             # ``GeneratorExit`` at the yield above).
             if not errored:
+                elapsed_ms = (time.perf_counter() - started) * 1000
                 final_text = "".join(accumulated)
                 if (
                     self._tracks_history
@@ -329,7 +330,7 @@ class AgentStage:
                     turn_id=turn.id,
                     state_before=state_before,
                     state_after=state_after,
-                    data_extra={"response": final_text},
+                    data_extra={"response": final_text, "elapsed_ms": elapsed_ms},
                 )
 
     # ── Post-turn framework-state mutations ─────────────────────

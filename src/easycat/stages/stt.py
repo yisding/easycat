@@ -124,6 +124,7 @@ class STTStage:
                     {"easycat.stage": self.name, "easycat.result": result_attr},
                 )
             state_after = self.snapshot_state()
+            elapsed_ms = (time.perf_counter() - started) * 1000
             journal_append_event(
                 ctx,
                 stage=self.name,
@@ -131,6 +132,7 @@ class STTStage:
                 turn_id=turn.id,
                 state_before=state_before,
                 state_after=state_after,
+                data_extra={"elapsed_ms": elapsed_ms},
             )
             return result
 
