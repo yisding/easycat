@@ -26,13 +26,9 @@ Open:
 from __future__ import annotations
 
 import asyncio
-import base64
-import contextlib
 import functools
-import hmac
 import json
 import logging
-import os
 import signal
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -49,13 +45,17 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.supervisor import (
+    SUPERVISOR_TOKEN_ENV,
+    serve_supervisor_websocket,
+    supervisor_auth_token_from_env,
+)
 
 logger = logging.getLogger(__name__)
 
 HTTP_PORT = 8080
 CALLER_WS_PORT = 8765
 SUPERVISOR_WS_PORT = 8766
-SUPERVISOR_TOKEN_ENV = "EASYCAT_SUPERVISOR_TOKEN"
 _STATIC_DIR = str(Path(__file__).parent)
 
 
@@ -65,60 +65,13 @@ def _run_http_server() -> None:
     httpd.serve_forever()
 
 
-def _serialize_audio_frame(frame) -> str:  # noqa: ANN001
-    fmt = frame.chunk.format
-    return json.dumps(
-        {
-            "type": "audio",
-            "session_id": frame.session_id,
-            "track": frame.track,
-            "turn_id": frame.turn_id,
-            "timestamp": frame.timestamp,
-            "sample_rate": fmt.sample_rate,
-            "channels": fmt.channels,
-            "sample_width": fmt.sample_width,
-            "encoding": fmt.encoding,
-            "data": base64.b64encode(frame.chunk.data).decode("ascii"),
-        }
-    )
-
-
-def _supervisor_auth_token() -> str | None:
-    token = os.environ.get(SUPERVISOR_TOKEN_ENV, "").strip()
-    return token or None
-
-
-def _supervisor_auth_ok(msg: dict[str, object], expected_token: str | None) -> bool:
-    if expected_token is None:
-        return True
-    supplied_token = msg.get("token")
-    return isinstance(supplied_token, str) and hmac.compare_digest(
-        supplied_token,
-        expected_token,
-    )
-
-
-async def _close_with_error(
-    ws: ServerConnection,
-    *,
-    code: int,
-    reason: str,
-    message: str,
-) -> None:
-    try:
-        await ws.send(json.dumps({"type": "error", "message": message}))
-    except websockets.exceptions.ConnectionClosed:
-        return
-    await ws.close(code, reason)
-
-
 async def main() -> None:
     require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     manager: SessionManager[str] = SessionManager()
     broadcasters: dict[str, SessionAudioBroadcaster] = {}
-    supervisor_token = _supervisor_auth_token()
+    supervisor_token = supervisor_auth_token_from_env()
     if supervisor_token is None:
         logger.warning(
             "Supervisor endpoint is unauthenticated; set %s before exposing it.",
@@ -163,129 +116,11 @@ async def main() -> None:
             logger.info("Caller session closed: %s", session_id)
 
     async def handle_supervisor(ws: ServerConnection) -> None:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "hello",
-                    "role": "supervisor",
-                    "auth_required": supervisor_token is not None,
-                    "message": 'Send {"type":"subscribe","session_id":"..."}',
-                }
-            )
+        await serve_supervisor_websocket(
+            ws,
+            broadcasters,
+            expected_token=supervisor_token,
         )
-
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
-        except TimeoutError:
-            await _close_with_error(
-                ws,
-                code=4408,
-                reason="Subscribe timed out",
-                message="Expected subscribe message with session_id within 10 seconds.",
-            )
-            return
-
-        if not isinstance(raw, str):
-            await _close_with_error(
-                ws,
-                code=4400,
-                reason="Invalid subscribe payload",
-                message="Supervisor subscribe payload must be JSON text.",
-            )
-            return
-
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            await _close_with_error(
-                ws,
-                code=4400,
-                reason="Invalid JSON",
-                message="Supervisor subscribe payload must be valid JSON.",
-            )
-            return
-
-        if msg.get("type") != "subscribe" or not isinstance(msg.get("session_id"), str):
-            await _close_with_error(
-                ws,
-                code=4400,
-                reason="Invalid subscribe message",
-                message='Expected {"type":"subscribe","session_id":"..."}.',
-            )
-            return
-
-        if not _supervisor_auth_ok(msg, supervisor_token):
-            await _close_with_error(
-                ws,
-                code=4401,
-                reason="Unauthorized",
-                message="Supervisor token is missing or invalid.",
-            )
-            return
-
-        session_id = msg["session_id"]
-        broadcaster = broadcasters.get(session_id)
-        if broadcaster is None:
-            await _close_with_error(
-                ws,
-                code=4404,
-                reason="Unknown session",
-                message=f"No active caller session found for {session_id}.",
-            )
-            return
-
-        listener_id, queue = broadcaster.subscribe()
-        logger.info("Supervisor attached to %s", session_id)
-
-        async def _drain_inbound() -> None:
-            # Supervisors are listen-only, but we still need to read from
-            # the socket so a disconnect during caller silence surfaces
-            # promptly instead of blocking on queue.get() forever.
-            try:
-                async for _ in ws:
-                    pass
-            except websockets.exceptions.ConnectionClosed:
-                return
-
-        recv_task = asyncio.create_task(_drain_inbound())
-        try:
-            await ws.send(
-                json.dumps(
-                    {
-                        "type": "subscribed",
-                        "session_id": session_id,
-                        "listener_count": broadcaster.listener_count,
-                    }
-                )
-            )
-            while True:
-                get_task = asyncio.create_task(queue.get())
-                done, _pending = await asyncio.wait(
-                    {get_task, recv_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if recv_task in done:
-                    get_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await get_task
-                    break
-                frame = get_task.result()
-                if frame is None:
-                    break
-                await ws.send(_serialize_audio_frame(frame))
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("Supervisor disconnected from %s", session_id)
-        finally:
-            recv_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await recv_task
-            dropped_frames = broadcaster.dropped_frames_for(listener_id)
-            broadcaster.unsubscribe(listener_id)
-            logger.info(
-                "Supervisor detached from %s (dropped_frames=%s)",
-                session_id,
-                dropped_frames,
-            )
 
     caller_server = await websockets.serve(handle_caller, "0.0.0.0", CALLER_WS_PORT)
     supervisor_server = await websockets.serve(

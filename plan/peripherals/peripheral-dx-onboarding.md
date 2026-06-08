@@ -113,6 +113,11 @@ Shipped:
   per-session console feedback for multi-client servers, so transport helpers
   and the Twilio scaffold / Twilio example / WebSocket supervisor example no
   longer import and call `attach_runtime_feedback(session)` themselves.
+- `examples/ws_supervisor_server.py` now keeps the passive listen-in teaching
+  path while delegating subscribe parsing, optional token auth, WebSocket
+  listener draining, and audio-frame JSON serialization to
+  `easycat.supervisor.serve_supervisor_websocket(...)`; the example's guarded
+  visible-code budget is now ≤140 instead of ≤265.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
   `session.end_turn()` lesson while using `async with create_session(config) as
   session:` instead of explicit `session.start()` / `session.stop(...)`
@@ -154,11 +159,12 @@ Still remaining:
   direct-session subscription/debugger and browser-transport examples use
   `run_session(session)`; the WebTransport server uses a config-server helper;
   multi-client Twilio scaffold/example and WebSocket supervisor example use
-  manager-owned runtime feedback; the push-to-talk example keeps manual turn
-  control while using the scoped session lifecycle; scaffold debug guidance
-  points all generated-project users at `record_to=`.
-  Broader raw line-count shrinkage remains open in non-canonical server and
-  protocol-heavy examples.
+  manager-owned runtime feedback; the WebSocket supervisor example also uses a
+  reusable supervisor WebSocket helper for auth, subscribe, and audio fan-out;
+  the push-to-talk example keeps manual turn control while using the scoped
+  session lifecycle; scaffold debug guidance points all generated-project users
+  at `record_to=`. Broader raw line-count shrinkage remains open in other
+  non-canonical server and protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS

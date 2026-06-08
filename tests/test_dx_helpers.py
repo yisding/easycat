@@ -299,6 +299,9 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "`ObservabilityConfig` carries" in status
     assert "`latency_budget_exceeded`" in status
     assert "structured" in status
+    assert "examples/ws_supervisor_server.py" in status
+    assert "serve_supervisor_websocket" in status
+    assert "visible-code budget is now ≤140 instead of ≤265" in status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from dataclasses import replace
 
 import pytest
@@ -13,7 +15,13 @@ from easycat.events import (
     SupervisorListenerAttached,
     SupervisorListenerDetached,
 )
-from easycat.supervisor import SessionAudioBroadcaster
+from easycat.supervisor import (
+    SessionAudioBroadcaster,
+    serve_supervisor_websocket,
+    supervisor_audio_frame_to_json,
+    supervisor_auth_token_from_env,
+    supervisor_message_authorized,
+)
 
 
 class _DummySession:
@@ -30,6 +38,52 @@ class _DummySession:
 
 def _chunk(byte: int) -> AudioChunk:
     return AudioChunk(data=bytes([byte]) * 640, format=PCM16_MONO_16K)
+
+
+class _FakeSupervisorWebSocket:
+    def __init__(self, incoming: list[object] | None = None) -> None:
+        self.sent: list[str] = []
+        self.close_code: int | None = None
+        self.close_reason: str | None = None
+        self._incoming: asyncio.Queue[object] = asyncio.Queue()
+        for item in incoming or []:
+            self._incoming.put_nowait(item)
+
+    async def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    async def recv(self) -> object:
+        return await self._incoming.get()
+
+    async def close(self, code: int, reason: str) -> None:
+        self.close_code = code
+        self.close_reason = reason
+        self._incoming.put_nowait(None)
+
+    def feed(self, message: object) -> None:
+        self._incoming.put_nowait(message)
+
+    def __aiter__(self):  # noqa: ANN204
+        return self
+
+    async def __anext__(self) -> object:
+        item = await self._incoming.get()
+        if item is None:
+            raise StopAsyncIteration
+        return item
+
+
+async def _wait_for_sent_type(
+    ws: _FakeSupervisorWebSocket,
+    message_type: str,
+) -> dict[str, object]:
+    for _ in range(100):
+        for raw in ws.sent:
+            message = json.loads(raw)
+            if message.get("type") == message_type:
+                return message
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {message_type!r}; sent={ws.sent!r}")
 
 
 @pytest.mark.asyncio
@@ -191,3 +245,103 @@ async def test_session_audio_broadcaster_emits_listener_audit_events() -> None:
     assert detached[0].session_id == session.session_id
 
     assert queue.get_nowait() is None
+
+
+def test_supervisor_auth_token_from_env_and_message_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EASYCAT_SUPERVISOR_TOKEN", raising=False)
+    assert supervisor_auth_token_from_env() is None
+    assert supervisor_message_authorized({"type": "subscribe"}, None)
+
+    monkeypatch.setenv("EASYCAT_SUPERVISOR_TOKEN", " secret ")
+    assert supervisor_auth_token_from_env() == "secret"
+    assert supervisor_message_authorized({"token": "secret"}, "secret")
+    assert not supervisor_message_authorized({"token": "wrong"}, "secret")
+    assert not supervisor_message_authorized({"token": 123}, "secret")
+
+
+@pytest.mark.asyncio
+async def test_supervisor_audio_frame_to_json() -> None:
+    session = _DummySession()
+    broadcaster = SessionAudioBroadcaster(session)
+    _listener_id, queue = broadcaster.subscribe()
+    caller = _chunk(7)
+
+    await session.event_bus.emit(
+        AudioIn(chunk=caller, session_id=session.session_id, turn_id="t1")
+    )
+    frame = queue.get_nowait()
+    assert frame is not None
+
+    payload = json.loads(supervisor_audio_frame_to_json(frame))
+    assert payload["type"] == "audio"
+    assert payload["session_id"] == session.session_id
+    assert payload["track"] == "caller"
+    assert payload["turn_id"] == "t1"
+    assert payload["sample_rate"] == PCM16_MONO_16K.sample_rate
+    assert payload["channels"] == PCM16_MONO_16K.channels
+    assert payload["sample_width"] == PCM16_MONO_16K.sample_width
+    assert payload["encoding"] == PCM16_MONO_16K.encoding
+    assert base64.b64decode(payload["data"]) == caller.data
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_subscribes_and_streams_audio() -> None:
+    session = _DummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "secret"})]
+    )
+
+    task = asyncio.create_task(
+        serve_supervisor_websocket(
+            ws,
+            {"session-a": broadcaster},
+            expected_token="secret",
+        )
+    )
+    await _wait_for_sent_type(ws, "subscribed")
+    assert broadcaster.listener_count == 1
+
+    await session.event_bus.emit(AudioOut(chunk=_chunk(8), session_id=session.session_id))
+    audio = await _wait_for_sent_type(ws, "audio")
+    assert audio["session_id"] == "session-a"
+    assert audio["track"] == "assistant"
+
+    ws.feed(None)
+    await asyncio.wait_for(task, timeout=1.0)
+    assert broadcaster.listener_count == 0
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_rejects_unknown_session() -> None:
+    ws = _FakeSupervisorWebSocket([json.dumps({"type": "subscribe", "session_id": "missing"})])
+
+    await serve_supervisor_websocket(ws, {}, expected_token=None)
+
+    error = await _wait_for_sent_type(ws, "error")
+    assert error["message"] == "No active caller session found for missing."
+    assert ws.close_code == 4404
+    assert ws.close_reason == "Unknown session"
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_rejects_bad_token() -> None:
+    session = _DummySession("session-a")
+    broadcaster = SessionAudioBroadcaster(session)
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "session-a", "token": "wrong"})]
+    )
+
+    await serve_supervisor_websocket(
+        ws,
+        {"session-a": broadcaster},
+        expected_token="secret",
+    )
+
+    error = await _wait_for_sent_type(ws, "error")
+    assert error["message"] == "Supervisor token is missing or invalid."
+    assert ws.close_code == 4401
+    assert ws.close_reason == "Unauthorized"
+    assert broadcaster.listener_count == 0

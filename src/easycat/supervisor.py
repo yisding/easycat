@@ -8,10 +8,17 @@ passive listeners without changing transport/session ownership.
 from __future__ import annotations
 
 import asyncio
+import base64
+import contextlib
+import hmac
+import json
 import logging
-from collections.abc import Callable
+import os
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
+
+import websockets
 
 from easycat.audio_format import AudioChunk
 from easycat.events import (
@@ -27,6 +34,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+SUPERVISOR_TOKEN_ENV = "EASYCAT_SUPERVISOR_TOKEN"
 SupervisorTrack = Literal["caller", "assistant"]
 
 
@@ -43,6 +51,226 @@ class SupervisorAudioFrame:
 
 SupervisorConsentHook = Callable[[SupervisorAudioFrame], bool]
 SupervisorRedactionHook = Callable[[SupervisorAudioFrame], SupervisorAudioFrame | None]
+
+
+class SupervisorWebSocket(Protocol):
+    """Minimal WebSocket contract used by supervisor listen-in helpers."""
+
+    async def send(self, message: str) -> None: ...
+    async def recv(self) -> object: ...
+    async def close(self, code: int, reason: str) -> None: ...
+    def __aiter__(self) -> AsyncIterator[object]: ...
+
+
+def supervisor_auth_token_from_env(name: str = SUPERVISOR_TOKEN_ENV) -> str | None:
+    """Return a trimmed supervisor token from the environment, if configured."""
+    token = os.environ.get(name, "").strip()
+    return token or None
+
+
+def supervisor_message_authorized(
+    message: Mapping[str, object],
+    expected_token: str | None,
+) -> bool:
+    """Check an optional supervisor subscription token."""
+    if expected_token is None:
+        return True
+    supplied_token = message.get("token")
+    return isinstance(supplied_token, str) and hmac.compare_digest(
+        supplied_token,
+        expected_token,
+    )
+
+
+def supervisor_audio_frame_to_json(frame: SupervisorAudioFrame) -> str:
+    """Serialize one supervisor audio frame for browser WebSocket clients."""
+    fmt = frame.chunk.format
+    return json.dumps(
+        {
+            "type": "audio",
+            "session_id": frame.session_id,
+            "track": frame.track,
+            "turn_id": frame.turn_id,
+            "timestamp": frame.timestamp,
+            "sample_rate": fmt.sample_rate,
+            "channels": fmt.channels,
+            "sample_width": fmt.sample_width,
+            "encoding": fmt.encoding,
+            "data": base64.b64encode(frame.chunk.data).decode("ascii"),
+        }
+    )
+
+
+async def serve_supervisor_websocket(
+    ws: SupervisorWebSocket,
+    broadcasters: Mapping[str, SessionAudioBroadcaster],
+    *,
+    expected_token: str | None = None,
+    subscribe_timeout_s: float = 10.0,
+) -> None:
+    """Serve one passive supervisor WebSocket connection.
+
+    The client must send ``{"type": "subscribe", "session_id": "..."}``
+    after the initial hello. When ``expected_token`` is set, the subscribe
+    message must include a matching ``token`` string. Once subscribed, the
+    helper streams serialized audio frames from the requested
+    :class:`SessionAudioBroadcaster` until the caller session closes or the
+    supervisor disconnects.
+    """
+    await _send_supervisor_json(
+        ws,
+        {
+            "type": "hello",
+            "role": "supervisor",
+            "auth_required": expected_token is not None,
+            "message": 'Send {"type":"subscribe","session_id":"..."}',
+        },
+    )
+
+    try:
+        raw = await asyncio.wait_for(_recv_supervisor_message(ws), timeout=subscribe_timeout_s)
+    except TimeoutError:
+        await _close_supervisor_with_error(
+            ws,
+            code=4408,
+            reason="Subscribe timed out",
+            message="Expected subscribe message with session_id within 10 seconds.",
+        )
+        return
+
+    message = _decode_supervisor_subscribe(raw)
+    if message is None:
+        await _close_supervisor_with_error(
+            ws,
+            code=4400,
+            reason="Invalid subscribe payload",
+            message="Supervisor subscribe payload must be valid JSON text.",
+        )
+        return
+
+    session_id = message.get("session_id")
+    if message.get("type") != "subscribe" or not isinstance(session_id, str):
+        await _close_supervisor_with_error(
+            ws,
+            code=4400,
+            reason="Invalid subscribe message",
+            message='Expected {"type":"subscribe","session_id":"..."}.',
+        )
+        return
+
+    if not supervisor_message_authorized(message, expected_token):
+        await _close_supervisor_with_error(
+            ws,
+            code=4401,
+            reason="Unauthorized",
+            message="Supervisor token is missing or invalid.",
+        )
+        return
+
+    broadcaster = broadcasters.get(session_id)
+    if broadcaster is None:
+        await _close_supervisor_with_error(
+            ws,
+            code=4404,
+            reason="Unknown session",
+            message=f"No active caller session found for {session_id}.",
+        )
+        return
+
+    await _stream_supervisor_audio(ws, broadcaster, session_id=session_id)
+
+
+def _decode_supervisor_subscribe(raw: object) -> dict[str, object] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        message = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return message if isinstance(message, dict) else None
+
+
+async def _stream_supervisor_audio(
+    ws: SupervisorWebSocket,
+    broadcaster: SessionAudioBroadcaster,
+    *,
+    session_id: str,
+) -> None:
+    listener_id, queue = broadcaster.subscribe()
+    logger.info("Supervisor attached to %s", session_id)
+
+    recv_task = asyncio.create_task(_drain_supervisor_inbound(ws))
+    try:
+        await _send_supervisor_json(
+            ws,
+            {
+                "type": "subscribed",
+                "session_id": session_id,
+                "listener_count": broadcaster.listener_count,
+            },
+        )
+        while True:
+            get_task = asyncio.create_task(queue.get())
+            done, _pending = await asyncio.wait(
+                {get_task, recv_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if recv_task in done:
+                get_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await get_task
+                break
+            frame = get_task.result()
+            if frame is None:
+                break
+            await _send_supervisor_text(ws, supervisor_audio_frame_to_json(frame))
+    except websockets.exceptions.ConnectionClosed:
+        logger.info("Supervisor disconnected from %s", session_id)
+    finally:
+        recv_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await recv_task
+        dropped_frames = broadcaster.dropped_frames_for(listener_id)
+        broadcaster.unsubscribe(listener_id)
+        logger.info(
+            "Supervisor detached from %s (dropped_frames=%s)",
+            session_id,
+            dropped_frames,
+        )
+
+
+async def _drain_supervisor_inbound(ws: SupervisorWebSocket) -> None:
+    try:
+        async for _ in ws:
+            pass
+    except websockets.exceptions.ConnectionClosed:
+        return
+
+
+async def _recv_supervisor_message(ws: SupervisorWebSocket) -> object:
+    return await ws.recv()
+
+
+async def _send_supervisor_json(ws: SupervisorWebSocket, payload: Mapping[str, object]) -> None:
+    await _send_supervisor_text(ws, json.dumps(payload))
+
+
+async def _send_supervisor_text(ws: SupervisorWebSocket, payload: str) -> None:
+    await ws.send(payload)
+
+
+async def _close_supervisor_with_error(
+    ws: SupervisorWebSocket,
+    *,
+    code: int,
+    reason: str,
+    message: str,
+) -> None:
+    try:
+        await _send_supervisor_json(ws, {"type": "error", "message": message})
+    except websockets.exceptions.ConnectionClosed:
+        return
+    await ws.close(code, reason)
 
 
 class SessionAudioBroadcaster:

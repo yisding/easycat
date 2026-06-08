@@ -1400,24 +1400,14 @@ def test_ws_supervisor_server_uses_manager_feedback_lifecycle() -> None:
     path = REPO_ROOT / "examples" / "ws_supervisor_server.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 265
+    assert _visible_code_line_count(path) <= 140
     assert "manager.connection(session_id, session, runtime_feedback=True)" in source
     assert "SessionAudioBroadcaster(session)" in source
+    assert "serve_supervisor_websocket(" in source
+    assert "supervisor_auth_token_from_env()" in source
+    assert "json.loads(raw)" not in source
+    assert "hmac.compare_digest" not in source
     assert "attach_runtime_feedback" not in source
-
-
-def test_ws_supervisor_server_auth_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    import examples.ws_supervisor_server as ws_supervisor_server
-
-    monkeypatch.delenv(ws_supervisor_server.SUPERVISOR_TOKEN_ENV, raising=False)
-    assert ws_supervisor_server._supervisor_auth_token() is None
-    assert ws_supervisor_server._supervisor_auth_ok({"type": "subscribe"}, None)
-
-    monkeypatch.setenv(ws_supervisor_server.SUPERVISOR_TOKEN_ENV, " secret ")
-    assert ws_supervisor_server._supervisor_auth_token() == "secret"
-    assert ws_supervisor_server._supervisor_auth_ok({"token": "secret"}, "secret")
-    assert not ws_supervisor_server._supervisor_auth_ok({"token": "wrong"}, "secret")
-    assert not ws_supervisor_server._supervisor_auth_ok({"token": 123}, "secret")
 
 
 def test_ws_supervisor_client_supports_optional_token() -> None:
