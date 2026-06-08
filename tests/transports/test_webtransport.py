@@ -44,6 +44,8 @@ from easycat.transports.webtransport import (
     _ControlCodec,
     _get_protocol_class,
     _WebTransportSession,
+    run_webtransport_config_server,
+    serve_webtransport_config_sessions,
 )
 
 
@@ -1100,6 +1102,142 @@ class TestWebTransportServerWiring:
         assert server._can_accept_session() is True  # noqa: SLF001 — slots freed
 
 
+class _FakeManagedSession:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self) -> None:
+        self.stopped.set()
+
+
+class _FakeAcceptedWebTransport:
+    def __init__(self) -> None:
+        self.closed = asyncio.Event()
+
+    async def wait_closed(self) -> None:
+        await self.closed.wait()
+
+
+@pytest.mark.asyncio
+async def test_serve_webtransport_config_sessions_manages_session_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.config as config_module
+    import easycat.transports.webtransport as webtransport_module
+
+    config = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
+    stop_event = asyncio.Event()
+    accepted_transport = _FakeAcceptedWebTransport()
+    server_started = asyncio.Event()
+    sessions: list[_FakeManagedSession] = []
+    configs: list[dict[str, object]] = []
+    transports: list[object] = []
+
+    class FakeWebTransportServer:
+        def __init__(self, cfg: WebTransportTransportConfig, handler: Any) -> None:
+            self.config = cfg
+            self.handler = handler
+            self.task: asyncio.Task[None] | None = None
+
+        async def start(self) -> None:
+            assert self.config is config
+            self.task = asyncio.create_task(self.handler(accepted_transport))
+            server_started.set()
+
+        async def stop(self) -> None:
+            accepted_transport.closed.set()
+            if self.task is not None:
+                await asyncio.wait_for(self.task, timeout=1)
+
+    def create_session(config: dict[str, object]) -> _FakeManagedSession:
+        configs.append(config)
+        session = _FakeManagedSession()
+        sessions.append(session)
+        return session
+
+    def config_factory(transport: object) -> dict[str, object]:
+        transports.append(transport)
+        return {"transport": transport, "agent": object()}
+
+    monkeypatch.setattr(webtransport_module, "WebTransportServer", FakeWebTransportServer)
+    monkeypatch.setattr(config_module, "create_session", create_session)
+
+    task = asyncio.create_task(
+        serve_webtransport_config_sessions(
+            config_factory,
+            config,
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        assert transports == [accepted_transport]
+        assert len(configs) == 1
+        assert configs[0]["transport"] is accepted_transport
+        assert "agent" in configs[0]
+        await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        if not task.done():
+            stop_event.set()
+            accepted_transport.closed.set()
+            await asyncio.wait_for(task, timeout=1)
+
+
+def test_run_webtransport_config_server_delegates_to_async_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.transports.webtransport as webtransport_module
+
+    config = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
+    calls: list[dict[str, object]] = []
+
+    def config_factory(transport: object) -> object:
+        return {"transport": transport}
+
+    async def fake_serve(
+        factory: object,
+        cfg: WebTransportTransportConfig,
+        *,
+        runtime_feedback: bool,
+        announce: bool,
+    ) -> None:
+        calls.append(
+            {
+                "factory": factory,
+                "config": cfg,
+                "runtime_feedback": runtime_feedback,
+                "announce": announce,
+            }
+        )
+
+    monkeypatch.setattr(webtransport_module, "serve_webtransport_config_sessions", fake_serve)
+
+    run_webtransport_config_server(
+        config_factory,
+        config,
+        runtime_feedback=False,
+        announce=False,
+    )
+
+    assert calls == [
+        {
+            "factory": config_factory,
+            "config": config,
+            "runtime_feedback": False,
+            "announce": False,
+        }
+    ]
+
+
 # ── Protocol session-id isolation ─────────────────────────────────
 
 
@@ -1343,7 +1481,19 @@ def test_top_level_lazy_exports() -> None:
     assert hasattr(easycat, "WebTransportTransportConfig")
     assert hasattr(easycat, "WebTransportConnectionTransport")
     assert hasattr(easycat, "WebTransportServer")
-    from easycat.transports import WebTransportTransport as _Wt  # noqa: F401
+    from easycat.transports import (
+        WebTransportTransport as _Wt,
+    )
+    from easycat.transports import (
+        run_webtransport_config_server as _RunWt,
+    )
+    from easycat.transports import (
+        serve_webtransport_config_sessions as _ServeWt,
+    )
+
+    assert _Wt
+    assert _RunWt
+    assert _ServeWt
 
 
 # ── Integration: loopback aioquic CONNECT handshake ───────────────

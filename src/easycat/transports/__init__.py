@@ -38,6 +38,8 @@ _LAZY_ATTR: dict[str, str] = {
     "WebTransportTransportConfig": "easycat.transports.webtransport",
     "WebTransportConnectionTransport": "easycat.transports.webtransport",
     "WebTransportServer": "easycat.transports.webtransport",
+    "run_webtransport_config_server": "easycat.transports.webtransport",
+    "serve_webtransport_config_sessions": "easycat.transports.webtransport",
 }
 
 __all__ = sorted(_LAZY_ATTR)
@@ -69,6 +71,8 @@ if TYPE_CHECKING:
         WebTransportServer,
         WebTransportTransport,
         WebTransportTransportConfig,
+        run_webtransport_config_server,
+        serve_webtransport_config_sessions,
     )
 
 
