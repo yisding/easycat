@@ -1549,12 +1549,18 @@ def test_vad_backends_example_uses_easyconfig_provider_instance_surface():
 
 
 def test_journal_demo_uses_easyconfig_provider_instance_surface():
-    source = (REPO_ROOT / "examples/journal_demo.py").read_text(encoding="utf-8")
+    path = REPO_ROOT / "examples/journal_demo.py"
+    source = path.read_text(encoding="utf-8")
 
+    assert _visible_code_line_count(path) <= 90
     assert "EasyConfig.mic(" in source
     assert 'debug="light"' in source
     assert "turn_taking=TurnManagerConfig" in source
     assert "create_session(config)" in source
+    assert "async with create_session(config) as session:" in source
+    assert "session = create_session(config)" not in source
+    assert "await session.start()" not in source
+    assert "await session.stop()" not in source
     assert "SessionConfig" not in source
     assert "Session(" not in source
     assert "InMemoryRingBuffer" not in source

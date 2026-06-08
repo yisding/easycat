@@ -28,7 +28,6 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.tts.input import TTSInput
 
 
 def _chunk(n: int = 320) -> AudioChunk:
@@ -68,7 +67,7 @@ class StubVAD:
 
 class StubSTT:
     def __init__(self) -> None:
-        self._queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
+        self._closed = asyncio.Event()
 
     async def start_stream(self) -> None: ...
     async def send_audio(self, chunk: AudioChunk) -> None: ...
@@ -77,15 +76,11 @@ class StubSTT:
         return False
 
     async def end_stream(self) -> None:
-        await self._queue.put(STTEvent(type=STTEventType.FINAL, text="Hello, how are you?"))
-        await self._queue.put(None)
+        self._closed.set()
 
     async def events(self) -> AsyncIterator[STTEvent]:
-        while True:
-            event = await self._queue.get()
-            if event is None:
-                break
-            yield event
+        await self._closed.wait()
+        yield STTEvent(type=STTEventType.FINAL, text="Hello, how are you?")
 
     def version_info(self) -> dict[str, str]:
         return {"provider": "stub-stt"}
@@ -99,9 +94,8 @@ class StubAgent:
 class StubTTS:
     supports_ssml = False
 
-    async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
-        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
-        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk())
+    async def synthesize(self, payload: object) -> AsyncIterator[TTSEvent]:
+        yield TTSEvent(type=TTSEventType.AUDIO, audio=_chunk(640))
 
     async def stop(self) -> None: ...
     async def cancel(self) -> None: ...
@@ -120,17 +114,11 @@ async def main() -> None:
         turn_taking=TurnManagerConfig(end_of_turn_silence_ms=1),
         debug="light",
     )
-    session = create_session(config)
+    async with create_session(config) as session:
+        await asyncio.sleep(0.5)
 
-    print("Starting session...")
-    await session.start()
-    await asyncio.sleep(0.5)
-    await session.stop()
-    print("Session stopped.\n")
-
-    view = session.journal
-    assert view is not None
-    records = view.read()
+    assert session.journal is not None
+    records = session.journal.read()
 
     print(f"{'seq':>4}  {'kind':<24} {'name':<28} data")
     print("-" * 90)

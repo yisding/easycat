@@ -81,6 +81,9 @@ Shipped:
   through `run(EasyConfig.mic(...))` and loads the timestamped bundle after
   shutdown instead of manually starting a session, attaching feedback, waiting
   for signals, or calling `session.export_debug_bundle(...)`.
+- `examples/journal_demo.py` now keeps the no-key journal inspection path on
+  `EasyConfig.mic(...)` while using `async with create_session(config) as
+  session:` instead of manual `start()` / `stop()` lifecycle code.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -98,10 +101,11 @@ Still remaining:
   `ws_server.py` ≤15, excluding setup docstrings and import guards.
   Provider shortcut and PydanticAI slim examples have shed duplicate key
   preflights, the canonical WebSocket server uses the config-server helper, the
-  debug bundle example uses `record_to=` auto-capture, and scaffold debug
-  guidance points all generated-project users at `record_to=`; broader raw
-  line-count shrinkage remains open in non-canonical server and protocol-heavy
-  examples.
+  debug bundle example uses `record_to=` auto-capture, the no-key journal demo
+  uses the scoped `async with create_session(...)` lifecycle, and scaffold
+  debug guidance points all generated-project users at `record_to=`; broader
+  raw line-count shrinkage remains open in non-canonical server and
+  protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS
