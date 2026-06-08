@@ -23,6 +23,24 @@ class FailingProvider:
         raise ConnectionError("WebSocket stale")
 
 
+class NotifyingHealthyProvider:
+    def __init__(self) -> None:
+        self.checked = asyncio.Event()
+
+    async def health_check(self) -> bool:
+        self.checked.set()
+        return True
+
+
+class NotifyingUnhealthyProvider:
+    def __init__(self) -> None:
+        self.checked = asyncio.Event()
+
+    async def health_check(self) -> bool:
+        self.checked.set()
+        return False
+
+
 class TestHealthCheckable:
     def test_protocol_detection(self):
         assert isinstance(HealthyProvider(), HealthCheckable)
@@ -88,37 +106,45 @@ class TestPeriodicHealthChecker:
         assert errors[0].provider == "broken_ws"
 
     async def test_start_stop(self):
+        provider = NotifyingHealthyProvider()
         checker = PeriodicHealthChecker(
-            HealthyProvider(),
-            interval=0.05,
+            provider,
+            interval=0,
             provider_name="test",
         )
         checker.start()
         assert checker.is_running
 
-        await asyncio.sleep(0.15)
-        await checker.stop()
+        try:
+            await asyncio.wait_for(provider.checked.wait(), timeout=0.5)
+        finally:
+            await checker.stop()
         assert not checker.is_running
 
     async def test_periodic_detects_stale_connection(self):
         """Start a periodic checker that detects a stale (unhealthy) provider."""
         event_bus = EventBus()
         errors = []
+        detected = asyncio.Event()
 
         async def handler(event):
             errors.append(event)
+            detected.set()
 
         event_bus.subscribe(Error, handler)
 
+        provider = NotifyingUnhealthyProvider()
         checker = PeriodicHealthChecker(
-            UnhealthyProvider(),
-            interval=0.05,
+            provider,
+            interval=0,
             provider_name="stale_ws",
             event_bus=event_bus,
         )
         checker.start()
-        await asyncio.sleep(0.15)
-        await checker.stop()
+        try:
+            await asyncio.wait_for(detected.wait(), timeout=0.5)
+        finally:
+            await checker.stop()
 
         assert len(errors) >= 1
 

@@ -776,6 +776,17 @@ def test_sqlite_journal_sigkill_test_waits_for_signal() -> None:
     assert "time.sleep(60)" not in sigkill_test
 
 
+def test_health_check_periodic_tests_wait_for_events() -> None:
+    """Periodic health-check tests should observe checks, not sleep for ticks."""
+    source = (REPO_ROOT / "tests" / "test_health_check.py").read_text(encoding="utf-8")
+
+    assert "class NotifyingHealthyProvider" in source
+    assert "class NotifyingUnhealthyProvider" in source
+    assert "await asyncio.wait_for(provider.checked.wait(), timeout=0.5)" in source
+    assert "await asyncio.wait_for(detected.wait(), timeout=0.5)" in source
+    assert "await asyncio.sleep(" not in source
+
+
 def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     """Timeout tests should model stuck work with cancellation-friendly events."""
     source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
