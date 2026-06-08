@@ -111,7 +111,11 @@ easycat docs             # show docs for learning, maintenance, validation, oper
 easycat docs --audience learners # filter docs by reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
+easycat docs --audience app-builders # filter docs to scaffold and app-building routes
 easycat docs --audience app-builders --json # emit a filtered docs route map for app builders
+easycat docs --audience operators # filter docs to deployment and observability routes
+easycat docs --audience operators --json # emit a filtered docs route map for operators
+easycat docs --audience maintainers # filter docs to architecture and maintenance routes
 easycat docs --audience maintainers --json # emit a filtered docs route map for maintainers
 easycat explain E102     # look up errors and CLI schema topics
 easycat explain json-schema # document the --json envelope and command metadata
@@ -150,11 +154,13 @@ rows without Rich formatting; use `easycat doctor --env-file .env --json`
 when both apply.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints. Use `easycat docs --audience learners`
-to narrow the human map, `easycat docs --audience learners --json` to parse only
-learner-facing route entries, or `easycat docs --audience maintainers --json`
-to parse only maintainer-facing route entries; the `maintainers` and
-`operators` filters also include compound labels such as `provider maintainers`,
-`release maintainers`, and `operators and maintainers`.
+to narrow the human map, `easycat docs --audience app-builders` for scaffold
+and app-building routes, `easycat docs --audience operators` for deployment and
+observability routes, or `easycat docs --audience maintainers` for architecture
+and maintenance routes. Add `--json` to those filters when automation needs
+parseable route entries; the `maintainers` and `operators` filters also include
+compound labels such as `provider maintainers`, `release maintainers`, and
+`operators and maintainers`.
 `easycat explain json-schema` documents the standard `--json` envelope. It covers
 the docs route map,
 template catalog, scaffold output, doctor environment/checks output,

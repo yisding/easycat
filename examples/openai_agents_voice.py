@@ -31,4 +31,5 @@ run(
 #   EasyConfig.browser(agent=...)  serve in a browser (needs a server + --extra webrtc)
 #   debug="full"                   record a journal under .easycat/journals/
 #   uv run easycat inspect .easycat/journals/<session_id>.sqlite
+#   uv run easycat docs --audience learners
 # Full ground-up ladder: docs/teaching/00-hello-audio/

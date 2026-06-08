@@ -510,9 +510,19 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat docs --audience learners # filter docs by reader audience or broad role",
         "easycat docs --audience learners --json # emit a filtered docs route map for learners",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
+        ("easycat docs --audience app-builders # filter docs to scaffold and app-building routes"),
         (
             "easycat docs --audience app-builders --json # emit a filtered docs route map "
             "for app builders"
+        ),
+        ("easycat docs --audience operators # filter docs to deployment and observability routes"),
+        (
+            "easycat docs --audience operators --json # emit a filtered docs route map "
+            "for operators"
+        ),
+        (
+            "easycat docs --audience maintainers # filter docs to architecture and "
+            "maintenance routes"
         ),
         (
             "easycat docs --audience maintainers --json # emit a filtered docs route map "
@@ -548,7 +558,11 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
     assert "easycat docs --json" in cli_section
     assert "easycat docs --audience learners" in cli_section
     assert "easycat docs --audience learners --json" in cli_section
+    assert "easycat docs --audience app-builders" in cli_section
     assert "easycat docs --audience app-builders --json" in cli_section
+    assert "easycat docs --audience operators" in cli_section
+    assert "easycat docs --audience operators --json" in cli_section
+    assert "easycat docs --audience maintainers" in cli_section
     assert "easycat docs --audience maintainers --json" in cli_section
 
     missing = sorted(

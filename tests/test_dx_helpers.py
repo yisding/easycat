@@ -139,6 +139,7 @@ def test_canonical_example_keeps_next_step_breadcrumbs() -> None:
     assert 'debug="full"' in example
     assert "`easycat inspect`" not in example
     assert "uv run easycat inspect .easycat/journals/<session_id>.sqlite" in example
+    assert "uv run easycat docs --audience learners" in example
     assert "docs/teaching/00-hello-audio/" in example
 
 
