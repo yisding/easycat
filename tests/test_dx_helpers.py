@@ -288,6 +288,9 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/pydantic_ai_workflow_voice.py" in status
     assert "same slim workflow object" in status
     assert "without structured-output or usage-history plumbing" in normalized_status
+    assert "examples/debug_bundle.py" in status
+    assert "through `run(EasyConfig.mic(...))`" in status
+    assert "instead of manually starting a session" in normalized_status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

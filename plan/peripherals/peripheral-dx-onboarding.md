@@ -78,8 +78,9 @@ Shipped:
   env-derived server config, and `asyncio.run(...)`
   (`transports/websocket.py`, `examples/ws_server.py`).
 - `examples/debug_bundle.py` now teaches the `record_to=` auto-capture path
-  and loads the timestamped bundle after shutdown instead of manually calling
-  `session.export_debug_bundle(...)`.
+  through `run(EasyConfig.mic(...))` and loads the timestamped bundle after
+  shutdown instead of manually starting a session, attaching feedback, waiting
+  for signals, or calling `session.export_debug_bundle(...)`.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`

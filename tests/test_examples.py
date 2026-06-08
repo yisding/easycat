@@ -1579,13 +1579,21 @@ def test_debug_bundle_example_imports():
 
 
 def test_debug_bundle_example_uses_record_to_auto_capture():
-    source = (REPO_ROOT / "examples/debug_bundle.py").read_text(encoding="utf-8")
+    path = REPO_ROOT / "examples/debug_bundle.py"
+    source = path.read_text(encoding="utf-8")
 
+    assert _visible_code_line_count(path) <= 55
     assert "EasyConfig.mic(" in source
     assert "record_to=BUNDLE_DIR" in source
     assert 'debug="light"' in source
+    assert "run(" in source
+    assert "def _new_bundle_after" in source
+    assert 'BUNDLE_DIR.glob("*.zip")' in source
+    assert "create_session(" not in source
+    assert "attach_runtime_feedback(" not in source
+    assert "wait_for_shutdown_signal(" not in source
+    assert "asyncio.run(" not in source
     assert "session.export_debug_bundle(" not in source
-    assert 'BUNDLE_DIR.glob(f"{session.session_id}-*.zip")' in source
 
 
 def test_journal_ui_example_imports():
@@ -1615,6 +1623,7 @@ _REQUIRES_AGENTS = frozenset(
         "examples/echo_cancellation.py",
         "examples/session_actions_openai.py",
         "examples/journal_ui.py",
+        "examples/debug_bundle.py",
         "examples/webrtc_observability_server.py",
     }
 )

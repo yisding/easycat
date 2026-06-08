@@ -5,8 +5,8 @@ End-to-end debug-capture workflow:
      pipeline stage records to the journal.
   2. After ``Ctrl+C`` stops the session, ``record_to=`` writes a
      timestamped ``RunBundle`` zip.
-  3. Load the bundle back in the same process and print a per-turn
-     summary plus a replay of the TTS audio the user heard.
+  3. Load the bundle back in the same process and print the records,
+     provider versions, and replayable TTS audio summary.
 
 Setup:
   export OPENAI_API_KEY="..."
@@ -20,87 +20,69 @@ Setup:
 
 from __future__ import annotations
 
-import asyncio
-from collections import defaultdict
 from pathlib import Path
 
-from easycat import (
-    EasyConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from easycat import EasyConfig, run
 from easycat.debug.bundle import RunBundle
 
 BUNDLE_DIR = Path("runs")
 
 
 def _summarize(bundle: RunBundle, path: Path) -> None:
-    """Walk the journal and print per-turn STT finals + TTS audio totals."""
-    stt_finals: dict[str | None, list[str]] = defaultdict(list)
-    agent_replies: dict[str | None, list[str]] = defaultdict(list)
-    turn_ids: list[str | None] = []
-
-    for record in bundle.records():
-        name = record.get("name")
-        turn_id = record.get("turn_id")
-        data = record.get("data") or {}
-        if not isinstance(data, dict):
-            continue
-        if name == "turn_started" and turn_id not in turn_ids:
-            turn_ids.append(turn_id)
-        elif name == "stt_final":
-            text = data.get("text") or ""
-            if text:
-                stt_finals[turn_id].append(text)
-        elif name == "agent_final":
-            text = data.get("text") or ""
-            if text:
-                agent_replies[turn_id].append(text)
+    """Print a compact postmortem summary from an exported bundle."""
+    records = list(bundle.records())
+    chunks = bundle.replay_audio()
+    total_bytes = sum(len(c.data) for c in chunks)
+    total_ms = sum(c.duration_ms for c in chunks)
 
     print(f"\nBundle: {path}")
     print(f"  provider_versions: {bundle.manifest.provider_versions}")
-    print(f"  turns recorded:    {len(turn_ids)}")
+    print(f"  records:           {len(records)}")
+    print(f"  tts replay:        {len(chunks)} chunks, {total_bytes} bytes, {total_ms:.0f} ms")
 
-    for turn_id in turn_ids:
-        print(f"\n  turn {turn_id}")
-        for text in stt_finals.get(turn_id, []):
-            print(f"    user:  {text}")
-        for text in agent_replies.get(turn_id, []):
-            print(f"    agent: {text}")
+    for record in records:
+        name = record.get("name")
+        data = record.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        text = data.get("text") or ""
+        if name == "stt_final" and text:
+            print(f"  user:             {text}")
+        elif name == "agent_final" and text:
+            print(f"  agent:            {text}")
 
-        chunks = bundle.replay_audio(turn_id=turn_id)
-        total_bytes = sum(len(c.data) for c in chunks)
-        total_ms = sum(c.duration_ms for c in chunks)
-        print(f"    tts:   {len(chunks)} chunks, {total_bytes} bytes, {total_ms:.0f} ms")
+
+def _new_bundle_after(before: set[Path]) -> Path:
+    created = [path for path in BUNDLE_DIR.glob("*.zip") if path not in before]
+    if not created:
+        raise RuntimeError(f"No bundle was exported under {BUNDLE_DIR}/")
+    return max(created, key=lambda path: path.stat().st_mtime)
 
 
-async def main() -> None:
-    require_env("OPENAI_API_KEY")
+def main() -> None:
+    try:
+        from agents import Agent  # type: ignore[import-untyped]
+    except ImportError as exc:
+        raise SystemExit(
+            "openai-agents is required. For an app, run: "
+            "uv add 'easycat[quickstart]'. In this repo, run: "
+            "uv sync --extra quickstart --group dev"
+        ) from exc
 
-    from agents import Agent  # type: ignore[import-untyped]
-
-    agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
-
-    session = create_session(
+    before = set(BUNDLE_DIR.glob("*.zip"))
+    print(f"Recording session. Press Ctrl+C to stop and export a bundle under {BUNDLE_DIR}/.\n")
+    run(
         EasyConfig.mic(
-            agent=agent,
+            agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
             record_to=BUNDLE_DIR,
             debug="light",
         )
     )
-    attach_runtime_feedback(session)
-
-    await session.start()
-    print(f"Recording session. Press Ctrl+C to stop and export a bundle under {BUNDLE_DIR}/.\n")
-    await wait_for_shutdown_signal(session)
-
-    bundle_path = max(BUNDLE_DIR.glob(f"{session.session_id}-*.zip"))
+    bundle_path = _new_bundle_after(before)
     print(f"\nExported bundle to {bundle_path}")
 
     _summarize(RunBundle.load(bundle_path), bundle_path)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
