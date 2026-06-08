@@ -8,7 +8,9 @@ installed app environment, use `easycat docs`. Use
 with command hints and audience labels. Replace uppercase or angle-bracket
 placeholders in command hints, such as `PATH` or `<session_id>`, before
 running them. Use
-`uv run easycat docs --audience learners` to narrow the human map, or
+`uv run easycat docs --audience learners` to narrow the human map,
+`uv run easycat docs --audience learners --json` when automation needs only
+learner-facing route entries, or
 `uv run easycat docs --audience app-builders --json` when automation needs only
 app-builder route entries, or
 `uv run easycat docs --audience maintainers --json` when automation needs only

@@ -109,6 +109,7 @@ easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat docs             # show docs for learning, maintenance, validation, operations
 easycat docs --audience learners # filter docs by reader audience or broad role
+easycat docs --audience learners --json # emit a filtered docs route map for learners
 easycat docs --json      # emit docs routes, audiences, and command hints for automation
 easycat docs --audience app-builders --json # emit a filtered docs route map for app builders
 easycat docs --audience maintainers --json # emit a filtered docs route map for maintainers
@@ -149,11 +150,13 @@ rows without Rich formatting; use `easycat doctor --env-file .env --json`
 when both apply.
 For coding agents and scripts, `easycat docs --json` emits the docs route map
 with audience labels and command hints. Use `easycat docs --audience learners`
-or `easycat docs --audience maintainers --json` to narrow the same map before
-scanning or parsing it; the `maintainers` and `operators` filters also include
-compound labels such as `provider maintainers`, `release maintainers`, and
-`operators and maintainers`. `easycat explain json-schema` documents the standard
-`--json` envelope. It covers the docs route map,
+to narrow the human map, `easycat docs --audience learners --json` to parse only
+learner-facing route entries, or `easycat docs --audience maintainers --json`
+to parse only maintainer-facing route entries; the `maintainers` and
+`operators` filters also include compound labels such as `provider maintainers`,
+`release maintainers`, and `operators and maintainers`.
+`easycat explain json-schema` documents the standard `--json` envelope. It covers
+the docs route map,
 template catalog, scaffold output, doctor environment/checks output,
 validation quick/contracts/release/report output, bundle list/show/export,
 inspect, and replay command families, including command-specific fields such

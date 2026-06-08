@@ -415,6 +415,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert commands["docs/README.md"] == [
         "easycat docs",
         "easycat docs --audience learners",
+        "easycat docs --audience learners --json",
         "easycat docs --audience app-builders",
         "easycat docs --audience app-builders --json",
         "easycat docs --json",

@@ -508,6 +508,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         "easycat doctor --env-file .env --json # emit checks with project .env loaded",
         "easycat docs             # show docs for learning, maintenance, validation, operations",
         "easycat docs --audience learners # filter docs by reader audience or broad role",
+        "easycat docs --audience learners --json # emit a filtered docs route map for learners",
         "easycat docs --json      # emit docs routes, audiences, and command hints for automation",
         (
             "easycat docs --audience app-builders --json # emit a filtered docs route map "
@@ -546,6 +547,7 @@ def test_readme_cli_section_lists_registered_top_level_commands() -> None:
         assert line not in cli_lines
     assert "easycat docs --json" in cli_section
     assert "easycat docs --audience learners" in cli_section
+    assert "easycat docs --audience learners --json" in cli_section
     assert "easycat docs --audience app-builders --json" in cli_section
     assert "easycat docs --audience maintainers --json" in cli_section
 

@@ -106,10 +106,12 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
 
     assert "uv run easycat docs" in readme
     assert "uv run easycat docs --audience learners" in readme
+    assert "uv run easycat docs --audience learners --json" in readme
     assert "uv run easycat docs --json" in readme
     assert "maintained docs map" in normalized
     assert "narrow that map to learner-facing routes" in normalized
-    assert "script or coding agent needs the same route map with command hints" in normalized
+    assert "automation needs that smaller route map" in normalized
+    assert "script or coding agent needs the full route map with command hints" in normalized
     assert "audience labels" in normalized
     assert (
         "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "

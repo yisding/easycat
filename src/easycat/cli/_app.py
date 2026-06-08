@@ -303,6 +303,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "easycat docs",
             "easycat docs --audience learners",
+            "easycat docs --audience learners --json",
             "easycat docs --audience app-builders",
             "easycat docs --audience app-builders --json",
             "easycat docs --json",
@@ -322,6 +323,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run easycat docs --audience learners",
+            "uv run easycat docs --audience learners --json",
             "uv run python docs/teaching/00-hello-audio/main.py",
             "uv run easycat validate quick",
             "uv run easycat validate quick --json",
