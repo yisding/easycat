@@ -37,7 +37,7 @@ except ImportError as exc:
         "uv sync --extra openai --extra openai-agents --extra webrtc --extra debugger --group dev"
     ) from exc
 
-from easycat import EasyConfig, create_session, require_env
+from easycat import EasyConfig, create_session
 from easycat.debugger import serve_session
 from easycat.helpers import run_session
 from easycat.transports import webrtc_transport_config_from_env
@@ -58,14 +58,12 @@ def multiply_numbers(a: float, b: float) -> float:
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
-
     debugger_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     debugger_port = int(os.getenv("DASHBOARD_PORT", "8090"))
     transport = webrtc_transport_config_from_env(static_dir=_STATIC_DIR)
 
     session = create_session(
-        EasyConfig(
+        EasyConfig.browser(
             transport=transport,
             agent=Agent(
                 name="assistant",

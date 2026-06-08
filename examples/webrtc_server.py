@@ -41,13 +41,12 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 
 from __future__ import annotations
 
-from easycat import EasyConfig, create_session, require_env
+from easycat import EasyConfig, create_session
 from easycat.helpers import run_session
 from easycat.transports import webrtc_transport_config_from_env
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(
@@ -56,7 +55,7 @@ def main() -> None:
     )
 
     transport = webrtc_transport_config_from_env()
-    config = EasyConfig(transport=transport, agent=agent)
+    config = EasyConfig.browser(transport=transport, agent=agent)
     session = create_session(config)
 
     print(f"Open http://localhost:{transport.port} in your browser")

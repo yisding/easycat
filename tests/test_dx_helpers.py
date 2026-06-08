@@ -334,8 +334,10 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
         normalized_status
     )
     assert "their guarded visible-code budgets are now ≤48 and ≤23" in normalized_status
+    assert "`EasyConfig.browser(...)`" in status
+    assert "duplicate OpenAI key preflight" in normalized_status
     assert "`webrtc_transport_config_from_env(...)`" in status
-    assert "visible-code budgets are now ≤30 and ≤60" in normalized_status
+    assert "visible-code budgets are now ≤39, ≤29, and ≤59" in normalized_status
     assert "examples/reconnecting_ws_client.py" in status
     assert "`create_shutdown_event()`" in status
     assert "`connect_until_stopped(...)`" in status

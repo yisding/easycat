@@ -110,13 +110,14 @@ Shipped:
   budgets are now ≤48 and ≤23.
 - `examples/ws_browser_example.py`, `examples/webrtc_server.py`, and
   `examples/webrtc_observability_server.py` now keep their browser/WebRTC
-  transport setup and URL guidance while using `run_session(session)` instead
-  of manual feedback attachment, signal waiting, `session.start()`, and
+  transport setup and URL guidance while using `EasyConfig.browser(...)` and
+  `run_session(session)` instead of duplicate OpenAI key preflight, manual
+  feedback attachment, signal waiting, `session.start()`, and
   `asyncio.run(...)`.
 - `examples/webrtc_server.py` and `examples/webrtc_observability_server.py`
   also share `webrtc_transport_config_from_env(...)` for loopback signaling,
-  TURN/STUN setup, and explicit ICE credential exposure; their guarded
-  visible-code budgets are now ≤30 and ≤60.
+  TURN/STUN setup, and explicit ICE credential exposure; the browser transport
+  examples' guarded visible-code budgets are now ≤39, ≤29, and ≤59.
 - `examples/webtransport_server.py` now keeps TLS/HTTP3 setup and per-client
   config construction while using `run_webtransport_config_server(...)`
   instead of carrying `SessionManager`, feedback attachment, signal handlers,
@@ -184,7 +185,8 @@ Still remaining:
   uses reusable scripted providers plus the scoped `async with
   create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
-  direct-session subscription/debugger and browser-transport examples use
+  direct-session subscription/debugger examples use `run_session(session)`;
+  browser-transport examples use `EasyConfig.browser(...)` plus
   `run_session(session)`; WebRTC examples share env-derived transport config;
   the WebTransport server uses a config-server helper; multi-client Twilio
   scaffold/example and WebSocket supervisor example use

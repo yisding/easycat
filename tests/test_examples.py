@@ -1458,9 +1458,9 @@ def test_webrtc_examples_default_signaling_to_loopback():
 
 def test_browser_transport_examples_use_run_session_lifecycle():
     budgets = {
-        "examples/ws_browser_example.py": 40,
-        "examples/webrtc_server.py": 30,
-        "examples/webrtc_observability_server.py": 60,
+        "examples/ws_browser_example.py": 39,
+        "examples/webrtc_server.py": 29,
+        "examples/webrtc_observability_server.py": 59,
     }
 
     for relpath, budget in budgets.items():
@@ -1468,9 +1468,11 @@ def test_browser_transport_examples_use_run_session_lifecycle():
         source = path.read_text(encoding="utf-8")
 
         assert _visible_code_line_count(path) <= budget
+        assert "EasyConfig.browser(" in source
         assert "create_session(" in source
         assert "from easycat.helpers import run_session" in source
         assert "run_session(session)" in source
+        assert 'require_env("OPENAI_API_KEY")' not in source
         assert "attach_runtime_feedback" not in source
         assert "wait_for_shutdown_signal" not in source
         assert "asyncio.run(" not in source
@@ -1757,12 +1759,15 @@ def test_journal_ui_example_uses_run_session():
 
 # ── Subprocess smoke test ───────────────────────────────────────────
 
-# Scripts that import an optional agent framework at module scope; the
-# subprocess test must skip when the framework isn't installed,
-# otherwise the script exits before reaching the OPENAI_API_KEY check.
+# Scripts that import an optional agent framework before no-key config
+# validation; the subprocess test must skip when the framework isn't
+# installed, otherwise the script exits before reaching the OPENAI_API_KEY
+# check.
 _REQUIRES_AGENTS = frozenset(
     {
         "examples/openai_agents_voice.py",
+        "examples/ws_browser_example.py",
+        "examples/webrtc_server.py",
         "examples/function_tools_openai.py",
         "examples/smart_turn_demo.py",
         "examples/combined_providers.py",

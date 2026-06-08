@@ -36,7 +36,6 @@ from easycat import (
     EasyConfig,
     WebSocketTransportConfig,
     create_session,
-    require_env,
 )
 from easycat.helpers import run_session
 
@@ -60,7 +59,6 @@ def _run_http_server() -> None:
 
 
 def main() -> None:
-    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(
@@ -68,7 +66,7 @@ def main() -> None:
         instructions="You are a helpful voice assistant. Keep responses concise.",
     )
 
-    config = EasyConfig(
+    config = EasyConfig.browser(
         transport=WebSocketTransportConfig(port=WS_PORT),
         agent=agent,
     )
