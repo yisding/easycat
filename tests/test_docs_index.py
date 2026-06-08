@@ -361,8 +361,20 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
 
     assert not missing, "easycat docs routes missing command hints: " + ", ".join(missing)
     assert "easycat doctor --json" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --audience learners" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --audience learners --json" in entries["README.md#cli"].get(
+        "commands", ()
+    )
     assert "easycat docs --audience app-builders" in entries["README.md#cli"].get("commands", ())
     assert "easycat docs --audience app-builders --json" in entries["README.md#cli"].get(
+        "commands", ()
+    )
+    assert "easycat docs --audience operators" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --audience operators --json" in entries["README.md#cli"].get(
+        "commands", ()
+    )
+    assert "easycat docs --audience maintainers" in entries["README.md#cli"].get("commands", ())
+    assert "easycat docs --audience maintainers --json" in entries["README.md#cli"].get(
         "commands", ()
     )
     assert "uv run easycat init --list-templates" in entries["README.md#choose-your-path"].get(

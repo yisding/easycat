@@ -400,8 +400,14 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "easycat doctor --env-file .env --json" in commands["README.md#cli"]
     assert "easycat docs" in commands["README.md#cli"]
+    assert "easycat docs --audience learners" in commands["README.md#cli"]
+    assert "easycat docs --audience learners --json" in commands["README.md#cli"]
     assert "easycat docs --audience app-builders" in commands["README.md#cli"]
     assert "easycat docs --audience app-builders --json" in commands["README.md#cli"]
+    assert "easycat docs --audience operators" in commands["README.md#cli"]
+    assert "easycat docs --audience operators --json" in commands["README.md#cli"]
+    assert "easycat docs --audience maintainers" in commands["README.md#cli"]
+    assert "easycat docs --audience maintainers --json" in commands["README.md#cli"]
     assert "easycat docs --json" in commands["README.md#cli"]
     assert (
         "uv run --env-file .env python examples/openai_agents_voice.py"
