@@ -311,10 +311,13 @@ def test_roadmap_current_code_status_tracks_inventory_and_artifact_hygiene() -> 
 
 def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
     """Keep current-facing planning summaries aligned with the canonical snapshot."""
+    from easycat._public_api import LAZY_EXPORTS
+
     session_lines = _line_count(REPO_ROOT / "src" / "easycat" / "session" / "_session.py")
     init_lines = _line_count(REPO_ROOT / "src" / "easycat" / "__init__.py")
     session_lines_text = f"{session_lines:,}"
     init_lines_text = f"{init_lines:,}"
+    lazy_export_count = len(LAZY_EXPORTS)
     files = {
         "combined": REPO_ROOT / "plan" / "roadmap" / "combined-cleanup-tasks.md",
         "workstreams": REPO_ROOT / "plan" / "workstreams" / "README.md",
@@ -331,6 +334,10 @@ def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
     assert f"roughly {session_lines_text} lines, not 2,961" in normalized["combined"]
     assert (
         f"`src/easycat/__init__.py` is now {init_lines_text} lines, not 578." in texts["combined"]
+    )
+    assert (
+        f"The top-level lazy export list is now {lazy_export_count} symbols, not 195."
+        in texts["combined"]
     )
     assert f"roughly {session_lines_text} lines" in normalized["workstreams"]
     assert f"{session_lines_text} lines in the 2026-06-07 snapshot" in normalized["workstream-3"]

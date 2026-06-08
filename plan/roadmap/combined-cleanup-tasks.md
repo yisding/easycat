@@ -25,7 +25,7 @@ Some important April findings have since changed:
   Session decomposition collaborators exist for audio routing, STT commits,
   TTS scheduling, cancellation, turn running, and journal sinking.
 - `src/easycat/__init__.py` is now 159 lines, not 578.
-- The top-level lazy export list is now 88 symbols, not 195.
+- The top-level lazy export list is now 90 symbols, not 195.
 - `tests/test_public_api.py` pins the exact top-level allowlist, and
   `docs/public-api.md` documents the public API contract.
 - Cartesia, TEN VAD license wording, and quickstart/TEN wording are reflected
