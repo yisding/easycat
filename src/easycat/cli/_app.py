@@ -430,7 +430,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Review the stable import surface before changing exports.",
         "commands": (
             "uv run easycat docs",
+            "uv run easycat docs --audience maintainers",
             "uv run easycat docs --json",
+            "uv run easycat docs --audience maintainers --json",
             "uv run easycat explain json-schema",
             "uv run pytest tests/test_public_api.py",
             "just guard-docs",
@@ -522,6 +524,8 @@ _DOCS_LINKS: list[_DocsLink] = [
         "audience": "operators and maintainers",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
         "commands": (
+            "uv run easycat docs --audience operators-and-maintainers",
+            "uv run easycat docs --audience operators-and-maintainers --json",
             "uv run pytest tests/runtime/test_sqlite_journal.py",
             "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
             "uv run easycat inspect .easycat/journals/<session_id>.sqlite --json",

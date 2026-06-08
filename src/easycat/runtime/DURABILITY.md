@@ -4,6 +4,12 @@ Maintenance check: after changing journal persistence, recovery, storage
 layout, or teardown semantics, run
 `uv run pytest tests/runtime/test_sqlite_journal.py`.
 
+Route discovery: use
+`uv run easycat docs --audience operators-and-maintainers` for the focused
+operator/maintainer route set, or
+`uv run easycat docs --audience operators-and-maintainers --json` when a script
+or coding agent needs the route entry and command hints.
+
 Operator inspection: after a run, inspect a live SQLite journal with
 `uv run easycat inspect .easycat/journals/<session_id>.sqlite`; use
 `uv run easycat inspect .easycat/journals/<session_id>.sqlite --json` when a

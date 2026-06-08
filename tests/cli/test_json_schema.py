@@ -447,6 +447,16 @@ def test_docs_envelope(cli: CliRunner) -> None:
         "uv run easycat docs --audience provider-maintainers --json"
         in commands["tests/contracts/README.md"]
     )
+    assert "uv run easycat docs --audience maintainers" in commands["docs/public-api.md"]
+    assert "uv run easycat docs --audience maintainers --json" in commands["docs/public-api.md"]
+    assert (
+        "uv run easycat docs --audience operators-and-maintainers"
+        in commands["src/easycat/runtime/DURABILITY.md"]
+    )
+    assert (
+        "uv run easycat docs --audience operators-and-maintainers --json"
+        in commands["src/easycat/runtime/DURABILITY.md"]
+    )
     assert "uv run easycat validate contracts" in commands["tests/contracts/README.md"]
     assert "uv run easycat validate contracts --json" in commands["tests/contracts/README.md"]
     assert "uv run pytest tests/contracts" in commands["tests/contracts/README.md"]

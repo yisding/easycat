@@ -473,7 +473,9 @@ def test_docs_command_json(cli: CliRunner) -> None:
     ]
     assert commands["docs/public-api.md"] == [
         "uv run easycat docs",
+        "uv run easycat docs --audience maintainers",
         "uv run easycat docs --json",
+        "uv run easycat docs --audience maintainers --json",
         "uv run easycat explain json-schema",
         "uv run pytest tests/test_public_api.py",
         "just guard-docs",
@@ -508,6 +510,8 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat validate report .easycat/validation/latest.json --json",
     ]
     assert commands["src/easycat/runtime/DURABILITY.md"] == [
+        "uv run easycat docs --audience operators-and-maintainers",
+        "uv run easycat docs --audience operators-and-maintainers --json",
         "uv run pytest tests/runtime/test_sqlite_journal.py",
         "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
         "uv run easycat inspect .easycat/journals/<session_id>.sqlite --json",

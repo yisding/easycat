@@ -4,8 +4,11 @@ This page defines what `from easycat import ...` means for application code.
 The exact top-level allowlist is also pinned in `tests/test_public_api.py`, so
 changes to this page and the snapshot should be reviewed together.
 This page is also listed in the maintained docs map; run `uv run easycat docs`
-to confirm it remains discoverable, or `uv run easycat docs --json` when a
-script or coding agent needs the route entry and command hints. Use
+to confirm it remains discoverable. Maintainers can use
+`uv run easycat docs --audience maintainers` for the focused route set, or
+`uv run easycat docs --json` and
+`uv run easycat docs --audience maintainers --json` when a script or coding
+agent needs route entries and command hints. Use
 `uv run easycat explain json-schema` for the standard JSON envelope and
 command-specific fields.
 
