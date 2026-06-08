@@ -85,8 +85,8 @@ def test_list_templates(cli: CliRunner) -> None:
         result.stdout
     )
     assert (
-        "Doctor, Doctor JSON, Check, Fix, Docs, Docs JSON, JSON schema, and Run after cd "
-        "are run inside the scaffolded project"
+        "Doctor, Doctor JSON, Check, Fix, Docs, App-builder docs, App-builder docs JSON, "
+        "Docs JSON, JSON schema, and Run after cd are run inside the scaffolded project"
     ) in result.stdout
     assert "Machine-readable template catalog: easycat init --list-templates --json" in (
         result.stdout
@@ -107,6 +107,9 @@ def test_list_templates(cli: CliRunner) -> None:
             "App-builder docs after cd: uv run easycat docs --audience app-builders"
             in result.stdout
         )
+        assert (
+            "App-builder docs JSON after cd: uv run easycat docs --audience app-builders --json"
+        ) in result.stdout
         assert "Docs JSON after cd: uv run easycat docs --json" in result.stdout
         assert "JSON schema after cd: uv run easycat explain json-schema" in result.stdout
         assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
@@ -902,6 +905,8 @@ def test_init_next_steps_load_env_for_doctor(
     assert "find learning, maintenance, and operations routes" not in normalized_stderr
     assert "uv run easycat docs --audience app-builders" in result.stderr
     assert "app-builder routes only" in result.stderr
+    assert "uv run easycat docs --audience app-builders --json" in result.stderr
+    assert "parseable app-builder route map" in normalized_stderr
     assert "uv run easycat docs --json" in result.stderr
     assert "route map with command hints" in result.stderr
     assert "audience labels" in result.stderr
@@ -995,6 +1000,7 @@ def test_init_json_next_step_commands_match_template_readme(
         _template_readme_fix_command(template),
         "uv run easycat docs",
         "uv run easycat docs --audience app-builders",
+        "uv run easycat docs --audience app-builders --json",
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
         _template_readme_run_command(template),

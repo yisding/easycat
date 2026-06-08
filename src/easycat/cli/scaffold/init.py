@@ -184,8 +184,8 @@ _INIT_COMMAND_NOTE = (
 _INIT_HUMAN_COMMAND_NOTE = (
     "Command note: Create uses installed CLI form; Repo create runs from this repository root; "
     "JSON catalog next_step_commands previews the my-agent post-create sequence; "
-    "Doctor, Doctor JSON, Check, Fix, Docs, Docs JSON, JSON schema, and Run after cd "
-    "are run inside the scaffolded project."
+    "Doctor, Doctor JSON, Check, Fix, Docs, App-builder docs, App-builder docs JSON, "
+    "Docs JSON, JSON schema, and Run after cd are run inside the scaffolded project."
 )
 _INIT_MACHINE_READABLE_HINT = (
     "Machine-readable template catalog: easycat init --list-templates --json"
@@ -194,6 +194,7 @@ _NEXT_STEP_DOCTOR_COMMAND = "uv run easycat doctor --env-file .env"
 _NEXT_STEP_DOCTOR_JSON_COMMAND = "uv run easycat doctor --env-file .env --json"
 _NEXT_STEP_DOCS_COMMAND = "uv run easycat docs"
 _NEXT_STEP_APP_BUILDER_DOCS_COMMAND = "uv run easycat docs --audience app-builders"
+_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND = "uv run easycat docs --audience app-builders --json"
 _NEXT_STEP_DOCS_JSON_COMMAND = "uv run easycat docs --json"
 _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND = "uv run easycat explain json-schema"
 
@@ -378,6 +379,8 @@ def _format_template_catalog(catalog: list[_TemplateCatalogEntry]) -> str:
             f"  [dim]Docs after cd:[/] {escape(_NEXT_STEP_DOCS_COMMAND)}\n"
             f"  [dim]App-builder docs after cd:[/] "
             f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_COMMAND)}\n"
+            f"  [dim]App-builder docs JSON after cd:[/] "
+            f"{escape(_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND)}\n"
             f"  [dim]Docs JSON after cd:[/] {escape(_NEXT_STEP_DOCS_JSON_COMMAND)}\n"
             f"  [dim]JSON schema after cd:[/] {escape(_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND)}\n"
             f"  [dim]Run after cd:[/] {escape(entry['run_command'])}"
@@ -418,6 +421,7 @@ def _next_step_commands(target: Path, template: str) -> list[str]:
         _next_step_fix_command(template),
         _NEXT_STEP_DOCS_COMMAND,
         _NEXT_STEP_APP_BUILDER_DOCS_COMMAND,
+        _NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND,
         _NEXT_STEP_DOCS_JSON_COMMAND,
         _NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND,
         _next_step_run_command(template),
@@ -869,6 +873,9 @@ def init(
     )
     stderr_console.print(
         f"  {_NEXT_STEP_APP_BUILDER_DOCS_COMMAND} [dim]# app-builder routes only[/]"
+    )
+    stderr_console.print(
+        f"  {_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND} [dim]# parseable app-builder route map[/]"
     )
     stderr_console.print(
         f"  {_NEXT_STEP_DOCS_JSON_COMMAND} "

@@ -68,9 +68,11 @@ If Ruff reports an auto-fixable issue, run
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to
-  app-building routes, or `uv run easycat docs --json` when a script or coding
-  agent needs the route map with command hints and audience labels. If this is
-  not the right starter, run `uv run easycat init --list-templates`; use
+  app-building routes. Use
+  `uv run easycat docs --audience app-builders --json` when automation needs
+  that smaller route map, or `uv run easycat docs --json` when a script or
+  coding agent needs the full route map with command hints and audience labels.
+  If this is not the right starter, run `uv run easycat init --list-templates`; use
   `uv run easycat init --list-templates --json` when automation needs the
   template catalog. Replace uppercase or angle-bracket placeholders such as
   `PATH` or `<session_id>` before running those hints. Run

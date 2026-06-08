@@ -246,6 +246,7 @@ def _catalog_command_problems(entry: dict[str, object]) -> list[str]:
         str(entry["fix_command"]),
         "uv run easycat docs",
         "uv run easycat docs --audience app-builders",
+        "uv run easycat docs --audience app-builders --json",
         "uv run easycat docs --json",
         "uv run easycat explain json-schema",
     ]
@@ -730,11 +731,13 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert "uv run easycat docs --audience app-builders" in next_steps
     assert 'uv run easycat docs --audience "app builders"' not in next_steps
     assert "narrow the map to app-building routes" in normalized_next_steps
+    assert "uv run easycat docs --audience app-builders --json" in next_steps
+    assert "automation needs that smaller route map" in normalized_next_steps
     assert "uv run easycat docs --json" in next_steps
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps
     assert "uv run easycat explain json-schema" in next_steps
-    assert "script or coding agent needs the route map with command hints" in (
+    assert "script or coding agent needs the full route map with command hints" in (
         normalized_next_steps
     )
     assert "audience labels" in normalized_next_steps

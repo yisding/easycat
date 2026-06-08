@@ -98,7 +98,8 @@ context. Each `catalog` row includes:
 (a `my-agent` preview sequence), `run_command`, `check_command`, and
 `fix_command`.
 Successful `easycat init NAME --json` also includes
-`next_step_commands`, an ordered copy/sync/doctor/check/docs/json-schema/run
+`next_step_commands`, an ordered
+copy/sync/doctor/check/fix/docs/app-builder-docs/docs-json/json-schema/run
 normal-path sequence from the human success footer, plus `fix_command` for
 Ruff-fixable lint findings.
 Bump `schema_version` when the accepted `--config` input shape changes;

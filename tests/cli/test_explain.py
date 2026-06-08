@@ -282,7 +282,8 @@ def test_explain_meta_init_schema(cli: CliRunner) -> None:
     assert "repository root" in stdout
     assert "post-scaffold command context" in stdout
     assert "`next_step_commands`" in result.stdout
-    assert "copy/sync/doctor/check/docs/json-schema/run" in stdout
+    init_sequence = "copy/sync/doctor/check/fix/docs/app-builder-docs/docs-json/json-schema/run"
+    assert init_sequence in stdout
     assert "`run_command`" in result.stdout
     assert "`check_command`" in result.stdout
     assert "`fix_command`" in result.stdout

@@ -416,6 +416,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat docs",
         "easycat docs --audience learners",
         "easycat docs --audience app-builders",
+        "easycat docs --audience app-builders --json",
         "easycat docs --json",
         "easycat docs --audience maintainers --json",
     ]
