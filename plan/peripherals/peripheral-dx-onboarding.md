@@ -128,8 +128,9 @@ Shipped:
   ≤180 instead of ≤205.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
   `session.end_turn()` lesson while using `async with create_session(config) as
-  session:` instead of explicit `session.start()` / `session.stop(...)`
-  lifecycle code.
+  session:` and `run_stdin_push_to_talk(...)` instead of carrying stdin
+  selector/thread plumbing in the example; the guarded visible-code budget is
+  now ≤35 instead of ≤90.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`

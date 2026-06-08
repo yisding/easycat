@@ -1482,11 +1482,14 @@ def test_push_to_talk_example_uses_scoped_lifecycle():
     path = REPO_ROOT / "examples/push_to_talk.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 90
+    assert _visible_code_line_count(path) <= 35
     assert "TurnMode.PUSH_TO_TALK" in source
-    assert "await session.start_turn()" in source
-    assert "await session.end_turn()" in source
+    assert "run_stdin_push_to_talk(session)" in source
+    assert "await session.start_turn()" not in source
+    assert "await session.end_turn()" not in source
     assert "async with create_session(config) as session:" in source
+    assert "threading.Thread" not in source
+    assert "loop.add_reader" not in source
     assert "await session.start()" not in source
     assert "await session.stop(" not in source
     assert "SessionConfig" not in source
