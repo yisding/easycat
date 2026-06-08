@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import signal
 import sys
 from typing import TYPE_CHECKING, Literal
 
+from easycat._signals import create_shutdown_event as _create_shutdown_event
+from easycat._signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
 from easycat.events import AgentFinal, BotStoppedSpeaking, Interruption, STTFinal, TurnStarted
 from easycat.session._session import Session
 
@@ -32,27 +33,9 @@ def require_env(name: str) -> str:
     return value
 
 
-def _install_shutdown_signal_handlers(
-    loop: asyncio.AbstractEventLoop, stop_event: asyncio.Event
-) -> bool:
-    """Wire SIGINT/SIGTERM to set ``stop_event``.
-
-    Returns ``True`` when at least one handler was installed.  On Windows
-    the default ``ProactorEventLoop`` raises ``NotImplementedError`` from
-    ``add_signal_handler``; we swallow it so callers can fall back to
-    ``KeyboardInterrupt``-driven shutdown instead of surfacing an
-    asyncio-internals traceback.
-    """
-    installed = False
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-            installed = True
-        except (NotImplementedError, RuntimeError, ValueError):
-            # NotImplementedError: ProactorEventLoop on Windows.
-            # RuntimeError/ValueError: handler set off the main thread.
-            pass
-    return installed
+def create_shutdown_event() -> asyncio.Event:
+    """Return an event set by SIGINT/SIGTERM when the event loop supports it."""
+    return _create_shutdown_event()
 
 
 async def wait_for_shutdown_signal(session: Session) -> None:

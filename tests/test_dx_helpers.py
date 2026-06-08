@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import re
@@ -89,6 +90,25 @@ def test_require_env_missing_value_gives_actionable_hint(monkeypatch: pytest.Mon
     assert "uv run easycat doctor" in message
     assert "uv run --env-file .env ..." in message
     assert "uv run easycat doctor --env-file .env" in message
+
+
+async def test_create_shutdown_event_wires_signal_handlers(monkeypatch: pytest.MonkeyPatch):
+    from easycat.helpers import create_shutdown_event
+
+    captured: dict[str, object] = {}
+
+    def install_shutdown(loop: asyncio.AbstractEventLoop, event: asyncio.Event) -> bool:
+        captured["loop"] = loop
+        captured["event"] = event
+        return True
+
+    monkeypatch.setattr("easycat._signals.install_shutdown_signal_handlers", install_shutdown)
+
+    event = create_shutdown_event()
+
+    assert isinstance(event, asyncio.Event)
+    assert captured["loop"] is asyncio.get_running_loop()
+    assert captured["event"] is event
 
 
 # ── Config factory presets ───────────────────────────────────────
@@ -302,6 +322,10 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/ws_supervisor_server.py" in status
     assert "serve_supervisor_websocket" in status
     assert "visible-code budget is now ≤140 instead of ≤265" in status
+    assert "examples/reconnecting_ws_client.py" in status
+    assert "`create_shutdown_event()`" in status
+    assert "`connect_until_stopped(...)`" in status
+    assert "visible-code budget is now ≤75 instead of ≤94" in status
     assert "examples/twilio_app.py" in status
     assert "reusable webhook request helpers" in normalized_status
     assert "visible-code budget is now ≤180 instead of ≤205" in normalized_status

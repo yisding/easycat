@@ -29,7 +29,6 @@ import asyncio
 import functools
 import json
 import logging
-import signal
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -45,6 +44,7 @@ from easycat import (
     create_session,
     require_env,
 )
+from easycat.helpers import create_shutdown_event
 from easycat.supervisor import (
     SUPERVISOR_TOKEN_ENV,
     serve_supervisor_websocket,
@@ -135,10 +135,7 @@ async def main() -> None:
     print(f"Supervisor WS: ws://localhost:{SUPERVISOR_WS_PORT}")
     print("Press Ctrl+C to stop.")
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
+    stop_event = create_shutdown_event()
 
     try:
         await stop_event.wait()

@@ -118,6 +118,10 @@ Shipped:
   listener draining, and audio-frame JSON serialization to
   `easycat.supervisor.serve_supervisor_websocket(...)`; the example's guarded
   visible-code budget is now ≤140 instead of ≤265.
+- `examples/reconnecting_ws_client.py` now keeps the custom WebSocket client
+  teaching path while reusing `create_shutdown_event()` and
+  `connect_until_stopped(...)` for signal and initial-retry cancellation; the
+  example's guarded visible-code budget is now ≤75 instead of ≤94.
 - `examples/twilio_app.py` now keeps the inbound/outbound call teaching path
   while delegating signed form parsing and stream caller metadata to reusable
   webhook request helpers; the example's guarded visible-code budget is now

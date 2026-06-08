@@ -33,9 +33,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import signal
 
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
+from easycat.helpers import create_shutdown_event
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket, connect_until_stopped
 
 URL = "ws://localhost:8765"
 SILENCE_FRAME_20MS_16KHZ = b"\x00" * 640  # 16-bit mono PCM, 20 ms at 16 kHz
@@ -62,34 +62,11 @@ async def main() -> None:
         on_give_up=on_give_up,
     )
 
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+    stop = create_shutdown_event()
 
     print(f"[client] connecting to {URL} (Ctrl+C to stop)")
-    # ``max_retries=-1`` means the initial ``connect()`` retries forever
-    # when the server is down.  Race it against ``stop`` so Ctrl-C
-    # cancels the attempt instead of hanging until a server appears.
-    connect_task = asyncio.create_task(ws.connect())
-    stop_task = asyncio.create_task(stop.wait())
-    try:
-        done, _ = await asyncio.wait(
-            {connect_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
-        )
-    finally:
-        if not stop_task.done():
-            stop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await stop_task
-    if connect_task not in done:
-        connect_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await connect_task
-        await ws.close()
+    if not await connect_until_stopped(ws, stop):
         return
-    # Surface connect errors (rather than silently proceeding).
-    connect_task.result()
 
     async def sender() -> None:
         while not stop.is_set():

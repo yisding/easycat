@@ -10,7 +10,7 @@ import websockets.exceptions
 import websockets.frames
 
 from easycat.events import EventBus, ReconnectAttempt, ReconnectFailure, ReconnectSuccess
-from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
+from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket, connect_until_stopped
 
 
 class FakeWSConnection:
@@ -84,6 +84,44 @@ class TestReconnectConfig:
     def test_max_delay_must_cover_base_delay(self):
         with pytest.raises(ValueError, match="max_delay"):
             ReconnectConfig(base_delay=10.0, max_delay=5.0)
+
+
+class _ConnectUntilStoppedClient:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.connected = False
+        self.closed = False
+
+    async def connect(self) -> None:
+        self.started.set()
+        await self.release.wait()
+        self.connected = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_connect_until_stopped_returns_true_when_connect_finishes() -> None:
+    client = _ConnectUntilStoppedClient()
+    client.release.set()
+
+    assert await connect_until_stopped(client, asyncio.Event()) is True  # type: ignore[arg-type]
+    assert client.connected
+    assert not client.closed
+
+
+async def test_connect_until_stopped_closes_when_stop_fires_first() -> None:
+    client = _ConnectUntilStoppedClient()
+    stop = asyncio.Event()
+
+    task = asyncio.create_task(connect_until_stopped(client, stop))  # type: ignore[arg-type]
+    await client.started.wait()
+    stop.set()
+
+    assert await task is False
+    assert not client.connected
+    assert client.closed
 
 
 class TestReconnectingWebSocket:

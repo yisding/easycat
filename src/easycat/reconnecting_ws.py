@@ -8,6 +8,7 @@ reconnect logic in EasyCat.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -58,6 +59,45 @@ class ReconnectConfig:
 def _validate_positive_number(name: str, value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
         raise ValueError(f"{name} must be > 0")
+
+
+async def connect_until_stopped(
+    ws: ReconnectingWebSocket,
+    stop_event: asyncio.Event,
+) -> bool:
+    """Connect a reconnecting socket unless shutdown is requested first.
+
+    This is the common wrapper for ``ReconnectConfig(max_retries=-1)`` clients:
+    the initial ``connect()`` can retry forever while the server is down, so
+    callers should race it against their shutdown event instead of making
+    Ctrl-C wait for a server to appear.
+
+    Returns:
+        ``True`` when the socket connected. ``False`` when *stop_event* fired
+        first; in that case the socket is closed before returning.
+    """
+    connect_task = asyncio.create_task(ws.connect())
+    stop_task = asyncio.create_task(stop_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {connect_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        if not stop_task.done():
+            stop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+
+    if connect_task not in done:
+        connect_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await connect_task
+        await ws.close()
+        return False
+
+    connect_task.result()
+    return True
 
 
 class ReconnectingWebSocket:

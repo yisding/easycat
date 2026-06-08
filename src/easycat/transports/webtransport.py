@@ -94,7 +94,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import signal
 import struct
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -102,6 +101,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat._audio_utils import resample_chunk
 from easycat._extras import require_module
+from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
@@ -1497,9 +1497,7 @@ async def serve_webtransport_config_sessions(
         )
         print("Press Ctrl+C to stop.\n")
 
-    event = stop_event or asyncio.Event()
-    if stop_event is None:
-        _install_shutdown_handlers(event)
+    event = stop_event or create_shutdown_event()
     try:
         await event.wait()
     finally:
@@ -1523,15 +1521,6 @@ def run_webtransport_config_server(
             announce=announce,
         )
     )
-
-
-def _install_shutdown_handlers(stop_event: asyncio.Event) -> None:
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass
 
 
 # ── Single-client convenience wrapper ─────────────────────────────

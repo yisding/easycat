@@ -1405,6 +1405,8 @@ def test_ws_supervisor_server_uses_manager_feedback_lifecycle() -> None:
     assert "SessionAudioBroadcaster(session)" in source
     assert "serve_supervisor_websocket(" in source
     assert "supervisor_auth_token_from_env()" in source
+    assert "create_shutdown_event()" in source
+    assert "add_signal_handler" not in source
     assert "json.loads(raw)" not in source
     assert "hmac.compare_digest" not in source
     assert "attach_runtime_feedback" not in source
@@ -1665,6 +1667,17 @@ def test_reconnecting_ws_client_example_imports():
     import examples.reconnecting_ws_client as reconnecting_ws_client
 
     assert callable(reconnecting_ws_client.main)
+
+
+def test_reconnecting_ws_client_uses_shared_shutdown_and_connect_helpers() -> None:
+    path = REPO_ROOT / "examples" / "reconnecting_ws_client.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 75
+    assert "create_shutdown_event()" in source
+    assert "connect_until_stopped(ws, stop)" in source
+    assert "add_signal_handler" not in source
+    assert "signal.SIGINT" not in source
 
 
 def test_telephony_helpers_example_imports():
