@@ -25,7 +25,6 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
-from urllib.parse import parse_qsl
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -45,8 +44,10 @@ from easycat import (
 )
 from easycat.telephony import (
     OutboundCallManager,
+    TwilioWebhookSignatureError,
     emit_call_status,
-    validate_twilio_webhook_signature,
+    twilio_form_items_from_request,
+    twilio_stream_parameters_from_form,
 )
 from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
 from easycat.transports.twilio_media import twiml_connect_stream
@@ -141,31 +142,14 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
 
     from fastapi import FastAPI, HTTPException, Request, Response
 
-    def public_twilio_url(request: Request) -> str:
-        # Twilio signs the exact public URL it requested. If this app is
-        # behind a trusted proxy, configure forwarded headers or adapt this
-        # reconstruction to your deployment's canonical external URL.
-        proto = request.headers.get("x-forwarded-proto")
-        host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-        if proto and host:
-            scheme = proto.split(",", 1)[0].strip()
-            public_host = host.split(",", 1)[0].strip()
-            suffix = request.url.path
-            if request.url.query:
-                suffix = f"{suffix}?{request.url.query}"
-            return f"{scheme}://{public_host}{suffix}"
-        return str(request.url)
-
     async def twilio_form(request: Request) -> list[tuple[str, str]]:
-        form_items = parse_qsl((await request.body()).decode(), keep_blank_values=True)
-        if twilio_auth_token and not validate_twilio_webhook_signature(
-            auth_token=twilio_auth_token,
-            url=public_twilio_url(request),
-            params=form_items,
-            signature=request.headers.get("x-twilio-signature"),
-        ):
-            raise HTTPException(status_code=403)
-        return form_items
+        try:
+            return await twilio_form_items_from_request(
+                request,
+                auth_token=twilio_auth_token or None,
+            )
+        except TwilioWebhookSignatureError:
+            raise HTTPException(status_code=403) from None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -184,22 +168,9 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
     @app.post("/twiml")
     async def twiml(request: Request) -> Response:
         form_items = await twilio_form(request)
-        form = dict(form_items)
-        parameters = {"Direction": form.get("Direction") or "inbound"}
-        for name in (
-            "From",
-            "To",
-            "CallerName",
-            "FromCity",
-            "FromState",
-            "FromZip",
-            "FromCountry",
-        ):
-            if form.get(name):
-                parameters[name] = form[name]
         xml = twiml_connect_stream(
             stream_url,
-            parameters=parameters,
+            parameters=twilio_stream_parameters_from_form(form_items),
             stream_token=stream_tokens.issue(),
         )
         return Response(content=xml, media_type="application/xml")

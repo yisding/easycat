@@ -302,6 +302,9 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "examples/ws_supervisor_server.py" in status
     assert "serve_supervisor_websocket" in status
     assert "visible-code budget is now ≤140 instead of ≤265" in status
+    assert "examples/twilio_app.py" in status
+    assert "reusable webhook request helpers" in normalized_status
+    assert "visible-code budget is now ≤180 instead of ≤205" in normalized_status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,

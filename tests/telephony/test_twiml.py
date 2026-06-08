@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from easycat.events import DTMF, EventBus
 from easycat.telephony import (
+    TwilioWebhookSignatureError,
     compute_twilio_webhook_signature,
+    twilio_form_items_from_request,
+    twilio_public_url_from_request,
+    twilio_stream_parameters_from_form,
     validate_twilio_webhook_signature,
 )
 from easycat.telephony.twiml import (
@@ -21,6 +27,26 @@ from easycat.telephony.twiml import (
 )
 
 
+class _FakeUrl:
+    def __init__(self, url: str, *, path: str, query: str = "") -> None:
+        self._url = url
+        self.path = path
+        self.query = query
+
+    def __str__(self) -> str:
+        return self._url
+
+
+class _FakeRequest:
+    def __init__(self, *, url: _FakeUrl, headers: dict[str, str], body: str) -> None:
+        self.url = url
+        self.headers = headers
+        self._body = body.encode("utf-8")
+
+    async def body(self) -> bytes:
+        return self._body
+
+
 def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
     signature = compute_twilio_webhook_signature(
         auth_token="token",
@@ -33,6 +59,98 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         params={"CallSid": "CA123", "From": "+15551234567"},
         signature=signature,
     )
+    assert twilio_stream_parameters_from_form({"From": "+15551234567"}) == {
+        "Direction": "inbound",
+        "From": "+15551234567",
+    }
+    assert issubclass(TwilioWebhookSignatureError, ValueError)
+
+
+def test_twilio_public_url_from_request_uses_framework_url_without_proxy() -> None:
+    request = _FakeRequest(
+        url=_FakeUrl("http://internal.example/twiml?x=1", path="/twiml", query="x=1"),
+        headers={"Host": "internal.example"},
+        body="",
+    )
+
+    assert twilio_public_url_from_request(request) == "http://internal.example/twiml?x=1"
+
+
+def test_twilio_public_url_from_request_honors_forwarded_proxy_headers() -> None:
+    request = _FakeRequest(
+        url=_FakeUrl("http://internal.example/twiml?x=1", path="/twiml", query="x=1"),
+        headers={
+            "Host": "internal.example",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "voice.example.com",
+        },
+        body="",
+    )
+
+    assert twilio_public_url_from_request(request) == "https://voice.example.com/twiml?x=1"
+
+
+async def test_twilio_form_items_from_request_preserves_blank_values() -> None:
+    request = _FakeRequest(
+        url=_FakeUrl("https://voice.example.com/twiml", path="/twiml"),
+        headers={},
+        body="CallSid=CA123&Empty=&From=%2B15551234567",
+    )
+
+    assert await twilio_form_items_from_request(request) == [
+        ("CallSid", "CA123"),
+        ("Empty", ""),
+        ("From", "+15551234567"),
+    ]
+
+
+async def test_twilio_form_items_from_request_validates_forwarded_signature() -> None:
+    params = [("CallSid", "CA123"), ("From", "+15551234567")]
+    signature = compute_twilio_webhook_signature(
+        auth_token="token",
+        url="https://voice.example.com/twiml?x=1",
+        params=params,
+    )
+    request = _FakeRequest(
+        url=_FakeUrl("http://internal.example/twiml?x=1", path="/twiml", query="x=1"),
+        headers={
+            "Host": "internal.example",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "voice.example.com",
+            "X-Twilio-Signature": signature,
+        },
+        body="CallSid=CA123&From=%2B15551234567",
+    )
+
+    assert await twilio_form_items_from_request(request, auth_token="token") == params
+
+
+async def test_twilio_form_items_from_request_rejects_bad_signature() -> None:
+    request = _FakeRequest(
+        url=_FakeUrl("https://voice.example.com/twiml", path="/twiml"),
+        headers={"X-Twilio-Signature": "bad"},
+        body="CallSid=CA123",
+    )
+
+    with pytest.raises(TwilioWebhookSignatureError):
+        await twilio_form_items_from_request(request, auth_token="token")
+
+
+def test_twilio_stream_parameters_from_form_defaults_and_copies_caller_fields() -> None:
+    assert twilio_stream_parameters_from_form({}) == {"Direction": "inbound"}
+    assert twilio_stream_parameters_from_form(
+        [
+            ("Direction", "outbound-api"),
+            ("From", "+15551234567"),
+            ("To", "+15557654321"),
+            ("CallerName", ""),
+            ("Ignored", "value"),
+        ]
+    ) == {
+        "Direction": "outbound-api",
+        "From": "+15551234567",
+        "To": "+15557654321",
+    }
 
 
 # ── Task 6.2: TwiML Gather webhook parsing ──────────────────────

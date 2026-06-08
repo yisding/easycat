@@ -8,6 +8,7 @@ import hmac
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
+from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape, quoteattr
 
 from easycat.events import DTMF, EventBus
@@ -43,6 +44,10 @@ def sanitize_dtmf_digits(digits: str) -> str:
 
 
 # ── Twilio webhook validation ────────────────────────────────────
+
+
+class TwilioWebhookSignatureError(ValueError):
+    """Raised when a Twilio webhook request fails signature validation."""
 
 
 def validate_twilio_webhook_signature(
@@ -143,6 +148,72 @@ def reconstruct_public_url(
     return f"{scheme}://{str(host).strip()}{path}"
 
 
+def twilio_public_url_from_request(request: Any) -> str:
+    """Return the public URL Twilio signed for a FastAPI/Starlette-like request.
+
+    The helper is intentionally duck-typed so telephony users can keep FastAPI
+    as an optional dependency.  When trusted proxy headers are present, it
+    mirrors the public scheme/host Twilio used; otherwise it falls back to the
+    request URL the framework exposes.
+    """
+    headers = getattr(request, "headers", {})
+    proto = _header_value(headers, "x-forwarded-proto")
+    host = _header_value(headers, "x-forwarded-host") or _header_value(headers, "host")
+    if proto and host:
+        scheme = proto.split(",", 1)[0].strip() or "https"
+        return reconstruct_public_url(
+            headers,
+            _request_path_with_query(request),
+            trust_proxy=True,
+            default_scheme=scheme,
+        )
+    return str(getattr(request, "url", ""))
+
+
+async def twilio_form_items_from_request(
+    request: Any,
+    *,
+    auth_token: str | None = None,
+) -> list[tuple[str, str]]:
+    """Parse a Twilio webhook form body and optionally validate its signature."""
+    body = await request.body()
+    if isinstance(body, str):
+        text = body
+    else:
+        text = bytes(body).decode("utf-8")
+    form_items = parse_qsl(text, keep_blank_values=True)
+
+    if auth_token and not validate_twilio_webhook_signature(
+        auth_token=auth_token,
+        url=twilio_public_url_from_request(request),
+        params=form_items,
+        signature=_header_value(getattr(request, "headers", {}), "x-twilio-signature"),
+    ):
+        raise TwilioWebhookSignatureError("Twilio webhook signature validation failed")
+
+    return form_items
+
+
+def twilio_stream_parameters_from_form(
+    form: Mapping[str, Any] | Sequence[tuple[str, Any]],
+) -> dict[str, str]:
+    """Build caller/call metadata parameters for ``twiml_connect_stream``."""
+    values = _form_values(form)
+    parameters = {"Direction": values.get("Direction") or "inbound"}
+    for name in (
+        "From",
+        "To",
+        "CallerName",
+        "FromCity",
+        "FromState",
+        "FromZip",
+        "FromCountry",
+    ):
+        if values.get(name):
+            parameters[name] = values[name]
+    return parameters
+
+
 def compute_twilio_webhook_signature(
     *,
     auth_token: str,
@@ -173,6 +244,45 @@ def _twilio_signature_values(
         else:
             values.append("" if value is None else str(value))
     return values_by_key
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        value = getter(name)
+        if value is None:
+            value = getter(name.lower())
+        if value is None:
+            value = getter("-".join(part.capitalize() for part in name.split("-")))
+        if value is not None:
+            return str(value)
+
+    items = getattr(headers, "items", None)
+    if callable(items):
+        lowered = name.lower()
+        for key, value in items():
+            if str(key).lower() == lowered:
+                return str(value)
+    return None
+
+
+def _request_path_with_query(request: Any) -> str:
+    url = getattr(request, "url", None)
+    path = str(getattr(url, "path", "/"))
+    query = getattr(url, "query", "")
+    if isinstance(query, bytes):
+        query = query.decode("utf-8")
+    if query:
+        return f"{path}?{query}"
+    return path
+
+
+def _form_values(form: Mapping[str, Any] | Sequence[tuple[str, Any]]) -> dict[str, str]:
+    source = form.items() if isinstance(form, Mapping) else form
+    values: dict[str, str] = {}
+    for key, value in source:
+        values[str(key)] = "" if value is None else str(value)
+    return values
 
 
 # ── TwiML Gather fallback ────────────────────────────────────────

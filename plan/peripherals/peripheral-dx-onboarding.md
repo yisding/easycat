@@ -118,6 +118,10 @@ Shipped:
   listener draining, and audio-frame JSON serialization to
   `easycat.supervisor.serve_supervisor_websocket(...)`; the example's guarded
   visible-code budget is now ≤140 instead of ≤265.
+- `examples/twilio_app.py` now keeps the inbound/outbound call teaching path
+  while delegating signed form parsing and stream caller metadata to reusable
+  webhook request helpers; the example's guarded visible-code budget is now
+  ≤180 instead of ≤205.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
   `session.end_turn()` lesson while using `async with create_session(config) as
   session:` instead of explicit `session.start()` / `session.stop(...)`

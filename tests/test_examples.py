@@ -1948,9 +1948,13 @@ def test_twilio_example_uses_manager_feedback_lifecycle():
     path = REPO_ROOT / "examples" / "twilio_app.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 205
+    assert _visible_code_line_count(path) <= 180
     assert "manager.connection(key, session, runtime_feedback=True)" in source
     assert "CallAnswered" in source
+    assert "twilio_form_items_from_request" in source
+    assert "twilio_stream_parameters_from_form" in source
+    assert "parse_qsl" not in source
+    assert "validate_twilio_webhook_signature" not in source
     assert "attach_runtime_feedback" not in source
 
 

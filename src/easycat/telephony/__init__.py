@@ -25,6 +25,10 @@ _LAZY_ATTR: dict[str, str] = {
     # TwiML helpers
     "compute_twilio_webhook_signature": "easycat.telephony.twiml",
     "parse_gather_webhook": "easycat.telephony.twiml",
+    "twilio_form_items_from_request": "easycat.telephony.twiml",
+    "twilio_public_url_from_request": "easycat.telephony.twiml",
+    "twilio_stream_parameters_from_form": "easycat.telephony.twiml",
+    "TwilioWebhookSignatureError": "easycat.telephony.twiml",
     "twiml_dial_number": "easycat.telephony.twiml",
     "twiml_dial_send_digits": "easycat.telephony.twiml",
     "twiml_gather": "easycat.telephony.twiml",
@@ -122,8 +126,12 @@ if TYPE_CHECKING:
         TwilioSessionActionExecutor,
     )
     from easycat.telephony.twiml import (
+        TwilioWebhookSignatureError,
         compute_twilio_webhook_signature,
         parse_gather_webhook,
+        twilio_form_items_from_request,
+        twilio_public_url_from_request,
+        twilio_stream_parameters_from_form,
         twiml_dial_number,
         twiml_dial_send_digits,
         twiml_gather,
