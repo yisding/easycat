@@ -68,6 +68,10 @@ Shipped:
   stop/shutdown lifecycle hook, so text-mode agent iteration can produce timestamped
   `RunBundle`s without switching to the audio pipeline (`config/easy.py`,
   `config/_factory.py`, `session/_session.py`).
+- `examples/pydantic_ai_workflow_voice.py` now uses the same slim workflow object
+  shape as the scaffold template: `on_user_turn(...)`, specialist routing state,
+  and `EasyConfig.mic(agent=...)`, without structured-output or usage-history
+  plumbing in the first reader-facing PydanticAI workflow example.
 - `run_websocket_config_server(...)` lets the canonical WebSocket server
   example hand back an `EasyConfig` from a per-connection transport instead of
   manually constructing `WebSocketConnectionTransport`, `create_session(...)`,

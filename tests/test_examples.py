@@ -1197,6 +1197,21 @@ def test_pydantic_ai_workflow_voice_example_imports(monkeypatch: pytest.MonkeyPa
     _load_slim_example(monkeypatch, "examples.pydantic_ai_workflow_voice", framework="pydantic_ai")
 
 
+def test_pydantic_ai_workflow_voice_example_stays_slim() -> None:
+    path = REPO_ROOT / "examples" / "pydantic_ai_workflow_voice.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 30
+    assert "class SupportWorkflow" in source
+    assert "async def on_user_turn" in source
+    assert "active_agent_id" in source
+    assert "EasyConfig.mic(agent=SupportWorkflow())" in source
+    assert "BaseModel" not in source
+    assert "RunUsage" not in source
+    assert "message_history=" not in source
+    assert "output_type=" not in source
+
+
 # ── Examples that still use ``def main()`` ──────────────────────────
 
 

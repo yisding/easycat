@@ -1,8 +1,8 @@
-"""Local voice bot driven by a PydanticAI workflow (programmatic hand-off).
+"""Local voice bot driven by a small PydanticAI workflow.
 
 The EasyCat integration point is the workflow object, not an individual
-PydanticAI agent. The workflow decides which specialist handles each
-turn and persists state across turns.
+PydanticAI agent. The workflow decides which specialist handles each turn
+and keeps that state across turns.
 
 Setup: export OPENAI_API_KEY=...; uv sync --extra quickstart --extra pydantic-ai --group dev
        uv run easycat doctor
@@ -12,11 +12,8 @@ Run:   uv run python examples/pydantic_ai_workflow_voice.py
        uv run --env-file .env python examples/pydantic_ai_workflow_voice.py  # if keys live in .env
 """
 
-from typing import Any
-
 try:
-    from pydantic import BaseModel
-    from pydantic_ai import Agent, RunUsage  # type: ignore[import-untyped]
+    from pydantic_ai import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
     raise SystemExit(
         "PydanticAI is required. For an app, run: "
@@ -26,81 +23,24 @@ except ImportError as exc:
 
 from easycat import EasyConfig, run
 
-
-class FlightDetails(BaseModel):
-    flight_number: str
+TECH_TERMS = ("audio", "browser", "setup", "install")
 
 
-class FlightSearchFailed(BaseModel):
-    reason: str
-
-
-class SeatChoice(BaseModel):
-    row: int
-    seat: str
-
-
-class FlightBookingWorkflow:
-    """Two-step workflow that persists the active specialist between turns."""
-
-    output_type = FlightDetails | FlightSearchFailed | SeatChoice  # type: ignore[assignment]
+class SupportWorkflow:
+    """Route each turn to a specialist while remembering the active lane."""
 
     def __init__(self, *, model_name: str = "openai:gpt-5.2") -> None:
-        self._usage = RunUsage()
-        self._search_history: list[Any] | None = None
-        self._seat_history: list[Any] | None = None
-        self.flight_details: FlightDetails | None = None
-        self.active_agent_id = "flight_search"
-        self.search_agent = Agent(
-            model_name,
-            output_type=FlightDetails | FlightSearchFailed,  # type: ignore[arg-type]
-            system_prompt=(
-                "You help users find flights. "
-                "Extract the best flight from the user's request. "
-                "Return FlightSearchFailed if essential trip details are missing."
-            ),
-        )
-        self.seat_agent = Agent(
-            model_name,
-            output_type=SeatChoice,
-            system_prompt=(
-                "You help users pick a seat after a flight has already been chosen. "
-                "Extract the row number and seat letter from the user's reply."
-            ),
-        )
+        self.active_agent_id = "billing"
+        self.billing = Agent(model_name, system_prompt="Help with invoices and plans.")
+        self.technical = Agent(model_name, system_prompt="Help with setup and audio.")
 
     async def on_user_turn(self, text: str) -> str:
-        if self.flight_details is None:
-            result = await self.search_agent.run(
-                text, message_history=self._search_history, usage=self._usage
-            )
-            self._search_history = result.new_messages()
-            output = result.output
-            if isinstance(output, FlightSearchFailed):
-                return (
-                    "I still need the route or date before I can search. "
-                    "Please say where you want to go and when."
-                )
-            self.flight_details = output
-            self.active_agent_id = "seat_selection"
-            return f"I found flight {output.flight_number}. What seat would you like?"
-
-        result = await self.seat_agent.run(
-            text, message_history=self._seat_history, usage=self._usage
-        )
-        self._seat_history = result.new_messages()
-        choice = result.output
-        assert self.flight_details is not None
-        return (
-            f"Got it. I saved seat {choice.row}{choice.seat} "
-            f"for flight {self.flight_details.flight_number}."
-        )
-
-    def clear_history(self) -> None:
-        self._search_history = None
-        self._seat_history = None
-        self.flight_details = None
-        self.active_agent_id = "flight_search"
+        if any(term in text.lower() for term in TECH_TERMS):
+            self.active_agent_id = "technical"
+        elif "invoice" in text.lower() or "plan" in text.lower():
+            self.active_agent_id = "billing"
+        agent = self.technical if self.active_agent_id == "technical" else self.billing
+        return str((await agent.run(text)).output)
 
 
-run(EasyConfig.mic(agent=FlightBookingWorkflow()))
+run(EasyConfig.mic(agent=SupportWorkflow()))

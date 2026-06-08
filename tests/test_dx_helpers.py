@@ -279,11 +279,15 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
         encoding="utf-8"
     )
     status = plan.split("## Status", 1)[1].split("Still remaining:", 1)[0]
+    normalized_status = " ".join(status.split())
     line_refs = re.findall(r"`?[\w./-]+\.py:\d+(?:-\d+)?`?", status)
 
     assert not line_refs, "DX onboarding status uses brittle source line refs: " + ", ".join(
         line_refs
     )
+    assert "examples/pydantic_ai_workflow_voice.py" in status
+    assert "same slim workflow object" in status
+    assert "without structured-output or usage-history plumbing" in normalized_status
     symbol_refs = {
         "src/easycat/helpers.py::run": helpers_run,
         "src/easycat/runtime/records.py::ErrorInfo.from_exception": ErrorInfo.from_exception,
