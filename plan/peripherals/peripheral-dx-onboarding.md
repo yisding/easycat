@@ -105,6 +105,10 @@ Shipped:
   transport setup and URL guidance while using `run_session(session)` instead
   of manual feedback attachment, signal waiting, `session.start()`, and
   `asyncio.run(...)`.
+- `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
+  `session.end_turn()` lesson while using `async with create_session(config) as
+  session:` instead of explicit `session.start()` / `session.stop(...)`
+  lifecycle code.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -126,8 +130,9 @@ Still remaining:
   uses the scoped `async with create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
   direct-session subscription/debugger and browser-transport examples use
-  `run_session(session)`; scaffold debug guidance points all generated-project
-  users at `record_to=`.
+  `run_session(session)`; the push-to-talk example keeps manual turn control
+  while using the scoped session lifecycle; scaffold debug guidance points all
+  generated-project users at `record_to=`.
   Broader raw line-count shrinkage remains open in non-canonical server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +

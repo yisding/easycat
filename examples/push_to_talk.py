@@ -116,16 +116,13 @@ async def main() -> None:
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
         agent=agent,
     )
-    session = create_session(config)
-    attach_runtime_feedback(session)
 
-    await session.start()
-    try:
-        await _stdin_loop(session)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await session.stop(force=True)
+    async with create_session(config) as session:
+        attach_runtime_feedback(session)
+        try:
+            await _stdin_loop(session)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
 
 if __name__ == "__main__":
