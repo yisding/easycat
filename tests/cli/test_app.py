@@ -418,8 +418,11 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat docs --audience learners --json",
         "easycat docs --audience app-builders",
         "easycat docs --audience app-builders --json",
-        "easycat docs --json",
+        "easycat docs --audience operators",
+        "easycat docs --audience operators --json",
+        "easycat docs --audience maintainers",
         "easycat docs --audience maintainers --json",
+        "easycat docs --json",
     ]
     assert commands["README.md#choose-your-path"] == [
         "uv sync --extra quickstart --group dev",

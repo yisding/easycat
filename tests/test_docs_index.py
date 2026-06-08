@@ -142,7 +142,11 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat docs --audience learners" in text
     assert "uv run easycat docs --audience learners --json" in text
     assert "uv run easycat docs --json" in text
+    assert "uv run easycat docs --audience app-builders" in text
     assert "uv run easycat docs --audience app-builders --json" in text
+    assert "uv run easycat docs --audience operators" in text
+    assert "uv run easycat docs --audience operators --json" in text
+    assert "uv run easycat docs --audience maintainers" in text
     assert "uv run easycat docs --audience maintainers --json" in text
     assert "repository path chooser" in normalized
     assert "installed app environment" in text

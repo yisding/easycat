@@ -310,8 +310,11 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat docs --audience learners --json",
             "easycat docs --audience app-builders",
             "easycat docs --audience app-builders --json",
-            "easycat docs --json",
+            "easycat docs --audience operators",
+            "easycat docs --audience operators --json",
+            "easycat docs --audience maintainers",
             "easycat docs --audience maintainers --json",
+            "easycat docs --json",
         ),
     },
     {

@@ -11,8 +11,13 @@ running them. Use
 `uv run easycat docs --audience learners` to narrow the human map,
 `uv run easycat docs --audience learners --json` when automation needs only
 learner-facing route entries, or
+`uv run easycat docs --audience app-builders` for scaffold/app-building routes,
 `uv run easycat docs --audience app-builders --json` when automation needs only
 app-builder route entries, or
+`uv run easycat docs --audience operators` for deployment/observability routes,
+`uv run easycat docs --audience operators --json` when automation needs only
+operator-facing route entries, or
+`uv run easycat docs --audience maintainers` for architecture/maintenance routes,
 `uv run easycat docs --audience maintainers --json` when automation needs only
 maintainer-facing route entries. The human docs menu also prints the available
 audience labels so readers can choose a narrower route map without switching
