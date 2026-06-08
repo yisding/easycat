@@ -25,24 +25,20 @@ import asyncio
 
 from easycat import (
     EasyConfig,
-    LocalTransportConfig,
     TurnManagerConfig,
     TurnMode,
     attach_runtime_feedback,
     create_session,
-    require_env,
 )
 from easycat.push_to_talk import run_stdin_push_to_talk
 
 
 async def main() -> None:
-    require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
     agent = Agent(name="assistant", instructions="You are a helpful voice assistant.")
 
-    config = EasyConfig(
-        transport=LocalTransportConfig(),
+    config = EasyConfig.mic(
         turn_taking=TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK),
         agent=agent,
     )

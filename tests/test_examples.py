@@ -1488,8 +1488,11 @@ def test_push_to_talk_example_uses_scoped_lifecycle():
     path = REPO_ROOT / "examples/push_to_talk.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 35
+    assert _visible_code_line_count(path) <= 33
     assert "TurnMode.PUSH_TO_TALK" in source
+    assert "EasyConfig.mic(" in source
+    assert "LocalTransportConfig" not in source
+    assert "require_env" not in source
     assert "run_stdin_push_to_talk(session)" in source
     assert "await session.start_turn()" not in source
     assert "await session.end_turn()" not in source
@@ -1768,6 +1771,7 @@ _REQUIRES_AGENTS = frozenset(
         "examples/noise_reduction_backends.py",
         "examples/echo_cancellation.py",
         "examples/session_actions_openai.py",
+        "examples/push_to_talk.py",
         "examples/journal_ui.py",
         "examples/debug_bundle.py",
         "examples/webrtc_observability_server.py",

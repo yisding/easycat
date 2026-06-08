@@ -140,10 +140,12 @@ Shipped:
   `twilio_app_settings_from_env(...)`; the example's guarded visible-code
   budget is now ≤150 instead of ≤205.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
-  `session.end_turn()` lesson while using `async with create_session(config) as
-  session:` and `run_stdin_push_to_talk(...)` instead of carrying stdin
-  selector/thread plumbing in the example; the guarded visible-code budget is
-  now ≤35 instead of ≤90.
+  `session.end_turn()` lesson while using
+  `EasyConfig.mic(turn_taking=...)`, `async with create_session(config) as
+  session:`, and `run_stdin_push_to_talk(...)` instead of carrying duplicate
+  key preflight, explicit local transport setup, or stdin selector/thread
+  plumbing in the example; the guarded visible-code budget is now ≤33 instead
+  of ≤90.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
