@@ -35,6 +35,7 @@ from easycat.events import (
 from easycat.runtime.context import RunContext
 from easycat.session._audio_router import AudioRouter
 from easycat.session._cancel_orchestrator import CancelOrchestrator
+from easycat.session._cost_budget import CostBudgetEnforcer
 from easycat.session._greeting import GreetingController
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._opt_out import OptOutPolicy
@@ -71,6 +72,7 @@ class SessionComponents:
     run_ctx: RunContext
     no_turn: TurnContext
     journal_sink: SessionJournalSink
+    cost_budget: CostBudgetEnforcer
     outbound_queue: BoundedAudioQueue
 
     stt_stage: STTStage
@@ -120,8 +122,16 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
         max_session_cost_usd=cfg.max_session_cost_usd,
-        on_cost_budget_exceeded=session._on_cost_budget_exceeded,
     )
+    cost_budget = CostBudgetEnforcer(
+        session_id=session.session_id,
+        runtime_scope=session._runtime_scope,
+        journal_sink=journal_sink,
+        stop_session=session.stop,
+        is_closed=lambda: session._closed,
+        is_stopping=lambda: session._stopping,
+    )
+    journal_sink.on_cost_budget_exceeded = cost_budget.on_exceeded
     journal_sink.subscribe()
 
     # Outbound (played-back) audio queue.  Shared between the TTS
@@ -309,6 +319,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         run_ctx=run_ctx,
         no_turn=no_turn,
         journal_sink=journal_sink,
+        cost_budget=cost_budget,
         outbound_queue=outbound_queue,
         stt_stage=stt_stage,
         tts_stage=tts_stage,

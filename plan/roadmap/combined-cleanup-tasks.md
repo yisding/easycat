@@ -21,7 +21,7 @@ stale, or not worth doing as written are called out at the end.
 
 Some important April findings have since changed:
 
-- `src/easycat/session/_session.py` is now roughly 1,489 lines, not 2,961.
+- `src/easycat/session/_session.py` is now roughly 1,434 lines, not 2,961.
   Session decomposition collaborators exist for audio routing, STT commits,
   TTS scheduling, cancellation, turn running, and journal sinking.
 - `src/easycat/__init__.py` is now 159 lines, not 578.
