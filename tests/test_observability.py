@@ -467,6 +467,7 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
         '`LatencyBudget(stage="tts", max_ms=500)`',
         "`latency_budget_exceeded`",
         "`max_session_cost_usd` budget status from cost records",
+        "`easycat.runtime.cost_budget_status(...)`",
         (
             "Provider cost-record emission, aggregate turn budgets, runtime cost alerts, "
             "and warmup execution are still planned"

@@ -108,8 +108,10 @@ because audio tokens are expensive.
 Current partial landing: the debugger `/api/cost` rollup reads
 `max_session_cost_usd` from the safe config snapshot and reports
 `ok` / `warning` / `exceeded` status when `cost` / `cost_record` journal
-entries exist. Runtime provider pricing, warning journal records, and the
-optional kill switch remain planned.
+entries exist. The shared budget-status parser now lives in
+`easycat.runtime.cost_budget_status(...)` so the debugger and future runtime
+alerts use the same thresholds. Runtime provider pricing, warning journal
+records, and the optional kill switch remain planned.
 
 ## OTel Export
 

@@ -318,6 +318,7 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "Advanced observability knobs are now config-addressable" in status
     assert "`ObservabilityConfig` carries" in status
     assert "`latency_budget_exceeded`" in status
+    assert "`easycat.runtime.cost_budget_status(...)`" in status
     assert "structured" in status
     assert "examples/ws_supervisor_server.py" in status
     assert "serve_supervisor_websocket" in status

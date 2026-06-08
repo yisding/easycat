@@ -10,8 +10,8 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 183 tracked Python files.
-- `tests/` contains 203 tracked `test_*.py` files.
+- `src/easycat/` contains 184 tracked Python files.
+- `tests/` contains 204 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick

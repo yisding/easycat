@@ -153,7 +153,8 @@ Shipped:
 - `max_session_cost_usd=` now reaches the debugger cost rollup through safe
   config snapshots. When `cost` / `cost_record` journal entries exist,
   `/api/cost` reports `ok` / `warning` / `exceeded` budget status alongside
-  per-turn and total spend.
+  per-turn and total spend using the shared
+  `easycat.runtime.cost_budget_status(...)` helper.
 
 Still remaining:
 

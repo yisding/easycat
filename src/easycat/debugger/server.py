@@ -24,13 +24,11 @@ Routes:
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import contextlib
 import io
 import json
 import logging
-import math
 import re
 import struct
 import threading
@@ -43,6 +41,11 @@ from typing import Any
 
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
+from easycat.runtime.costs import (
+    cost_budget_status,
+    finite_number,
+    max_session_cost_usd_from_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -745,67 +748,6 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return transcripts
 
 
-_COST_WARNING_FRACTION = 0.8
-
-
-def _finite_number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    return number if math.isfinite(number) else None
-
-
-def _max_session_cost_usd(config_snapshot: dict[str, Any] | None) -> float | None:
-    if not isinstance(config_snapshot, dict):
-        return None
-    raw = config_snapshot.get("max_session_cost_usd")
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        try:
-            raw = ast.literal_eval(raw)
-        except (SyntaxError, ValueError):
-            try:
-                raw = float(raw)
-            except ValueError:
-                return None
-    limit = _finite_number(raw)
-    if limit is None or limit <= 0:
-        return None
-    return limit
-
-
-def _cost_budget_status(total_usd: float, limit_usd: float | None) -> dict[str, Any]:
-    if limit_usd is None:
-        return {
-            "configured": False,
-            "max_session_cost_usd": None,
-            "warning_threshold_usd": None,
-            "usage_fraction": None,
-            "remaining_usd": None,
-            "overage_usd": None,
-            "status": "unconfigured",
-            "warning": False,
-            "exceeded": False,
-        }
-
-    usage_fraction = total_usd / limit_usd
-    exceeded = total_usd >= limit_usd
-    warning = usage_fraction >= _COST_WARNING_FRACTION
-    status = "exceeded" if exceeded else "warning" if warning else "ok"
-    return {
-        "configured": True,
-        "max_session_cost_usd": limit_usd,
-        "warning_threshold_usd": limit_usd * _COST_WARNING_FRACTION,
-        "usage_fraction": usage_fraction,
-        "remaining_usd": max(0.0, limit_usd - total_usd),
-        "overage_usd": max(0.0, total_usd - limit_usd),
-        "status": status,
-        "warning": warning,
-        "exceeded": exceeded,
-    }
-
-
 def _cost_rollup(
     records: list[dict[str, Any]],
     *,
@@ -831,14 +773,14 @@ def _cost_rollup(
             turn_id, {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
         )
         for key in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            value = _finite_number(data.get(key))
+            value = finite_number(data.get(key))
             if value is None:
                 continue
             bucket[key] += value
             totals[key] += value
-    budget = _cost_budget_status(
+    budget = cost_budget_status(
         totals["usd"],
-        _max_session_cost_usd(config_snapshot),
+        max_session_cost_usd_from_snapshot(config_snapshot),
     )
     return {"per_turn": by_turn, "totals": totals, "budget": budget}
 

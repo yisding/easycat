@@ -5,6 +5,12 @@ from easycat.runtime.artifacts import (
     FilesystemArtifactStore,
     InMemoryArtifactStore,
 )
+from easycat.runtime.costs import (
+    COST_WARNING_FRACTION,
+    cost_budget_status,
+    finite_number,
+    max_session_cost_usd_from_snapshot,
+)
 from easycat.runtime.journal import (
     ExecutionJournal,
     InMemoryRingBuffer,
@@ -22,6 +28,7 @@ from easycat.runtime.scope import RuntimeScope
 
 __all__ = [
     "ArtifactStore",
+    "COST_WARNING_FRACTION",
     "ErrorInfo",
     "ExecutionJournal",
     "FilesystemArtifactStore",
@@ -33,5 +40,8 @@ __all__ = [
     "RuntimeScope",
     "SqliteJournal",
     "TimingInfo",
+    "cost_budget_status",
     "create_journal",
+    "finite_number",
+    "max_session_cost_usd_from_snapshot",
 ]

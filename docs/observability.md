@@ -195,7 +195,8 @@ There are three independent knobs, and they control different things:
   debug-bundle config snapshots. Budgets whose `stage` matches a runtime stage
   name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
   stage records with `latency_budget_exceeded`; the debugger cost rollup reports
-  `max_session_cost_usd` budget status from cost records. Provider cost-record
+  `max_session_cost_usd` budget status from cost records using the shared
+  `easycat.runtime.cost_budget_status(...)` helper. Provider cost-record
   emission, aggregate turn budgets, runtime cost alerts, and warmup execution
   are still planned.
 
