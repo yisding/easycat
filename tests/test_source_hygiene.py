@@ -5,6 +5,8 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+from tests._release_artifacts import REQUIRED_BUILD_SOURCE_EXCLUDES
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPO_ROOT / "src" / "easycat"
 PLANNING_LABEL_RE = re.compile(r"\b(?:WS\d+[A-Z]?|AC\d+(?:\.\d+)?|T\d+(?:\.\d+)?)\b|workstream-")
@@ -70,63 +72,7 @@ def test_build_source_excludes_local_generated_state() -> None:
     """Keep release source selection aligned with ignored local/generated artifacts."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     excludes = set(pyproject["tool"]["uv"]["build-backend"]["source-exclude"])
-    required = {
-        "__pycache__",
-        "*.pyc",
-        "*.pyo",
-        "*.key",
-        "*.pem",
-        "*.egg-info",
-        "*.egg-info/**",
-        ".agents",
-        ".agents/**",
-        ".claude",
-        ".claude/**",
-        ".codex",
-        ".codex/**",
-        ".coverage",
-        ".coverage.*",
-        ".easycat",
-        ".easycat/**",
-        ".git",
-        ".git/**",
-        ".github",
-        ".github/**",
-        ".hypothesis",
-        ".hypothesis/**",
-        ".mypy_cache",
-        ".mypy_cache/**",
-        ".mutmut-cache",
-        ".mutmut-cache/**",
-        ".pipecat-bench",
-        ".pipecat-bench/**",
-        ".pytest_cache",
-        ".pytest_cache/**",
-        ".ruff_cache",
-        ".ruff_cache/**",
-        ".uv-cache",
-        ".uv-cache/**",
-        ".venv",
-        ".venv/**",
-        "build",
-        "build/**",
-        "coverage.xml",
-        "dist",
-        "dist/**",
-        "docs",
-        "docs/**",
-        "htmlcov",
-        "htmlcov/**",
-        "mutants",
-        "mutants/**",
-        "plan",
-        "plan/**",
-        "site",
-        "site/**",
-        "tests",
-        "tests/**",
-    }
-    missing = sorted(required - excludes)
+    missing = sorted(REQUIRED_BUILD_SOURCE_EXCLUDES - excludes)
 
     assert not missing, "pyproject source-exclude missing release hygiene patterns: " + ", ".join(
         missing

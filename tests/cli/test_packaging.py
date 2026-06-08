@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._release_artifacts import release_artifact_offenders
+
 pytestmark = pytest.mark.integration_local
 
 
@@ -46,34 +48,6 @@ _EXPECTED_FILES: tuple[str, ...] = (
     ".env.example",
     ".gitignore",
 )
-_FORBIDDEN_RELEASE_ARTIFACT_PARTS = {
-    ".easycat",
-    ".coverage",
-    ".agents",
-    ".claude",
-    ".codex",
-    ".git",
-    ".github",
-    ".hypothesis",
-    ".mypy_cache",
-    ".mutmut-cache",
-    ".pipecat-bench",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".uv-cache",
-    ".venv",
-    "__pycache__",
-    "build",
-    "coverage.xml",
-    "dist",
-    "docs",
-    "htmlcov",
-    "mutants",
-    "plan",
-    "site",
-    "tests",
-}
-_FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES = (".key", ".pem", ".pyc", ".pyo")
 
 
 @pytest.fixture(scope="module")
@@ -134,19 +108,6 @@ def _wheel_metadata(wheel_path: Path) -> Message:
             name for name in zf.namelist() if name.endswith(".dist-info/METADATA")
         )
         return email.message_from_bytes(zf.read(metadata_name))
-
-
-def _release_artifact_offenders(members: list[str]) -> list[str]:
-    offenders = []
-    for member in members:
-        parts = set(Path(member).parts)
-        if (
-            parts & _FORBIDDEN_RELEASE_ARTIFACT_PARTS
-            or member.endswith(_FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES)
-            or any(part.endswith(".egg-info") for part in parts)
-        ):
-            offenders.append(member)
-    return offenders
 
 
 @pytest.mark.parametrize("template", _EXPECTED_TEMPLATES)
@@ -214,7 +175,7 @@ def test_wheel_metadata_is_useful_for_package_indexes(built_wheel: Path) -> None
 def test_wheel_does_not_ship_local_generated_or_secret_artifacts(built_wheel: Path) -> None:
     """Ignored local artifacts under ``src/`` must not leak into release wheels."""
     members = _wheel_members(built_wheel)
-    offenders = _release_artifact_offenders(members)
+    offenders = release_artifact_offenders(members)
 
     assert not offenders, "wheel should not ship cache/workspace/generated/secret artifacts: " + (
         ", ".join(offenders)
@@ -224,7 +185,7 @@ def test_wheel_does_not_ship_local_generated_or_secret_artifacts(built_wheel: Pa
 def test_sdist_does_not_ship_local_generated_or_secret_artifacts(built_sdist: Path) -> None:
     """Ignored local artifacts must not leak into source distributions."""
     members = _sdist_members(built_sdist)
-    offenders = _release_artifact_offenders(members)
+    offenders = release_artifact_offenders(members)
 
     assert not offenders, "sdist should not ship cache/workspace/generated/secret artifacts: " + (
         ", ".join(offenders)
