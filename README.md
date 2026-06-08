@@ -163,8 +163,8 @@ as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
 `next_step_commands`, `pyproject_name`, `run_command`, `check_command`,
 `fix_command`, `environment`, `checks`, `validation`, `source_path`, and
 `fidelity_effective`, and error fields such as `report_path`, `path`, and
-`output_path`. Replace uppercase placeholders in command hints, such as `PATH`,
-and angle-bracket placeholders such as `<session_id>`, before running them.
+`output_path`. Replace uppercase or angle-bracket placeholders in command
+hints, such as `PATH` or `<session_id>`, before running them.
 
 ## Validation Workflow
 

@@ -68,7 +68,7 @@ If Ruff reports an auto-fixable issue, run
   agent needs the route map with command hints and audience labels. If this is
   not the right starter, run `uv run easycat init --list-templates`; use
   `uv run easycat init --list-templates --json` when automation needs the
-  template catalog. Replace uppercase placeholders such as `PATH` before
-  running those hints. Run
+  template catalog. Replace uppercase or angle-bracket placeholders such as
+  `PATH` or `<session_id>` before running those hints. Run
   `uv run easycat explain json-schema` for the JSON envelope and field
   contract.

@@ -766,9 +766,10 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert "right starter" in normalized_next_steps
     assert "automation needs the template catalog" in normalized_next_steps
     assert "JSON envelope and field contract" in normalized_next_steps
-    assert "Replace uppercase placeholders such as `PATH` before running those hints" in (
-        normalized_next_steps
-    )
+    assert (
+        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
+        "before running those hints"
+    ) in normalized_next_steps
 
 
 @pytest.mark.parametrize("name", sorted(_VOICE_TEMPLATE_PRESETS))

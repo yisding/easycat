@@ -582,7 +582,10 @@ def test_readme_cli_explain_examples_are_copyable() -> None:
     )
     assert "`fix_command`, `environment`, `checks`, `validation`" in normalized_readme
     assert "`source_path`, and `fidelity_effective`" in normalized_readme
-    assert "Replace uppercase placeholders in command hints, such as `PATH`" in normalized_readme
+    assert (
+        "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
+        "or `<session_id>`"
+    ) in normalized_readme
 
 
 def test_readme_cli_command_examples_are_locally_valid() -> None:

@@ -111,9 +111,10 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "narrow that map to learner-facing routes" in normalized
     assert "script or coding agent needs the same route map with command hints" in normalized
     assert "audience labels" in normalized
-    assert "replace uppercase placeholders such as `PATH` before running those hints" in (
-        normalized
-    )
+    assert (
+        "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
+        "before running those hints"
+    ) in normalized
     assert "uv run easycat explain json-schema" in readme
     assert "JSON envelope and field contract" in normalized
     assert "uv run easycat doctor" in readme
@@ -413,9 +414,10 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "same route map with command hints" in normalized_cli_section
     assert "audience labels" in normalized_cli_section
     assert "architecture and maintenance guides" in normalized_cli_section
-    assert "replace uppercase placeholders such as `PATH` before running those hints" in (
-        normalized_cli_section
-    )
+    assert (
+        "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
+        "before running those hints"
+    ) in normalized_cli_section
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat doctor --json`" in cli_section
     assert "script or coding agent needs parseable first-run environment checks" in (

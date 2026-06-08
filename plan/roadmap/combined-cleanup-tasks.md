@@ -156,6 +156,8 @@ context. Several bullets are known stale; use the current-state list above and
   RNNoise dependencies, NumPy, and ONNX Runtime, but not `ten-vad`.
 - Ensure teaching docs and README consistently describe the current
   ZIP/NDJSON bundle format.
+- Done: command-hint placeholder guidance is aligned across the root README,
+  docs index, examples, teaching ladder, and scaffold template READMEs.
 - Add tests for README snippets or at least a smoke job for the documented
   first-success path.
 

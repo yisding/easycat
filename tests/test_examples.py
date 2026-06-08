@@ -550,9 +550,10 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run easycat docs --json" in intro
     assert "maintained docs map" in intro
     assert "script or coding agent needs the same route map with command hints" in normalized_intro
-    assert "Replace uppercase placeholders such as `PATH` before running those hints" in (
-        normalized_intro
-    )
+    assert (
+        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
+        "before running those hints"
+    ) in normalized_intro
     assert "uv run easycat explain json-schema" in intro
     assert "JSON envelope and field contract" in normalized_intro
     assert "uv run easycat doctor --json" in intro

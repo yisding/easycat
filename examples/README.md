@@ -6,8 +6,8 @@ below names what the example teaches, the command to run, the extras or
 third-party packages it expects, and the environment variables that must be set.
 Run `uv run easycat docs` for the maintained docs map; use
 `uv run easycat docs --json` when a script or coding agent needs the same route
-map with command hints and audience labels. Replace uppercase placeholders such
-as `PATH` before running those hints. Use
+map with command hints and audience labels. Replace uppercase or angle-bracket
+placeholders such as `PATH` or `<session_id>` before running those hints. Use
 `uv run easycat explain json-schema` for the JSON envelope and field contract.
 Use `uv run easycat doctor --json` when a script or coding agent needs
 parseable first-run environment checks; use
