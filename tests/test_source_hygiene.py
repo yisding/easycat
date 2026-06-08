@@ -66,6 +66,73 @@ def test_gitignore_covers_local_generated_state() -> None:
         assert pattern in patterns
 
 
+def test_build_source_excludes_local_generated_state() -> None:
+    """Keep release source selection aligned with ignored local/generated artifacts."""
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    excludes = set(pyproject["tool"]["uv"]["build-backend"]["source-exclude"])
+    required = {
+        "__pycache__",
+        "*.pyc",
+        "*.pyo",
+        "*.key",
+        "*.pem",
+        "*.egg-info",
+        "*.egg-info/**",
+        ".agents",
+        ".agents/**",
+        ".claude",
+        ".claude/**",
+        ".codex",
+        ".codex/**",
+        ".coverage",
+        ".coverage.*",
+        ".easycat",
+        ".easycat/**",
+        ".git",
+        ".git/**",
+        ".github",
+        ".github/**",
+        ".hypothesis",
+        ".hypothesis/**",
+        ".mypy_cache",
+        ".mypy_cache/**",
+        ".mutmut-cache",
+        ".mutmut-cache/**",
+        ".pipecat-bench",
+        ".pipecat-bench/**",
+        ".pytest_cache",
+        ".pytest_cache/**",
+        ".ruff_cache",
+        ".ruff_cache/**",
+        ".uv-cache",
+        ".uv-cache/**",
+        ".venv",
+        ".venv/**",
+        "build",
+        "build/**",
+        "coverage.xml",
+        "dist",
+        "dist/**",
+        "docs",
+        "docs/**",
+        "htmlcov",
+        "htmlcov/**",
+        "mutants",
+        "mutants/**",
+        "plan",
+        "plan/**",
+        "site",
+        "site/**",
+        "tests",
+        "tests/**",
+    }
+    missing = sorted(required - excludes)
+
+    assert not missing, "pyproject source-exclude missing release hygiene patterns: " + ", ".join(
+        missing
+    )
+
+
 def test_library_source_does_not_reference_internal_planning_labels() -> None:
     """Keep maintainer-facing source comments tied to behavior, not old plans."""
     stale: list[str] = []
