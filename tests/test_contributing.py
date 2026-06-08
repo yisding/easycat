@@ -153,11 +153,13 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in quick_start
     assert "uv run easycat docs --audience contributors" in quick_start
+    assert "uv run easycat docs --audience contributors --json" in quick_start
     assert "uv run easycat docs --json" in quick_start
     assert "uv run easycat explain json-schema" in quick_start
     assert "maintained reader-facing map" in quick_start
     assert "narrow the map to contributor-facing routes" in normalized
-    assert "script or coding agent needs the same route map with command hints" in normalized
+    assert "automation needs that smaller route map" in normalized
+    assert "script or coding agent needs the full route map with command hints" in normalized
     assert (
         "replace uppercase or angle-bracket placeholders such as `PATH` or "
         "`<session_id>` before running those hints"

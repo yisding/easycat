@@ -5,7 +5,9 @@ container.  Silero VAD and Smart-Turn ONNX models ship inside
 `src/easycat/models/`, so they are embedded in the image — nothing is
 fetched at first-request time besides the calls to OpenAI.
 From this repository, run `uv run easycat docs --audience operators` for the
-operator-facing route slice covering deployment, observability, and journal durability.
+operator-facing route slice covering deployment, observability, and journal
+durability. Use `uv run easycat docs --audience operators --json` when
+automation needs that same operator map with command hints.
 
 ## Quickstart
 

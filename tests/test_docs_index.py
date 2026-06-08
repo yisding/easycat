@@ -654,6 +654,7 @@ def test_deployment_docs_route_matches_docker_commands() -> None:
 
     for command in (
         "uv run easycat docs --audience operators",
+        "uv run easycat docs --audience operators --json",
         "docker compose -f docker/compose.yaml up --build",
         "python -m http.server 8080 --directory examples",
         "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
@@ -676,6 +677,8 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
 
     assert "uv run easycat docs --audience operators" in observability
     assert "uv run easycat docs --audience operators" in route_commands
+    assert "uv run easycat docs --audience operators --json" in observability
+    assert "uv run easycat docs --audience operators --json" in route_commands
     for command in (
         "easycat bundles list",
         "easycat bundles list --json",
@@ -806,6 +809,8 @@ def test_contributing_docs_route_matches_validation_lane_commands() -> None:
 
     assert "uv run easycat docs --audience contributors" in quick_start
     assert "uv run easycat docs --audience contributors" in route_commands
+    assert "uv run easycat docs --audience contributors --json" in quick_start
+    assert "uv run easycat docs --audience contributors --json" in route_commands
 
     assert guard_commands
     assert validation_commands

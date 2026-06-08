@@ -489,6 +489,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         *_DOCS_ONBOARDING_GUARD_COMMANDS,
         *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
         "uv run easycat docs --audience contributors",
+        "uv run easycat docs --audience contributors --json",
         "uv run pytest",
         "uv run ruff check .",
         "uv run easycat validate quick",

@@ -7,7 +7,9 @@ accidentally couple your application logic to a diagnostic sink.
 
 This guide is the "which layer do I use when" map.
 From this repository, run `uv run easycat docs --audience operators` to see
-the full operator-facing route slice, including deployment, observability, and journal durability.
+the full operator-facing route slice, including deployment, observability, and
+journal durability. Use `uv run easycat docs --audience operators --json` when
+automation needs that same operator map with command hints.
 
 ## The four layers
 

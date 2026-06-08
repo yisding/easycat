@@ -462,6 +462,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat docs --audience contributors",
+            "uv run easycat docs --audience contributors --json",
             "uv run pytest",
             "uv run ruff check .",
             "uv run easycat validate quick",
@@ -485,6 +486,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
             "uv run easycat docs --audience operators",
+            "uv run easycat docs --audience operators --json",
             "docker compose -f docker/compose.yaml up --build",
             "python -m http.server 8080 --directory examples",
             "docker compose --env-file docker/.env -f docker/compose.yaml up --build",
@@ -498,6 +500,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "description": "Inspect journals, debug bundles, the debugger UI, metrics, and traces.",
         "commands": (
             "uv run easycat docs --audience operators",
+            "uv run easycat docs --audience operators --json",
             "easycat bundles list",
             "easycat bundles list --json",
             "easycat bundles show PATH",

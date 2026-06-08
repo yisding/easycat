@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 import pytest
@@ -339,10 +340,13 @@ def test_observability_doc_lists_journal_cli_entry_points() -> None:
 def test_observability_doc_points_operators_to_filtered_docs_route() -> None:
     doc = (REPO_ROOT / "docs" / "observability.md").read_text(encoding="utf-8")
     intro = doc.split("## The four layers", 1)[0]
+    normalized_intro = re.sub(r"\s+", " ", intro)
 
     assert "uv run easycat docs --audience operators" in intro
+    assert "uv run easycat docs --audience operators --json" in intro
     assert "operator-facing route slice" in intro
-    assert "deployment, observability, and journal durability" in intro
+    assert "same operator map with command hints" in intro
+    assert "deployment, observability, and journal durability" in normalized_intro
 
 
 def test_observability_doc_lists_debugger_ui_entry_points() -> None:
