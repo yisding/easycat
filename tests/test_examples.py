@@ -1396,6 +1396,16 @@ def test_ws_supervisor_server_example_imports():
     assert callable(ws_supervisor_server.main)
 
 
+def test_ws_supervisor_server_uses_manager_feedback_lifecycle() -> None:
+    path = REPO_ROOT / "examples" / "ws_supervisor_server.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 265
+    assert "manager.connection(session_id, session, runtime_feedback=True)" in source
+    assert "SessionAudioBroadcaster(session)" in source
+    assert "attach_runtime_feedback" not in source
+
+
 def test_ws_supervisor_server_auth_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     import examples.ws_supervisor_server as ws_supervisor_server
 
@@ -1942,6 +1952,16 @@ def test_twilio_example_factory():
 
     app = twilio_app.create_app(api_key="test-key", stream_url="wss://example.com/stream")
     assert app is not None
+
+
+def test_twilio_example_uses_manager_feedback_lifecycle():
+    path = REPO_ROOT / "examples" / "twilio_app.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 205
+    assert "manager.connection(key, session, runtime_feedback=True)" in source
+    assert "CallAnswered" in source
+    assert "attach_runtime_feedback" not in source
 
 
 def test_twilio_example_missing_openai_key_is_actionable(monkeypatch: pytest.MonkeyPatch):

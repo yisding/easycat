@@ -26,7 +26,6 @@ from websockets.http11 import Request, Response
 
 from easycat._audio_utils import resample_chunk
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.helpers import attach_runtime_feedback
 from easycat.session_manager import SessionManager
 from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
 
@@ -152,9 +151,7 @@ async def serve_websocket_sessions(
             return
         async with session_slots:
             session = session_factory(ws)
-            if runtime_feedback:
-                attach_runtime_feedback(session)
-            async with manager.connection(id(ws), session):
+            async with manager.connection(id(ws), session, runtime_feedback=runtime_feedback):
                 await ws.wait_closed()
 
     server = await websockets.serve(

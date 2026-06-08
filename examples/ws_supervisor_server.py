@@ -46,7 +46,6 @@ from easycat import (
     SessionAudioBroadcaster,
     SessionManager,
     WebSocketConnectionTransport,
-    attach_runtime_feedback,
     create_session,
     require_env,
 )
@@ -140,7 +139,6 @@ async def main() -> None:
                 agent=agent,
             )
         )
-        attach_runtime_feedback(session)
 
         broadcaster = SessionAudioBroadcaster(session)
         session_id = session.session_id
@@ -148,7 +146,7 @@ async def main() -> None:
         logger.info("Caller session created: %s", session_id)
 
         try:
-            async with manager.connection(session_id, session):
+            async with manager.connection(session_id, session, runtime_feedback=True):
                 await ws.send(
                     json.dumps(
                         {

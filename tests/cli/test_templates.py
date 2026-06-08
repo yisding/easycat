@@ -200,6 +200,13 @@ def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
     )
 
 
+def test_twilio_scaffold_uses_manager_feedback_lifecycle() -> None:
+    source = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
+
+    assert "manager.connection(id(ws), create_session(config), runtime_feedback=True)" in source
+    assert "attach_runtime_feedback" not in source
+
+
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_template_catalog_env_covers_template_code(name: str) -> None:
     code_required, code_referenced = _template_code_env_vars(name)

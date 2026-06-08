@@ -47,3 +47,38 @@ async def test_session_manager_stop_all() -> None:
     assert manager.get("b") is None
     assert a.stopped == 1
     assert b.stopped == 1
+
+
+@pytest.mark.asyncio
+async def test_session_manager_connection_can_attach_runtime_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager: SessionManager[str] = SessionManager()
+    session = _DummySession()
+    attached: list[object] = []
+
+    monkeypatch.setattr("easycat.helpers.attach_runtime_feedback", attached.append)
+
+    async with manager.connection("a", session, runtime_feedback=True):
+        assert manager.get("a") is session
+        assert session.started == 1
+
+    assert attached == [session]
+    assert manager.get("a") is None
+    assert session.stopped == 1
+
+
+@pytest.mark.asyncio
+async def test_session_manager_connection_leaves_feedback_off_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager: SessionManager[str] = SessionManager()
+    session = _DummySession()
+    attached: list[object] = []
+
+    monkeypatch.setattr("easycat.helpers.attach_runtime_feedback", attached.append)
+
+    async with manager.connection("a", session):
+        assert manager.get("a") is session
+
+    assert attached == []

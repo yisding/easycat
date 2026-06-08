@@ -40,7 +40,6 @@ from easycat import (
     TelephonyConfig,
     TwilioConnectionTransport,
     TwilioSessionActionConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
 )
@@ -114,7 +113,6 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
                 agent=agent,
             )
         )
-        attach_runtime_feedback(session)
         key = id(ws)
         call_sid: str | None = None
 
@@ -135,7 +133,7 @@ def create_app(*, api_key: str | None = None, stream_url: str | None = None):
         session.event_bus.subscribe(CallEnded, forget_call)
         session.event_bus.subscribe(CallFailed, forget_call)
         try:
-            async with manager.connection(key, session):
+            async with manager.connection(key, session, runtime_feedback=True):
                 await ws.wait_closed()
         finally:
             if call_sid:

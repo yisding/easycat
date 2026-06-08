@@ -109,6 +109,10 @@ Shipped:
   config construction while using `run_webtransport_config_server(...)`
   instead of carrying `SessionManager`, feedback attachment, signal handlers,
   `server.start()`, `server.stop()`, and `asyncio.run(...)` in the example.
+- `SessionManager.connection(..., runtime_feedback=True)` centralizes
+  per-session console feedback for multi-client servers, so transport helpers
+  and the Twilio scaffold / Twilio example / WebSocket supervisor example no
+  longer import and call `attach_runtime_feedback(session)` themselves.
 - `examples/push_to_talk.py` now keeps the manual `session.start_turn()` /
   `session.end_turn()` lesson while using `async with create_session(config) as
   session:` instead of explicit `session.start()` / `session.stop(...)`
@@ -135,9 +139,10 @@ Still remaining:
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
   direct-session subscription/debugger and browser-transport examples use
   `run_session(session)`; the WebTransport server uses a config-server helper;
-  the push-to-talk example keeps manual turn control while using the scoped
-  session lifecycle; scaffold debug guidance points all generated-project
-  users at `record_to=`.
+  multi-client Twilio scaffold/example and WebSocket supervisor example use
+  manager-owned runtime feedback; the push-to-talk example keeps manual turn
+  control while using the scoped session lifecycle; scaffold debug guidance
+  points all generated-project users at `record_to=`.
   Broader raw line-count shrinkage remains open in non-canonical server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +

@@ -1330,7 +1330,7 @@ class WebTransportServer:
 
         async def handle(transport: WebTransportConnectionTransport) -> None:
             session = create_session(EasyConfig(transport=transport, agent=...))
-            async with manager.connection(id(transport), session):
+            async with manager.connection(id(transport), session, runtime_feedback=True):
                 await transport.wait_closed()
 
         server = WebTransportServer(
@@ -1479,16 +1479,13 @@ async def serve_webtransport_config_sessions(
     optional runtime feedback, server teardown, and process shutdown.
     """
     from easycat.config import create_session
-    from easycat.helpers import attach_runtime_feedback
     from easycat.session_manager import SessionManager
 
     manager: SessionManager[int] = SessionManager()
 
     async def handle_connection(transport: WebTransportConnectionTransport) -> None:
         session = create_session(config_factory(transport))
-        if runtime_feedback:
-            attach_runtime_feedback(session)
-        async with manager.connection(id(transport), session):
+        async with manager.connection(id(transport), session, runtime_feedback=runtime_feedback):
             await transport.wait_closed()
 
     server = WebTransportServer(config, handle_connection)

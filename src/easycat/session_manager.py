@@ -75,15 +75,28 @@ class SessionManager(Generic[TKey]):
                 logger.error("Failed to stop session %s: %s", key, result)
 
     @asynccontextmanager
-    async def connection(self, key: TKey, session: Session) -> AsyncIterator[Session]:
+    async def connection(
+        self,
+        key: TKey,
+        session: Session,
+        *,
+        runtime_feedback: bool = False,
+    ) -> AsyncIterator[Session]:
         """Manage a session's lifetime within an ``async with`` block.
 
         The ``finally`` clause always calls :meth:`remove`, so ``session.stop``
         may run even if it was already stopped elsewhere (e.g. by
         :meth:`stop_all`); this is safe only because ``Session.stop`` is
-        idempotent. Do not run :meth:`stop_all`/:meth:`remove` on this key
+        idempotent. Set ``runtime_feedback=True`` to attach the same console
+        feedback used by the built-in multi-client server helpers before the
+        session starts. Do not run :meth:`stop_all`/:meth:`remove` on this key
         concurrently with the ``yield`` body (see class docstring).
         """
+        if runtime_feedback:
+            from easycat.helpers import attach_runtime_feedback
+
+            attach_runtime_feedback(session)
+
         await self.add(key, session)
         try:
             yield session
