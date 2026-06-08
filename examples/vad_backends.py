@@ -28,19 +28,12 @@ Setup:
 from __future__ import annotations
 
 import argparse
-import asyncio
 
-from easycat import (
-    EasyConfig,
-    attach_runtime_feedback,
-    create_session,
-    require_env,
-    wait_for_shutdown_signal,
-)
+from easycat import EasyConfig, require_env, run
 from easycat.vad import VADConfig, create_vad
 
 
-async def main(backend: str) -> None:
+def main(backend: str) -> None:
     require_env("OPENAI_API_KEY")
 
     from agents import Agent  # type: ignore[import-untyped]
@@ -48,15 +41,12 @@ async def main(backend: str) -> None:
     vad = create_vad(VADConfig(backend=backend))
     print(f"[vad_backends] requested={backend!r} built={type(vad).__name__}")
 
-    config = EasyConfig.mic(
-        vad=vad,
-        agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+    run(
+        EasyConfig.mic(
+            vad=vad,
+            agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
+        )
     )
-    session = create_session(config)
-    attach_runtime_feedback(session)
-
-    await session.start()
-    await wait_for_shutdown_signal(session)
 
 
 if __name__ == "__main__":
@@ -68,4 +58,4 @@ if __name__ == "__main__":
         help="VAD backend to pin (default: auto)",
     )
     args = parser.parse_args()
-    asyncio.run(main(args.backend))
+    main(args.backend)

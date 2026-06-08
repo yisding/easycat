@@ -1546,12 +1546,21 @@ def test_vad_backends_example_imports():
 
 
 def test_vad_backends_example_uses_easyconfig_provider_instance_surface():
-    source = (REPO_ROOT / "examples/vad_backends.py").read_text(encoding="utf-8")
+    path = REPO_ROOT / "examples/vad_backends.py"
+    source = path.read_text(encoding="utf-8")
 
+    assert _visible_code_line_count(path) <= 30
     assert "vad = create_vad(VADConfig(backend=backend))" in source
     assert "EasyConfig.mic(" in source
     assert "vad=vad" in source
-    assert "create_session(config)" in source
+    assert "from easycat import EasyConfig, require_env, run" in source
+    assert "run(" in source
+    assert "create_session" not in source
+    assert "attach_runtime_feedback" not in source
+    assert "wait_for_shutdown_signal" not in source
+    assert "asyncio.run(" not in source
+    assert "await session.start()" not in source
+    assert "await session.stop()" not in source
     assert "SessionConfig" not in source
     assert "Session(" not in source
     assert "AgentRunner(" not in source

@@ -88,6 +88,9 @@ Shipped:
   protocol examples but now hand execution to `run(EasyConfig.mic(...))`
   instead of teaching manual session creation, runtime feedback attachment,
   shutdown-signal handling, and `asyncio.run(...)`.
+- `examples/vad_backends.py` now keeps the backend-selection teaching path
+  (`create_vad(VADConfig(backend=...))`) but hands execution to
+  `run(EasyConfig.mic(...))` instead of manual session lifecycle helpers.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -107,9 +110,10 @@ Still remaining:
   preflights, the canonical WebSocket server uses the config-server helper, the
   debug bundle example uses `record_to=` auto-capture, the no-key journal demo
   uses the scoped `async with create_session(...)` lifecycle, the custom
-  provider examples use `run(EasyConfig.mic(...))`, and scaffold debug guidance
-  points all generated-project users at `record_to=`; broader raw line-count
-  shrinkage remains open in non-canonical server and protocol-heavy examples.
+  provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
+  scaffold debug guidance points all generated-project users at `record_to=`;
+  broader raw line-count shrinkage remains open in non-canonical server and
+  protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
 - Pipeline-wide `ExceptionGroup` propagation outside the streaming agent/TTS
