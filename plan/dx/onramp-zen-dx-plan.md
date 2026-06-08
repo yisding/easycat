@@ -141,7 +141,7 @@ corrected form).
 
 ---
 
-### 5.1 — One canonical hello-world; kill the three "fastest path" claims  *(adopt-with-changes)*
+### 5.1 — One canonical hello-world; kill the three "fastest path" claims  *(landed; guarded)*
 
 **What / why.** The README asserts three conflicting "fastest" paths and its most prominent
 quickstart constructs a session it never starts (silence) using a hardcoded `"your-api-key"`.
@@ -172,16 +172,21 @@ form); `src/easycat/cli/scaffold/templates/openai-agents/agent.py` (emit the `ru
 *shape* — keep its `$AGENT_NAME`/`$AGENT_INSTRUCTIONS` substitution and the teaching
 `current_time` `@function_tool`).
 
-**Verifier verdict.** Feasible; genuinely simpler (−2 concepts on the happy path); breaks no
-power user. **Caveats folded in:** drop the "byte-identical to `easycat init`" claim — the
-scaffold is parameterized through `src/easycat/cli/scaffold/init.py::_render_text` and copied by
+**Verifier verdict.** Landed and guarded by
+`tests/test_dx_helpers.py::test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence`.
+The README's first runnable block, the package docstring, the canonical local-voice example,
+and the OpenAI Agents scaffold template all use the `run(EasyConfig.mic(...))` shape; the
+README's `create_session` block is now explicitly under "Advanced: own the lifecycle" and uses
+`async with`. This is genuinely simpler (−2 concepts on the happy path) and breaks no power
+user. **Caveats folded in:** drop the "byte-identical to `easycat init`" claim — the scaffold
+is parameterized through `src/easycat/cli/scaffold/init.py::_render_text` and copied by
 `src/easycat/cli/scaffold/init.py::_copy_template`; it must stay parameterized, so aim for
 *same shape*, with README and `examples/` byte-identical to each other. Note that bare
 `EasyConfig(agent=...)` already equals `.mic()` for local
-(`src/easycat/config/easy.py::EasyConfig`), so promoting
-`.mic()` is a readability choice, not a bug fix — do not imply the bare form was broken. Keep
-`create_session` fully documented (it is the advanced entry exposed by
-`src/easycat/helpers.py::run` and `src/easycat/config/_factory.py::create_session`).
+(`src/easycat/config/easy.py::EasyConfig`), so promoting `.mic()` is a readability choice, not
+a bug fix — do not imply the bare form was broken. Keep `create_session` fully documented (it
+is the advanced entry exposed by `src/easycat/helpers.py::run` and
+`src/easycat/config/_factory.py::create_session`).
 
 **Zen.** #11 one obvious way.
 

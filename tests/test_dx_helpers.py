@@ -320,6 +320,7 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
         assert callable(symbol)
 
     landed_statuses = {
+        "5.1": "landed; guarded",
         "5.2": "landed; guarded",
         "5.3": "landed; guarded",
         "5.4": "folded into 5.3",
@@ -335,6 +336,51 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
     for number, status in landed_statuses.items():
         pattern = rf"^### {re.escape(number)} .* \*\({re.escape(status)}\)\*$"
         assert re.search(pattern, plan, re.MULTILINE), f"section {number} status drifted"
+
+
+def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence() -> None:
+    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
+    scaffold = (
+        REPO_ROOT
+        / "src"
+        / "easycat"
+        / "cli"
+        / "scaffold"
+        / "templates"
+        / "openai-agents"
+        / "agent.py"
+    ).read_text(encoding="utf-8")
+    package_doc = easycat.__doc__ or ""
+    quickstart = readme.split("### Quickstart (EasyConfig)", 1)[1].split(
+        "### Advanced: own the lifecycle",
+        1,
+    )[0]
+    advanced = readme.split("### Advanced: own the lifecycle", 1)[1].split(
+        "## Telephony",
+        1,
+    )[0]
+    normalized_quickstart = " ".join(quickstart.split())
+
+    assert "### 5.1" in plan
+    assert "*(landed; guarded)*" in plan.split("### 5.1", 1)[1].split("### 5.2", 1)[0]
+    assert "test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence" in (plan)
+
+    assert "run(EasyConfig.mic(agent=Agent(" in package_doc
+    assert "run(\n    EasyConfig.mic(" in quickstart
+    assert "create_session" not in quickstart
+    assert "your-api-key" not in quickstart
+    assert "one canonical shape" in normalized_quickstart
+    assert "examples/openai_agents_voice.py" in quickstart
+    assert "easycat init my-agent" in quickstart
+
+    assert "run(\n    EasyConfig.mic(" in example
+    assert "create_session" not in example
+    assert "run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))" in scaffold
+
+    assert "create_session(...)" in advanced
+    assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in advanced
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────
