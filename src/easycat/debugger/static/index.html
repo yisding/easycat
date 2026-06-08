@@ -435,7 +435,7 @@
   #cost-view { padding: 14px; overflow: auto; }
   .cost-totals {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 10px;
     margin-bottom: 16px;
   }
@@ -456,6 +456,17 @@
     font-family: var(--mono);
     font-size: 22px;
     color: var(--accent);
+    overflow-wrap: anywhere;
+  }
+  .cost-card .value.ok { color: var(--green); }
+  .cost-card .value.warning { color: var(--orange); }
+  .cost-card .value.exceeded { color: var(--red); }
+  .cost-card .subvalue {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
   }
 
   /* Replay view */
@@ -1686,6 +1697,7 @@ function renderCostView() {
   clear(root);
   if (!state.cost) return;
   const totals = state.cost.totals || {};
+  const budget = state.cost.budget || {};
   const totalsRow = el("div", { class: "cost-totals" });
   const cards = [
     { label: "Spend (USD)", value: `$${(totals.usd || 0).toFixed(4)}` },
@@ -1693,10 +1705,23 @@ function renderCostView() {
     { label: "TTS chars", value: String(totals.tts_chars || 0) },
     { label: "LLM tokens", value: String(totals.llm_tokens || 0) },
   ];
+  if (budget.configured) {
+    const status = budget.status || "ok";
+    const label = status === "exceeded" ? "Exceeded" : status === "warning" ? "Warning" : "OK";
+    const maxUsd = budget.max_session_cost_usd || 0;
+    cards.push({
+      label: "Budget",
+      value: label,
+      valueClass: status,
+      subvalue: `$${(totals.usd || 0).toFixed(4)} / $${maxUsd.toFixed(4)}`,
+    });
+  }
   for (const c of cards) {
+    const valueClass = c.valueClass ? `value ${c.valueClass}` : "value";
     totalsRow.appendChild(el("div", { class: "cost-card" }, [
       el("div", { class: "label" }, c.label),
-      el("div", { class: "value" }, c.value),
+      el("div", { class: valueClass }, c.value),
+      c.subvalue ? el("div", { class: "subvalue" }, c.subvalue) : null,
     ]));
   }
   root.appendChild(totalsRow);

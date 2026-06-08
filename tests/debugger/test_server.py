@@ -20,7 +20,9 @@ from easycat import create_text_session  # noqa: E402
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk  # noqa: E402
 from easycat.debug.bundle import RunBundle  # noqa: E402
 from easycat.debugger.server import (  # noqa: E402
+    DebuggerSource,
     _bundle_source,
+    _cost_rollup,
     _filter_records,
     _make_app,
     _session_source,
@@ -189,6 +191,62 @@ def test_filter_records_by_multiple_names():
         to_seq=None,
     )
     assert [r["sequence"] for r in out] == [1, 3]
+
+
+def test_cost_rollup_reports_budget_status_from_snapshot():
+    records = [
+        {
+            "sequence": 1,
+            "name": "cost",
+            "turn_id": "turn-1",
+            "data": {"usd": 0.2, "stt_seconds": 1.5, "llm_tokens": True},
+        },
+        {
+            "sequence": 2,
+            "name": "cost_record",
+            "turn_id": "turn-2",
+            "data": {"usd": 0.65, "tts_chars": 120, "llm_tokens": 42},
+        },
+        {
+            "sequence": 3,
+            "name": "stage_complete",
+            "turn_id": "turn-2",
+            "data": {"usd": 10.0},
+        },
+    ]
+
+    out = _cost_rollup(records, config_snapshot={"max_session_cost_usd": "1.0"})
+
+    assert out["totals"]["usd"] == pytest.approx(0.85)
+    assert out["totals"]["stt_seconds"] == pytest.approx(1.5)
+    assert out["totals"]["tts_chars"] == pytest.approx(120)
+    assert out["totals"]["llm_tokens"] == pytest.approx(42)
+    assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.2)
+    assert out["per_turn"]["turn-2"]["usd"] == pytest.approx(0.65)
+    assert out["budget"] == {
+        "configured": True,
+        "max_session_cost_usd": 1.0,
+        "warning_threshold_usd": 0.8,
+        "usage_fraction": pytest.approx(0.85),
+        "remaining_usd": pytest.approx(0.15),
+        "overage_usd": 0.0,
+        "status": "warning",
+        "warning": True,
+        "exceeded": False,
+    }
+
+
+def test_cost_rollup_reports_exceeded_budget():
+    out = _cost_rollup(
+        [{"sequence": 1, "name": "cost", "turn_id": "turn-1", "data": {"usd": 1.25}}],
+        config_snapshot={"max_session_cost_usd": "1.0"},
+    )
+
+    assert out["budget"]["status"] == "exceeded"
+    assert out["budget"]["warning"] is True
+    assert out["budget"]["exceeded"] is True
+    assert out["budget"]["remaining_usd"] == 0.0
+    assert out["budget"]["overage_usd"] == pytest.approx(0.25)
 
 
 def test_summarise_turns_tracks_audio_bytes():
@@ -608,6 +666,32 @@ async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):
         assert "totals" in body and "per_turn" in body
         for k in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
             assert body["totals"][k] == 0
+        assert body["budget"]["configured"] is False
+
+
+async def test_api_cost_reports_budget_from_manifest():
+    source = DebuggerSource(
+        label="budget-source",
+        _records_fn=lambda: [
+            {
+                "sequence": 1,
+                "name": "cost",
+                "turn_id": "turn-1",
+                "data": {"usd": 0.85, "stt_seconds": 2.5},
+            }
+        ],
+        _artifact_fn=lambda _ref: None,
+        _manifest_fn=lambda: {"config_snapshot": {"max_session_cost_usd": "1.0"}},
+    )
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/cost")).json()
+        assert body["totals"]["usd"] == pytest.approx(0.85)
+        assert body["per_turn"]["turn-1"]["stt_seconds"] == pytest.approx(2.5)
+        assert body["budget"]["status"] == "warning"
+        assert body["budget"]["usage_fraction"] == pytest.approx(0.85)
 
 
 async def test_api_health_returns_ok(tmp_path):

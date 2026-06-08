@@ -105,6 +105,12 @@ optionally kills the session at 100%. Kill-switch pattern from Langfuse,
 Helicone, Langsmith. Voice apps burn money faster than chat apps
 because audio tokens are expensive.
 
+Current partial landing: the debugger `/api/cost` rollup reads
+`max_session_cost_usd` from the safe config snapshot and reports
+`ok` / `warning` / `exceeded` status when `cost` / `cost_record` journal
+entries exist. Runtime provider pricing, warning journal records, and the
+optional kill switch remain planned.
+
 ## OTel Export
 
 OTel solves a different problem than debugging. It is designed for

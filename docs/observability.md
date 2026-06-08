@@ -194,8 +194,10 @@ There are three independent knobs, and they control different things:
   `max_session_cost_usd=0.50`. These values are validated and preserved in safe
   debug-bundle config snapshots. Budgets whose `stage` matches a runtime stage
   name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
-  stage records with `latency_budget_exceeded`; aggregate turn budgets, cost
-  alerts, and warmup execution are still planned.
+  stage records with `latency_budget_exceeded`; the debugger cost rollup reports
+  `max_session_cost_usd` budget status from cost records. Provider cost-record
+  emission, aggregate turn budgets, runtime cost alerts, and warmup execution
+  are still planned.
 
 ### Correlation ids in logs
 

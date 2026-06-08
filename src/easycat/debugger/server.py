@@ -14,7 +14,7 @@ Routes:
 - ``GET  /api/turns``                 — per-turn rollup with stage counts
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
-- ``GET  /api/cost``                  — cost rollup (degrades to zero)
+- ``GET  /api/cost``                  — cost rollup and budget status
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn
 - ``POST /api/replay``                — run replay against the source
@@ -24,11 +24,13 @@ Routes:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import io
 import json
 import logging
+import math
 import re
 import struct
 import threading
@@ -315,6 +317,7 @@ def _session_source(session: Any) -> DebuggerSource:
         return {
             "source": "session",
             "session_id": getattr(session, "session_id", ""),
+            "config_snapshot": _safe_session_config_snapshot(session),
             "is_running": bool(getattr(session, "is_running", False)),
             "turn_state": str(getattr(session, "turn_state", "")),
             "supports_replay": False,
@@ -333,6 +336,19 @@ def _session_source(session: Any) -> DebuggerSource:
         _replay_fn=None,
         is_live=True,
     )
+
+
+def _safe_session_config_snapshot(session: Any) -> dict[str, Any]:
+    """Return the allowlisted config snapshot for live debugger sessions."""
+    try:
+        from easycat.runtime.safe_defaults import safe_config_snapshot
+
+        config = getattr(session, "_easycat_config", None) or getattr(session, "_config", None)
+        if config is None:
+            return {}
+        return safe_config_snapshot(config)
+    except ImportError:
+        return {}
 
 
 def _record_to_dict(record: Any) -> dict[str, Any]:
@@ -729,7 +745,72 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return transcripts
 
 
-def _cost_rollup(records: list[dict[str, Any]]) -> dict[str, Any]:
+_COST_WARNING_FRACTION = 0.8
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _max_session_cost_usd(config_snapshot: dict[str, Any] | None) -> float | None:
+    if not isinstance(config_snapshot, dict):
+        return None
+    raw = config_snapshot.get("max_session_cost_usd")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            try:
+                raw = float(raw)
+            except ValueError:
+                return None
+    limit = _finite_number(raw)
+    if limit is None or limit <= 0:
+        return None
+    return limit
+
+
+def _cost_budget_status(total_usd: float, limit_usd: float | None) -> dict[str, Any]:
+    if limit_usd is None:
+        return {
+            "configured": False,
+            "max_session_cost_usd": None,
+            "warning_threshold_usd": None,
+            "usage_fraction": None,
+            "remaining_usd": None,
+            "overage_usd": None,
+            "status": "unconfigured",
+            "warning": False,
+            "exceeded": False,
+        }
+
+    usage_fraction = total_usd / limit_usd
+    exceeded = total_usd >= limit_usd
+    warning = usage_fraction >= _COST_WARNING_FRACTION
+    status = "exceeded" if exceeded else "warning" if warning else "ok"
+    return {
+        "configured": True,
+        "max_session_cost_usd": limit_usd,
+        "warning_threshold_usd": limit_usd * _COST_WARNING_FRACTION,
+        "usage_fraction": usage_fraction,
+        "remaining_usd": max(0.0, limit_usd - total_usd),
+        "overage_usd": max(0.0, total_usd - limit_usd),
+        "status": status,
+        "warning": warning,
+        "exceeded": exceeded,
+    }
+
+
+def _cost_rollup(
+    records: list[dict[str, Any]],
+    *,
+    config_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Aggregate ``CostRecord``-style entries.  Degrades to zero when absent.
 
     Cost records are owned by the peripheral observability/cost plan so
@@ -750,11 +831,16 @@ def _cost_rollup(records: list[dict[str, Any]]) -> dict[str, Any]:
             turn_id, {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
         )
         for key in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            v = data.get(key)
-            if isinstance(v, (int, float)):
-                bucket[key] += v
-                totals[key] += v
-    return {"per_turn": by_turn, "totals": totals}
+            value = _finite_number(data.get(key))
+            if value is None:
+                continue
+            bucket[key] += value
+            totals[key] += value
+    budget = _cost_budget_status(
+        totals["usd"],
+        _max_session_cost_usd(config_snapshot),
+    )
+    return {"per_turn": by_turn, "totals": totals, "budget": budget}
 
 
 def _collect_tts_frames(
@@ -1014,7 +1100,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         return web.json_response({"transcripts": _build_transcript(source.records())})
 
     async def cost(_request: Any) -> Any:
-        return web.json_response(_cost_rollup(source.records()))
+        manifest = source.manifest()
+        config_snapshot = manifest.get("config_snapshot") if isinstance(manifest, dict) else None
+        return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
 
     async def artifact(request: Any) -> Any:
         try:
