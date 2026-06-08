@@ -344,33 +344,35 @@ stderr is redirected.
 > `LangGraphBridge`) for callers who want to construct them by hand.
 
 ### Advanced: own the lifecycle
-`run()` hides the asyncio/signal/teardown ceremony. When you need to
-subscribe to events, run inside an existing event loop, or do work
-between turns, reach for `create_session(...)` and drive it with the one
-public teardown idiom — `async with session:` (it starts the session on
-entry and calls `stop(force=True)` on exit):
+`run()` hides the asyncio/signal/teardown ceremony. When you need the
+session object before startup — for event subscriptions, a debugger UI,
+or app-specific hooks — create it first with `create_session(...)` and hand it
+to `run_session(...)`:
 
 ```python
-import asyncio
-
 from agents import Agent
 
 from easycat import EasyConfig, STTFinal, create_session
+from easycat.helpers import run_session
 
 agent = Agent(name="Support", instructions="Help customers with account issues.")
 
 
-async def main() -> None:
-    async with create_session(EasyConfig.mic(agent=agent)) as session:
-        subscription = session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
-        try:
-            await session.wait_closed()
-        finally:
-            subscription.unsubscribe()
+def main() -> None:
+    session = create_session(EasyConfig.mic(agent=agent))
+    subscription = session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
+    try:
+        run_session(session)
+    finally:
+        subscription.unsubscribe()
 
 
-asyncio.run(main())
+main()
 ```
+
+If you already own an event loop, use the same public teardown idiom directly:
+`async with session:` starts the session on entry and calls
+`stop(force=True)` on exit.
 
 ## Telephony (inbound + outbound)
 

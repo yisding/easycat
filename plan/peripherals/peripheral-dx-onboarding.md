@@ -12,6 +12,11 @@ Shipped:
 - `easycat.run(config, feedback="auto" | "on" | "off")` with auto-attached
   runtime feedback by default and explicit force/suppress controls
   (`src/easycat/helpers.py::run`).
+- `easycat.helpers.run_session(session, feedback="auto" | "on" | "off")`
+  lets examples and apps that need a prebuilt session for subscriptions,
+  debugger setup, or other pre-start hooks reuse the same feedback, signal,
+  and `async with session:` teardown path as `run()`
+  (`src/easycat/helpers.py::run_session`).
 - String-keyed provider selection (`stt="deepgram/flux"`,
   `tts="cartesia/sonic-3"`) with fuzzy suggestions on typos
   (`stt/factory.py`, `tts/factory.py`).
@@ -91,6 +96,10 @@ Shipped:
 - `examples/vad_backends.py` now keeps the backend-selection teaching path
   (`create_vad(VADConfig(backend=...))`) but hands execution to
   `run(EasyConfig.mic(...))` instead of manual session lifecycle helpers.
+- `examples/agent_event_subscription.py` and `examples/journal_ui.py` now keep
+  their direct-session teaching points (agent/tool event subscriptions and
+  debugger UI setup) while using `run_session(session)` instead of manual
+  feedback attachment, signal waiting, `session.start()`, and `asyncio.run(...)`.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -111,8 +120,9 @@ Still remaining:
   debug bundle example uses `record_to=` auto-capture, the no-key journal demo
   uses the scoped `async with create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
-  scaffold debug guidance points all generated-project users at `record_to=`;
-  broader raw line-count shrinkage remains open in non-canonical server and
+  direct-session subscription/debugger examples use `run_session(session)`;
+  scaffold debug guidance points all generated-project users at `record_to=`.
+  Broader raw line-count shrinkage remains open in non-canonical server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +
   Whisper-small + Smart Turn v3.2 wiring).
@@ -202,16 +212,16 @@ Current ceremony to remove:
   → `run(..., feedback="auto")` auto-attaches when `sys.stderr.isatty()` and
   not in a test environment; `"on"` forces it and `"off"` suppresses it
 - explicit shutdown signal handling (`wait_for_shutdown_signal(session)`)
-  → handled by `run()` or `async with session`
-- explicit `asyncio.run(main())` wrapper → handled by `run()`
+  → handled by `run()`, `run_session()`, or `async with session`
+- explicit `asyncio.run(main())` wrapper → handled by `run()` / `run_session()`
 
 ## Quickstart Helpers
 
 **`easycat.run(config)`**
 
-20-line wrapper that replaces `asyncio.run(main())` + `await
-session.start()` + shutdown handling. Thin enough that advanced users can
-still reach the session object via `create_session()`.
+Small wrapper that replaces `asyncio.run(main())` + `await session.start()` +
+shutdown handling for config-first examples. Advanced users can still reach
+the session object via `create_session()`.
 
 Target example:
 
@@ -223,6 +233,20 @@ from easycat import EasyConfig, run
 run(EasyConfig.mic(
     agent=Agent(name="Support", instructions="Help the user."),
 ))
+```
+
+**`easycat.helpers.run_session(session)`**
+
+The direct-session companion for examples that must subscribe handlers or
+serve a debugger before the session starts:
+
+```python
+from easycat import EasyConfig, create_session
+from easycat.helpers import run_session
+
+session = create_session(EasyConfig.mic(agent=agent))
+session.subscribe_event(...)
+run_session(session)
 ```
 
 **`async with session:`**

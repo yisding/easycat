@@ -402,7 +402,11 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
     assert "run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))" in scaffold
 
     assert "create_session(...)" in advanced
-    assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in advanced
+    assert "from easycat import EasyConfig, STTFinal, create_session" in advanced
+    assert "from easycat.helpers import run_session" in advanced
+    assert "session = create_session(EasyConfig.mic(agent=agent))" in advanced
+    assert "run_session(session)" in advanced
+    assert "async with session:" in advanced
 
 
 def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> None:

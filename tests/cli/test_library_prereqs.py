@@ -4,6 +4,8 @@ The CLI's scaffolded templates assume that:
 
 * ``easycat.run(config)`` exists, calls ``create_session``,
   enters the session async context, and wires signal handlers.
+* ``easycat.helpers.run_session(session)`` gives preconfigured sessions the
+  same lifecycle/signal wrapper without rebuilding them.
 * ``EasyConfig(stt="<provider>/<model>", tts="...")`` resolves
   strings to typed configs using env-var API keys and raises
   ``EASYCAT_E104``/``EASYCAT_E203`` on unknowns / missing keys.
@@ -36,6 +38,12 @@ def test_run_is_exposed_publicly() -> None:
     from easycat import run as _
 
     assert _ is easycat.run
+
+
+def test_run_session_is_exposed_publicly() -> None:
+    from easycat.helpers import run_session
+
+    assert callable(run_session)
 
 
 def test_run_docstring_teaches_public_context_lifecycle() -> None:
@@ -105,6 +113,21 @@ def test_run_uses_session_async_context(monkeypatch: pytest.MonkeyPatch) -> None
     assert session.events.index("start") < session.events.index("stop(force=True)")
 
 
+def test_run_session_uses_existing_session_async_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.helpers import run_session
+
+    session = _StubSession()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
+    installs = _install_immediate_shutdown(monkeypatch)
+
+    run_session(session)
+
+    assert installs == ["install"]
+    assert session.events == ["start", "stop(force=True)"]
+
+
 def test_run_does_not_attach_feedback_under_pytest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -117,6 +140,21 @@ def test_run_does_not_attach_feedback_under_pytest(
     with patch("easycat.helpers.attach_runtime_feedback") as attach:
         _install_immediate_shutdown(monkeypatch)
         easycat.run(EasyConfig(openai_api_key="stub"))
+
+    attach.assert_not_called()
+
+
+def test_run_session_does_not_attach_feedback_under_pytest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.helpers import run_session
+
+    session = _StubSession()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
+
+    with patch("easycat.helpers.attach_runtime_feedback") as attach:
+        _install_immediate_shutdown(monkeypatch)
+        run_session(session)
 
     attach.assert_not_called()
 

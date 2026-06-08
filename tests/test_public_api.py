@@ -157,9 +157,11 @@ def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
 
     assert "from easycat import EasyConfig, run" in preferred
     assert "from easycat import EasyConfig, STTFinal, create_session" in preferred
-    assert "async with create_session(EasyConfig.mic(agent=agent)) as session:" in preferred
+    assert "from easycat.helpers import run_session" in preferred
+    assert "session = create_session(EasyConfig.mic(agent=agent))" in preferred
     assert "session.subscribe_event(STTFinal" in preferred
-    assert "await session.wait_closed()" in preferred
+    assert "run_session(session)" in preferred
+    assert "subscription.unsubscribe()" in preferred
     assert "Session.from_providers(" in preferred
     assert "SessionConfig" not in preferred
 

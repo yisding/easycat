@@ -15,8 +15,8 @@ command-specific fields.
 ## Rules
 
 - The first-run path is `EasyConfig` plus `run`.
-- Long-running applications should use `create_session` or
-  `create_text_session`.
+- Long-running applications should use `create_session` plus
+  `easycat.helpers.run_session`, or `create_text_session`.
 - Advanced users who own concrete providers should prefer
   `Session.from_providers(...)`. They may also import `SessionConfig`,
   provider protocols, transport configs, core events, and debug bundle helpers
@@ -49,17 +49,22 @@ Use the smallest import that matches your use case:
 from easycat import EasyConfig, run
 ```
 
-For long-running apps that need event subscriptions or explicit lifecycle
-control, keep the same `EasyConfig` surface and scope the session:
+For long-running apps that need event subscriptions, debugger setup, or other
+pre-start hooks, keep the same `EasyConfig` surface and run the prebuilt
+session:
 
 ```python
 from easycat import EasyConfig, STTFinal, create_session
+from easycat.helpers import run_session
 
 
-async def main(agent) -> None:
-    async with create_session(EasyConfig.mic(agent=agent)) as session:
-        session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
-        await session.wait_closed()
+def main(agent) -> None:
+    session = create_session(EasyConfig.mic(agent=agent))
+    subscription = session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
+    try:
+        run_session(session)
+    finally:
+        subscription.unsubscribe()
 ```
 
 Use submodules for rare or implementation-specific names:

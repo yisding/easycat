@@ -1539,6 +1539,23 @@ def test_agent_event_subscription_example_imports():
     assert callable(agent_event_subscription.main)
 
 
+def test_agent_event_subscription_example_uses_run_session():
+    path = REPO_ROOT / "examples/agent_event_subscription.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 50
+    assert "from easycat import" in source
+    assert "run_session" in source
+    assert "create_session(" in source
+    assert "session.subscribe_agent_events(" in source
+    assert "session.unsubscribe_handlers(registrations)" in source
+    assert "attach_runtime_feedback" not in source
+    assert "wait_for_shutdown_signal" not in source
+    assert "asyncio.run(" not in source
+    assert "await session.start()" not in source
+    assert "await session.stop()" not in source
+
+
 def test_vad_backends_example_imports():
     import examples.vad_backends as vad_backends
 
@@ -1625,6 +1642,21 @@ def test_journal_ui_example_imports():
     import examples.journal_ui as journal_ui
 
     assert callable(journal_ui.main)
+
+
+def test_journal_ui_example_uses_run_session():
+    path = REPO_ROOT / "examples/journal_ui.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 25
+    assert "serve_session(session" in source
+    assert "run_session(session)" in source
+    assert 'debug="light"' in source
+    assert "attach_runtime_feedback" not in source
+    assert "wait_for_shutdown_signal" not in source
+    assert "asyncio.run(" not in source
+    assert "await session.start()" not in source
+    assert "await session.stop()" not in source
 
 
 # ── Subprocess smoke test ───────────────────────────────────────────

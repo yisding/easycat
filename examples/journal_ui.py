@@ -17,8 +17,6 @@ Run:   uv run python examples/journal_ui.py
 
 from __future__ import annotations
 
-import asyncio
-
 try:
     from agents import Agent  # type: ignore[import-untyped]
 except ImportError as exc:
@@ -30,15 +28,14 @@ except ImportError as exc:
 
 from easycat import (
     EasyConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
-    wait_for_shutdown_signal,
 )
 from easycat.debugger import serve_session
+from easycat.helpers import run_session
 
 
-async def main() -> None:
+def main() -> None:
     require_env("OPENAI_API_KEY")
     # debug="light" keeps the journal in memory so the UI has something to read.
     session = create_session(
@@ -47,14 +44,12 @@ async def main() -> None:
             debug="light",
         )
     )
-    attach_runtime_feedback(session)
 
     serve_session(session, in_thread=True, port=8765, open_browser=False)
     print("[journal_ui] debugger UI: http://localhost:8765")
 
-    await session.start()
-    await wait_for_shutdown_signal(session)
+    run_session(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

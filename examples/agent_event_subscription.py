@@ -14,7 +14,6 @@ Run:   uv run python examples/agent_event_subscription.py
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,11 +27,10 @@ except ImportError as exc:
 
 from easycat import (
     EasyConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
-    wait_for_shutdown_signal,
 )
+from easycat.helpers import run_session
 
 
 @function_tool
@@ -51,7 +49,7 @@ def get_time(timezone_name: str = "UTC") -> str:
     return f"It is {datetime.now(tz).strftime('%H:%M')} {timezone_name}."
 
 
-async def main() -> None:
+def main() -> None:
     require_env("OPENAI_API_KEY")
     session = create_session(
         EasyConfig.mic(
@@ -65,7 +63,6 @@ async def main() -> None:
             ),
         )
     )
-    attach_runtime_feedback(session)
 
     registrations = session.subscribe_agent_events(
         on_delta=lambda e: print(f"[agent delta] {e.text!r}"),
@@ -76,11 +73,10 @@ async def main() -> None:
     )
 
     try:
-        await session.start()
-        await wait_for_shutdown_signal(session)
+        run_session(session)
     finally:
         session.unsubscribe_handlers(registrations)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

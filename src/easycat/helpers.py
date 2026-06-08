@@ -117,6 +117,64 @@ def _feedback_enabled(
     raise ValueError(f"Unknown feedback mode: {feedback!r}. Use 'auto', 'on', or 'off'.")
 
 
+def _enable_console_logging_from_env() -> None:
+    """Enable EasyCat console logging when explicitly requested by env."""
+    env_level = os.getenv("EASYCAT_LOG_LEVEL", "").strip()
+    if not env_level:
+        return
+
+    from easycat._logging import enable_console_logging
+
+    # Only attach a console handler when the user explicitly asked for a log
+    # level; otherwise stay silent so applications that already own logging
+    # aren't overridden.
+    enable_console_logging()
+
+
+def _run_session_until_shutdown(session: Session) -> None:
+    """Run a prebuilt session until SIGINT/SIGTERM from a sync entry point."""
+
+    async def _run() -> None:
+        # ``async with`` is the one public teardown idiom: __aenter__
+        # starts the session and __aexit__ tears it down with
+        # ``stop(force=True)``.
+        async with session:
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            if _install_shutdown_signal_handlers(loop, stop_event):
+                await stop_event.wait()
+            else:
+                # No signal-handler support (e.g. Windows ProactorEventLoop).
+                # Block until KeyboardInterrupt; asyncio.run propagates it and
+                # ``async with session`` still tears the session down cleanly.
+                await asyncio.Event().wait()
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        # Ctrl+C on the fallback (signal-handler-less) path: exit cleanly
+        # instead of dumping a traceback. Teardown already ran via __aexit__.
+        pass
+
+
+def run_session(session: Session, *, feedback: FeedbackMode = "auto") -> None:
+    """Run a prebuilt session to completion from a synchronous entry point.
+
+    Use this when you need the session object before startup — for example to
+    subscribe event handlers, serve the debugger UI, or inject app-specific
+    runtime hooks — but still want the same signal handling, console feedback
+    policy, and ``async with session:`` teardown path as :func:`run`.
+
+    For the simplest first-run path, prefer ``run(EasyConfig.mic(...))``.
+    """
+    _enable_console_logging_from_env()
+
+    if _feedback_enabled(feedback):
+        attach_runtime_feedback(session)
+
+    _run_session_until_shutdown(session)
+
+
 def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
     """Run a voice agent to completion from a synchronous entry point.
 
@@ -141,17 +199,10 @@ def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
     :func:`easycat.create_session` directly and manage the lifecycle
     themselves.
     """
-    from easycat._logging import enable_console_logging
     from easycat.config import create_session
 
     feedback_on = _feedback_enabled(feedback)
-    env_level = os.getenv("EASYCAT_LOG_LEVEL", "").strip()
-    if env_level:
-        # Only attach a console handler when the user explicitly asked for a
-        # log level; otherwise stay silent so applications that already own
-        # logging aren't overridden.  ``run()`` owns the process, but the
-        # handler still goes on the ``easycat`` logger, never root.
-        enable_console_logging()
+    _enable_console_logging_from_env()
 
     session = create_session(config)
     if feedback_on:
@@ -167,27 +218,7 @@ def run(config: EasyConfig, *, feedback: FeedbackMode = "auto") -> None:
             print(_wired_summary(config), file=sys.stderr)
         attach_runtime_feedback(session)
 
-    async def _run() -> None:
-        # ``async with`` is the one public teardown idiom: __aenter__
-        # starts the session and __aexit__ tears it down with
-        # ``stop(force=True)``.
-        async with session:
-            stop_event = asyncio.Event()
-            loop = asyncio.get_running_loop()
-            if _install_shutdown_signal_handlers(loop, stop_event):
-                await stop_event.wait()
-            else:
-                # No signal-handler support (e.g. Windows ProactorEventLoop).
-                # Block until KeyboardInterrupt; asyncio.run propagates it and
-                # ``async with session`` still tears the session down cleanly.
-                await asyncio.Event().wait()
-
-    try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        # Ctrl+C on the fallback (signal-handler-less) path: exit cleanly
-        # instead of dumping a traceback. Teardown already ran via __aexit__.
-        pass
+    _run_session_until_shutdown(session)
 
 
 # Transport-config type -> human label for the "what got wired" summary.
