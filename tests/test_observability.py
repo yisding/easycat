@@ -468,9 +468,10 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
         "`latency_budget_exceeded`",
         "`max_session_cost_usd` budget status from cost records",
         "`easycat.runtime.cost_budget_status(...)`",
+        "`cost_budget_warning` / `cost_budget_exceeded`",
         (
-            "Provider cost-record emission, aggregate turn budgets, runtime cost alerts, "
-            "and warmup execution are still planned"
+            "Provider cost-record emission, aggregate turn budgets, optional session "
+            "kill switches, and warmup execution are still planned"
         ),
     ):
         assert token in config_text

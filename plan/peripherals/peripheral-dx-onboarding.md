@@ -154,7 +154,9 @@ Shipped:
   config snapshots. When `cost` / `cost_record` journal entries exist,
   `/api/cost` reports `ok` / `warning` / `exceeded` budget status alongside
   per-turn and total spend using the shared
-  `easycat.runtime.cost_budget_status(...)` helper.
+  `easycat.runtime.cost_budget_status(...)` helper. The session journal also
+  emits one `cost_budget_warning` and one `cost_budget_exceeded` metric record
+  when explicit cost records cross the configured thresholds.
 
 Still remaining:
 
@@ -184,8 +186,8 @@ Still remaining:
   `human`) without adding a structlog dependency.
 - Runtime enforcement for advanced observability knobs remains:
   `warmup=` currently records intent but does not execute provider/model warmup,
-  `max_session_cost_usd=` reports debugger budget status but does not yet emit
-  runtime cost-budget warning or kill-switch records, and
+  `max_session_cost_usd=` reports debugger budget status and runtime budget
+  records but does not yet stop sessions at the configured limit, and
   aggregate `latency_budget=` gates such as `total_ms`, `llm_ttft_ms`, and
   `tts_ttfb_ms` remain validation concepts rather than runtime alerts.
 
@@ -193,7 +195,7 @@ The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
 `ExceptionGroup` propagation, full structlog adoption, non-canonical example
 shrinkage, and runtime enforcement for advanced observability knobs:
-`warmup=`, runtime `max_session_cost_usd=` alerts / kill switches, and
+`warmup=`, optional runtime `max_session_cost_usd=` kill switches, and
 aggregate `latency_budget=` alerts.
 
 >

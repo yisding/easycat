@@ -119,6 +119,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         artifact_store=session._artifact_store,
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
+        max_session_cost_usd=cfg.max_session_cost_usd,
     )
     journal_sink.subscribe()
 

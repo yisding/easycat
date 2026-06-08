@@ -196,8 +196,10 @@ There are three independent knobs, and they control different things:
   name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
   stage records with `latency_budget_exceeded`; the debugger cost rollup reports
   `max_session_cost_usd` budget status from cost records using the shared
-  `easycat.runtime.cost_budget_status(...)` helper. Provider cost-record
-  emission, aggregate turn budgets, runtime cost alerts, and warmup execution
+  `easycat.runtime.cost_budget_status(...)` helper, and the session journal
+  emits `cost_budget_warning` / `cost_budget_exceeded` records when appended
+  cost records cross the configured thresholds. Provider cost-record emission,
+  aggregate turn budgets, optional session kill switches, and warmup execution
   are still planned.
 
 ### Correlation ids in logs

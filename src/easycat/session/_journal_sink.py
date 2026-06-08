@@ -43,9 +43,11 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
+from easycat.runtime.costs import cost_budget_status, finite_number
 from easycat.runtime.journal import ExecutionJournal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
+_COST_RECORD_NAMES = frozenset({"cost", "cost_record"})
 _JOURNAL_ATTRS = (
     "text",
     "track",
@@ -117,7 +119,11 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: Callable[[str | None], str | None]
+    max_session_cost_usd: float | None = None
     _subscribed: bool = field(default=False, init=False)
+    _cost_total_usd: float = field(default=0.0, init=False)
+    _cost_budget_warning_emitted: bool = field(default=False, init=False)
+    _cost_budget_exceeded_emitted: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
@@ -224,14 +230,84 @@ class SessionJournalSink:
             if output_bytes is not None
             else None
         )
+        resolved_turn_id = self.current_turn_id(turn_id)
         self.journal.append(
             kind=kind,
             name=name,
             session_id=self.session_id,
-            turn_id=self.current_turn_id(turn_id),
+            turn_id=resolved_turn_id,
             data=data,
             input_ref=input_ref,
             output_ref=output_ref,
+        )
+        self._maybe_append_cost_budget_record(
+            name=name,
+            turn_id=resolved_turn_id,
+            data=data,
+        )
+
+    def _maybe_append_cost_budget_record(
+        self,
+        *,
+        name: str,
+        turn_id: str | None,
+        data: dict[str, Any] | None,
+    ) -> None:
+        if self.journal is None or name not in _COST_RECORD_NAMES or not isinstance(data, dict):
+            return
+        limit_usd = finite_number(self.max_session_cost_usd)
+        if limit_usd is None or limit_usd <= 0:
+            return
+        record_usd = finite_number(data.get("usd"))
+        if record_usd is None:
+            return
+
+        self._cost_total_usd += record_usd
+        budget = cost_budget_status(self._cost_total_usd, limit_usd)
+        if budget["warning"] and not self._cost_budget_warning_emitted:
+            self._append_cost_budget_alert(
+                alert="warning",
+                budget=budget,
+                trigger_record_name=name,
+                turn_id=turn_id,
+            )
+            self._cost_budget_warning_emitted = True
+        if budget["exceeded"] and not self._cost_budget_exceeded_emitted:
+            self._append_cost_budget_alert(
+                alert="exceeded",
+                budget=budget,
+                trigger_record_name=name,
+                turn_id=turn_id,
+            )
+            self._cost_budget_exceeded_emitted = True
+
+    def _append_cost_budget_alert(
+        self,
+        *,
+        alert: str,
+        budget: dict[str, Any],
+        trigger_record_name: str,
+        turn_id: str | None,
+    ) -> None:
+        if self.journal is None:
+            return
+        self.journal.append(
+            kind=JournalRecordKind.METRIC,
+            name=f"cost_budget_{alert}",
+            session_id=self.session_id,
+            turn_id=turn_id,
+            data={
+                "alert": alert,
+                "budget_status": budget["status"],
+                "total_usd": self._cost_total_usd,
+                "max_session_cost_usd": budget["max_session_cost_usd"],
+                "warning_threshold_usd": budget["warning_threshold_usd"],
+                "usage_fraction": budget["usage_fraction"],
+                "remaining_usd": budget["remaining_usd"],
+                "overage_usd": budget["overage_usd"],
+                "trigger_record_name": trigger_record_name,
+            },
+            tags=frozenset({"cost_budget", alert}),
         )
 
     def _subscribe(self, event_type: type, handler: EventHandler) -> None:
