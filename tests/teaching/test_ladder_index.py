@@ -415,6 +415,10 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "same template catalog and post-scaffold command previews" in normalized_cli_section
     assert "same route map with command hints" in normalized_cli_section
     assert "audience labels" in normalized_cli_section
+    assert "`uv run easycat docs --audience operators`" in cli_section
+    assert "`uv run easycat docs --audience operators --json`" in cli_section
+    assert "production and observability route set" in normalized_cli_section
+    assert "parseable operator-facing routes" in normalized_cli_section
     assert "architecture and maintenance guides" in normalized_cli_section
     assert (
         "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "

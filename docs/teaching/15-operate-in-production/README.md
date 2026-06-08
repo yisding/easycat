@@ -465,6 +465,10 @@ Run easycat explain json-schema for CLI JSON.
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, architecture and maintenance guides, deployment, observability,
   and validation reference material.
+  Use `uv run easycat docs --audience operators` for the production and
+  observability route set, or
+  `uv run easycat docs --audience operators --json` when automation needs
+  parseable operator-facing routes.
   Use `uv run easycat docs --json` when a coding agent or script needs the
   same route map with command hints and audience labels; replace uppercase or
   angle-bracket placeholders such as `PATH` or `<session_id>` before running
