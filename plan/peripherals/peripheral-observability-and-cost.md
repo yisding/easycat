@@ -100,9 +100,9 @@ provider version strings so replays compute costs at historical rates.
 
 ### Budget Alerts
 
-`max_session_cost_usd=0.50` emits a warning journal record at 80% and an
-exceeded journal record at 100%; optional session kill-switch behavior is
-still planned. Kill-switch pattern from Langfuse, Helicone, Langsmith. Voice
+`max_session_cost_usd=0.50` emits a warning journal record at 80%, an exceeded
+journal record at 100%, and a session stop request when explicit cost records
+cross the cap. Kill-switch pattern from Langfuse, Helicone, Langsmith. Voice
 apps burn money faster than chat apps because audio tokens are expensive.
 
 Current partial landing: the debugger `/api/cost` rollup reads
@@ -112,8 +112,9 @@ entries exist. The shared budget-status parser now lives in
 `easycat.runtime.cost_budget_status(...)`, and `SessionJournalSink` now uses
 the same helper to emit one `cost_budget_warning` and one
 `cost_budget_exceeded` metric record when explicit cost journal entries cross
-those thresholds. Runtime provider pricing and the optional kill switch remain
-planned.
+those thresholds. The exceeded alert now records `cost_budget_stop_requested`
+and schedules `stop(force=True)` through the runtime task scope. Runtime
+provider pricing remains planned.
 
 ## OTel Export
 

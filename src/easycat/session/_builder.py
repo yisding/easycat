@@ -120,6 +120,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
         max_session_cost_usd=cfg.max_session_cost_usd,
+        on_cost_budget_exceeded=session._on_cost_budget_exceeded,
     )
     journal_sink.subscribe()
 

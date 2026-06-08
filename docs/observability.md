@@ -198,9 +198,10 @@ There are three independent knobs, and they control different things:
   `max_session_cost_usd` budget status from cost records using the shared
   `easycat.runtime.cost_budget_status(...)` helper, and the session journal
   emits `cost_budget_warning` / `cost_budget_exceeded` records when appended
-  cost records cross the configured thresholds. Provider cost-record emission,
-  aggregate turn budgets, optional session kill switches, and warmup execution
-  are still planned.
+  cost records cross the configured thresholds. When `cost_budget_exceeded`
+  fires, Session also records `cost_budget_stop_requested` and schedules
+  `stop(force=True)` through the runtime task scope. Provider cost-record
+  emission, aggregate turn budgets, and warmup execution are still planned.
 
 ### Correlation ids in logs
 

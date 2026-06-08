@@ -290,7 +290,7 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "runtime enforcement for advanced observability knobs" in remaining_summary
     assert "aggregate `latency_budget=` alerts" in remaining_summary
     assert "`warmup=`" in remaining_summary
-    assert "`max_session_cost_usd=`" in remaining_summary
+    assert "`max_session_cost_usd=`" not in remaining_summary
 
 
 def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
@@ -324,6 +324,8 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "`easycat.runtime.cost_budget_status(...)`" in status
     assert "`cost_budget_warning`" in status
     assert "`cost_budget_exceeded`" in status
+    assert "`cost_budget_stop_requested`" in status
+    assert "`stop(force=True)`" in status
     assert "structured" in status
     assert "examples/ws_supervisor_server.py" in status
     assert "serve_supervisor_websocket" in status

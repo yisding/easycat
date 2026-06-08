@@ -295,6 +295,7 @@ def test_journal_sink_stores_artifact_refs_before_record() -> None:
 
 def test_journal_sink_emits_cost_budget_alerts_once() -> None:
     journal = InMemoryRingBuffer()
+    exceeded_calls: list[tuple[dict[str, object], str | None]] = []
     sink = SessionJournalSink(
         event_bus=EventBus(),
         journal=journal,
@@ -302,6 +303,7 @@ def test_journal_sink_emits_cost_budget_alerts_once() -> None:
         session_id="session-a",
         current_turn_id=lambda turn_id=None: turn_id,
         max_session_cost_usd=1.0,
+        on_cost_budget_exceeded=lambda alert, turn_id: exceeded_calls.append((alert, turn_id)),
     )
 
     sink.append_record(
@@ -370,6 +372,7 @@ def test_journal_sink_emits_cost_budget_alerts_once() -> None:
         "overage_usd": 0.0,
         "trigger_record_name": "cost",
     }
+    assert exceeded_calls == [(exceeded.data, "turn-2")]
 
 
 def test_journal_sink_skips_cost_budget_alerts_without_budget_or_numeric_usd() -> None:
@@ -407,6 +410,43 @@ def test_journal_sink_skips_cost_budget_alerts_without_budget_or_numeric_usd() -
         "cost_record",
         "cost",
         "stage_complete",
+    ]
+
+
+def test_journal_sink_notifies_cost_budget_exceeded_without_journal() -> None:
+    exceeded_calls: list[tuple[dict[str, object], str | None]] = []
+    sink = SessionJournalSink(
+        event_bus=EventBus(),
+        journal=None,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+        max_session_cost_usd=1.0,
+        on_cost_budget_exceeded=lambda alert, turn_id: exceeded_calls.append((alert, turn_id)),
+    )
+
+    sink.append_record(
+        kind=JournalRecordKind.METRIC,
+        name="cost",
+        turn_id="turn-no-journal",
+        data={"usd": 1.1},
+    )
+
+    assert exceeded_calls == [
+        (
+            {
+                "alert": "exceeded",
+                "budget_status": "exceeded",
+                "total_usd": 1.1,
+                "max_session_cost_usd": 1.0,
+                "warning_threshold_usd": 0.8,
+                "usage_fraction": pytest.approx(1.1),
+                "remaining_usd": 0.0,
+                "overage_usd": pytest.approx(0.1),
+                "trigger_record_name": "cost",
+            },
+            "turn-no-journal",
+        )
     ]
 
 

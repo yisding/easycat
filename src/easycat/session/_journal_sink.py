@@ -9,6 +9,7 @@ and event-bus subscription handlers.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,6 +49,7 @@ from easycat.runtime.journal import ExecutionJournal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
 _COST_RECORD_NAMES = frozenset({"cost", "cost_record"})
+logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
     "text",
     "track",
@@ -120,6 +122,7 @@ class SessionJournalSink:
     session_id: str
     current_turn_id: Callable[[str | None], str | None]
     max_session_cost_usd: float | None = None
+    on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], None] | None = None
     _subscribed: bool = field(default=False, init=False)
     _cost_total_usd: float = field(default=0.0, init=False)
     _cost_budget_warning_emitted: bool = field(default=False, init=False)
@@ -219,6 +222,11 @@ class SessionJournalSink:
         output_artifact_class: ArtifactClass = "debug_verbose",
     ) -> None:
         if self.journal is None:
+            self._maybe_append_cost_budget_record(
+                name=name,
+                turn_id=self.current_turn_id(turn_id),
+                data=data,
+            )
             return
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
@@ -253,7 +261,7 @@ class SessionJournalSink:
         turn_id: str | None,
         data: dict[str, Any] | None,
     ) -> None:
-        if self.journal is None or name not in _COST_RECORD_NAMES or not isinstance(data, dict):
+        if name not in _COST_RECORD_NAMES or not isinstance(data, dict):
             return
         limit_usd = finite_number(self.max_session_cost_usd)
         if limit_usd is None or limit_usd <= 0:
@@ -273,13 +281,18 @@ class SessionJournalSink:
             )
             self._cost_budget_warning_emitted = True
         if budget["exceeded"] and not self._cost_budget_exceeded_emitted:
-            self._append_cost_budget_alert(
+            alert_data = self._append_cost_budget_alert(
                 alert="exceeded",
                 budget=budget,
                 trigger_record_name=name,
                 turn_id=turn_id,
             )
             self._cost_budget_exceeded_emitted = True
+            if self.on_cost_budget_exceeded is not None:
+                try:
+                    self.on_cost_budget_exceeded(alert_data, turn_id)
+                except Exception:
+                    logger.exception("Cost budget enforcement callback failed")
 
     def _append_cost_budget_alert(
         self,
@@ -288,27 +301,29 @@ class SessionJournalSink:
         budget: dict[str, Any],
         trigger_record_name: str,
         turn_id: str | None,
-    ) -> None:
+    ) -> dict[str, Any]:
+        data = {
+            "alert": alert,
+            "budget_status": budget["status"],
+            "total_usd": self._cost_total_usd,
+            "max_session_cost_usd": budget["max_session_cost_usd"],
+            "warning_threshold_usd": budget["warning_threshold_usd"],
+            "usage_fraction": budget["usage_fraction"],
+            "remaining_usd": budget["remaining_usd"],
+            "overage_usd": budget["overage_usd"],
+            "trigger_record_name": trigger_record_name,
+        }
         if self.journal is None:
-            return
+            return data
         self.journal.append(
             kind=JournalRecordKind.METRIC,
             name=f"cost_budget_{alert}",
             session_id=self.session_id,
             turn_id=turn_id,
-            data={
-                "alert": alert,
-                "budget_status": budget["status"],
-                "total_usd": self._cost_total_usd,
-                "max_session_cost_usd": budget["max_session_cost_usd"],
-                "warning_threshold_usd": budget["warning_threshold_usd"],
-                "usage_fraction": budget["usage_fraction"],
-                "remaining_usd": budget["remaining_usd"],
-                "overage_usd": budget["overage_usd"],
-                "trigger_record_name": trigger_record_name,
-            },
+            data=data,
             tags=frozenset({"cost_budget", alert}),
         )
+        return data
 
     def _subscribe(self, event_type: type, handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)

@@ -68,6 +68,7 @@ from easycat.runtime.capabilities import (
     is_passthrough_provider,
 )
 from easycat.runtime.journal import JournalView
+from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._builder import (
     _OUTBOUND_QUEUE_MAX_SIZE,
@@ -241,6 +242,7 @@ class Session:
         self._is_running = False
         self._closed = False
         self._stopping = False
+        self._cost_budget_stop_requested = False
         self._observability_active = False
         self._closed_event: asyncio.Event | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -502,6 +504,60 @@ class Session:
                 "total_drops": total_drops,
             },
         )
+
+    def _on_cost_budget_exceeded(
+        self,
+        alert: dict[str, Any],
+        turn_id: str | None,
+    ) -> None:
+        """Schedule session teardown when runtime cost records exceed the cap."""
+        if self._closed or self._stopping or self._cost_budget_stop_requested:
+            return
+        self._cost_budget_stop_requested = True
+        self._journal_sink.append_record(
+            kind=JournalRecordKind.CONTROL,
+            name="cost_budget_stop_requested",
+            turn_id=turn_id,
+            data={
+                "reason": "max_session_cost_usd_exceeded",
+                "budget_status": alert.get("budget_status"),
+                "total_usd": alert.get("total_usd"),
+                "max_session_cost_usd": alert.get("max_session_cost_usd"),
+                "overage_usd": alert.get("overage_usd"),
+                "trigger_record_name": alert.get("trigger_record_name"),
+            },
+        )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "Cost budget exceeded for session %s outside a running event loop; "
+                "stop(force=True) could not be scheduled.",
+                self.session_id,
+            )
+            return
+        task = self._runtime_scope.create_journaled_task(
+            self._stop_for_cost_budget(alert),
+            name="cost_budget_stop",
+            journal_sink=self._journal_sink,
+            turn_id=turn_id,
+        )
+        task.add_done_callback(self._runtime_scope.log_task_exception)
+
+    async def _stop_for_cost_budget(self, alert: dict[str, Any]) -> None:
+        """Force-stop the session from a runtime-scope task after budget breach."""
+        current = asyncio.current_task()
+        if current is not None:
+            self._runtime_scope.discard(current)
+        if self._closed or self._stopping:
+            return
+        logger.warning(
+            "Stopping session %s because max_session_cost_usd=%r was exceeded (total_usd=%r).",
+            self.session_id,
+            alert.get("max_session_cost_usd"),
+            alert.get("total_usd"),
+        )
+        await self.stop(force=True)
 
     def _reset_turn_state(self) -> None:
         """Clear turn correlation state and reset the turn manager."""

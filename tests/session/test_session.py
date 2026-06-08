@@ -593,6 +593,71 @@ async def test_session_stop_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_session_cost_budget_exceeded_requests_force_stop() -> None:
+    journal = InMemoryRingBuffer()
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            journal=journal,
+            max_session_cost_usd=1.0,
+        )
+    )
+
+    session._journal_sink.append_record(
+        kind=JournalRecordKind.METRIC,
+        name="cost_record",
+        turn_id="turn-budget",
+        data={"usd": 1.25},
+    )
+
+    await asyncio.wait_for(session.wait_closed(), timeout=1.0)
+
+    records = session.journal.read()
+    names = [record.name for record in records]
+    assert names[:5] == [
+        "cost_record",
+        "cost_budget_warning",
+        "cost_budget_exceeded",
+        "cost_budget_stop_requested",
+        "task_scheduled",
+    ]
+    stop_request = records[3]
+    assert stop_request.kind == JournalRecordKind.CONTROL
+    assert stop_request.turn_id == "turn-budget"
+    assert stop_request.data == {
+        "reason": "max_session_cost_usd_exceeded",
+        "budget_status": "exceeded",
+        "total_usd": 1.25,
+        "max_session_cost_usd": 1.0,
+        "overage_usd": pytest.approx(0.25),
+        "trigger_record_name": "cost_record",
+    }
+    assert records[4].data == {"task_name": "cost_budget_stop"}
+    assert session._closed is True
+
+
+@pytest.mark.asyncio
+async def test_session_cost_budget_exceeded_stops_without_journal() -> None:
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            max_session_cost_usd=1.0,
+        )
+    )
+
+    session._journal_sink.append_record(
+        kind=JournalRecordKind.METRIC,
+        name="cost",
+        data={"usd": 1.1},
+    )
+
+    await asyncio.wait_for(session.wait_closed(), timeout=1.0)
+
+    assert session._closed is True
+    assert session.journal is None
+
+
+@pytest.mark.asyncio
 async def test_stop_keeps_sqlite_journal_and_bundle_readable(tmp_path):
     session_id = "sess"
     transport = FakeTransport()
