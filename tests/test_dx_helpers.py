@@ -322,9 +322,15 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
     landed_statuses = {
         "5.2": "landed; guarded",
         "5.3": "landed; guarded",
+        "5.4": "folded into 5.3",
+        "5.5": "landed; guarded",
+        "5.6": "landed; guarded",
+        "5.7": "landed; guarded",
+        "5.8": "landed; guarded",
         "5.9": "landed; guarded",
         "5.10": "landed",
         "5.12": "landed Part A; Part B dropped",
+        "5.13": "landed; guarded",
     }
     for number, status in landed_statuses.items():
         pattern = rf"^### {re.escape(number)} .* \*\({re.escape(status)}\)\*$"

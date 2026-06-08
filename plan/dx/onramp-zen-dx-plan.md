@@ -1,9 +1,10 @@
 # EasyCat Onramp DX Plan — Radically Simpler, Still Powerful, Zen-Aligned
 
-> Status: implementation-ready. Every change below has been checked against the
-> source tree and an adversarial verifier pass. Changes the verifiers marked
-> **drop** are not in the ranked list; **adopt-with-changes** caveats are folded
-> into each subsection; **adopt** changes are kept as-is.
+> Status: current implementation record plus remaining DX backlog. Every change
+> below has been checked against the source tree and an adversarial verifier
+> pass. Sections marked **landed** are backed by tests named in the verifier
+> verdicts; sections still marked **adopt** or **adopt-with-changes** remain
+> actionable backlog.
 
 ---
 
@@ -294,7 +295,7 @@ tests. Because
 
 ---
 
-### 5.4 — Warn at the silent env-pickup site (folded into the `_validate` message)  *(adopt-with-changes)*
+### 5.4 — Warn at the silent env-pickup site (folded into the `_validate` message)  *(folded into 5.3)*
 
 **What / why.** The old `EasyConfig.__post_init__` env-pickup branch was a bare `if` with no
 `else`, so a missing key was swallowed at the pickup site and resurfaced two steps later. The
@@ -319,7 +320,7 @@ adopt the single-message route in #5.3 instead.
 
 ---
 
-### 5.5 — Filter the scaffold's template copy so cache artifacts stop shipping  *(adopt)*
+### 5.5 — Filter the scaffold's template copy so cache artifacts stop shipping  *(landed; guarded)*
 
 **What / why.** `_copy_template` walks the live template dir and used to copy every
 non-dir file byte-for-byte with no ignore filter
@@ -345,20 +346,21 @@ for source in sorted(src_root.rglob("*")):
     rel = source.relative_to(src_root)
 ```
 
-**Files touched.** `src/easycat/cli/scaffold/init.py`; **add a regression test** asserting no
-generated path contains `__pycache__`/`.ruff_cache` or ends in `.pyc` (`tests/cli/test_init.py`
-currently only does a subset check for known generated cache directories).
+**Files touched.** `src/easycat/cli/scaffold/init.py`; regression coverage asserts generated
+paths skip local artifact directories, package metadata directories, compiled bytecode, local
+secret suffixes, and coverage files.
 
-**Verifier verdict.** Bug reproduced live; the filter drops exactly the 4 cache artifacts and
-keeps the 5 real files (the legitimate top-level `.gitignore` survives). Adopt; pair with the
-regression test so it cannot silently regress. (A git-tracked manifest would be even more
-robust but the denylist is the minimal shippable fix.)
+**Verifier verdict.** Landed and guarded by
+`tests/cli/test_templates.py::test_template_sources_skip_generated_artifacts` plus the
+copy-filter policy tests around `_COPY_IGNORE`, `_COPY_FILE_IGNORE`,
+`_COPY_PART_SUFFIX_IGNORE`, and `_COPY_SUFFIX_IGNORE`. The legitimate top-level `.gitignore`
+survives while cache artifacts stay out of generated projects.
 
 **Zen.** #1 beautiful is better than ugly.
 
 ---
 
-### 5.6 — Render scaffolded agent instructions with non-ASCII intact  *(adopt)*
+### 5.6 — Render scaffolded agent instructions with non-ASCII intact  *(landed; guarded)*
 
 **What / why.** `_python_string_literal_contents` used `json.dumps(value)[1:-1]`
 (`src/easycat/cli/scaffold/init.py::_python_string_literal_contents`),
@@ -371,19 +373,18 @@ step tells the newcomer to edit.
 return json.dumps(value, ensure_ascii=False)[1:-1]
 ```
 
-**Files touched.** `src/easycat/cli/scaffold/init.py` (one line; optional docstring tweak noting
-non-ASCII now passes through).
+**Files touched.** `src/easycat/cli/scaffold/init.py`.
 
-**Verifier verdict.** Clean one-line fix; round-trips to the identical runtime string; escaping
-of `\`, `"`, newline is preserved; `ruff` clean under the generated project's config; the
-escaping test (`tests/cli/test_init.py::test_template_python_string_literal_escaping`) stays
-green. Adopt.
+**Verifier verdict.** Landed and guarded by
+`tests/cli/test_init.py::test_init_renders_non_ascii_instructions_intact` and the escaping
+coverage around generated `agent.py` compilation. It round-trips to the identical runtime
+string while preserving escaping of `\`, `"`, and newline.
 
 **Zen.** #7 readability; #1 beautiful.
 
 ---
 
-### 5.7 — Lead the package `__doc__` with the 3-line quickstart + altitude steer  *(adopt-with-changes)*
+### 5.7 — Lead the package `__doc__` with the 3-line quickstart + altitude steer  *(landed; guarded)*
 
 **What / why.** `help(easycat)` and IDE hover render the module docstring; today it states the
 lazy-import curation policy (a maintainer concern), not a "start here." Lead with the runnable
@@ -411,16 +412,17 @@ cheap.
 
 **Files touched.** `src/easycat/__init__.py`.
 
-**Verifier verdict.** Clean, single-file, zero-risk; serves #11 and #2. **Caveat folded in:**
-include the install hint (`uv add 'easycat[quickstart]'`) so the teaser is honestly runnable —
-the snippet omits the `try/except ImportError` guard the real example carries, so a literal
-copy-paste without `openai-agents` would otherwise raise a raw `ModuleNotFoundError`.
+**Verifier verdict.** Landed and guarded by
+`tests/test_dx_helpers.py::test_package_docstring_leads_with_canonical_quickstart`. **Caveat
+folded in:** the module docstring includes the install hint (`uv add 'easycat[quickstart]'`)
+plus `uv run easycat doctor` / `.env` guidance so the teaser is honestly runnable even though
+the full example carries the richer `try/except ImportError` guard.
 
 **Zen.** #11 one obvious way; #2 explicit.
 
 ---
 
-### 5.8 — Add in-code "Next:" signposts forming an in-editor ladder  *(adopt-with-changes)*
+### 5.8 — Add in-code "Next:" signposts forming an in-editor ladder  *(landed; guarded)*
 
 **What / why.** `examples/openai_agents_voice.py` dead-ends in-code (docstring repeats
 setup/run only); the rich "Next steps" content exists only in the scaffold-generated README.
@@ -437,12 +439,15 @@ Add a trailing `# Next, try:` block to the canonical example and one-line `Next:
 **Files touched.** `examples/openai_agents_voice.py`; `src/easycat/config/easy.py` (preset
 docstrings); `src/easycat/session/_types.py` (`SessionConfig` docstring).
 
-**Verifier verdict.** Feasible, low-risk (comments/docstrings only — no behavior change). Not a
-concept reduction; it is discoverability (Progressive Disclosure). **Caveats folded in:** the
-`stt="deepgram/nova-2"` line must be as honest as the browser/phone note — flag that it needs
-`DEEPGRAM_API_KEY` **and** `easycat[deepgram]` (otherwise it recreates the "looks like a
-one-token swap" footgun). Soften the `SessionConfig` "one rung up" wording: the two configs
-differ in field *type* (live providers vs descriptors), not just convenience.
+**Verifier verdict.** Landed and guarded by
+`tests/test_dx_helpers.py::test_canonical_example_keeps_next_step_breadcrumbs`,
+`tests/test_dx_helpers.py::test_easyconfig_preset_docstrings_explain_next_rungs`, and
+`tests/test_dx_helpers.py::test_sessionconfig_docstring_steers_to_easyconfig`. **Caveats
+folded in:** the `stt="deepgram/nova-2"` line names both `DEEPGRAM_API_KEY` and
+`easycat[deepgram]`; the canonical example now links to
+`uv run easycat docs --audience learners`; and the `SessionConfig` wording distinguishes
+live provider instances from EasyConfig descriptors instead of pretending the difference is
+only convenience.
 
 **Zen.** #7 readability; #13 if easy to explain, may be a good idea.
 
