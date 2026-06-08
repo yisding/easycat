@@ -45,6 +45,8 @@ the raw commands below. For raw docs/onboarding guard commands, use the
   examples, teaching, architecture and maintenance, validation, and operations.
 - `uv run easycat docs --audience coding-agents`: show the coding-agent
   route slice without scanning the full map.
+- `uv run easycat docs --audience coding-agents --json`: emit the
+  coding-agent route slice with command hints for automation.
 - `uv run easycat docs --json`: emit the same route map with audience labels
   and command hints for automation.
 - `uv run easycat doctor --json`: emit parseable first-run environment checks.

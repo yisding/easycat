@@ -435,6 +435,8 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "easycat bundles list",
         "uv sync --extra debugger --group dev",
     ]
+    assert "uv run easycat docs --audience maintainers --json" in commands["CLAUDE.md"]
+    assert "uv run easycat docs --audience coding-agents --json" in commands["AGENTS.md"]
     assert commands["README.md#cli"] == [
         "easycat init --list-templates",
         "easycat init --list-templates --json",

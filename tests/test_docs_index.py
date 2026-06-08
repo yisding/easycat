@@ -472,7 +472,10 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
 
     for command in (
         DOCS_MAP_COMMANDS
-        + ("uv run easycat docs --audience coding-agents",)
+        + (
+            "uv run easycat docs --audience coding-agents",
+            "uv run easycat docs --audience coding-agents --json",
+        )
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ONBOARDING_GUARD_COMMANDS
         + RAW_ONBOARDING_GUARD_COMMANDS
@@ -489,7 +492,10 @@ def test_architecture_docs_route_matches_guide_command_hints() -> None:
 
     for command in (
         DOCS_MAP_COMMANDS
-        + ("uv run easycat docs --audience maintainers",)
+        + (
+            "uv run easycat docs --audience maintainers",
+            "uv run easycat docs --audience maintainers --json",
+        )
         + AGENT_GUIDE_MACHINE_COMMANDS
         + ("uv run pytest tests/test_install_guidance.py",)
         + ONBOARDING_GUARD_COMMANDS

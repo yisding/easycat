@@ -47,6 +47,7 @@ uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percent
 uv run pytest tests/test_install_guidance.py            # Verify onboarding/install guidance
 uv run easycat docs              # Maintained docs map
 uv run easycat docs --audience maintainers  # Maintainer-focused docs map
+uv run easycat docs --audience maintainers --json  # JSON maintainer-focused docs map
 uv run easycat docs --json       # Docs route map with audiences and command hints
 uv run easycat doctor --json     # Parseable first-run environment checks
 uv run easycat doctor --env-file .env --json  # Parseable checks with project .env loaded
