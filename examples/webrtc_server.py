@@ -41,18 +41,16 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 from easycat import (
     EasyConfig,
     ICEServer,
     WebRTCTransportConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
-    wait_for_shutdown_signal,
 )
+from easycat.helpers import run_session
 
 
 def _build_ice_servers() -> list[ICEServer]:
@@ -79,7 +77,7 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-async def main() -> None:
+def main() -> None:
     require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
@@ -104,7 +102,6 @@ async def main() -> None:
         agent=agent,
     )
     session = create_session(config)
-    attach_runtime_feedback(session)
 
     print(f"Open http://localhost:{signaling_port} in your browser")
     if any(any("turn:" in u for u in s.urls) for s in ice_servers):
@@ -116,10 +113,8 @@ async def main() -> None:
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")
 
-    await session.start()
-
-    await wait_for_shutdown_signal(session)
+    run_session(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

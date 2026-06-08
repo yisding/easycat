@@ -27,7 +27,6 @@ Then open http://localhost:8080/ws_browser_client.html in your browser.
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -36,11 +35,10 @@ from pathlib import Path
 from easycat import (
     EasyConfig,
     WebSocketTransportConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
-    wait_for_shutdown_signal,
 )
+from easycat.helpers import run_session
 
 HTTP_PORT = 8080
 WS_PORT = 8765
@@ -61,7 +59,7 @@ def _run_http_server() -> None:
 # ── Main ─────────────────────────────────────────────────────────
 
 
-async def main() -> None:
+def main() -> None:
     require_env("OPENAI_API_KEY")
     from agents import Agent  # type: ignore[import-untyped]
 
@@ -75,17 +73,14 @@ async def main() -> None:
         agent=agent,
     )
     session = create_session(config)
-    attach_runtime_feedback(session)
 
     # Serve the HTML client — in production, use your own web framework.
     http_thread = threading.Thread(target=_run_http_server, daemon=True)
     http_thread.start()
     print(f"Open http://localhost:{HTTP_PORT}/ws_browser_client.html in your browser")
 
-    await session.start()
-
-    await wait_for_shutdown_signal(session)
+    run_session(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -25,7 +25,6 @@ Open:
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 
@@ -42,12 +41,11 @@ from easycat import (
     EasyConfig,
     ICEServer,
     WebRTCTransportConfig,
-    attach_runtime_feedback,
     create_session,
     require_env,
-    wait_for_shutdown_signal,
 )
 from easycat.debugger import serve_session
+from easycat.helpers import run_session
 
 _STATIC_DIR = str(Path(__file__).parent / "webrtc_static")
 
@@ -82,7 +80,7 @@ def multiply_numbers(a: float, b: float) -> float:
     return a * b
 
 
-async def main() -> None:
+def main() -> None:
     require_env("OPENAI_API_KEY")
 
     signaling_host = os.getenv("SIGNALING_HOST", "127.0.0.1")
@@ -112,7 +110,6 @@ async def main() -> None:
             debug="light",
         )
     )
-    attach_runtime_feedback(session)
 
     serve_session(
         session,
@@ -131,9 +128,8 @@ async def main() -> None:
     print(f"WebRTC client only: http://localhost:{signaling_port}/webrtc_client.html")
     print(f"Debugger only:     http://{debugger_host}:{debugger_port}")
 
-    await session.start()
-    await wait_for_shutdown_signal(session)
+    run_session(session)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -100,6 +100,11 @@ Shipped:
   their direct-session teaching points (agent/tool event subscriptions and
   debugger UI setup) while using `run_session(session)` instead of manual
   feedback attachment, signal waiting, `session.start()`, and `asyncio.run(...)`.
+- `examples/ws_browser_example.py`, `examples/webrtc_server.py`, and
+  `examples/webrtc_observability_server.py` now keep their browser/WebRTC
+  transport setup and URL guidance while using `run_session(session)` instead
+  of manual feedback attachment, signal waiting, `session.start()`, and
+  `asyncio.run(...)`.
 - Voice/server scaffold README debug guidance now tells generated-project
   users to pass `record_to="runs"` alongside `debug="full"` so they get both a
   durable journal and a timestamped `RunBundle`
@@ -120,8 +125,9 @@ Still remaining:
   debug bundle example uses `record_to=` auto-capture, the no-key journal demo
   uses the scoped `async with create_session(...)` lifecycle, the custom
   provider and VAD backend examples use `run(EasyConfig.mic(...))`, and
-  direct-session subscription/debugger examples use `run_session(session)`;
-  scaffold debug guidance points all generated-project users at `record_to=`.
+  direct-session subscription/debugger and browser-transport examples use
+  `run_session(session)`; scaffold debug guidance points all generated-project
+  users at `record_to=`.
   Broader raw line-count shrinkage remains open in non-canonical server and
   protocol-heavy examples.
 - `EasyConfig.offline()` preset (depends on Kyutai Pocket TTS +

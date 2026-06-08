@@ -1425,6 +1425,28 @@ def test_webrtc_examples_default_signaling_to_loopback():
     assert "SIGNALING_HOST=0.0.0.0" in deploy
 
 
+def test_browser_transport_examples_use_run_session_lifecycle():
+    budgets = {
+        "examples/ws_browser_example.py": 40,
+        "examples/webrtc_server.py": 65,
+        "examples/webrtc_observability_server.py": 80,
+    }
+
+    for relpath, budget in budgets.items():
+        path = REPO_ROOT / relpath
+        source = path.read_text(encoding="utf-8")
+
+        assert _visible_code_line_count(path) <= budget
+        assert "create_session(" in source
+        assert "from easycat.helpers import run_session" in source
+        assert "run_session(session)" in source
+        assert "attach_runtime_feedback" not in source
+        assert "wait_for_shutdown_signal" not in source
+        assert "asyncio.run(" not in source
+        assert "await session.start()" not in source
+        assert "await session.stop()" not in source
+
+
 def test_push_to_talk_example_imports():
     import examples.push_to_talk as push_to_talk
 
