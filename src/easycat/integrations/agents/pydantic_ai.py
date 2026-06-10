@@ -94,10 +94,10 @@ class PydanticAIBridge:
                 )
             self._mode = "graph"
             self._graph = graph
-            self._state_factory = state_factory
-            self._initial_node_factory = initial_node_factory
+            self._state_factory: Callable[[], Any] | None = state_factory
+            self._initial_node_factory: Callable[[str, Any], Any] | None = initial_node_factory
             self._agents = agents
-            self._agent = None
+            self._agent: Any | None = None
             self._state: Any = None
             self._active_node: str | None = None
         else:
@@ -302,16 +302,24 @@ class PydanticAIBridge:
 
     # ── Agent mode ───────────────────────────────────────────────
 
+    def _require_agent(self) -> Any:
+        """Return the wrapped agent; only callable in agent mode."""
+        agent = self._agent
+        if agent is None:
+            raise BridgeConfigurationError("PydanticAIBridge is in graph mode (no agent set)")
+        return agent
+
     async def _invoke_agent(
         self,
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
+        agent = self._require_agent()
         agent_cursor = ExecutionCursor(
             unit_id=f"agent-{uuid4().hex[:8]}",
             unit_kind=UnitKind.AGENT,
-            display_name=_agent_name(self._agent),
+            display_name=_agent_name(agent),
             entered_at=time.monotonic_ns(),
             committable=False,
         )
@@ -323,10 +331,10 @@ class PydanticAIBridge:
 
         saved_mcp_servers = _UNSET
         try:
-            if self._mcp_servers is not None and hasattr(self._agent, "mcp_servers"):
-                saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
-                self._agent.mcp_servers = list(self._mcp_servers)
-            if hasattr(self._agent, "iter"):
+            if self._mcp_servers is not None and hasattr(agent, "mcp_servers"):
+                saved_mcp_servers = getattr(agent, "mcp_servers", None)
+                agent.mcp_servers = list(self._mcp_servers)
+            if hasattr(agent, "iter"):
                 async for ev in self._stream_via_iter(turn_input, recorder, cancel_token):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
@@ -359,7 +367,7 @@ class PydanticAIBridge:
             raise
         finally:
             if saved_mcp_servers is not _UNSET:
-                self._agent.mcp_servers = saved_mcp_servers
+                agent.mcp_servers = saved_mcp_servers
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         if not done_emitted:
@@ -376,9 +384,10 @@ class PydanticAIBridge:
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Stream using ``agent.iter()`` with full event capture."""
-        async with self._agent.iter(
+        agent = self._require_agent()
+        async with agent.iter(
             turn_input.text,
-            **self._agent_run_kwargs(self._agent.iter, turn_input),
+            **self._agent_run_kwargs(agent.iter, turn_input),
         ) as agent_run:
             interrupted = False
             async for node in agent_run:
@@ -414,9 +423,10 @@ class PydanticAIBridge:
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Fallback: stream text-only via ``agent.run_stream()``."""
-        async with self._agent.run_stream(
+        agent = self._require_agent()
+        async with agent.run_stream(
             turn_input.text,
-            **self._agent_run_kwargs(self._agent.run_stream, turn_input),
+            **self._agent_run_kwargs(agent.run_stream, turn_input),
         ) as result:
             accumulated = ""
             async for full_text in result.stream_text():
@@ -490,12 +500,16 @@ class PydanticAIBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
+        state_factory = self._state_factory
+        initial_node_factory = self._initial_node_factory
+        if state_factory is None or initial_node_factory is None:
+            raise BridgeConfigurationError("PydanticAIBridge is in agent mode (no graph set)")
         if self._state is None:
-            state = self._state_factory()
+            state = state_factory()
             self._state = state
         else:
             state = self._state
-        initial_node = self._initial_node_factory(turn_input.text, state)
+        initial_node = initial_node_factory(turn_input.text, state)
 
         # Install event handler on state for per-agent capture.
         _handler = _GraphEventHandler(recorder)

@@ -1012,7 +1012,7 @@ class LangGraphBridge:
         recorder: AgentRecorder,
         agent_cursor: ExecutionCursor,
         open_cursors: dict[str, ExecutionCursor],
-        last_node_by_ns: dict[tuple[str, ...], str],
+        last_node_by_ns: dict[tuple[str, ...], tuple[str, Any]],
         ended_runs: set[str],
     ) -> None:
         """Open / close workflow_node + model_node cursors for one event.
@@ -1034,7 +1034,8 @@ class LangGraphBridge:
         via the recorder; this method yields no stream events.
         """
         event_type = event.get("event")
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        metadata_raw = event.get("metadata")
+        metadata = metadata_raw if isinstance(metadata_raw, dict) else {}
         node_name = metadata.get("langgraph_node")
         step = metadata.get("langgraph_step")
         ns_raw = metadata.get("langgraph_checkpoint_ns", "")

@@ -282,6 +282,9 @@ class STTCommitter:
                 else:
                     await future
             except TimeoutError:
+                # ``wait_for`` (and therefore TimeoutError) is only used
+                # when a timeout is configured.
+                assert timeout is not None
                 name = resolve_provider_name(self._stt_getter(), "stt")
                 err = STTTimeoutError(name, timeout)
                 await self._emit(Error(exception=err, stage=ErrorStage.STT, provider=name))

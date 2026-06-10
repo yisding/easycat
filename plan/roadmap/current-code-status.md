@@ -86,7 +86,7 @@ with the codebase. Counts below come from tracked files and exclude
   validation now exposes a first-class optional WebRTC browser stats artifact
   path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
-  1,437 lines.
+  1,440 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
   159 lines, with the lazy-export registry isolated in `easycat._public_api`.
   The public surface is still broad at 90 lazy top-level exports, but it is

@@ -114,7 +114,7 @@ class TurnStage:
         complete_extra: dict[str, Any] = {}
         if isinstance(result, dict):
             source: dict[str, Any] = dict(result)
-        elif dataclasses.is_dataclass(result):
+        elif dataclasses.is_dataclass(result) and not isinstance(result, type):
             source = dataclasses.asdict(result)
         else:
             source = {}

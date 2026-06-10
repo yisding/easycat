@@ -31,17 +31,19 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
+      - uses: extractions/setup-just@v3
       - run: uv sync --group dev --python 3.12
       # Advisory: full-repo type report. Never fails the build today
-      # (~104 known errors across optional providers / config.py);
-      # surfaces the count so we can ratchet it down over time.
+      # (~72 known errors across optional providers / config / cli /
+      # debugger); surfaces the count so we can ratchet it down over time.
       - name: mypy (advisory, whole repo)
         continue-on-error: true
         run: uv run --python 3.12 mypy src/easycat
-      # Gate: the clean core must stay green. Scoped + silent follow-imports
-      # so only the gated package's own files are graded.
+      # Gate: the clean core must stay green. The gated path list lives in
+      # the justfile (`mypy_gated_paths`) so local `just typecheck` and CI
+      # grade exactly the same packages.
       - name: mypy (gate, clean core)
-        run: uv run --python 3.12 mypy --follow-imports=silent src/easycat/debug
+        run: just typecheck
 
   test:
     name: Validate Quick

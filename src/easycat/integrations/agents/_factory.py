@@ -120,7 +120,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 5. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
     try:
-        from pydantic_graph import Graph as PydanticGraph  # type: ignore[import-untyped]
+        from pydantic_graph import Graph as PydanticGraph
 
         if isinstance(agent, PydanticGraph):
             raise BridgeInputError(
@@ -144,7 +144,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 7. OpenAI Agents SDK -> OpenAIAgentsBridge.
     try:
-        from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
+        from agents import Agent as OpenAIAgent
 
         if isinstance(agent, OpenAIAgent):
             from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
@@ -177,7 +177,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 7c. LangChain Runnable -> LangChainBridge.
     try:
-        from langchain_core.runnables import Runnable  # type: ignore[import-untyped]
+        from langchain_core.runnables import Runnable
 
         if isinstance(agent, Runnable):
             from easycat.integrations.agents.langchain import LangChainBridge
@@ -271,19 +271,19 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
     Runnable branch) when ``langgraph`` is unavailable.
     """
     try:
-        from langgraph.graph.state import (  # type: ignore[import-untyped]
+        from langgraph.graph.state import (
             CompiledStateGraph,
         )
     except ImportError:
         return None
     try:
-        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+        from langchain_core.runnables.base import (
             RunnableBinding,
             RunnableBindingBase,
         )
     except ImportError:
-        RunnableBinding = ()  # type: ignore[assignment]
-        RunnableBindingBase = ()  # type: ignore[assignment]
+        RunnableBinding = ()
+        RunnableBindingBase = ()
     # Walk outer→inner collecting wrapper layers (``seen`` guards a
     # pathological self-referential ``.bound``) until the real graph.
     seen: set[int] = set()
@@ -381,20 +381,20 @@ def _is_language_model(agent: Any) -> bool:
     back to the default dict payload.
     """
     try:
-        from langchain_core.language_models import (  # type: ignore[import-untyped]
+        from langchain_core.language_models import (
             BaseChatModel,
             BaseLLM,
         )
     except ImportError:
         return False
     try:
-        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+        from langchain_core.runnables.base import (
             RunnableBindingBase,
             RunnableSequence,
         )
     except ImportError:
-        RunnableBindingBase = ()  # type: ignore[assignment]
-        RunnableSequence = ()  # type: ignore[assignment]
+        RunnableBindingBase = ()
+        RunnableSequence = ()
     # ``RunnableBindingBase`` may nest (e.g.
     # ``.bind_tools(...).with_config(...).with_retry()``) and a
     # model-first sequence may itself sit under a binding or nest another

@@ -153,6 +153,10 @@ class TurnRunner:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
         if not self._is_running():
             return
+        # TurnManager always stamps TurnStarted with a generated id;
+        # synthesize one for hand-built events so the TurnContext (and
+        # every journal record keyed off it) still gets a real id.
+        turn_id = event.turn_id or f"turn-{uuid4().hex[:8]}"
 
         # Cancel the previous turn's token so any in-flight agent/TTS work
         # notices the cancellation before we overwrite the turn pointer.
@@ -165,7 +169,7 @@ class TurnRunner:
             prev.cancel_token.cancel()
 
         cancel_token = self._turn_manager.cancel_token or CancelToken()
-        turn = TurnContext(turn_id=event.turn_id, cancel_token=cancel_token)
+        turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token)
         self._turn.set(turn)
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.

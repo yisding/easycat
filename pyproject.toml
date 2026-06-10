@@ -275,18 +275,23 @@ exclude = [
 warn_unused_ignores = false
 warn_redundant_casts = true
 
-# --- GATED core. Day-one this is exactly the package that is already
-# --- clean (easycat.debug = 0 errors with these settings). Ratchet by
-# --- adding modules to this list as they reach zero errors:
-# ---   easycat.stages.*   (2 errors today)
-# ---   easycat.runtime.*  (3 errors today)
-# ---   easycat.session.*  (13 errors today)
+# --- GATED core: every module listed here is clean (0 errors) under the
+# --- stricter settings below and is graded by `just typecheck` / CI.
+# --- The path list lives in the justfile (`mypy_gated_paths`); keep the
+# --- two in sync when ratcheting. Remaining ratchet candidates (advisory
+# --- whole-repo pass: ~72 errors across optional providers / config /
+# --- cli / debugger today):
+# ---   easycat.config.* / easycat.cli.* / provider subpackages
 # --- NOTE: deliberately NOT enabling warn_return_any here - it surfaces
 # --- a no-any-return error in debug/bundle.py:205 and would turn the
-# --- day-one gate RED. Add it (and fix the return) in a later ratchet.
+# --- gate RED. Add it (and fix the return) in a later ratchet.
 [[tool.mypy.overrides]]
 module = [
     "easycat.debug.*",
+    "easycat.runtime.*",
+    "easycat.stages.*",
+    "easycat.session.*",
+    "easycat.integrations.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true

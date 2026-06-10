@@ -410,7 +410,12 @@ class ExternalAgentBridge(Protocol):
 
     COMMITTABLE_BOUNDARIES: dict[UnitKind | str, CommitRule]
 
-    async def invoke(
+    # Declared as a *sync* method returning an async iterator: every
+    # implementation is an ``async def`` generator function, and calling
+    # such a function immediately returns the generator (no await).
+    # Declaring ``async def`` here would instead mean "coroutine that
+    # resolves to an iterator", which no implementation satisfies.
+    def invoke(
         self,
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
