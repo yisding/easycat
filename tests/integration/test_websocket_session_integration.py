@@ -20,6 +20,8 @@ from .harness import (
     make_chunk,
     make_test_config,
     patch_provider_factories,
+    recv_ws_binary,
+    recv_ws_json,
 )
 
 
@@ -85,10 +87,12 @@ async def test_create_session_websocket_streaming_barge_in(
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
 
-            fmt_msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=3.0))
+            # Session event frames (turn_started, stt_final, …) interleave
+            # with control frames on the same socket; dispatch by type.
+            fmt_msg = await recv_ws_json(ws, "audio_format", timeout=3.0)
             assert fmt_msg == {"type": "audio_format", "sample_rate": 16000}
 
-            first_audio = await asyncio.wait_for(ws.recv(), timeout=3.0)
+            first_audio = await recv_ws_binary(ws, timeout=3.0)
             assert isinstance(first_audio, bytes)
             assert len(first_audio) == 640
 

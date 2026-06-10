@@ -23,6 +23,35 @@ def make_chunk(n_bytes: int = 640) -> AudioChunk:
     return AudioChunk(data=bytes(n_bytes), format=PCM16_MONO_16K)
 
 
+async def recv_ws_json(ws: Any, expected_type: str, *, timeout: float = 3.0) -> dict[str, Any]:
+    """Receive WS text frames until one with ``type == expected_type`` arrives.
+
+    The WS wire protocol interleaves session event frames (``turn_started``,
+    ``stt_final``, ``turn_latency``, …) with control frames on the same
+    socket, so readers must dispatch by ``type`` instead of assuming order.
+    Fails if a binary frame arrives first — ``audio_format`` is guaranteed to
+    precede audio.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        message = await asyncio.wait_for(ws.recv(), timeout=deadline - loop.time())
+        assert isinstance(message, str), f"binary frame arrived before {expected_type!r} frame"
+        payload = json.loads(message)
+        if payload.get("type") == expected_type:
+            return payload
+
+
+async def recv_ws_binary(ws: Any, *, timeout: float = 3.0) -> bytes:
+    """Receive WS frames until a binary (audio) frame arrives, skipping text frames."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        message = await asyncio.wait_for(ws.recv(), timeout=deadline - loop.time())
+        if isinstance(message, bytes):
+            return message
+
+
 async def _wait_for_change(
     predicate: Callable[[], bool],
     changed: asyncio.Event,

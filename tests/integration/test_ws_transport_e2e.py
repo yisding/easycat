@@ -38,6 +38,8 @@ from .harness import (
     make_chunk,
     make_test_config,
     patch_provider_factories,
+    recv_ws_binary,
+    recv_ws_json,
 )
 
 pytestmark = pytest.mark.integration_socket
@@ -144,11 +146,12 @@ async def test_ws_full_turn_e2e(monkeypatch: pytest.MonkeyPatch) -> None:
             await ws.send(make_chunk().data)
             await ws.send(make_chunk().data)
 
-            # Read outbound audio format + audio data
-            fmt_msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=3.0))
+            # Read outbound audio format + audio data. Session event frames
+            # (turn_started, stt_final, …) interleave on the same socket.
+            fmt_msg = await recv_ws_json(ws, "audio_format", timeout=3.0)
             assert fmt_msg["type"] == "audio_format"
 
-            audio = await asyncio.wait_for(ws.recv(), timeout=3.0)
+            audio = await recv_ws_binary(ws, timeout=3.0)
             assert isinstance(audio, bytes)
 
         result = await asyncio.wait_for(result_future, timeout=4.0)
