@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 
 import pytest
@@ -30,6 +31,27 @@ def _format_task(task: asyncio.Task[object]) -> str:
     coroutine = task.get_coro()
     name = getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None)
     return f"{task.get_name()} ({name or coroutine!r})"
+
+
+@pytest.fixture(autouse=True)
+def _restore_easycat_logger_state():
+    """Restore the ``easycat`` logger after each test.
+
+    ``enable_console_logging`` (reached via ``run()``, ``EasyConfig`` debug
+    modes, and the console/serve CLI paths) attaches a handler and flips
+    ``propagate = False`` on the ``easycat`` logger. Left in place, that state
+    leaks across tests and blinds ``caplog`` (which relies on root-handler
+    propagation) for every later test in a serial full-suite run. Snapshot and
+    restore handlers, level, and propagate so each test sees pristine state.
+    """
+    logger = logging.getLogger("easycat")
+    handlers = list(logger.handlers)
+    level = logger.level
+    propagate = logger.propagate
+    yield
+    logger.handlers[:] = handlers
+    logger.setLevel(level)
+    logger.propagate = propagate
 
 
 @pytest_asyncio.fixture(autouse=True)
