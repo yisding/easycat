@@ -72,10 +72,22 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
+- Looking up the production API: start with the
+  [architecture explanation](architecture.md) for how the pipeline and
+  session collaborators fit together, then use the
+  [events reference](reference/events.md), the
+  [EasyConfig field reference](reference/easyconfig.md), and the
+  [session lifecycle reference](reference/session-lifecycle.md). Run
+  `uv run easycat explain events`, `uv run easycat explain turn-taking`, or
+  `uv run easycat explain journal` for terminal summaries that print the
+  matching docs route. Every `easycat docs --json` route entry also carries a
+  `diataxis` field (`tutorial`, `how-to`, `reference`, or `explanation`) so
+  automation can pick the right kind of page.
 - Maintaining architecture or package boundaries: use the
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
   registries, session lifecycle, test layout, and maintainer command block,
-  including docs/onboarding guard recipes. Coding agents should also read the
+  including docs/onboarding guard recipes; the full architecture explanation
+  lives in [docs/architecture.md](architecture.md). Coding agents should also read the
   [repository agent guide](../AGENTS.md) for repo structure, development
   commands, docs/onboarding guard recipes, validation commands, and PR
   expectations.

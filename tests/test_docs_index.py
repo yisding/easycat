@@ -278,6 +278,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "First lesson",
         "Examples",
         "Architecture",
+        "Maintainer guide",
         "Coding agents",
     ]
     expected_suffix = ["Validation", "Validation reference"]
@@ -506,7 +507,7 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         assert command in route_commands
 
 
-def test_architecture_docs_route_matches_guide_command_hints() -> None:
+def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
@@ -525,6 +526,169 @@ def test_architecture_docs_route_matches_guide_command_hints() -> None:
     ):
         assert command in command_section
         assert command in route_commands
+
+
+def test_architecture_explanation_carries_claude_guide_prose() -> None:
+    """docs/architecture.md owns the architecture explanation; CLAUDE.md links to it."""
+    page = re.sub(
+        r"\s+", " ", (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    )
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    architecture_section = guide.split("## Architecture", 1)[1].split("## Key Patterns", 1)[0]
+
+    assert "[docs/architecture.md](docs/architecture.md)" in architecture_section
+    # The deep per-collaborator prose lives in the docs page, not CLAUDE.md.
+    for marker in (
+        "session/_builder.py",
+        "session/_wiring.py",
+        "session/_turn_runner.py",
+        "ExternalAgentBridge",
+        "_PROVIDER_TO_CONFIG",
+        "Silero → FunASR → TEN → Krisp",
+        "IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING",
+    ):
+        assert marker in page, f"docs/architecture.md missing {marker!r}"
+    assert "SessionWiringContext" in page
+    assert "SessionWiringContext" not in guide
+
+
+def test_cli_docs_routes_declare_diataxis_categories() -> None:
+    allowed = {"tutorial", "how-to", "reference", "explanation"}
+    invalid = [
+        f"{entry['label']} ({entry.get('diataxis')!r})"
+        for entry in _DOCS_LINKS
+        if entry.get("diataxis") not in allowed
+    ]
+
+    assert not invalid, "easycat docs routes missing valid diataxis labels: " + ", ".join(invalid)
+
+    diataxis = {entry["path"]: entry["diataxis"] for entry in _DOCS_LINKS}
+    assert diataxis["README.md#install"] == "tutorial"
+    assert diataxis["docs/teaching/"] == "tutorial"
+    assert diataxis["docs/architecture.md"] == "explanation"
+    assert diataxis["docs/reference/events.md"] == "reference"
+    assert diataxis["docs/reference/easyconfig.md"] == "reference"
+    assert diataxis["docs/reference/session-lifecycle.md"] == "reference"
+    assert diataxis["docs/public-api.md"] == "reference"
+
+    docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    assert "`diataxis`" in docs_index
+
+
+def test_events_reference_tracks_public_event_types() -> None:
+    """docs/reference/events.md must list exactly the exported concrete events."""
+    import easycat
+    from easycat.events import Event
+
+    text = (REPO_ROOT / "docs" / "reference" / "events.md").read_text(encoding="utf-8")
+    catalog = text.split("## Event Catalog", 1)[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^- `([A-Za-z]+)`", catalog, flags=re.MULTILINE))
+    exported = {
+        name
+        for name in easycat.__all__
+        if isinstance(getattr(easycat, name), type)
+        and issubclass(getattr(easycat, name), Event)
+        and getattr(easycat, name) is not Event
+    }
+
+    missing = sorted(exported - documented)
+    extra = sorted(documented - exported)
+    assert not missing, "docs/reference/events.md missing events: " + ", ".join(missing)
+    assert not extra, "docs/reference/events.md lists non-exported events: " + ", ".join(extra)
+
+    # The page must teach the provider-scoped vs EasyCat-level distinction.
+    assert "provider-scoped" in text.lower()
+    assert "`STTEvent`" in text
+    assert "`TTSEvent`" in text
+    assert "easycat.events" in text
+
+
+def _reference_section_field_names(text: str, heading: str) -> set[str]:
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
+    return set(re.findall(r"^- `([A-Za-z_][A-Za-z0-9_]*)`", section, flags=re.MULTILINE))
+
+
+def test_easyconfig_reference_tracks_config_fields() -> None:
+    """The handwritten EasyConfig reference must match the live dataclasses."""
+    import dataclasses
+
+    from easycat import (
+        AudioProcessingConfig,
+        EasyConfig,
+        ObservabilityConfig,
+        SessionPolicyConfig,
+    )
+
+    text = (REPO_ROOT / "docs" / "reference" / "easyconfig.md").read_text(encoding="utf-8")
+    expected = {
+        "## Construction Fields": {f.name for f in dataclasses.fields(EasyConfig)},
+        "## Audio Processing Fields": {f.name for f in dataclasses.fields(AudioProcessingConfig)},
+        "## Observability Fields": {f.name for f in dataclasses.fields(ObservabilityConfig)},
+        "## Session Policy Fields": {f.name for f in dataclasses.fields(SessionPolicyConfig)},
+    }
+
+    problems: list[str] = []
+    for heading, names in expected.items():
+        documented = _reference_section_field_names(text, heading)
+        for name in sorted(names - documented):
+            problems.append(f"{heading}: missing `{name}`")
+        for name in sorted(documented - names):
+            problems.append(f"{heading}: documents unknown `{name}`")
+
+    assert not problems, "docs/reference/easyconfig.md is out of sync:\n" + "\n".join(problems)
+
+    # The grouped fields double as top-level InitVar aliases; the page must say so.
+    from easycat.config.easy import (
+        _AUDIO_PROCESSING_ALIAS_FIELDS,
+        _OBSERVABILITY_ALIAS_FIELDS,
+        _SESSION_POLICY_ALIAS_FIELDS,
+    )
+
+    alias_names = (
+        _AUDIO_PROCESSING_ALIAS_FIELDS | _OBSERVABILITY_ALIAS_FIELDS | _SESSION_POLICY_ALIAS_FIELDS
+    )
+    grouped_documented = (
+        _reference_section_field_names(text, "## Audio Processing Fields")
+        | _reference_section_field_names(text, "## Observability Fields")
+        | _reference_section_field_names(text, "## Session Policy Fields")
+    )
+    assert alias_names == grouped_documented
+    assert "## Top-Level Aliases" in text
+    assert "test_easyconfig_reference_tracks_config_fields" in text
+
+
+def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
+    text = (REPO_ROOT / "docs" / "reference" / "session-lifecycle.md").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    lifecycle_section = guide.split("## Session Lifecycle", 1)[1].split("## Style", 1)[0]
+
+    assert "docs/reference/session-lifecycle.md" in lifecycle_section
+    for marker in (
+        "`stop(force=True)`",
+        "`session.shutdown()`",
+        "`session.journal.read()`",
+        "`session.export_debug_bundle(path)`",
+        "`async with session:`",
+        "record_to",
+    ):
+        assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"
+
+
+def test_explain_concept_topics_print_docs_routes() -> None:
+    """`easycat explain events|turn-taking|journal` must point at live docs routes."""
+    from easycat.cli.diagnose._codes import META_ENTRIES
+
+    route_paths = {entry["path"] for entry in _DOCS_LINKS}
+    expected_routes = {
+        "events": "docs/reference/events.md",
+        "turn-taking": "docs/architecture.md",
+        "journal": "docs/reference/session-lifecycle.md",
+    }
+
+    for slug, route in expected_routes.items():
+        assert slug in META_ENTRIES, f"easycat explain is missing the {slug!r} concept topic"
+        assert route in META_ENTRIES[slug].body
+        assert route in route_paths
 
 
 def test_cli_docs_command_hints_are_visible_on_target_pages() -> None:

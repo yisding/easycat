@@ -1,11 +1,13 @@
-site_name: EasyCat — Voice Pipelines from Scratch
-site_description: A 16-chapter ladder for building a production voice-AI pipeline from raw PCM up.
+site_name: EasyCat
+site_description: >-
+  Learn voice pipelines from scratch with the 16-chapter teaching ladder,
+  then look up the production API in the reference docs.
 site_url: https://yisding.github.io/easycat/
 repo_url: https://github.com/yisding/easycat
 repo_name: yisding/easycat
-edit_uri: edit/main/docs/teaching/
+edit_uri: edit/main/docs/
 
-docs_dir: docs/teaching
+docs_dir: docs
 site_dir: site
 use_directory_urls: true
 
@@ -14,6 +16,7 @@ theme:
   features:
     - navigation.indexes
     - navigation.sections
+    - navigation.tabs
     - navigation.top
     - navigation.tracking
     - content.code.copy
@@ -73,56 +76,66 @@ hooks:
 
 nav:
   - Home: README.md
-  - Build — assemble the pipeline:
-      - Chapter 0 — Hello, Audio:
-          - 00-hello-audio/README.md
-          - Exercises: 00-hello-audio/EXERCISES.md
-      - Chapter 1 — Echo:
-          - 01-echo/README.md
-          - Exercises: 01-echo/EXERCISES.md
-      - Chapter 2 — Transcribe:
-          - 02-transcribe/README.md
-          - Exercises: 02-transcribe/EXERCISES.md
-      - Chapter 3 — Parrot, the naive way:
-          - 03-parrot-naive/README.md
-          - Exercises: 03-parrot-naive/EXERCISES.md
-      - Chapter 4 — VAD + pre-roll:
-          - 04-vad-preroll/README.md
-          - Exercises: 04-vad-preroll/EXERCISES.md
-      - Chapter 5 — The blocking agent:
-          - 05-blocking-agent/README.md
-          - Exercises: 05-blocking-agent/EXERCISES.md
-      - Chapter 6 — Streaming agent + sentence TTS:
-          - 06-streaming-agent/README.md
-          - Exercises: 06-streaming-agent/EXERCISES.md
-      - Chapter 7 — Tools, mid-stream:
-          - 07-tools/README.md
-          - Exercises: 07-tools/EXERCISES.md
-      - Chapter 8 — Smart-turn:
-          - 08-smart-turn/README.md
-          - Exercises: 08-smart-turn/EXERCISES.md
-      - Chapter 9 — Interruption / barge-in:
-          - 09-interruption/README.md
-          - Exercises: 09-interruption/EXERCISES.md
-  - Operate — the demo-to-production gap:
-      - Chapter 10 — Cleaning the signal:
-          - 10-cleaning-signal/README.md
-          - Exercises: 10-cleaning-signal/EXERCISES.md
-      - Chapter 11 — The journal as mental model:
-          - 11-journal/README.md
-          - Exercises: 11-journal/EXERCISES.md
-          - Solutions (spoiler): 11-journal/solutions.md
-      - Chapter 12 — Evals + the latency budget:
-          - 12-evals-and-latency/README.md
-          - Exercises: 12-evals-and-latency/EXERCISES.md
-  - Generalise — the Protocol payoff:
-      - Chapter 13 — Swap providers and transports:
-          - 13-swap-providers-and-transports/README.md
-          - Exercises: 13-swap-providers-and-transports/EXERCISES.md
-      - Chapter 14 — Bring your own agent:
-          - 14-bring-your-own-agent/README.md
-          - Exercises: 14-bring-your-own-agent/EXERCISES.md
-  - Ship — from demo to production:
-      - Chapter 15 — Operate in production:
-          - 15-operate-in-production/README.md
-          - Exercises: 15-operate-in-production/EXERCISES.md
+  - Learn:
+      - Teaching ladder: teaching/README.md
+      - Build — assemble the pipeline:
+          - Chapter 0 — Hello, Audio:
+              - teaching/00-hello-audio/README.md
+              - Exercises: teaching/00-hello-audio/EXERCISES.md
+          - Chapter 1 — Echo:
+              - teaching/01-echo/README.md
+              - Exercises: teaching/01-echo/EXERCISES.md
+          - Chapter 2 — Transcribe:
+              - teaching/02-transcribe/README.md
+              - Exercises: teaching/02-transcribe/EXERCISES.md
+          - Chapter 3 — Parrot, the naive way:
+              - teaching/03-parrot-naive/README.md
+              - Exercises: teaching/03-parrot-naive/EXERCISES.md
+          - Chapter 4 — VAD + pre-roll:
+              - teaching/04-vad-preroll/README.md
+              - Exercises: teaching/04-vad-preroll/EXERCISES.md
+          - Chapter 5 — The blocking agent:
+              - teaching/05-blocking-agent/README.md
+              - Exercises: teaching/05-blocking-agent/EXERCISES.md
+          - Chapter 6 — Streaming agent + sentence TTS:
+              - teaching/06-streaming-agent/README.md
+              - Exercises: teaching/06-streaming-agent/EXERCISES.md
+          - Chapter 7 — Tools, mid-stream:
+              - teaching/07-tools/README.md
+              - Exercises: teaching/07-tools/EXERCISES.md
+          - Chapter 8 — Smart-turn:
+              - teaching/08-smart-turn/README.md
+              - Exercises: teaching/08-smart-turn/EXERCISES.md
+          - Chapter 9 — Interruption / barge-in:
+              - teaching/09-interruption/README.md
+              - Exercises: teaching/09-interruption/EXERCISES.md
+      - Operate — the demo-to-production gap:
+          - Chapter 10 — Cleaning the signal:
+              - teaching/10-cleaning-signal/README.md
+              - Exercises: teaching/10-cleaning-signal/EXERCISES.md
+          - Chapter 11 — The journal as mental model:
+              - teaching/11-journal/README.md
+              - Exercises: teaching/11-journal/EXERCISES.md
+              - Solutions (spoiler): teaching/11-journal/solutions.md
+          - Chapter 12 — Evals + the latency budget:
+              - teaching/12-evals-and-latency/README.md
+              - Exercises: teaching/12-evals-and-latency/EXERCISES.md
+      - Generalise — the Protocol payoff:
+          - Chapter 13 — Swap providers and transports:
+              - teaching/13-swap-providers-and-transports/README.md
+              - Exercises: teaching/13-swap-providers-and-transports/EXERCISES.md
+          - Chapter 14 — Bring your own agent:
+              - teaching/14-bring-your-own-agent/README.md
+              - Exercises: teaching/14-bring-your-own-agent/EXERCISES.md
+      - Ship — from demo to production:
+          - Chapter 15 — Operate in production:
+              - teaching/15-operate-in-production/README.md
+              - Exercises: teaching/15-operate-in-production/EXERCISES.md
+  - Reference:
+      - Architecture: architecture.md
+      - Events: reference/events.md
+      - EasyConfig fields: reference/easyconfig.md
+      - Session lifecycle: reference/session-lifecycle.md
+      - Public API contract: public-api.md
+      - Observability: observability.md
+      - Deployment — Docker: deployment/docker.md

@@ -337,7 +337,26 @@ def _emit_provider_versions(
 
 
 def create_session(config: EasyConfig) -> Session:
-    """Create a fully wired Session from EasyConfig."""
+    """Create a fully wired :class:`Session` from an :class:`EasyConfig`.
+
+    Resolves every pipeline piece declared on ``config`` — STT/TTS (shortcut
+    strings, provider config dataclasses, or live provider instances), VAD,
+    noise reduction, echo cancellation, transport, turn-taking, the agent
+    bridge (plain ``async run(text) -> str`` agents are wrapped in
+    ``AgentRunner`` unless ``wrap_agent=False``), telephony helpers, and the
+    execution journal (created when ``debug != "off"``) — then builds the
+    Session with every collaborator subscribed to a shared ``EventBus``.
+
+    The returned session is **not started**: subscribe events, attach a
+    debugger, or register helpers first, then ``await session.start()`` or
+    hand it to ``easycat.helpers.run_session``. See
+    ``docs/reference/easyconfig.md`` for the field reference and
+    ``docs/reference/session-lifecycle.md`` for start/stop semantics.
+
+    Raises ``EasyConfigError`` / ``ValueError`` for invalid configuration and
+    an :class:`easycat.errors.EasyCatError` subclass when a selected
+    provider's credentials or optional extra are missing.
+    """
     from dataclasses import replace
 
     session_id = f"session-{uuid4().hex[:12]}"
