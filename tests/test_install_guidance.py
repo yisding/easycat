@@ -230,7 +230,7 @@ def _clean_code_span_path(code_span: str) -> str:
 
 def _readme_cli_section() -> str:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    return readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+    return readme.split("## CLI", 1)[1].split("## Current capabilities", 1)[0]
 
 
 def _source_path_candidates_for_agent_guide(
@@ -668,6 +668,7 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
     cli_section = _readme_cli_section()
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    validation_doc = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
@@ -678,11 +679,14 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     assert "easycat validate release --json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json --json" in cli_section
-    assert "uv run easycat validate quick --json" in readme
-    assert "uv run easycat validate contracts --json" in readme
-    assert "uv run easycat validate release --json" in readme
-    assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
+    assert "uv run easycat validate quick --json" in validation_doc
+    assert "uv run easycat validate contracts --json" in validation_doc
+    assert "uv run easycat validate release --json" in validation_doc
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in (
+        validation_doc
+    )
     assert "easycat validate report PATH" not in readme
+    assert "easycat validate report PATH" not in validation_doc
 
 
 def test_readme_cli_doctor_documents_env_file_option() -> None:

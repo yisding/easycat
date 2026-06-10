@@ -125,7 +125,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "deployment/docker.md",
         "observability.md",
         "../src/easycat/runtime/DURABILITY.md",
-        "../README.md#validation-workflow",
+        "validation.md",
         "../plan/validation/reference.md",
     ]
 
@@ -327,7 +327,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
-    assert audiences["README.md#validation-workflow"] == "contributors"
+    assert audiences["docs/validation.md"] == "contributors"
 
 
 def test_cli_docs_routes_have_useful_command_hints() -> None:
@@ -348,9 +348,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "src/easycat/runtime/DURABILITY.md": (
             "uv run pytest tests/runtime/test_sqlite_journal.py"
         ),
-        "README.md#validation-workflow": (
-            "uv run easycat validate report .easycat/validation/latest.json"
-        ),
+        "docs/validation.md": ("uv run easycat validate report .easycat/validation/latest.json"),
     }
 
     missing = [
@@ -395,9 +393,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in entries[
         "README.md#choose-your-path"
     ].get("commands", ())
-    assert "uv run pytest tests/test_install_guidance.py" in entries[
-        "README.md#choose-your-path"
-    ].get("commands", ())
+    assert "uv run python examples/journal_demo.py" in entries["README.md#choose-your-path"].get(
+        "commands", ()
+    )
 
 
 def test_cli_docs_env_file_doctor_hints_include_json_variant() -> None:
@@ -469,7 +467,9 @@ def test_quickstart_docs_route_matches_install_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     route_commands = set(entries["README.md#install"].get("commands", ()))
     install_section = (
-        _route_target_text("README.md#install").split("## Install", 1)[1].split("## CLI", 1)[0]
+        _route_target_text("README.md#install")
+        .split("## Install", 1)[1]
+        .split("## Choose Your Path", 1)[0]
     )
     install_commands = [
         match.group(1)
@@ -750,9 +750,8 @@ def test_journal_durability_docs_route_matches_inspection_commands() -> None:
 
 def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
-    route_commands = entries["README.md#validation-workflow"].get("commands", ())
+    validation_section = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/validation.md"].get("commands", ())
     guard_commands = _documented_commands(validation_section, prefixes=("just guard-",))
     raw_guard_commands = _documented_command_lines(
         validation_section,
@@ -768,7 +767,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     assert raw_guard_commands == RAW_ONBOARDING_GUARD_COMMANDS
     assert validation_commands
     assert "If `just` is not installed" in validation_section
-    assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in validation_section
+    assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in validation_section
     assert "`uv run pytest ...` command behind each guard" in validation_section
     for command in guard_commands:
         assert command in validation_section
@@ -788,8 +787,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 
 
 def test_validation_workflow_command_hints_are_locally_valid() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+    validation_section = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
     commands = _documented_command_lines(
         validation_section,
         prefixes=("just ", "uv run easycat ", "uv run pytest "),
@@ -797,19 +795,17 @@ def test_validation_workflow_command_hints_are_locally_valid() -> None:
     problems = _cli_docs_command_hint_problems(
         [
             {
-                "label": "README.md validation workflow",
-                "path": "README.md#validation-workflow",
+                "label": "docs/validation.md validation workflow",
+                "path": "docs/validation.md",
                 "audience": "contributors",
-                "description": "Root README validation workflow commands.",
+                "description": "Validation workflow doc commands.",
                 "commands": commands,
             }
         ]
     )
 
     assert commands
-    assert not problems, "README.md validation workflow commands are stale:\n" + "\n".join(
-        problems
-    )
+    assert not problems, "docs/validation.md workflow commands are stale:\n" + "\n".join(problems)
 
 
 def test_contributing_docs_route_matches_validation_lane_commands() -> None:
@@ -909,7 +905,7 @@ def test_cli_docs_command_hint_validator_checks_pytest_node_ids() -> None:
         [
             {
                 "label": "Broken pytest hint",
-                "path": "README.md#validation-workflow",
+                "path": "docs/validation.md",
                 "audience": "contributors",
                 "description": "Regression fixture for pytest node validation.",
                 "commands": (

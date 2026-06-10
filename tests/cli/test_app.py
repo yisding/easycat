@@ -277,7 +277,7 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "docs/deployment/docker.md" in result.stdout
     assert "docs/observability.md" in result.stdout
     assert "src/easycat/runtime/DURABILITY.md" in result.stdout
-    assert "#validation-workflow" in result.stdout
+    assert "docs/validation.md" in result.stdout
     assert ".easycat/validation/latest.json" in result.stdout
     assert "plan/validation/reference.md" in result.stdout
     assert "easycat validate report .easycat/validation/latest.json --json" in result.stdout
@@ -406,7 +406,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "docs/deployment/docker.md" in paths
     assert "docs/observability.md" in paths
     assert "src/easycat/runtime/DURABILITY.md" in paths
-    assert ".easycat/validation/latest.json" in descriptions["README.md#validation-workflow"]
+    assert ".easycat/validation/latest.json" in descriptions["docs/validation.md"]
     assert "plan/validation/reference.md" in paths
     assert all(entry.get("description") for entry in payload["entries"])
     assert all(entry.get("audience") for entry in payload["entries"])
@@ -431,12 +431,12 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat doctor --env-file .env",
         "uv run easycat doctor --env-file .env --json",
         "uv run --env-file .env python examples/openai_agents_voice.py",
+        "uv run python examples/journal_demo.py",
         "uv run easycat init --list-templates",
         "uv run easycat init my-agent",
         "uv run easycat docs --audience maintainers",
         "uv run easycat docs --audience coding-agents",
         "uv run easycat validate quick",
-        "uv run pytest tests/test_install_guidance.py",
         "easycat bundles list",
         "uv sync --extra debugger --group dev",
     ]
@@ -468,7 +468,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv sync --extra local --group dev",
         "uv run python docs/teaching/00-hello-audio/main.py",
     ]
-    assert commands["README.md#validation-workflow"] == [
+    assert commands["docs/validation.md"] == [
         *_DOCS_ONBOARDING_GUARD_COMMANDS,
         *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
         "uv run easycat validate quick",
@@ -551,7 +551,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
     assert "maintenance" in descriptions["README.md#choose-your-path"]
     assert "uv run easycat init --list-templates" in commands["README.md#choose-your-path"]
     assert "uv run easycat init my-agent" in commands["README.md#choose-your-path"]
-    assert "docs/onboarding guards" in descriptions["README.md#validation-workflow"]
+    assert "docs/onboarding guards" in descriptions["docs/validation.md"]
     assert "provider registries" in descriptions["CLAUDE.md"]
     assert "development commands" in descriptions["AGENTS.md"]
     assert "docs/onboarding guards" in descriptions["AGENTS.md"]
