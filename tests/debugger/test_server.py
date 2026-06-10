@@ -506,6 +506,42 @@ async def test_api_timeline_emits_per_stage_spans(tmp_path):
                 }
 
 
+async def test_timeline_helpers_are_shared_with_cli(tmp_path):
+    """The waterfall math lives once in ``debug/_turn_timeline``.
+
+    The debugger endpoints and ``easycat bundles show`` / ``inspect``
+    must compute identical per-turn spans, so the server's helpers are
+    the shared functions and ``turn_waterfall`` decorates the same
+    timeline with milestone deltas for the CLI.
+    """
+    from easycat.debug import _turn_timeline
+    from easycat.debugger import server
+
+    assert server._summarise_turns is _turn_timeline.summarise_turns
+    assert server._build_timeline is _turn_timeline.build_timeline
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    records = list(RunBundle.load(bundle_path).records())
+    timeline = _turn_timeline.build_timeline(records)
+    waterfall = _turn_timeline.turn_waterfall(records)
+
+    assert waterfall, "expected at least one turn"
+    by_turn = {turn["turn_id"]: turn for turn in timeline}
+    for turn in waterfall:
+        assert turn["spans"] == by_turn[turn["turn_id"]]["spans"]
+        assert set(turn["milestones"]) == {
+            "vad_endpoint_to_stt_final_ms",
+            "stt_final_to_agent_first_token_ms",
+            "agent_first_token_to_tts_first_byte_ms",
+            "vad_endpoint_to_tts_first_byte_ms",
+        }
+    # A real voice turn reaches TTS, so at least one turn resolves the
+    # full VAD endpoint → TTS first byte delta.
+    assert any(
+        turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None for turn in waterfall
+    )
+
+
 async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
     """The transcript endpoint must surface user STT text and agent text."""
     session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)

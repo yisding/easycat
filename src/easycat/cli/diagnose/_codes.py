@@ -166,11 +166,17 @@ entry points include:
                          `easycat validate report PATH --json`; `validation`
                          contains the redacted validation report object
   `bundles`, `scanned` - `easycat bundles list --json`
-  `path`, `session_id`, `turns`, `errors`, `tool_calls`, `records`,
-  `duration_ms`, `provider_versions`, `artifact_count`,
+  `path`, `session_id`, `turn_count`, `turns`, `errors`, `tool_calls`,
+  `records`, `duration_ms`, `provider_versions`, `artifact_count`,
   `replay_entry_points`, `format_version` -
                          `easycat bundles show PATH --json` and
-                         `easycat inspect PATH --json`
+                         `easycat inspect PATH --json`; `turns` is the
+                         per-turn latency waterfall — each entry has
+                         `turn_id`, `wall_ms`, per-stage `spans`
+                         (`stage`, `offset_ms`, `duration_ms`,
+                         `record_count`), and `milestones` deltas (VAD
+                         endpoint → STT final → agent first token →
+                         TTS first byte); see docs/latency.md
   `source_path`, `output_path`, `target`, `files`, `records`, `artifacts`,
   `format_version`, `summary`, `redaction` -
                          `easycat bundles export PATH --output DIR --json`

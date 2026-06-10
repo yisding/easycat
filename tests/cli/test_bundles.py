@@ -243,6 +243,108 @@ def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert "400.0ms" in human.stdout
 
 
+def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_path: Path) -> None:
+    """``bundles show --json`` surfaces the per-turn latency waterfall.
+
+    The ``turns`` array must carry per-stage spans plus the milestone
+    deltas (VAD endpoint → STT final → agent first token → TTS first
+    byte) so "why was that turn slow?" is answerable without the
+    debugger UI.  Records go through the real ``export_debug_bundle``
+    path so timestamps carry the production ``timing.wall_ns`` shape.
+    """
+    base = 1_000_000_000
+
+    def _rec(seq: int, name: str, offset_ms: int, data: dict | None = None) -> JournalRecord:
+        return JournalRecord(
+            sequence=seq,
+            session_id="sess-wf",
+            name=name,
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=base + offset_ms * 1_000_000),
+            data=data,
+        )
+
+    records = [
+        _rec(1, "turn_started", 0),
+        _rec(2, "vad_stop_speaking", 0),
+        _rec(3, "stage_start", 50, {"stage": "stt"}),
+        _rec(4, "stt_final", 100, {"text": "hi"}),
+        _rec(5, "stage_complete", 100, {"stage": "stt"}),
+        _rec(6, "agent_delta", 300, {"text": "he"}),
+        _rec(7, "agent_final", 400, {"text": "hey"}),
+        _rec(8, "tts_frame", 500, {"stage": "tts", "audio_bytes": 320}),
+        _rec(9, "turn_ended", 600),
+    ]
+    bundle = tmp_path / "waterfall.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["turn_count"] == 1
+    (turn,) = payload["turns"]
+    assert turn["turn_id"] == "t1"
+    assert turn["wall_ms"] == pytest.approx(600.0)
+
+    spans = {span["stage"]: span for span in turn["spans"]}
+    assert spans["stt"]["offset_ms"] == pytest.approx(50.0)
+    assert spans["stt"]["duration_ms"] == pytest.approx(50.0)
+    assert "tts" in spans
+
+    milestones = turn["milestones"]
+    assert milestones["vad_endpoint_to_stt_final_ms"] == pytest.approx(100.0)
+    assert milestones["stt_final_to_agent_first_token_ms"] == pytest.approx(200.0)
+    assert milestones["agent_first_token_to_tts_first_byte_ms"] == pytest.approx(200.0)
+    assert milestones["vad_endpoint_to_tts_first_byte_ms"] == pytest.approx(500.0)
+
+    # The human summary renders the same waterfall with a docs pointer.
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "Per-turn latency" in human.stdout
+    assert "docs/latency.md" in human.stdout
+    assert "stt 50.0@50.0" in human.stdout
+
+
+def test_inspect_crash_dump_turn_waterfall_reads_flat_wall_ns(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """Crash-dump SQLite journals flatten ``timing.wall_ns`` to a top-level
+    ``wall_ns``; the waterfall milestones must still resolve."""
+    crash = tmp_path / "sess-crash.sqlite"
+    base = 2_000_000_000
+    _make_crash_dump(
+        crash,
+        [
+            {
+                "sequence": 1,
+                "session_id": "sess-crash",
+                "name": "stt_final",
+                "turn_id": "t1",
+                "wall_ns": base,
+                "data": {"text": "hi"},
+            },
+            {
+                "sequence": 2,
+                "session_id": "sess-crash",
+                "name": "agent_final",
+                "turn_id": "t1",
+                "wall_ns": base + 250 * 1_000_000,
+                "data": {"text": "hey"},
+            },
+        ],
+    )
+
+    result = cli.invoke(app, ["inspect", str(crash), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    (turn,) = payload["turns"]
+    milestones = turn["milestones"]
+    assert milestones["stt_final_to_agent_first_token_ms"] == pytest.approx(250.0)
+    # No VAD endpoint or TTS bytes in this dump — those deltas stay None.
+    assert milestones["vad_endpoint_to_stt_final_ms"] is None
+    assert milestones["agent_first_token_to_tts_first_byte_ms"] is None
+
+
 def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     _make_bundle(
@@ -263,7 +365,7 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["command"] == "bundles_show"
     assert payload["session_id"] == "sess-xyz"
     assert payload["records"] == 1
-    assert payload["turns"] == 1
+    assert payload["turn_count"] == 1
     assert payload["replay_entry_points"][0]["checkpoint_id"] == "cp_7"
 
 
@@ -654,7 +756,7 @@ def test_bundles_show_sqlite_crash_dump(cli: CliRunner, tmp_path: Path) -> None:
     payload = json.loads(show.stdout)
     assert payload["command"] == "bundles_show"
     assert payload["session_id"] == "sess-crash"
-    assert payload["turns"] == 1
+    assert payload["turn_count"] == 1
 
 
 def test_inspect_locked_sqlite_journal_message(
