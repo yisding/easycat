@@ -45,6 +45,48 @@
       overflow: hidden;
     }
     .level-fill { height: 100%; background: #4CAF50; width: 0%; transition: width 80ms; }
+    .readouts {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 8px 0;
+      font-size: 13px;
+      color: #555;
+    }
+    #latency { font-variant-numeric: tabular-nums; }
+    #interruption {
+      padding: 2px 10px;
+      border-radius: 12px;
+      background: #e0e0e0;
+      color: #999;
+      transition: background 0.2s, color 0.2s;
+    }
+    #interruption.active { background: #f8d7da; color: #721c24; }
+    #transcript {
+      text-align: left;
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid #eee;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 12px 0;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    #transcript:empty::before {
+      content: "Transcript appears here once you start talking.";
+      color: #aaa;
+      font-size: 13px;
+    }
+    .line-you { color: #1a1a1a; }
+    .line-you::before { content: "You: "; font-weight: 600; color: #2e7d32; }
+    .line-bot { color: #333; }
+    .line-bot::before { content: "Bot: "; font-weight: 600; color: #1565c0; }
+    .line-partial { color: #888; font-style: italic; }
+    .line-interrupted::after { content: " (interrupted)"; color: #c62828; font-size: 12px; }
+    .links { margin-top: 14px; font-size: 12px; }
+    .links a { color: #1565c0; text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
     button {
       padding: 12px 36px;
       font-size: 16px;
@@ -93,11 +135,22 @@
 
     <div><span id="status" class="status-idle">Ready</span></div>
     <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
+    <div class="readouts">
+      <span id="latency" title="Final transcript to first bot audio">Latency: &mdash;</span>
+      <span id="interruption" title="Lights up when you barge in over the bot">Interrupted</span>
+    </div>
+    <div id="transcript" aria-live="polite"></div>
     <div>
       <button id="startBtn">Start</button>
       <button id="stopBtn" disabled>Stop</button>
     </div>
     <p class="info" id="connInfo"></p>
+    <p class="links">
+      <a id="debuggerLink" href="http://localhost:8765" target="_blank" rel="noopener"
+         title="Run serve_session(session) from easycat.debugger (uv sync --extra debugger --group dev)">
+        Open the EasyCat debugger UI</a>
+      to replay this session from its journal.
+    </p>
   </div>
 
 <script>
@@ -111,6 +164,11 @@ var manualStop = false;
 var statsSampleId = "";
 var statsSequence = 0;
 var firstReceivedAudioStatsSent = false;
+var eventsChannel = null;
+
+// Optional shared secret: easycat serve prints an Open URL with ?token=...
+// when the server requires one; forward it on every signaling request.
+var authToken = new URLSearchParams(location.search).get("token") || "";
 
 // ── UI ───────────────────────────────────────────────────────────
 var startBtn     = document.getElementById("startBtn");
@@ -119,6 +177,15 @@ var statusEl     = document.getElementById("status");
 var levelFill    = document.getElementById("levelFill");
 var connInfo     = document.getElementById("connInfo");
 var signalingUrl = document.getElementById("signalingUrl");
+var transcriptEl = document.getElementById("transcript");
+var latencyEl    = document.getElementById("latency");
+var interruptEl  = document.getElementById("interruption");
+
+function authHeaders(extra) {
+  var headers = extra || {};
+  if (authToken) headers["Authorization"] = "Bearer " + authToken;
+  return headers;
+}
 
 // Default signaling URL: same origin (works when static files are
 // served from the signaling server via the static_dir config option).
@@ -168,10 +235,70 @@ function stopLevelMeter() {
   analyser = null;
 }
 
+// ── Server events (transcript / interruption / latency) ─────────
+var userLine = null;     // current (possibly partial) user transcript line
+var botLine = null;      // current bot reply line for the active turn
+var botLineText = "";
+
+function transcriptLine(className) {
+  var line = document.createElement("p");
+  line.className = className;
+  transcriptEl.appendChild(line);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  return line;
+}
+
+function resetConversationUI() {
+  transcriptEl.textContent = "";
+  latencyEl.textContent = "Latency: —";
+  interruptEl.classList.remove("active");
+  userLine = null;
+  botLine = null;
+  botLineText = "";
+}
+
+// JSON event messages from the server (see docs/browser-playground.md):
+// stt_partial / stt_final / agent_delta / agent_final / turn_started /
+// interruption / turn_latency.
+function handleServerEvent(raw) {
+  var event;
+  try { event = JSON.parse(raw); } catch (err) { return; }
+  if (!event || typeof event.type !== "string") return;
+
+  if (event.type === "stt_partial") {
+    if (!userLine) userLine = transcriptLine("line-you line-partial");
+    userLine.textContent = event.text;
+  } else if (event.type === "stt_final") {
+    if (!userLine) userLine = transcriptLine("line-you");
+    userLine.textContent = event.text;
+    userLine.className = "line-you";
+    userLine = null;
+    botLine = null;
+    botLineText = "";
+  } else if (event.type === "agent_delta") {
+    if (!botLine) botLine = transcriptLine("line-bot");
+    botLineText += event.text;
+    botLine.textContent = botLineText;
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  } else if (event.type === "agent_final") {
+    if (!botLine) botLine = transcriptLine("line-bot");
+    botLine.textContent = event.text;
+    botLineText = event.text;
+  } else if (event.type === "turn_started") {
+    interruptEl.classList.remove("active");
+  } else if (event.type === "interruption") {
+    interruptEl.classList.add("active");
+    if (botLine) botLine.classList.add("line-interrupted");
+    setTimeout(function() { interruptEl.classList.remove("active"); }, 2500);
+  } else if (event.type === "turn_latency") {
+    latencyEl.textContent = "Latency: " + Math.round(event.ms) + " ms";
+  }
+}
+
 // ── Fetch ICE config from server ─────────────────────────────────
 async function fetchIceConfig(baseUrl) {
   try {
-    var response = await fetch(baseUrl + "/config");
+    var response = await fetch(baseUrl + "/config", { headers: authHeaders() });
     if (response.ok) {
       return await response.json();
     }
@@ -297,7 +424,7 @@ async function postStatsSnapshot(label, peer) {
     var baseUrl = signalingUrl.value.replace(/\/$/, "");
     await fetch(baseUrl + "/stats", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(snapshot),
       keepalive: label === "teardown",
     });
@@ -327,7 +454,7 @@ async function negotiate(offerUrl) {
 
   var response = await fetch(offerUrl + "/offer", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({
       sdp: pc.localDescription.sdp,
       type: pc.localDescription.type,
@@ -368,6 +495,12 @@ async function start() {
     // 2. Fetch ICE server configuration from the signaling server.
     var iceConfig = await fetchIceConfig(baseUrl);
     pc = new RTCPeerConnection(iceConfig);
+    resetConversationUI();
+
+    // Server → browser event channel: the server pushes transcripts,
+    // interruption flags, and per-turn latency over this data channel.
+    eventsChannel = pc.createDataChannel("events");
+    eventsChannel.onmessage = function(evt) { handleServerEvent(evt.data); };
 
     // 3. Add mic track.
     localStream.getTracks().forEach(function(track) {
@@ -436,6 +569,10 @@ async function cleanup() {
   if (localStream) {
     localStream.getTracks().forEach(function(t) { t.stop(); });
     localStream = null;
+  }
+  if (eventsChannel) {
+    eventsChannel.onmessage = null;
+    eventsChannel = null;
   }
   if (peer) {
     peer.close();
