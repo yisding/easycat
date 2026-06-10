@@ -786,6 +786,7 @@ EasyCat — voice bot framework
   Scaffold
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
+    serve       Serve the browser voice playground on localhost
     explain     Look up errors and CLI schema topics
 
   Debug with the journal

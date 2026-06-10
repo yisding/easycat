@@ -430,6 +430,35 @@ def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
     assert not stale, "examples/README.md has stale support-file links for: " + ", ".join(stale)
 
 
+def test_bundled_browser_playground_page_serves_transcript_and_latency_ui() -> None:
+    """Served-page smoke: the bundled WebRTC client that ``easycat serve`` and
+    ``examples/webrtc_server.py`` serve must ship the playground widgets —
+    live transcript, interruption indicator, latency readout, the server →
+    browser events data channel, and the debugger UI link."""
+    client = (
+        REPO_ROOT / "src" / "easycat" / "transports" / "static" / "webrtc_client.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'pc.createDataChannel("events")' in client
+    assert 'id="transcript"' in client
+    assert 'id="latency"' in client
+    assert 'id="interruption"' in client
+    assert 'id="debuggerLink"' in client
+    for message_type in (
+        "stt_partial",
+        "stt_final",
+        "agent_delta",
+        "agent_final",
+        "turn_started",
+        "interruption",
+        "turn_latency",
+    ):
+        assert f'"{message_type}"' in client, f"client misses {message_type} handling"
+    # Token forwarding keeps the WS/docker security defaults working when
+    # ``easycat serve --token`` prints a tokenized Open URL.
+    assert 'new URLSearchParams(location.search).get("token")' in client
+
+
 def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     server = (REPO_ROOT / "examples" / "webrtc_server.py").read_text(encoding="utf-8")
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")

@@ -72,6 +72,10 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
+- Talking to a bot in the browser: run `uv run easycat serve` and follow the
+  [browser playground guide](browser-playground.md) for the one-command
+  playground page (live transcript, interruption indicator, per-turn latency)
+  and the WebSocket/WebRTC wire protocol behind it.
 - Maintaining architecture or package boundaries: use the
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
   registries, session lifecycle, test layout, and maintainer command block,
