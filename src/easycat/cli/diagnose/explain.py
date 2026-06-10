@@ -152,7 +152,10 @@ def explain(
     code: str = typer.Argument(
         None,
         metavar="CODE",
-        help="Error code (e.g., E102) or meta topic (exit-codes, init-schema, json-schema).",
+        help=(
+            "Error code (e.g., E102), CLI schema topic (exit-codes, init-schema, "
+            "json-schema), or concept topic (events, turn-taking, journal)."
+        ),
     ),
     list_codes: bool = typer.Option(
         False, "--list", help="Print every registered code and meta topic."

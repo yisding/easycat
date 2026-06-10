@@ -7,7 +7,9 @@ documentation, not just the CLI.
 
 Meta-entries — ``exit-codes``, ``init-schema``, ``json-schema`` — are
 also exposed here so the ``explain`` command can render them
-alongside the per-error docs.
+alongside the per-error docs, together with the concept topics
+``events``, ``turn-taking``, and ``journal`` that summarize a docs
+page and print its route.
 """
 
 from __future__ import annotations
@@ -138,7 +140,9 @@ entry points include:
                             and `easycat docs --audience learners --json`;
                             each docs entry has `label`, `path`, `audience`,
                             `description`, `url`, and optional `commands`
-                            in onboarding order; `audience`
+                            in onboarding order, plus a `diataxis` label
+                            (tutorial, how-to, reference, or explanation);
+                            `audience`
                             labels the intended reader, and `command_note`
                             explains bare installed CLI hints, repo-local
                             `uv run` hints, and uppercase placeholders such
@@ -148,7 +152,9 @@ entry points include:
                             filters include compound labels such as provider
                             maintainers, release maintainers, and operators
                             and maintainers; `available_audience_filters`
-                            lists the copyable filter tokens
+                            lists the copyable filter tokens; `diataxis`
+                            labels each entry as tutorial, how-to,
+                            reference, or explanation
   `templates`, `catalog`, `command_note` -
                          `easycat init --list-templates --json`;
                          catalog entries include `name`, `mode`, `transport`,
@@ -215,6 +221,72 @@ documented before accepting a newer version.
 """
 
 
+_EVENTS_BODY = """\
+EasyCat has two event layers, and only one is meant for your code.
+
+EasyCat-level events are emitted on the session EventBus: audio
+(`AudioIn`/`AudioOut`), VAD (`VADStartSpeaking`/`VADStopSpeaking`), STT
+(`STTPartial`/`STTFinal`), agent (`AgentDelta`/`AgentFinal`), TTS
+(`TTSAudio`/`TTSMarkers`), turn lifecycle (`TurnStarted`, `TurnEnded`,
+`BotStartedSpeaking`, `BotStoppedSpeaking`, `Interruption`), telephony
+(`CallAnswered`, `CallEnded`, `CallFailed`), supervisor taps, and
+`Error`. Subscribe with `session.subscribe_event(STTFinal, handler)`;
+every event carries `session_id` / `turn_id` correlation fields.
+
+Provider-scoped events (`STTEvent`, `TTSEvent`) are produced by STT/TTS
+provider iterators and are internal: the Session maps them to the
+EasyCat-level events above, so application code never consumes them
+directly.
+
+The EventBus drives behavior — it is not an observability sink. Use the
+journal (`easycat explain journal`) for durable records.
+
+Docs route: docs/reference/events.md (`easycat docs --audience
+app-builders`, label "Events reference").
+"""
+
+_TURN_TAKING_BODY = """\
+Turn-taking is a 5-state finite state machine in `turn_manager.py`:
+
+  IDLE -> USER_SPEAKING -> USER_PAUSED -> PROCESSING -> BOT_SPEAKING
+
+In VAD mode (default) the voice-activity detector opens a turn when the
+user starts speaking, with pre-roll buffering so the first syllables are
+not lost; a silence timeout (or the optional smart-turn ONNX endpoint
+classifier) decides when the user is done. PUSH_TO_TALK mode hands that
+control to the application. If the user speaks while the bot is playing
+audio, the turn manager raises an interruption (barge-in): pending TTS
+is cancelled cooperatively via CancelToken and the journal records what
+the user actually heard.
+
+Tune it with `EasyConfig(turn_taking=TurnManagerConfig(...))` and the
+`smart_turn` / `smart_turn_sensitivity` knobs under `audio_processing`.
+
+Docs route: docs/architecture.md (`easycat docs --audience maintainers`,
+label "Architecture"); hands-on chapters: docs/teaching/04-vad-preroll/,
+docs/teaching/08-smart-turn/, docs/teaching/09-interruption/.
+"""
+
+_JOURNAL_BODY = """\
+The execution journal is EasyCat's single source of truth for
+observability. With `EasyConfig(debug="light")` or `debug="full"` every
+session records events, spans, and metrics (and, in full mode, audio
+artifacts) into an SQLite-backed journal under `.easycat/journals/`.
+
+It is debug-first: `session.journal.read()` works during the session and
+keeps working after a clean `session.stop()` through a preserved
+read-only postmortem view. Export a replayable bundle with
+`session.export_debug_bundle(path)` or automatically on every stop via
+`EasyConfig(record_to=...)`, then inspect it with `easycat bundles show
+PATH`, `easycat inspect PATH`, `easycat replay PATH`, or the debugger
+UI.
+
+Docs route: docs/reference/session-lifecycle.md (`easycat docs
+--audience app-builders`, label "Session lifecycle"); operator tooling:
+docs/observability.md.
+"""
+
+
 META_ENTRIES: dict[str, MetaEntry] = {
     "exit-codes": MetaEntry(
         slug="exit-codes",
@@ -230,5 +302,20 @@ META_ENTRIES: dict[str, MetaEntry] = {
         slug="json-schema",
         headline="CLI `--json` output envelope schema",
         body=_JSON_SCHEMA_BODY,
+    ),
+    "events": MetaEntry(
+        slug="events",
+        headline="How EasyCat session events flow",
+        body=_EVENTS_BODY,
+    ),
+    "turn-taking": MetaEntry(
+        slug="turn-taking",
+        headline="How turn-taking and barge-in work",
+        body=_TURN_TAKING_BODY,
+    ),
+    "journal": MetaEntry(
+        slug="journal",
+        headline="The execution journal and debug bundles",
+        body=_JOURNAL_BODY,
     ),
 }

@@ -145,6 +145,7 @@ class _DocsLink(TypedDict):
     label: str
     path: str
     audience: str
+    diataxis: str
     description: str
     commands: NotRequired[tuple[str, ...]]
 
@@ -158,6 +159,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Start here",
         "path": "README.md#choose-your-path",
         "audience": "all readers",
+        "diataxis": "how-to",
         "description": (
             "Choose the right first route for quickstart, learning, examples, "
             "maintenance, or operations."
@@ -184,6 +186,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Quickstart",
         "path": "README.md#install",
         "audience": "new users",
+        "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
             "uv sync --extra quickstart --group dev",
@@ -199,6 +202,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "CLI and scaffolds",
         "path": "README.md#cli",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": (
             "Scaffold projects, compare templates with base package requirements, "
             "extras, env requirements, optional env knobs, generated files, and "
@@ -230,6 +234,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Docs map",
         "path": "docs/README.md",
         "audience": "all readers",
+        "diataxis": "reference",
         "description": "Choose the maintained guide for your current task.",
         "commands": (
             "easycat docs",
@@ -244,6 +249,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Teaching ladder",
         "path": "docs/teaching/",
         "audience": "learners",
+        "diataxis": "tutorial",
         "description": "Learn voice pipelines chapter by chapter.",
         "commands": (
             "uv sync --extra local --group dev",
@@ -265,6 +271,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "First lesson",
         "path": "docs/teaching/00-hello-audio/",
         "audience": "learners",
+        "diataxis": "tutorial",
         "description": "Start with audio chunks before agents or providers.",
         "commands": (
             "uv sync --extra local --group dev",
@@ -275,6 +282,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
         "commands": (
             "uv run easycat init --list-templates",
@@ -296,8 +304,22 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
     {
         "label": "Architecture",
+        "path": "docs/architecture.md",
+        "audience": "maintainers",
+        "diataxis": "explanation",
+        "description": (
+            "Understand the pipeline, session collaborators, stages, providers, and agent bridges."
+        ),
+        "commands": (
+            "uv run easycat docs --audience maintainers",
+            "uv run easycat docs --audience maintainers --json",
+        ),
+    },
+    {
+        "label": "Maintainer guide",
         "path": "CLAUDE.md",
         "audience": "maintainers",
+        "diataxis": "how-to",
         "description": (
             "Orient to the pipeline, packages, provider registries, lifecycle, "
             "and docs/onboarding guards."
@@ -328,6 +350,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Coding agents",
         "path": "AGENTS.md",
         "audience": "coding agents",
+        "diataxis": "how-to",
         "description": (
             "Follow repo structure, development commands, docs/onboarding guards, "
             "and PR expectations."
@@ -357,6 +380,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Session graduation",
         "path": "docs/from-easyconfig-to-session.md",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": (
             "Graduate from the EasyConfig quickstart to the production Session "
             "API: lifecycle, events, text turns, session actions, and replayable "
@@ -374,6 +398,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Testing and evals",
         "path": "docs/testing-and-evals.md",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": (
             "Climb the eval ladder: bundle fixtures, offline text turns, "
             "latency budgets and LLM-as-judge, then live audio validation."
@@ -387,9 +412,39 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Events reference",
+        "path": "docs/reference/events.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": ("Look up every public session event type and when it is emitted."),
+        "commands": (
+            "uv run easycat explain events",
+            "uv run easycat docs --audience app-builders",
+        ),
+    },
+    {
+        "label": "EasyConfig reference",
+        "path": "docs/reference/easyconfig.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Look up every EasyConfig field, grouped config object, and legacy alias."
+        ),
+        "commands": ("uv run easycat docs --audience app-builders",),
+    },
+    {
+        "label": "Session lifecycle",
+        "path": "docs/reference/session-lifecycle.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": ("Start, stop, force-stop, and read the journal after teardown."),
+        "commands": ("uv run easycat explain journal",),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",
+        "diataxis": "reference",
         "description": "Review the stable import surface before changing exports.",
         "commands": (
             "uv run easycat docs",
@@ -406,6 +461,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Provider contracts",
         "path": "tests/contracts/README.md",
         "audience": "provider maintainers",
+        "diataxis": "how-to",
         "description": (
             "Maintain offline provider, protocol, cassette, and bridge contract coverage."
         ),
@@ -422,6 +478,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Extending providers",
         "path": "docs/extending/",
         "audience": "provider maintainers",
+        "diataxis": "how-to",
         "description": (
             "Build custom STT, TTS, VAD, transport, and agent-bridge providers "
             "out of tree and verify conformance."
@@ -439,6 +496,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",
+        "diataxis": "how-to",
         "description": (
             "Follow the development loop, docs/onboarding guards, and validation slices."
         ),
@@ -467,6 +525,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Deployment",
         "path": "docs/deployment/docker.md",
         "audience": "operators",
+        "diataxis": "how-to",
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
             "uv run easycat docs --audience operators",
@@ -481,6 +540,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Observability",
         "path": "docs/observability.md",
         "audience": "operators",
+        "diataxis": "how-to",
         "description": "Inspect journals, debug bundles, the debugger UI, metrics, and traces.",
         "commands": (
             "uv run easycat docs --audience operators",
@@ -502,6 +562,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Latency",
         "path": "docs/latency.md",
         "audience": "operators",
+        "diataxis": "how-to",
         "description": (
             'Answer "why was that turn slow?" with per-turn CLI waterfalls and the '
             "table of latency-adding defaults."
@@ -517,6 +578,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Journal durability",
         "path": "src/easycat/runtime/DURABILITY.md",
         "audience": "operators and maintainers",
+        "diataxis": "explanation",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
         "commands": (
             "uv run easycat docs --audience operators-and-maintainers",
@@ -531,6 +593,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Validation",
         "path": "docs/validation.md",
         "audience": "contributors",
+        "diataxis": "how-to",
         "description": (
             "Run docs/onboarding guards, the right validation lane, and inspect "
             ".easycat/validation/latest.json."
@@ -556,6 +619,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Validation reference",
         "path": "plan/validation/reference.md",
         "audience": "release maintainers",
+        "diataxis": "reference",
         "description": "Read provider and report vocabulary used by validation.",
         "commands": (
             "easycat docs --audience release-maintainers --json",

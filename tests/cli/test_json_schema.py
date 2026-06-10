@@ -351,7 +351,13 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Docs map", "path": "docs/README.md"} in entries
     assert {"label": "First lesson", "path": "docs/teaching/00-hello-audio/"} in entries
     assert {"label": "Examples", "path": "examples/README.md"} in entries
-    assert {"label": "Architecture", "path": "CLAUDE.md"} in entries
+    assert {"label": "Architecture", "path": "docs/architecture.md"} in entries
+    assert {"label": "Maintainer guide", "path": "CLAUDE.md"} in entries
+    assert {"label": "Events reference", "path": "docs/reference/events.md"} in entries
+    assert {"label": "EasyConfig reference", "path": "docs/reference/easyconfig.md"} in entries
+    assert {"label": "Session lifecycle", "path": "docs/reference/session-lifecycle.md"} in (
+        entries
+    )
     assert {"label": "Coding agents", "path": "AGENTS.md"} in entries
     assert {"label": "Provider contracts", "path": "tests/contracts/README.md"} in entries
     assert {"label": "Contributing", "path": "CONTRIBUTING.md"} in entries
@@ -360,6 +366,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert {"label": "Validation reference", "path": "plan/validation/reference.md"} in entries
     assert all(isinstance(entry.get("description"), str) for entry in payload["entries"])
     assert all(isinstance(entry.get("audience"), str) for entry in payload["entries"])
+    assert all(isinstance(entry.get("diataxis"), str) for entry in payload["entries"])
     assert all(isinstance(entry.get("url"), str) for entry in payload["entries"])
     assert all(
         isinstance(command, str)

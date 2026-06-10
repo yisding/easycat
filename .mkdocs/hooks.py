@@ -1,23 +1,24 @@
-"""MkDocs build hook for the teaching-ladder site.
+"""MkDocs build hook for the EasyCat docs site (Learn + Reference).
 
 Three jobs:
 
 1. **README.md as directory index.** GitHub renders `README.md` automatically
    when you browse a folder, so we keep the filename. MkDocs by default would
-   serve it at `/00-hello-audio/README/`; we rewrite the URL/dest so it lives
-   at `/00-hello-audio/` instead. The top-level `docs/teaching/README.md` is
-   served at `/`.
+   serve it at `/teaching/00-hello-audio/README/`; we rewrite the URL/dest so
+   it lives at `/teaching/00-hello-audio/` instead. The top-level
+   `docs/README.md` is served at `/`.
 
-2. **Cross-link rewriting.** The source markdown links to sibling chapters
-   with `[..](../04-vad-preroll/)` (folder-style, works on GitHub). MkDocs
-   needs an explicit file reference. We rewrite those at build time to
-   `[..](../04-vad-preroll/README.md)`, which — combined with job 1 — lands
-   at the correct `/04-vad-preroll/` URL.
+2. **Folder-style cross-links.** The source markdown links to sibling pages
+   with `[..](../04-vad-preroll/)` or `[..](teaching/)` (folder-style, works
+   on GitHub). MkDocs needs an explicit file reference. We rewrite any
+   relative folder link that resolves to a docs directory containing a
+   `README.md` to point at that file — which, combined with job 1, lands at
+   the correct directory URL.
 
-3. **Source-file deep links.** Chapter prose links to sibling Python files
-   with `[..](./main.py#L83-L92)` so the line anchors work on GitHub. MkDocs
-   doesn't render `.py` files, so we rewrite those at build time to point at
-   `repo_url`'s blob URL on the configured edit branch.
+3. **Repo-relative deep links.** Pages link to source files and out-of-docs
+   pages with `[..](./main.py#L83-L92)` or `[..](../CLAUDE.md)` so the links
+   work on GitHub. MkDocs can't render those, so we rewrite them at build
+   time to point at `repo_url`'s blob/tree URL on the configured edit branch.
 
 No source files are modified.
 """
@@ -27,8 +28,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_CROSS_LINK = re.compile(r"\((\.{1,2}(?:/\d{2}-[^/)]+)?)/\)")
-_PY_DEEP_LINK = re.compile(r"\((?P<rel>(?:\./|\.\./)[^)\s]+?\.py(?:#L\d+(?:-L\d+)?)?)\)")
+_MD_LINK = re.compile(r"\]\((?P<target>[^)\s#]+)?(?P<fragment>#[^)\s]*)?\)")
+_EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "tel:", "/")
+_STATIC_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".css", ".js"}
 # `edit_uri` looks like ``edit/<branch>/<path>/`` (or ``blob/<branch>/...``);
 # the second path segment is the branch the blob URLs should point at.
 _BRANCH_FROM_EDIT_URI = re.compile(r"(?:edit|blob|tree)/([^/]+)/")
@@ -56,33 +58,45 @@ def on_files(files, config):
     return files
 
 
-def _rewrite_py_links(markdown: str, page, config) -> str:
-    """Rewrite ``[..](./main.py#L..)`` → absolute repo blob URL."""
+def _rewrite_links(markdown: str, page, config) -> str:
+    """Rewrite folder-style and repo-relative links for the rendered site."""
     repo_url = (config.get("repo_url") or "").rstrip("/")
-    if not repo_url or page.file.src_path == "README.md":
-        return markdown
     docs_root = Path(config["docs_dir"]).resolve()
     repo_root = Path(config["config_file_path"]).resolve().parent
     page_dir = (docs_root / page.file.src_path).parent
     branch = _edit_branch(config)
 
     def _sub(m: re.Match[str]) -> str:
-        rel = m.group("rel")
-        path_part, _, hash_part = rel.partition("#")
+        target = m.group("target") or ""
+        fragment = m.group("fragment") or ""
+        if not target or target.startswith(_EXTERNAL_PREFIXES):
+            return m.group(0)
+        resolved = (page_dir / target).resolve()
         try:
-            resolved = (page_dir / path_part).resolve()
+            resolved.relative_to(docs_root)
+            inside_docs = True
+        except ValueError:
+            inside_docs = False
+
+        if inside_docs:
+            if resolved.is_dir() and (resolved / "README.md").exists():
+                return f"]({target.rstrip('/')}/README.md{fragment})"
+            if resolved.suffix in {".md", *_STATIC_SUFFIXES} or not resolved.exists():
+                return m.group(0)
+            # Non-renderable file inside docs (e.g. a teaching `.py` script
+            # with `#L..` line anchors) — deep-link to the repo instead.
+
+        if not repo_url:
+            return m.group(0)
+        try:
             repo_rel = resolved.relative_to(repo_root)
         except ValueError:
             return m.group(0)
-        url = f"{repo_url}/blob/{branch}/{repo_rel.as_posix()}"
-        if hash_part:
-            url += f"#{hash_part}"
-        return f"({url})"
+        kind = "tree" if resolved.is_dir() else "blob"
+        return f"]({repo_url}/{kind}/{branch}/{repo_rel.as_posix()}{fragment})"
 
-    return _PY_DEEP_LINK.sub(_sub, markdown)
+    return _MD_LINK.sub(_sub, markdown)
 
 
 def on_page_markdown(markdown, page, config, **kwargs):
-    markdown = _CROSS_LINK.sub(r"(\1/README.md)", markdown)
-    markdown = _rewrite_py_links(markdown, page, config)
-    return markdown
+    return _rewrite_links(markdown, page, config)

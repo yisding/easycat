@@ -117,6 +117,9 @@ def _agent_guide_command_sections() -> dict[str, str]:
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
+    # The architecture explanation moved out of CLAUDE.md; keep its source
+    # paths honest with the same guard. Related Pages holds only doc links.
+    "docs/architecture.md": ("# EasyCat Architecture", "## Related Pages"),
 }
 REPO_REL_PATH_PREFIXES = ("src/", "tests/", "docs/", "examples/", "plan/", "scripts/")
 SOURCE_REL_PATH_PREFIXES = (
