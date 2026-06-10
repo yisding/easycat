@@ -423,6 +423,7 @@ $ uv run easycat
 EasyCat — voice bot framework
 
   Scaffold
+    console     Try EasyCat in your terminal with no API keys
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     explain     Look up errors and CLI schema topics
@@ -445,6 +446,13 @@ Run easycat explain <code> for errors.
 Run easycat explain json-schema for CLI JSON.
 ```
 
+- **`uv run easycat console`** — tries EasyCat in your terminal with no API
+  keys (`src/easycat/cli/console.py`): a keyless interactive text loop with
+  an echo agent that climbs to a live OpenAI session when a key (and
+  microphone) is present, always ending with an exported debug bundle path
+  and a replay hint. Add `--voice-demo`
+  (`uv run easycat console --voice-demo`) to run one scripted no-key turn
+  through the full audio pipeline.
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session. Run `uv run easycat init --list-templates` first when

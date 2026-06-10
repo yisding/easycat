@@ -23,6 +23,7 @@ Source: https://github.com/yisding/easycat
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
 - [Architecture](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
 - [Coding agents](https://github.com/yisding/easycat/blob/main/AGENTS.md) — for coding agents: Follow repo structure, development commands, docs/onboarding guards, and PR expectations.
+- [Session graduation](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md) — for app builders: Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
 - [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
 - [Contributing](https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md) — for contributors: Follow the development loop, docs/onboarding guards, and validation slices.

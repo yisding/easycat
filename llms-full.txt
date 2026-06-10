@@ -267,6 +267,23 @@ uv run easycat validate report .easycat/validation/latest.json
 uv run easycat validate report .easycat/validation/latest.json --json
 ```
 
+## Session graduation
+
+- Path: docs/from-easyconfig-to-session.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md
+- Audience: app builders
+- Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
+
+Commands:
+
+```bash
+uv run easycat docs --audience app-builders
+uv run easycat docs --audience app-builders --json
+uv run easycat replay PATH
+uv run easycat replay PATH --json
+uv run easycat inspect .easycat/journals/<session_id>.sqlite
+```
+
 ## Public API
 
 - Path: docs/public-api.md
