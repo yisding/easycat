@@ -532,6 +532,21 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Latency",
+        "path": "docs/latency.md",
+        "audience": "operators",
+        "description": (
+            'Answer "why was that turn slow?" with per-turn CLI waterfalls and the '
+            "table of latency-adding defaults."
+        ),
+        "commands": (
+            "uv run easycat docs --audience operators",
+            "easycat bundles show PATH --json",
+            "easycat inspect PATH --json",
+            "uv run easycat validate latency --smoke",
+        ),
+    },
+    {
         "label": "Journal durability",
         "path": "src/easycat/runtime/DURABILITY.md",
         "audience": "operators and maintainers",
