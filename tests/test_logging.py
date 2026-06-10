@@ -115,7 +115,7 @@ def test_import_does_not_call_basicconfig() -> None:
 
 
 def test_degraded_journal_emits_warning_not_error(caplog) -> None:
-    from easycat.runtime.journal import InMemoryRingBuffer
+    from easycat.runtime import InMemoryRingBuffer
     from easycat.runtime.records import JournalRecordKind
 
     journal = InMemoryRingBuffer(capacity=10)

@@ -17,7 +17,7 @@ import pytest
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import AgentTurnInput, RecorderContext
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 # ── Mock PydanticAI event types ──────────────────────────────────
 

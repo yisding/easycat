@@ -38,8 +38,8 @@ from easycat.events import (  # noqa: E402
     VADStopSpeaking,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer  # noqa: E402
+from easycat.runtime import InMemoryRingBuffer  # noqa: E402
 from easycat.runtime.artifacts import InMemoryArtifactStore  # noqa: E402
-from easycat.runtime.journal import InMemoryRingBuffer  # noqa: E402
 from easycat.runtime.records import ErrorInfo, JournalRecordKind  # noqa: E402
 from easycat.session._session import Session  # noqa: E402
 from easycat.session._types import SessionConfig  # noqa: E402
@@ -417,7 +417,7 @@ def test_debugger_source_session_adapts_live_journal():
 def test_journal_view_exposes_latest_sequence():
     """``JournalView`` re-exposes the backend's O(1) ``latest_sequence`` so
     live-tailing callers can detect growth without re-reading the journal."""
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=8)
     view = JournalView(journal)
@@ -436,7 +436,7 @@ def test_session_source_progress_is_cheap_and_tracks_growth():
     ``records()`` (full ``read()`` + ``_record_to_dict`` per record) every
     500ms just to compare a count.
     """
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=8)
 
@@ -835,7 +835,7 @@ async def test_websocket_live_source_pushes_on_growth_without_serializing():
     """A live source should push a fresh snapshot when the journal grows,
     and the WS loop must drive change detection off the cheap O(1)
     ``progress()`` probe — never re-serializing the journal per tick."""
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=32)
 

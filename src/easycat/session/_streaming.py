@@ -130,6 +130,97 @@ async def emit_tool_event(
     return False
 
 
+class _SentenceStreamBuffer:
+    """Accumulates text deltas and queues complete sentences for TTS.
+
+    Owns the buffering/sentence-splitting/markdown-window state that used
+    to live as locals inside :func:`consume_agent_stream`:
+
+    - plain mode: split at sentence boundaries on every delta;
+    - markdown mode: defer the regex-heavy strip/split work until a delta
+      could plausibly complete a sentence or close a markdown span.
+    """
+
+    def __init__(
+        self,
+        *,
+        tts_queue: asyncio.Queue[TTSInput | None],
+        prepare_tts_payload: Callable[..., TTSInput],
+        strip_md: bool,
+    ) -> None:
+        self._tts_queue = tts_queue
+        self._prepare = prepare_tts_payload
+        self._strip_md = strip_md
+        self._text = ""
+        self._markdown_window_open = False
+        # True when ``_markdown_window_open`` is held open solely by a trailing
+        # closed link/image label ``[label]`` awaiting its ``(destination)``.  A
+        # non-space, non-``(`` continuation disambiguates that case, so we
+        # recheck eagerly rather than waiting for a markdown-closer character.
+        self._awaiting_link_dest = False
+
+    def replace(self, text: str) -> None:
+        """Replace the pending buffer wholesale (used by the ``done`` event)."""
+        self._text = text
+
+    async def add_delta(self, delta: str) -> None:
+        """Buffer *delta* and queue any newly-completed sentences."""
+        if self._strip_md:
+            await self._add_markdown_delta(delta)
+            return
+        self._text += delta
+        ready, self._text = split_at_sentence_boundaries(self._text)
+        if ready:
+            await self._put_payload(ready, is_final=False)
+
+    async def _add_markdown_delta(self, delta: str) -> None:
+        self._text += delta
+
+        # Markdown stripping is regex-heavy and sentence splitting scans the
+        # whole pending window.  Do not repeat that work for tiny deltas
+        # that cannot complete a sentence.  If markdown is already known
+        # to be open, punctuation inside the open span is also not enough;
+        # wait until a plausible markdown closer arrives before rechecking.
+        #
+        # Exception: when the window is open *only* because a trailing
+        # ``[label]`` is awaiting its ``(destination)``, any non-space,
+        # non-``(`` character proves it is not a link and re-opens
+        # streaming.  Recheck eagerly in that case so an ordinary-prose
+        # continuation does not stall emission until the final flush.
+        if self._markdown_window_open:
+            recheck = any(ch in delta for ch in _MARKDOWN_RECHECK_CHARS)
+            if not recheck and self._awaiting_link_dest:
+                recheck = any(not ch.isspace() and ch != "(" for ch in delta)
+            if not recheck:
+                return
+        elif not any(ch in delta for ch in _STREAMING_SENTENCE_TRIGGER_CHARS):
+            return
+
+        self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
+        if self._markdown_window_open:
+            return
+
+        stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
+        ready, remaining = split_at_sentence_boundaries(stripped_window)
+        if ready:
+            await self._put_payload(ready, is_final=False)
+        self._text = remaining
+
+    async def flush(self) -> None:
+        """Queue whatever is still buffered as a final streaming payload."""
+        if self._text.strip():
+            text = self._text
+            if self._strip_md:
+                text = strip_markdown(text, normalize_code_spans=True)
+            await self._put_payload(text, is_final=True)
+        self._text = ""
+
+    async def _put_payload(self, text: str, *, is_final: bool) -> None:
+        payload = self._prepare(text, is_streaming=True, is_final=is_final)
+        if payload.text.strip():
+            await self._tts_queue.put(payload)
+
+
 async def consume_agent_stream(
     stream_factory: Callable[[], AsyncIterator[Any]],
     *,
@@ -154,164 +245,164 @@ async def consume_agent_stream(
     Returns an :class:`AgentStreamResult` with the accumulated text,
     structured output, and any error that occurred.
     """
-    result = AgentStreamResult()
-    text_buffer = ""
-    pending_tool_calls = 0
-    done_received = False
-    markdown_window_open = False
-    # True when ``markdown_window_open`` is held open solely by a trailing
-    # closed link/image label ``[label]`` awaiting its ``(destination)``.  A
-    # non-space, non-``(`` continuation disambiguates that case, so we recheck
-    # eagerly rather than waiting for a markdown-closer character.
-    awaiting_link_dest = False
+    consumer = _AgentStreamConsumer(
+        cancel_token=cancel_token,
+        tts_queue=tts_queue,
+        emit=emit,
+        prepare_tts_payload=prepare_tts_payload,
+        strip_md=strip_md,
+        turn=turn,
+    )
+    return await consumer.run(stream_factory)
 
-    async def _flush_buffer() -> None:
-        nonlocal text_buffer
-        if text_buffer.strip():
-            if strip_md:
-                text_buffer = strip_markdown(text_buffer, normalize_code_spans=True)
-            payload = prepare_tts_payload(text_buffer, is_streaming=True, is_final=True)
-            if payload.text.strip():
-                await tts_queue.put(payload)
-        text_buffer = ""
 
-    stream: AsyncIterator[Any] | None = None
-    try:
-        stream = stream_factory()
+class _AgentStreamConsumer:
+    """Stateful helper behind :func:`consume_agent_stream`.
+
+    Splits the consumption loop into named phases — cancellation
+    draining, text-delta buffering, tool-event forwarding, and final
+    sentinel delivery — that all share the in-flight counters that used
+    to live as closure locals.
+    """
+
+    def __init__(
+        self,
+        *,
+        cancel_token: Any | None,
+        tts_queue: asyncio.Queue[TTSInput | None],
+        emit: Callable[[Any], Awaitable[None]],
+        prepare_tts_payload: Callable[..., TTSInput],
+        strip_md: bool,
+        turn: TurnContext,
+    ) -> None:
+        self._cancel_token = cancel_token
+        self._tts_queue = tts_queue
+        self._emit = emit
+        self._turn = turn
+        self._buffer = _SentenceStreamBuffer(
+            tts_queue=tts_queue,
+            prepare_tts_payload=prepare_tts_payload,
+            strip_md=strip_md,
+        )
+        self.result = AgentStreamResult()
+        self._pending_tool_calls = 0
+        self._done_received = False
+
+    async def run(self, stream_factory: Callable[[], AsyncIterator[Any]]) -> AgentStreamResult:
+        stream: AsyncIterator[Any] | None = None
+        try:
+            stream = stream_factory()
+            await self._consume(stream)
+        except Exception as exc:
+            self.result.error = exc
+            logger.exception("Agent streaming error")
+            await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
+        finally:
+            await self._close_stream(stream)
+            await self._finish()
+        return self.result
+
+    # ── Phases ─────────────────────────────────────────────────────
+
+    async def _consume(self, stream: AsyncIterator[Any]) -> None:
         async for event in stream:
             kind = getattr(event, "kind", None)
-            if kind is None:
+            if kind is None or self._done_received:
                 continue
-
-            if done_received:
-                continue
-
-            # ── Cancellation: drain tool calls then stop ──
-            if cancel_token and cancel_token.is_cancelled:
-                if not result.interrupted:
-                    result.interrupted = True
-                if pending_tool_calls > 0:
-                    if kind == "tool_result":
-                        pending_tool_calls = max(0, pending_tool_calls - 1)
-                        await emit_tool_event(event, kind, emit=emit)
-                        if pending_tool_calls <= 0:
-                            break
-                    elif kind == "tool_started":
-                        pending_tool_calls += 1
-                        await emit_tool_event(event, kind, emit=emit)
-                    elif kind == "tool_delta":
-                        await emit_tool_event(event, kind, emit=emit)
-                    elif kind == "done":
-                        if event.text:
-                            result.text = event.text
-                        if getattr(event, "structured_output", None) is not None:
-                            result.structured_output = event.structured_output
-                        break
-                    continue
-                else:
-                    # No tool calls left to drain. Capture any trailing
-                    # ``done`` payload (text / structured_output) before
-                    # stopping, mirroring the pending>0 branch above, so an
-                    # interrupted stream still surfaces its partial result.
-                    if kind == "done":
-                        if event.text:
-                            result.text = event.text
-                        if getattr(event, "structured_output", None) is not None:
-                            result.structured_output = event.structured_output
+            if self._cancel_token and self._cancel_token.is_cancelled:
+                if not await self._consume_cancelled(event, kind):
                     break
+                continue
+            await self._consume_event(event, kind)
 
-            # ── Normal event handling ──
-            if kind == "text_delta":
-                result.text += event.text
-                await emit(AgentDelta(text=event.text))
+    async def _consume_cancelled(self, event: Any, kind: str) -> bool:
+        """Drain in-flight tool calls after cancellation.
 
-                # Record first-token latency
-                if turn.first_agent_time is None:
-                    turn.first_agent_time = time.monotonic()
+        Returns ``True`` to keep consuming (tool calls still pending) and
+        ``False`` to stop.  Captures a trailing ``done`` payload either
+        way so an interrupted stream still surfaces its partial result.
+        """
+        if not self.result.interrupted:
+            self.result.interrupted = True
+        if self._pending_tool_calls <= 0:
+            if kind == "done":
+                self._capture_done_payload(event)
+            return False
+        if kind == "tool_result":
+            self._pending_tool_calls = max(0, self._pending_tool_calls - 1)
+            await emit_tool_event(event, kind, emit=self._emit)
+            return self._pending_tool_calls > 0
+        if kind in ("tool_started", "tool_delta"):
+            if kind == "tool_started":
+                self._pending_tool_calls += 1
+            await emit_tool_event(event, kind, emit=self._emit)
+            return True
+        if kind == "done":
+            self._capture_done_payload(event)
+            return False
+        return True
 
-                # Buffer text and queue complete sentences for TTS
-                if strip_md:
-                    text_buffer += event.text
+    async def _consume_event(self, event: Any, kind: str) -> None:
+        if kind == "text_delta":
+            await self._consume_text_delta(event)
+        elif kind == "tool_started":
+            self._pending_tool_calls += 1
+            await emit_tool_event(event, kind, emit=self._emit)
+        elif kind in ("tool_delta", "tool_result"):
+            if kind == "tool_result":
+                self._pending_tool_calls = max(0, self._pending_tool_calls - 1)
+            await emit_tool_event(event, kind, emit=self._emit)
+        elif kind == "done":
+            await self._consume_done(event)
 
-                    # Markdown stripping is regex-heavy and sentence splitting scans the
-                    # whole pending window.  Do not repeat that work for tiny deltas
-                    # that cannot complete a sentence.  If markdown is already known
-                    # to be open, punctuation inside the open span is also not enough;
-                    # wait until a plausible markdown closer arrives before rechecking.
-                    #
-                    # Exception: when the window is open *only* because a trailing
-                    # ``[label]`` is awaiting its ``(destination)``, any non-space,
-                    # non-``(`` character proves it is not a link and re-opens
-                    # streaming.  Recheck eagerly in that case so an ordinary-prose
-                    # continuation does not stall emission until the final flush.
-                    if markdown_window_open:
-                        recheck = any(ch in event.text for ch in _MARKDOWN_RECHECK_CHARS)
-                        if not recheck and awaiting_link_dest:
-                            recheck = any(not ch.isspace() and ch != "(" for ch in event.text)
-                        if not recheck:
-                            continue
-                    elif not any(ch in event.text for ch in _STREAMING_SENTENCE_TRIGGER_CHARS):
-                        continue
+    async def _consume_text_delta(self, event: Any) -> None:
+        self.result.text += event.text
+        await self._emit(AgentDelta(text=event.text))
 
-                    markdown_window_open, awaiting_link_dest = markdown_open_state(text_buffer)
-                    if markdown_window_open:
-                        continue
+        # Record first-token latency
+        if self._turn.first_agent_time is None:
+            self._turn.first_agent_time = time.monotonic()
 
-                    stripped_window = strip_markdown(
-                        text_buffer, trim=False, normalize_code_spans=True
-                    )
-                    ready, remaining = split_at_sentence_boundaries(stripped_window)
-                    if ready:
-                        payload = prepare_tts_payload(ready, is_streaming=True, is_final=False)
-                        if payload.text.strip():
-                            await tts_queue.put(payload)
-                    text_buffer = remaining
-                else:
-                    text_buffer += event.text
-                    ready, text_buffer = split_at_sentence_boundaries(text_buffer)
-                    if ready:
-                        payload = prepare_tts_payload(ready, is_streaming=True, is_final=False)
-                        if payload.text.strip():
-                            await tts_queue.put(payload)
+        await self._buffer.add_delta(event.text)
 
-            elif kind == "tool_started":
-                pending_tool_calls += 1
-                await emit_tool_event(event, kind, emit=emit)
-            elif kind == "tool_delta":
-                await emit_tool_event(event, kind, emit=emit)
-            elif kind == "tool_result":
-                pending_tool_calls = max(0, pending_tool_calls - 1)
-                await emit_tool_event(event, kind, emit=emit)
-            elif kind == "done":
-                if event.text:
-                    if not result.text:
-                        text_buffer = event.text
-                    result.text = event.text
-                if getattr(event, "structured_output", None) is not None:
-                    result.structured_output = event.structured_output
-                await _flush_buffer()
-                done_received = True
+    async def _consume_done(self, event: Any) -> None:
+        if event.text:
+            if not self.result.text:
+                self._buffer.replace(event.text)
+            self.result.text = event.text
+        if getattr(event, "structured_output", None) is not None:
+            self.result.structured_output = event.structured_output
+        await self._buffer.flush()
+        self._done_received = True
 
-    except Exception as exc:
-        result.error = exc
-        logger.exception("Agent streaming error")
-        await emit(Error(exception=exc, stage=ErrorStage.AGENT))
-    finally:
+    def _capture_done_payload(self, event: Any) -> None:
+        if event.text:
+            self.result.text = event.text
+        if getattr(event, "structured_output", None) is not None:
+            self.result.structured_output = event.structured_output
+
+    # ── Teardown ───────────────────────────────────────────────────
+
+    @staticmethod
+    async def _close_stream(stream: AsyncIterator[Any] | None) -> None:
         # Defensively close the agent stream so a generator abandoned mid-
         # iteration (e.g. on barge-in/cancellation) is finalized promptly
         # rather than waiting for GC. Bridges already close their own upstream
         # connections via async with/finally on cancel; this is hygiene that
         # tightens the race window where the bridge frame is left suspended.
-        if stream is not None:
-            aclose = getattr(stream, "aclose", None)
-            if aclose is not None:
-                with contextlib.suppress(Exception):
-                    await aclose()
-        stream_succeeded = result.error is None and (
-            not cancel_token or not cancel_token.is_cancelled
+        if stream is None:
+            return
+        aclose = getattr(stream, "aclose", None)
+        if aclose is not None:
+            with contextlib.suppress(Exception):
+                await aclose()
+
+    async def _finish(self) -> None:
+        stream_succeeded = self.result.error is None and (
+            not self._cancel_token or not self._cancel_token.is_cancelled
         )
         if stream_succeeded:
-            await _flush_buffer()
+            await self._buffer.flush()
         # Sentinel to stop the TTS task.
         #
         # On a clean completion the consumer is still actively draining the
@@ -326,11 +417,9 @@ async def consume_agent_stream(
         # finally block, so fall back to a non-blocking put and swallow
         # ``QueueFull`` (the consumer is gone, so the sentinel is moot).
         if stream_succeeded:
-            await tts_queue.put(None)
+            await self._tts_queue.put(None)
         else:
             try:
-                tts_queue.put_nowait(None)
+                self._tts_queue.put_nowait(None)
             except asyncio.QueueFull:
                 logger.debug("tts_queue full; skipping stop sentinel (consumer already stopped)")
-
-    return result

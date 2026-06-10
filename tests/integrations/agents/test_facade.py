@@ -243,7 +243,7 @@ class TestAutoAdaptLangChain:
 
         from easycat.integrations.agents._recorder import JournalAgentRecorder
         from easycat.integrations.agents.base import RecorderContext
-        from easycat.runtime.journal import InMemoryRingBuffer
+        from easycat.runtime import InMemoryRingBuffer
 
         adapted = auto_adapt_agent(FakeListChatModel(responses=["the answer"]))
         rec = JournalAgentRecorder(

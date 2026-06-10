@@ -22,7 +22,7 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 
 

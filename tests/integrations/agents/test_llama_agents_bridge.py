@@ -21,8 +21,8 @@ from easycat.integrations.agents.base import (
     RecorderContext,
 )
 from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from easycat.runtime.journal import InMemoryRingBuffer
 
 
 def _recorder(journal=None):

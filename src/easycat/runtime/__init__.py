@@ -11,13 +11,16 @@ from easycat.runtime.costs import (
     finite_number,
     max_session_cost_usd_from_snapshot,
 )
-from easycat.runtime.journal import (
-    ExecutionJournal,
-    InMemoryRingBuffer,
-    JournalView,
+from easycat.runtime.journal import ExecutionJournal, JournalView
+from easycat.runtime.journal_factory import create_journal
+from easycat.runtime.journal_memory import InMemoryRingBuffer
+from easycat.runtime.journal_retention import run_retention
+from easycat.runtime.journal_sql import (
+    LibsqlJournal,
+    LitestreamSqliteJournal,
     SqliteJournal,
-    create_journal,
 )
+from easycat.runtime.journal_views import FrozenJournalSnapshot, ReadonlySqliteJournal
 from easycat.runtime.records import (
     ErrorInfo,
     JournalRecord,
@@ -32,11 +35,15 @@ __all__ = [
     "ErrorInfo",
     "ExecutionJournal",
     "FilesystemArtifactStore",
+    "FrozenJournalSnapshot",
     "InMemoryArtifactStore",
     "InMemoryRingBuffer",
     "JournalRecord",
     "JournalRecordKind",
     "JournalView",
+    "LibsqlJournal",
+    "LitestreamSqliteJournal",
+    "ReadonlySqliteJournal",
     "RuntimeScope",
     "SqliteJournal",
     "TimingInfo",
@@ -44,4 +51,5 @@ __all__ = [
     "create_journal",
     "finite_number",
     "max_session_cost_usd_from_snapshot",
+    "run_retention",
 ]

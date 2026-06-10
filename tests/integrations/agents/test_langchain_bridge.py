@@ -30,7 +30,7 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.integrations.agents.langchain import LangChainBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.timeouts import AgentTimeoutError
 
 # ── Mock LangChain objects ───────────────────────────────────────

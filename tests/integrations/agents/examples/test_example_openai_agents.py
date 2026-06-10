@@ -16,7 +16,7 @@ import pytest
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import AgentTurnInput, RecorderContext
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 # ── Mock SDK objects ─────────────────────────────────────────────
 

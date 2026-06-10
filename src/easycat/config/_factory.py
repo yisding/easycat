@@ -33,7 +33,7 @@ from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
 from easycat.providers import TransportLike
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.capabilities import bind_identity_sink_if_supported
-from easycat.runtime.journal import create_journal
+from easycat.runtime.journal_factory import create_journal
 from easycat.session._session import Session
 from easycat.session._types import Agent as _AgentProto
 from easycat.session._types import SessionConfig

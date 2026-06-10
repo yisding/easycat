@@ -682,7 +682,11 @@ def test_validation_tasks_v62_current_state_tracks_low_cardinality_metrics() -> 
             "easycat.audio.bytes.total",
             "easycat.audio.frames.total",
         ),
-        "src/easycat/runtime/journal.py": (
+        "src/easycat/runtime/journal_memory.py": (
+            "easycat.journal.append.latency",
+            "easycat.journal.degraded",
+        ),
+        "src/easycat/runtime/journal_sql.py": (
             "easycat.journal.append.latency",
             "easycat.journal.degraded",
         ),

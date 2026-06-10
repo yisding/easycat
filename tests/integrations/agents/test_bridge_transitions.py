@@ -24,7 +24,7 @@ from easycat.integrations.agents.base import (
     ConventionViolationError,
     RecorderContext,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 
 def _make_recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder:

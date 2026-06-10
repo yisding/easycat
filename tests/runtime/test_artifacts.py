@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import (
     FilesystemArtifactStore,
     InMemoryArtifactStore,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 
 

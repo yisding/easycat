@@ -1694,7 +1694,8 @@ Current verified state:
   `easycat.transport.disconnects.total` or `easycat.validation.failures.total`.
 - Metric wiring is present in `src/easycat/_bounded_queue.py`,
   `src/easycat/session/_session.py`, `src/easycat/session/_turn_runner.py`,
-  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal.py`,
+  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal_memory.py`,
+  `src/easycat/runtime/journal_sql.py`,
   and the stage modules under `src/easycat/stages/`.
 - `tests/test_observability.py` verifies metric definitions, fake meter
   counter/histogram/gauge behavior, observable-gauge callback behavior,

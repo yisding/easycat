@@ -14,7 +14,7 @@ from unittest import mock
 
 import pytest
 
-from easycat.runtime.journal import (
+from easycat.runtime import (
     JournalView,
     LitestreamSqliteJournal,
     ReadonlySqliteJournal,
@@ -326,7 +326,7 @@ class TestSqliteJournalLifecycle:
         j.close()
 
     def test_readonly_journal_surfaces_persisted_degraded(self, tmp_path):
-        from easycat.runtime.journal import ReadonlySqliteJournal
+        from easycat.runtime import ReadonlySqliteJournal
 
         j = SqliteJournal("sess", data_dir=tmp_path)
         circular: dict[str, object] = {}
@@ -345,7 +345,7 @@ class TestSqliteJournalLifecycle:
         assert ro.degraded is True
 
     def test_reused_session_clears_persisted_degraded_marker(self, tmp_path):
-        from easycat.runtime.journal import ReadonlySqliteJournal
+        from easycat.runtime import ReadonlySqliteJournal
 
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         circular: dict[str, object] = {}
@@ -488,7 +488,7 @@ class TestCrashRecovery:
         j1._closed = True
 
         with mock.patch(
-            "easycat.runtime.journal.shutil.copy2",
+            "easycat.runtime.journal_sql.shutil.copy2",
             side_effect=OSError("disk full"),
         ):
             j2 = SqliteJournal("sess", data_dir=tmp_path)
@@ -658,7 +658,7 @@ class TestCrashRecovery:
         script = textwrap.dedent(f"""\
             import signal, sys
             sys.path.insert(0, "src")
-            from easycat.runtime.journal import SqliteJournal
+            from easycat.runtime import SqliteJournal
             from easycat.runtime.records import JournalRecordKind
 
             j = SqliteJournal("crash-sess", data_dir="{tmp_path}")
@@ -815,7 +815,7 @@ class TestSqliteHotPathBehavior:
             script = textwrap.dedent(f"""\
                 import sys
                 sys.path.insert(0, "src")
-                from easycat.runtime.journal import SqliteJournal
+                from easycat.runtime import SqliteJournal
                 from easycat.runtime.records import JournalRecordKind
 
                 j = SqliteJournal("strace-sess", data_dir="{data_dir}")
@@ -873,7 +873,7 @@ class TestSqliteHotPathBehavior:
 class TestLitestreamSqliteJournal:
     def test_fallback_when_binary_missing(self, tmp_path):
         """When litestream is not on PATH, adapter degrades to plain SqliteJournal."""
-        with mock.patch("easycat.runtime.journal.shutil.which", return_value=None):
+        with mock.patch("easycat.runtime.journal_sql.shutil.which", return_value=None):
             j = LitestreamSqliteJournal(
                 "test-ls-fallback",
                 data_dir=tmp_path,
@@ -914,7 +914,7 @@ class TestLitestreamSqliteJournal:
 
     def test_factory_creates_litestream_adapter(self, tmp_path):
         """create_journal with backend='sqlite+litestream' returns the adapter."""
-        with mock.patch("easycat.runtime.journal.shutil.which", return_value=None):
+        with mock.patch("easycat.runtime.journal_sql.shutil.which", return_value=None):
             j = create_journal(
                 "test-factory-ls",
                 debug="full",
@@ -999,7 +999,7 @@ class TestLibsqlJournal:
     )
     def test_libsql_adapter_round_trip(self, tmp_path):
         """Integration: round-trip through LibsqlJournal (local-only, no remote)."""
-        from easycat.runtime.journal import LibsqlJournal
+        from easycat.runtime import LibsqlJournal
 
         j = LibsqlJournal("test-libsql-rt", data_dir=tmp_path)
         for i in range(5):
@@ -1029,7 +1029,7 @@ class TestLibsqlJournal:
         ``degraded`` key there would desync the persisted state from the
         retained history, so it must survive.
         """
-        from easycat.runtime.journal import LibsqlJournal, ReadonlySqliteJournal
+        from easycat.runtime import LibsqlJournal, ReadonlySqliteJournal
 
         j1 = LibsqlJournal("sess-unclean", data_dir=tmp_path)
         circular: dict[str, object] = {}
@@ -1064,7 +1064,7 @@ class TestLibsqlJournal:
     def test_libsql_clean_reuse_clears_degraded_marker(self, tmp_path):
         """Clean libSQL reuse truncates the prior journal, so its stale
         ``degraded`` marker must be cleared."""
-        from easycat.runtime.journal import LibsqlJournal, ReadonlySqliteJournal
+        from easycat.runtime import LibsqlJournal, ReadonlySqliteJournal
 
         j1 = LibsqlJournal("sess-clean", data_dir=tmp_path)
         circular: dict[str, object] = {}
