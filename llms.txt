@@ -1,0 +1,37 @@
+# EasyCat
+
+> EasyCat is a Python voice bot framework: noise reduction -> VAD -> STT ->
+> agent -> TTS, with pluggable providers at each stage and idiomatic bridges
+> for OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, the
+> remote Responses API, or your own async workflow.
+
+Machine-readable surfaces: `easycat docs --json` emits this route map with
+command hints and audience labels; `easycat explain json-schema` documents the
+standard `--json` envelope every CLI command shares. Bare `easycat` commands
+use the installed CLI form; from this repository, prefix them with `uv run`.
+
+Source: https://github.com/yisding/easycat
+
+## Docs
+
+- [Start here](https://github.com/yisding/easycat/blob/main/README.md#choose-your-path) — for all readers: Choose the right first route for quickstart, learning, examples, maintenance, or operations.
+- [Quickstart](https://github.com/yisding/easycat/blob/main/README.md#install) — for new users: Install EasyCat and run your first voice agent.
+- [CLI and scaffolds](https://github.com/yisding/easycat/blob/main/README.md#cli) — for app builders: Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
+- [Docs map](https://github.com/yisding/easycat/blob/main/docs/README.md) — for all readers: Choose the maintained guide for your current task.
+- [Teaching ladder](https://github.com/yisding/easycat/tree/main/docs/teaching) — for learners: Learn voice pipelines chapter by chapter.
+- [First lesson](https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio) — for learners: Start with audio chunks before agents or providers.
+- [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
+- [Architecture](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
+- [Coding agents](https://github.com/yisding/easycat/blob/main/AGENTS.md) — for coding agents: Follow repo structure, development commands, docs/onboarding guards, and PR expectations.
+- [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
+- [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
+- [Contributing](https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md) — for contributors: Follow the development loop, docs/onboarding guards, and validation slices.
+- [Deployment](https://github.com/yisding/easycat/blob/main/docs/deployment/docker.md) — for operators: Package the WebSocket example for container deployment.
+- [Observability](https://github.com/yisding/easycat/blob/main/docs/observability.md) — for operators: Inspect journals, debug bundles, the debugger UI, metrics, and traces.
+- [Journal durability](https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md) — for operators and maintainers: Understand SQLite journal persistence, recovery, and storage layout.
+- [Validation](https://github.com/yisding/easycat/blob/main/README.md#validation-workflow) — for contributors: Run docs/onboarding guards, the right validation lane, and inspect .easycat/validation/latest.json.
+- [Validation reference](https://github.com/yisding/easycat/blob/main/plan/validation/reference.md) — for release maintainers: Read provider and report vocabulary used by validation.
+
+## Optional
+
+- [llms-full.txt](https://github.com/yisding/easycat/blob/main/llms-full.txt) — every docs route above expanded with its copyable command hints.

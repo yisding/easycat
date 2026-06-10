@@ -28,13 +28,14 @@ When adding or changing provider behavior:
    matrix separate from protocol contract assertions.
 
 From the repository root, run `uv run easycat validate contracts` for the
-offline provider, protocol, and bridge contract lane. Use
-`uv run easycat validate contracts --json` when a script or coding agent needs
-the same contract run inside the standard CLI envelope. Use
+offline provider, protocol, and bridge contract lane (add `--json` for the
+same run inside the standard CLI envelope:
+`uv run easycat validate contracts --json`). Use
 `uv run easycat docs --audience provider-maintainers` to narrow the maintained
 docs map to provider-facing routes, or
 `uv run easycat docs --audience provider-maintainers --json` when automation
-needs that smaller route map with command hints. Use
+needs that smaller route map. Coding agent? Start at
+[llms.txt](../../llms.txt) or run `uv run easycat explain json-schema`. Use
 `uv run pytest tests/contracts` for the focused contract suite, and
 `uv run pytest tests/integration/test_provider_contract_matrix.py` when you
 need to verify the separate factory/session wiring matrix.

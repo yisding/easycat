@@ -674,7 +674,8 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
     normalized_readme = " ".join(readme.split())
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
-    assert "script or coding agent needs parseable environment/check rows" in normalized_readme
+    assert "for parseable environment/check rows" in normalized_readme
+    assert "when a script or coding agent" not in normalized_readme
     assert "uv run --env-file .env easycat doctor" not in readme
     assert "\nuv run easycat doctor\n" not in readme
     assert "Run `easycat doctor`" not in readme
@@ -739,14 +740,16 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert 'uv run easycat docs --audience "app builders"' not in next_steps
     assert "narrow the map to app-building routes" in normalized_next_steps
     assert "uv run easycat docs --audience app-builders --json" in next_steps
-    assert "automation needs that smaller route map" in normalized_next_steps
+    assert "automation needs the route map with command hints" in normalized_next_steps
     assert "uv run easycat docs --json" in next_steps
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps
     assert "uv run easycat explain json-schema" in next_steps
-    assert "script or coding agent needs the full route map with command hints" in (
+    assert "Coding agent? Start at EasyCat's" in normalized_next_steps
+    assert "[llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt)" in (
         normalized_next_steps
     )
+    assert "when a script or coding agent" not in normalized_next_steps
     assert "audience labels" in normalized_next_steps
     assert "right starter" in normalized_next_steps
     assert "automation needs the template catalog" in normalized_next_steps

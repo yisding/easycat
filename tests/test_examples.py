@@ -547,20 +547,13 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     commands = fast_path.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
 
     assert "uv run easycat docs" in intro
-    assert "uv run easycat docs --json" in intro
     assert "maintained docs map" in intro
-    assert "script or coding agent needs the same route map with command hints" in normalized_intro
-    assert (
-        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
-        "before running those hints"
-    ) in normalized_intro
+    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized_intro
+    assert "when a script or coding agent" not in normalized_intro
     assert "uv run easycat explain json-schema" in intro
-    assert "JSON envelope and field contract" in normalized_intro
     assert "uv run easycat doctor --json" in intro
     assert "uv run easycat doctor --env-file .env --json" in intro
-    assert "script or coding agent needs parseable first-run environment checks" in (
-        normalized_intro
-    )
+    assert "same checks as parseable rows" in normalized_intro
     assert "uv run easycat init --list-templates" in intro
     assert "uv run easycat init my-agent" in intro
     assert "uv run easycat init --list-templates --json" in intro
@@ -582,12 +575,8 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run easycat validate report .easycat/validation/latest.json" in fast_path
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in fast_path
     normalized_fast_path = re.sub(r"\s+", " ", fast_path)
-    current_run_phrase = (
-        "script or coding agent needs the current quick validation run inside "
-        "the standard CLI envelope"
-    )
-    assert current_run_phrase in normalized_fast_path
-    assert "re-emit the saved report in that same envelope" in normalized_fast_path
+    assert "emit the run or saved report inside the standard CLI envelope" in normalized_fast_path
+    assert "when a script or coding agent" not in normalized_fast_path
 
 
 def test_examples_readme_command_hints_are_locally_valid() -> None:

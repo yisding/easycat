@@ -3,25 +3,21 @@
 Use this page as the map for the maintained docs. Planning notes live under
 `plan/`; the files below are the current reader-facing documentation.
 From this repository, `uv run easycat docs` prints the same map; in an
-installed app environment, use `easycat docs`. Use
-`uv run easycat docs --json` when a script or coding agent needs the route map
-with command hints and audience labels. Replace uppercase or angle-bracket
+installed app environment, use `easycat docs`. Narrow the map by audience —
+the human docs menu also prints the available audience labels:
+
+```bash
+uv run easycat docs --audience learners      # learning routes
+uv run easycat docs --audience app-builders  # scaffold/app-building routes
+uv run easycat docs --audience operators     # deployment/observability routes
+uv run easycat docs --audience maintainers   # architecture/maintenance routes
+uv run easycat docs --json                   # route map with command hints and audience labels
+```
+
+Coding agent? Start at [llms.txt](../llms.txt) or run
+`uv run easycat explain json-schema`. Replace uppercase or angle-bracket
 placeholders in command hints, such as `PATH` or `<session_id>`, before
-running them. Use
-`uv run easycat docs --audience learners` to narrow the human map,
-`uv run easycat docs --audience learners --json` when automation needs only
-learner-facing route entries, or
-`uv run easycat docs --audience app-builders` for scaffold/app-building routes,
-`uv run easycat docs --audience app-builders --json` when automation needs only
-app-builder route entries, or
-`uv run easycat docs --audience operators` for deployment/observability routes,
-`uv run easycat docs --audience operators --json` when automation needs only
-operator-facing route entries, or
-`uv run easycat docs --audience maintainers` for architecture/maintenance routes,
-`uv run easycat docs --audience maintainers --json` when automation needs only
-maintainer-facing route entries. The human docs menu also prints the available
-audience labels so readers can choose a narrower route map without switching
-to JSON first. Multi-word audience filters accept hyphens or underscores, so
+running them. Multi-word audience filters accept hyphens or underscores, so
 `uv run easycat docs --audience app-builders` is equivalent to
 `uv run easycat docs --audience "app builders"`. The `maintainers` and
 `operators` filters also include compound labels such as `provider maintainers`,
@@ -43,11 +39,12 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat init --list-templates` to compare templates with best-fit
   guidance, base `easycat[...]` package requirements and extras, required
   environment variables, optional environment knobs, generated files, and
-  copyable create/preflight/check/fix/docs/json-schema/run commands. Use
-  `uv run easycat init --list-templates --json` when a script or coding agent
-  needs the same template catalog and post-scaffold command previews, then use
+  copyable create/preflight/check/fix/docs/json-schema/run commands
+  (`uv run easycat init --list-templates --json` emits the same template
+  catalog and post-scaffold command previews), then use
   the CLI commands documented in the [root README](../README.md#cli).
-- Automating the CLI: use `uv run easycat docs --json` to inspect the docs
+- Automating the CLI: start at [llms.txt](../llms.txt), use
+  `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,
   including command-specific success and error fields. Use
@@ -110,7 +107,7 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat validate contracts --json`,
   `uv run easycat validate release --json`, and
   `uv run easycat validate report .easycat/validation/latest.json --json`) when
-  a script or coding agent needs validation output inside the standard CLI
+  automation needs validation output inside the standard CLI
   envelope. Then use the validation workflow in the
   [root README](../README.md#validation-workflow) and the
   [validation reference](../plan/validation/reference.md) for provider and

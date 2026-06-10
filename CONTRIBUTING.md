@@ -15,22 +15,20 @@ just check                 # fmt-check + lint + tests (the pre-PR gauntlet)
 Run `uv run easycat docs` for the maintained reader-facing map, including
 quickstart, CLI and scaffold commands, examples, teaching chapters, public API,
 validation, and operations. Use `uv run easycat docs --audience contributors`
-to narrow the map to contributor-facing routes. Use
+to narrow the map to contributor-facing routes, or
 `uv run easycat docs --audience contributors --json` when automation needs
-that smaller route map, or `uv run easycat docs --json` when a script or coding
-agent needs the full route map with command hints and audience labels; replace
-uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` before
-running those hints. Use
-`uv run easycat explain json-schema` for the standard `--json` envelope and
-command-specific fields.
+that smaller route map.
+Coding agent? Start at [llms.txt](llms.txt) or run
+`uv run easycat explain json-schema`; `uv run easycat docs --json` emits the
+full route map. After editing the docs route map, regenerate the machine docs
+with `uv run python scripts/regen_llms_txt.py` (`--check` verifies them in
+CI).
 For local audio or provider work, set the relevant environment variables and
 run `uv run easycat doctor` before debugging tests or examples. Use
 `uv run easycat doctor --env-file .env` when those keys live in a project
-`.env`. Use
-`uv run easycat doctor --json` when a script or coding agent needs parseable
-environment/check rows; use
-`uv run easycat doctor --env-file .env --json` when those checks should load
-project `.env` keys.
+`.env`; add `--json` (`uv run easycat doctor --json`,
+`uv run easycat doctor --env-file .env --json`) for parseable
+environment/check rows.
 
 Don't have [`just`](https://github.com/casey/just)? Every recipe is a one-liner
 you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
@@ -53,7 +51,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
-| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
+| Guard root docs routes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
 | Guard teaching docs | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
 | Guard examples docs | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold docs | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |
@@ -154,13 +152,13 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 | `release` | `uv run easycat validate release` | installed-wheel aggregate gate |
 
 `uv run easycat validate report .easycat/validation/latest.json` renders the
-latest saved report. Use
-`uv run easycat validate quick --json`,
-`uv run easycat validate contracts --json`, or
-`uv run easycat validate release --json` when a script or coding agent needs
-the current validation run inside the standard CLI envelope. Use
-`uv run easycat validate report .easycat/validation/latest.json --json` when a
-script or coding agent needs a saved report re-emitted inside that envelope.
+latest saved report. Add `--json` to any lane
+(`uv run easycat validate quick --json`,
+`uv run easycat validate contracts --json`,
+`uv run easycat validate release --json`) for the current validation run
+inside the standard CLI envelope, or to the report command
+(`uv run easycat validate report .easycat/validation/latest.json --json`) to
+re-emit a saved report inside that envelope.
 Use `.easycat/validation/runs/<run_id>/report.json` when you need a specific
 older run.
 
@@ -302,9 +300,9 @@ EasyCat uses **registries**, not inheritance. To add a provider:
 6. **Tests**: contract tests under `tests/contracts/` plus unit tests under
    `tests/stt/` or `tests/tts/`. Mark provider/surface pairs correctly (see
    the pairing rule above). If the protocol is replayable, add a cassette. Run
-   `uv run easycat validate contracts`,
-   `uv run easycat validate contracts --json` when a script or coding agent
-   needs the contract run inside the standard CLI envelope,
+   `uv run easycat validate contracts`
+   (add `--json` for the same run inside the standard CLI envelope:
+   `uv run easycat validate contracts --json`),
    `uv run pytest tests/contracts`, and
    `uv run pytest tests/integration/test_provider_contract_matrix.py`.
 

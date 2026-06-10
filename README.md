@@ -155,19 +155,17 @@ create/preflight/check/fix/docs/json-schema/run commands.
 `easycat init my-agent` scaffolds the same one shown below: the canonical
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
-provider keys live in a project `.env`, use `easycat doctor --env-file .env`.
-Add `--json` when a script or coding agent needs the same environment/check
-rows without Rich formatting; use `easycat doctor --env-file .env --json`
-when both apply.
-For coding agents and scripts, `easycat docs --json` emits the docs route map
-with audience labels and command hints. Use `easycat docs --audience learners`
-to narrow the human map, `easycat docs --audience app-builders` for scaffold
-and app-building routes, `easycat docs --audience operators` for deployment and
-observability routes, or `easycat docs --audience maintainers` for architecture
-and maintenance routes. Add `--json` to those filters when automation needs
-parseable route entries; the `maintainers` and `operators` filters also include
-compound labels such as `provider maintainers`, `release maintainers`, and
+provider keys live in a project `.env`, use `easycat doctor --env-file .env`;
+add `--json` for the same environment/check rows without Rich formatting.
+Use `easycat docs --audience learners` to narrow the human map,
+`easycat docs --audience app-builders` for scaffold and app-building routes,
+`easycat docs --audience operators` for deployment and observability routes,
+or `easycat docs --audience maintainers` for architecture and maintenance
+routes; the `maintainers` and `operators` filters also include compound labels
+such as `provider maintainers`, `release maintainers`, and
 `operators and maintainers`.
+Coding agent? Start at [llms.txt](llms.txt) or run
+`easycat explain json-schema`.
 `easycat explain json-schema` documents the standard `--json` envelope. It covers
 the docs route map,
 template catalog, scaffold output, doctor environment/checks output,
@@ -212,7 +210,7 @@ If `just` is not installed, use the raw command table in
 directly:
 
 ```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
