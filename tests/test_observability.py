@@ -1102,3 +1102,95 @@ async def test_session_errors_counter_increments_on_dispatch_failure(
     _value, attrs = err_counter.adds[0]
     assert attrs["easycat.surface"] == "agent_bridge"
     assert attrs["easycat.error_type"] == "RuntimeError"
+
+
+# ── docs/latency.md guard ────────────────────────────────────────
+
+_LATENCY_DOC = REPO_ROOT / "docs/latency.md"
+# Rows look like: | `TurnManagerConfig.end_of_turn_silence_ms` | `1000` | ... |
+_LATENCY_DEFAULT_ROW = re.compile(
+    r"^\| `(?P<cls>\w+)\.(?P<field>\w+)` \| `(?P<value>[0-9]+(?:\.[0-9]+)?)` \|",
+    re.MULTILINE,
+)
+
+
+def _latency_config_classes() -> dict[str, type]:
+    from easycat.integrations.agents import AgentRunnerConfig
+    from easycat.session._types import SessionConfig
+    from easycat.smart_turn import SmartTurnConfig
+    from easycat.turn_manager import TurnManagerConfig
+    from easycat.vad import VADConfig
+
+    return {
+        "AgentRunnerConfig": AgentRunnerConfig,
+        "SessionConfig": SessionConfig,
+        "SmartTurnConfig": SmartTurnConfig,
+        "TurnManagerConfig": TurnManagerConfig,
+        "VADConfig": VADConfig,
+    }
+
+
+def test_latency_docs_defaults_match_code() -> None:
+    """Every default documented in docs/latency.md matches the code.
+
+    The latency page promises operators a table of latency-adding
+    defaults with their *current* values; a drifted number would send
+    someone tuning the wrong knob.  Each ``ClassName.field`` row is
+    resolved against the real dataclass default.
+    """
+    import dataclasses
+
+    doc = _LATENCY_DOC.read_text(encoding="utf-8")
+    rows = _LATENCY_DEFAULT_ROW.findall(doc)
+    assert rows, "no `ClassName.field` | `value` rows found in docs/latency.md"
+
+    classes = _latency_config_classes()
+    for cls_name, field_name, doc_value in rows:
+        assert cls_name in classes, f"docs/latency.md documents unknown class {cls_name}"
+        fields = {f.name: f for f in dataclasses.fields(classes[cls_name])}
+        assert field_name in fields, (
+            f"docs/latency.md documents unknown field {cls_name}.{field_name}"
+        )
+        default = fields[field_name].default
+        assert default is not dataclasses.MISSING, (
+            f"{cls_name}.{field_name} has no plain default to document"
+        )
+        assert float(doc_value) == pytest.approx(float(default)), (
+            f"docs/latency.md says {cls_name}.{field_name} defaults to {doc_value}, "
+            f"but the code default is {default}"
+        )
+
+
+def test_latency_docs_cover_core_latency_defaults() -> None:
+    """The big response-path knobs must stay documented."""
+    doc = _LATENCY_DOC.read_text(encoding="utf-8")
+    documented = {(cls, field) for cls, field, _value in _LATENCY_DEFAULT_ROW.findall(doc)}
+
+    required = {
+        ("TurnManagerConfig", "end_of_turn_silence_ms"),
+        ("TurnManagerConfig", "stt_segment_silence_ms"),
+        ("VADConfig", "min_silence_duration_ms"),
+        ("VADConfig", "min_speech_duration_ms"),
+        ("SmartTurnConfig", "timeout_s"),
+        ("AgentRunnerConfig", "timeout"),
+    }
+    missing = required - documented
+    assert not missing, f"docs/latency.md dropped required latency defaults: {sorted(missing)}"
+
+
+def test_latency_docs_name_the_cli_waterfall_milestones() -> None:
+    """The doc explains the same milestone keys the CLI waterfall emits."""
+    from easycat.debug._turn_timeline import turn_waterfall
+
+    doc = _LATENCY_DOC.read_text(encoding="utf-8")
+    record = {
+        "sequence": 1,
+        "turn_id": "t1",
+        "name": "stt_final",
+        "timing": {"wall_ns": 1},
+    }
+    (turn,) = turn_waterfall([record])
+    for milestone_key in turn["milestones"]:
+        assert f"`{milestone_key}`" in doc, (
+            f"docs/latency.md does not document milestone {milestone_key}"
+        )

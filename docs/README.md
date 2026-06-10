@@ -98,7 +98,9 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md) for journal CLI commands, the debugger UI,
   metrics, and traces. Start with `easycat bundles list`; from this repo, add
-  `uv sync --extra debugger --group dev` when you need the UI. Then review the
+  `uv sync --extra debugger --group dev` when you need the UI. When a turn
+  feels slow, use the [latency guide](latency.md) for the per-turn CLI
+  waterfall and the table of latency-adding defaults. Then review the
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout. Run `just guard-ops` when editing
   these operator-facing pages.

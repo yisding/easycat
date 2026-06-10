@@ -57,6 +57,7 @@ from easycat.cli._output import (
     success,
     warn,
 )
+from easycat.debug._turn_timeline import record_wall_ns, turn_waterfall
 from easycat.debug.bundle import (
     BundleError,
     BundleInUseError,
@@ -108,30 +109,24 @@ def _format_mtime(mtime: float) -> str:
 
 def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
     """Collect the high-signal fields we surface in ``bundles show``/``inspect``."""
-    turns: set[str] = set()
+    turn_ids: set[str] = set()
     errors = 0
     session_id = ""
     first_wall_ns: int | None = None
     last_wall_ns: int | None = None
     tool_calls = 0
     record_count = 0
+    records = list(bundle.records())
 
-    for record in bundle.records():
+    for record in records:
         record_count += 1
         if not session_id and record.get("session_id"):
             session_id = str(record["session_id"])
         turn_id = record.get("turn_id")
         if turn_id:
-            turns.add(str(turn_id))
-        # Crash-dump SQLite journals flatten the timestamp to a top-level
-        # ``wall_ns``; exported ZIP bundles keep the ``JournalRecord`` shape
-        # with the timestamp nested under ``timing.wall_ns``. Read both.
-        wall_ns = record.get("wall_ns")
-        if wall_ns is None:
-            timing = record.get("timing")
-            if isinstance(timing, dict):
-                wall_ns = timing.get("wall_ns")
-        if isinstance(wall_ns, int):
+            turn_ids.add(str(turn_id))
+        wall_ns = record_wall_ns(record)
+        if wall_ns is not None:
             if first_wall_ns is None:
                 first_wall_ns = wall_ns
             last_wall_ns = wall_ns
@@ -149,7 +144,11 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
 
     return {
         "session_id": session_id,
-        "turns": len(turns),
+        "turn_count": len(turn_ids),
+        # Per-turn latency waterfall: per-stage spans plus milestone deltas
+        # (VAD endpoint → STT final → agent first token → TTS first byte),
+        # shared with the debugger UI via ``debug/_turn_timeline``.
+        "turns": turn_waterfall(records),
         "errors": errors,
         "tool_calls": tool_calls,
         "records": record_count,
@@ -222,15 +221,6 @@ def _default_export_path(bundle_path: Path) -> Path:
     return bundle_path.with_name(f"{bundle_path.stem}-pack")
 
 
-def _record_wall_ns(record: Mapping[str, Any]) -> int | None:
-    wall_ns = record.get("wall_ns")
-    if wall_ns is None:
-        timing = record.get("timing")
-        if isinstance(timing, Mapping):
-            wall_ns = timing.get("wall_ns")
-    return wall_ns if isinstance(wall_ns, int) else None
-
-
 def _redacted_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     return {
         str(key): redact_value(item, str(key))
@@ -252,7 +242,7 @@ def _context_record(record: Mapping[str, Any]) -> dict[str, Any]:
         if value not in (None, ""):
             context[key] = redact_value(value, key)
 
-    wall_ns = _record_wall_ns(record)
+    wall_ns = record_wall_ns(record)
     if wall_ns is not None:
         context["wall_ns"] = wall_ns
 
@@ -714,7 +704,7 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     table.add_row("session_id", escape(str(summary["session_id"])) or "[dim](unknown)[/]")
     table.add_row("format_version", str(bundle.format_version))
     table.add_row("records", str(summary["records"]))
-    table.add_row("turns", str(summary["turns"]))
+    table.add_row("turns", str(summary["turn_count"]))
     duration = summary["duration_ms"]
     duration_str = f"{float(duration):.1f}ms" if isinstance(duration, float) else "[dim]n/a[/]"
     table.add_row("duration", duration_str)
@@ -734,6 +724,55 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
         pv = escape(", ".join(f"{k}={v}" for k, v in sorted(providers.items())))
         table.add_row("providers", pv)
     stdout_console.print(table)
+
+    turns = summary["turns"]
+    if isinstance(turns, list) and turns:
+        stdout_console.print(_turn_waterfall_table(turns))
+
+
+def _format_ms(value: object) -> str:
+    return f"{value:.1f}" if isinstance(value, int | float) else "-"
+
+
+def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
+    """Render the per-turn latency waterfall for ``bundles show``/``inspect``.
+
+    One row per turn: total wall time, the milestone deltas (VAD endpoint
+    → STT final → agent first token → TTS first byte), and the per-stage
+    spans as ``stage duration@offset``.  ``docs/latency.md`` explains how
+    to read the numbers and which defaults to tune.
+    """
+    table = Table(
+        title="Per-turn latency (ms) — see docs/latency.md",
+        show_header=True,
+        header_style="bold",
+        box=None,
+        padding=(0, 1),
+        title_justify="left",
+    )
+    table.add_column("turn", no_wrap=True, overflow="fold")
+    table.add_column("wall", justify="right", no_wrap=True)
+    table.add_column("vad→stt", justify="right", no_wrap=True)
+    table.add_column("stt→agent", justify="right", no_wrap=True)
+    table.add_column("agent→tts", justify="right", no_wrap=True)
+    table.add_column("vad→tts", justify="right", no_wrap=True)
+    table.add_column("spans (dur@off)", overflow="fold")
+    for turn in turns:
+        milestones = turn.get("milestones") or {}
+        spans = ", ".join(
+            f"{span['stage']} {_format_ms(span['duration_ms'])}@{_format_ms(span['offset_ms'])}"
+            for span in turn.get("spans", ())
+        )
+        table.add_row(
+            escape(str(turn.get("turn_id", ""))),
+            _format_ms(turn.get("wall_ms")),
+            _format_ms(milestones.get("vad_endpoint_to_stt_final_ms")),
+            _format_ms(milestones.get("stt_final_to_agent_first_token_ms")),
+            _format_ms(milestones.get("agent_first_token_to_tts_first_byte_ms")),
+            _format_ms(milestones.get("vad_endpoint_to_tts_first_byte_ms")),
+            escape(spans) if spans else "[dim](no stage spans)[/]",
+        )
+    return table
 
 
 # ── `easycat bundles show` / `easycat inspect` ───────────────────
