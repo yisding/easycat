@@ -203,6 +203,9 @@ src/easycat/cli/
     _app.py               # Typer app construction
     _output.py            # Rich console, --json mode, exit codes
     _errors.py            # EASYCAT_Exxx → CLI exit code mapping
+    _guard_commands.py    # generated guard-lane command hints (regen_guard_commands.py)
+    console.py            # `easycat console` keyless terminal demo
+    serve.py              # `easycat serve` browser voice playground
     validate.py           # `easycat validate ...`
     scaffold/
         __init__.py
