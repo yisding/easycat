@@ -21,7 +21,6 @@ REQUIRED_VALIDATION_MARKERS = {
     "provider_elevenlabs",
     "provider_openai",
     "release",
-    "requires_extra",
     "slow",
     "stress",
     "surface_agent",
