@@ -106,5 +106,5 @@ uv run easycat validate live --provider openai
 ```
 
 Reports land in `.easycat/validation/latest.json`; see the
-[validation workflow](../README.md#validation-workflow) for lane
+[validation workflow](validation.md) for lane
 selection and report inspection.

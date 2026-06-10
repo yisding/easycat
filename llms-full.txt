@@ -284,6 +284,22 @@ uv run easycat replay PATH --json
 uv run easycat inspect .easycat/journals/<session_id>.sqlite
 ```
 
+## Testing and evals
+
+- Path: docs/testing-and-evals.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md
+- Audience: app builders
+- Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
+
+Commands:
+
+```bash
+uv run pytest tests/debug/test_testing_helpers.py
+uv run python docs/teaching/12-evals-and-latency/llm_judge.py docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
+uv run easycat validate latency --smoke
+uv run easycat validate live --provider openai
+```
+
 ## Public API
 
 - Path: docs/public-api.md
