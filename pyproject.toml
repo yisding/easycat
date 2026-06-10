@@ -176,8 +176,10 @@ source-exclude = [
     "plan/**",
     "site",
     "site/**",
-    "tests",
-    "tests/**",
+    # Anchored: only the repo-root test suite. Scaffold templates ship a
+    # nested ``tests/`` directory that must reach the sdist/wheel.
+    "/tests",
+    "/tests/**",
 ]
 
 [tool.uv]

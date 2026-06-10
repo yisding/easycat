@@ -180,9 +180,11 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["openai-agents"]["files"] == [
         ".env.example",
         ".gitignore",
+        "AGENTS.md",
         "README.md",
         "agent.py",
         "pyproject.toml",
+        "tests/test_agent.py",
     ]
     assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
@@ -493,14 +495,14 @@ def test_init_omits_cache_artifacts(
     generated_paths = [
         path.relative_to(project).as_posix() for path in project.rglob("*") if path != project
     ]
-    offenders = release_artifact_offenders(generated_paths)
+    offenders = release_artifact_offenders(generated_paths, scaffold_project=True)
     assert not offenders, "generated project shipped local/generated artifacts: " + ", ".join(
         offenders
     )
 
     # The reported file manifest is equally clean.
     payload = json.loads(result.stdout)
-    manifest_offenders = release_artifact_offenders(payload["files"])
+    manifest_offenders = release_artifact_offenders(payload["files"], scaffold_project=True)
     assert not manifest_offenders, "reported generated-project manifest is not clean: " + (
         ", ".join(manifest_offenders)
     )

@@ -45,6 +45,8 @@ _EXPECTED_FILES: tuple[str, ...] = (
     "agent.py",
     "pyproject.toml",
     "README.md",
+    "AGENTS.md",
+    "tests/test_agent.py",
     ".env.example",
     ".gitignore",
 )

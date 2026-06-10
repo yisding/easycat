@@ -50,6 +50,14 @@ uv run ruff check agent.py
 If Ruff reports an auto-fixable issue, run
 `uv run ruff check --fix agent.py` and then re-run the check.
 
+Then run the offline agent tests — no API keys or network needed
+(`tests/test_agent.py` exercises the real turn pipeline with a stub
+agent; see `AGENTS.md` for the testing-and-evals ladder):
+
+```bash
+uv run pytest
+```
+
 ## Next steps
 
 - **Change the routing:** edit the keyword checks in `on_user_turn(...)`.

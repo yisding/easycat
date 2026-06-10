@@ -3,6 +3,8 @@
 For each template:
 * Scaffold into a tmpdir via the CLI.
 * Assert the generated Python files pass ``py_compile`` AND ``ruff``.
+* Run the generated offline test suite (``tests/test_agent.py``) with
+  pytest — key-free, against this repo's installed ``easycat``.
 
 Full ``uv sync`` round-trip is intentionally skipped (requires the
 template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §17).
@@ -13,6 +15,7 @@ See ``TEST_PLANS.md`` §17.
 from __future__ import annotations
 
 import json
+import os
 import py_compile
 import subprocess
 import sys
@@ -49,8 +52,8 @@ def _scaffold_project(cli: CliRunner, tmp_path: Path, template: str) -> Path:
 
 
 def _generated_python_files(project: Path) -> list[Path]:
-    files = sorted(project.glob("*.py"))
-    assert files, f"{project} did not generate any top-level Python files"
+    files = sorted([*project.glob("*.py"), *project.glob("tests/*.py")])
+    assert files, f"{project} did not generate any Python files"
     return files
 
 
@@ -86,4 +89,29 @@ def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, templat
     )
     assert proc.returncode == 0, (
         f"ruff check failed on scaffolded {template} Python files:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_scaffold_offline_test_suite_passes(cli: CliRunner, tmp_path: Path, template: str) -> None:
+    """``pytest`` must pass inside a freshly generated project, offline.
+
+    Runs the scaffold's ``tests/test_agent.py`` with this repo's
+    interpreter (which has ``easycat`` + ``pytest`` installed) so the
+    smoke test needs no ``uv sync`` round-trip, no API keys, and no
+    network — the stub agent drives EasyCat's real text-turn pipeline.
+    """
+    project = _scaffold_project(cli, tmp_path, template)
+    assert (project / "tests" / "test_agent.py").is_file()
+    assert (project / "AGENTS.md").is_file()
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "tests/test_agent.py", "-q", "-p", "no:cacheprovider"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OPENAI_API_KEY": ""},
+    )
+    assert proc.returncode == 0, (
+        f"pytest failed inside scaffolded {template} project:\n{proc.stdout}\n{proc.stderr}"
     )

@@ -272,11 +272,15 @@ def _template_sources(template_name: str) -> list[Path]:
     for source in sorted(src_root.rglob("*")):
         if source.is_dir():
             continue
-        ignored_directory = any(part in _COPY_IGNORE for part in source.parts)
+        # Apply ignore rules to the template-relative path only — the
+        # install location itself may live under a dotted directory
+        # (e.g. a git worktree below ``.claude/``) and must not match.
+        rel_parts = source.relative_to(src_root).parts
+        ignored_directory = any(part in _COPY_IGNORE for part in rel_parts)
         ignored_file = source.name in _COPY_FILE_IGNORE or source.name.startswith(
             _COPY_FILE_PREFIX_IGNORE
         )
-        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in source.parts)
+        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in rel_parts)
         ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
         if ignored_directory or ignored_file or ignored_part_suffix or ignored_suffix:
             continue

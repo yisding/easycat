@@ -146,18 +146,28 @@ REQUIRED_BUILD_SOURCE_EXCLUDES = frozenset(
         "plan/**",
         "site",
         "site/**",
-        "tests",
-        "tests/**",
+        "/tests",
+        "/tests/**",
     }
 )
 
+# Scaffold templates deliberately ship an offline test suite
+# (``tests/test_agent.py``); a ``tests`` path part under this marker —
+# or anywhere inside a scaffolded project — is not an offender.
+SCAFFOLD_TEMPLATE_PATH_MARKER = "cli/scaffold/templates/"
 
-def release_artifact_offenders(members: list[str]) -> list[str]:
+
+def release_artifact_offenders(members: list[str], *, scaffold_project: bool = False) -> list[str]:
     offenders = []
     for member in members:
         parts = set(Path(member).parts)
+        forbidden = set(parts & FORBIDDEN_RELEASE_ARTIFACT_PARTS)
+        if "tests" in forbidden and (
+            scaffold_project or SCAFFOLD_TEMPLATE_PATH_MARKER in Path(member).as_posix()
+        ):
+            forbidden.discard("tests")
         if (
-            parts & FORBIDDEN_RELEASE_ARTIFACT_PARTS
+            forbidden
             or member.endswith(FORBIDDEN_RELEASE_ARTIFACT_SUFFIXES)
             or any(part.endswith(".egg-info") for part in parts)
         ):
