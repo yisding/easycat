@@ -7,13 +7,9 @@ import re
 import tomllib
 from pathlib import Path
 
-from easycat.cli._app import (
-    _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-)
 from easycat.cli.diagnose._codes import META_ENTRIES
+from scripts._justfile import just_recipe_names
 from tests._command_hints import command_hint_problems, documented_commands
-from tests._justfile import just_recipe_names
 from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -103,38 +99,6 @@ def _guide_pytest_commands(command_section: str) -> list[str]:
         commands.append(command)
 
     return commands
-
-
-def _agent_guide_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
-    commands: list[str] = []
-
-    for line in command_section.splitlines():
-        stripped = line.strip()
-        if filename == "AGENTS.md":
-            match = re.match(r"^- `(?P<command>just guard-[^`]+)`:", stripped)
-            if match is not None:
-                commands.append(match.group("command"))
-        elif stripped.startswith("just guard-"):
-            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
-
-    return tuple(commands)
-
-
-def _agent_guide_raw_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
-    commands: list[str] = []
-
-    for line in command_section.splitlines():
-        stripped = line.strip()
-        if filename == "AGENTS.md":
-            if not stripped.startswith("- Raw fallback for "):
-                continue
-            spans = CODE_SPAN_RE.findall(stripped)
-            if len(spans) == 2 and spans[0].startswith("just guard-"):
-                commands.append(spans[1])
-        elif "# Raw fallback for just guard-" in stripped:
-            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
-
-    return tuple(commands)
 
 
 def _agent_guide_command_sections() -> dict[str, str]:
@@ -803,18 +767,8 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in (command_section), (
             filename
         )
-        assert _agent_guide_guard_commands(filename, command_section) == (
-            _DOCS_ONBOARDING_GUARD_COMMANDS
-        ), filename
-        assert _agent_guide_raw_guard_commands(filename, command_section) == (
-            _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
-        ), filename
         assert "just check" in command_section
         assert "just validate-quick" in command_section
-        for recipe in _DOCS_ONBOARDING_GUARD_COMMANDS:
-            assert recipe in command_section, filename
-        for command in _DOCS_ONBOARDING_RAW_GUARD_COMMANDS:
-            assert command in command_section, filename
         assert "uv run easycat docs" in command_section
         assert "uv run easycat docs --json" in command_section
         assert "uv run easycat doctor --json" in command_section

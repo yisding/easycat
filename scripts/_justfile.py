@@ -1,11 +1,23 @@
+"""Shared ``justfile`` parsing helpers.
+
+The repo ``justfile`` is the single source of truth for developer task
+commands, including the docs/onboarding ``guard-*`` recipes. Both the test
+suite and ``scripts/regen_guard_commands.py`` parse it through this module.
+"""
+
 from __future__ import annotations
 
 import re
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 
 _RECIPE_RE = re.compile(r"^(?P<name>[A-Za-z0-9_-]+)(?:\s+[^:]*)?:(?P<deps>.*)$")
 _VARIABLE_RE = re.compile(r"^(?:export\s+)?(?P<name>[A-Za-z0-9_-]+)\s*:=\s*(?P<value>.+)$")
+
+
+def _is_recipe_line(line: str, match: re.Match[str] | None) -> bool:
+    return match is not None and ":=" not in line and not line.startswith((" ", "\t", "#"))
 
 
 def _parse_variable(line: str) -> tuple[str, str] | None:
@@ -41,7 +53,7 @@ def just_recipe_commands(repo_root: Path) -> dict[str, str]:
                 continue
 
         recipe_match = _RECIPE_RE.match(line)
-        if recipe_match and ":=" not in line and not line.startswith((" ", "\t", "#")):
+        if recipe_match is not None and _is_recipe_line(line, recipe_match):
             current_recipe = recipe_match.group("name")
             commands[current_recipe] = ""
             dependencies[current_recipe] = shlex.split(recipe_match.group("deps"))
@@ -69,3 +81,46 @@ def just_recipe_commands(repo_root: Path) -> dict[str, str]:
 
 def just_recipe_names(repo_root: Path) -> set[str]:
     return set(just_recipe_commands(repo_root))
+
+
+def just_recipe_descriptions(repo_root: Path) -> dict[str, str]:
+    """Map each recipe to the comment block written directly above it."""
+    descriptions: dict[str, str] = {}
+    pending: list[str] = []
+
+    for line in (repo_root / "justfile").read_text(encoding="utf-8").splitlines():
+        if line.startswith("#"):
+            pending.append(line.lstrip("#").strip())
+            continue
+        recipe_match = _RECIPE_RE.match(line)
+        if recipe_match is not None and _is_recipe_line(line, recipe_match):
+            descriptions[recipe_match.group("name")] = " ".join(part for part in pending if part)
+        pending = []
+
+    return descriptions
+
+
+@dataclass(frozen=True)
+class GuardRecipe:
+    """One docs/onboarding ``guard-*`` recipe parsed from the justfile."""
+
+    name: str
+    description: str
+    command: str
+
+
+def just_guard_recipes(repo_root: Path) -> tuple[GuardRecipe, ...]:
+    """All ``guard-*`` recipes in justfile order with comments and raw commands."""
+    commands = just_recipe_commands(repo_root)
+    descriptions = just_recipe_descriptions(repo_root)
+    guards = tuple(
+        GuardRecipe(name=name, description=descriptions.get(name, ""), command=command)
+        for name, command in commands.items()
+        if name.startswith("guard-")
+    )
+
+    assert guards, "justfile guard recipes were not found"
+    for guard in guards:
+        assert guard.description, f"justfile recipe {guard.name} is missing a comment"
+        assert guard.command, f"justfile recipe {guard.name} is missing a command"
+    return guards

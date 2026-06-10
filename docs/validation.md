@@ -7,36 +7,42 @@ uv run easycat validate quick
 ```
 
 For docs and onboarding-only edits, run the narrower guard that owns the
-surface first, then run quick validation before a PR:
+surface first, then run quick validation before a PR. The guard command
+blocks below are generated from the `justfile` by
+`uv run python scripts/regen_guard_commands.py`:
 
+<!-- BEGIN auto:guard-commands format=just-bash -->
 ```bash
-just guard-docs          # root README e2e, install guidance, docs map, public API docs, CLI JSON envelopes
-just guard-teaching      # teaching ladder, generated blocks, learner routes
-just guard-examples      # examples README, support files, script smoke, docs route
-just guard-templates     # scaffold templates, init flows, generated project smoke, secret/artifact hygiene
-just guard-contributing  # contributor guidance, agent guide contracts, validation state
-just guard-validation    # validation workflow, reference docs, validate CLI behavior
-just guard-contracts     # provider contracts, cassettes, matrix, bridge grammar
-just guard-ops           # operator deployment, observability, journal CLI, durability
-just guard-markdown      # maintained Markdown links, anchors, docs-route targets
+just guard-docs          # root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes
+just guard-teaching      # teaching ladder chapters, generated README blocks, and learner route hints
+just guard-examples      # examples README, support files, script smoke checks, and docs-route hints
+just guard-templates     # scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene
+just guard-contributing  # contributor guidance, agent guide contracts, validation state, and route hints
+just guard-validation    # validation workflow docs, validation reference docs, and validate CLI behavior
+just guard-contracts     # provider contract docs, offline contract suite, contract kit, and provider wiring matrix
+just guard-ops           # operator docs, deployment guide, observability docs, journal CLI, and durability
+just guard-markdown      # maintained Markdown links, anchors, and docs-route Markdown targets
 ```
+<!-- END auto:guard-commands -->
 
 If `just` is not installed, use the raw command table in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop) for the equivalent
 `uv run pytest ...` command behind each guard, or run the matching command
 directly:
 
+<!-- BEGIN auto:guard-commands format=raw-bash -->
 ```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
-uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
 uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
 uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
 uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
 ```
+<!-- END auto:guard-commands -->
 
 The quick validation lane runs deterministic local tests only: no live
 credentials, no localhost socket lane, no slow tests, and no flaky quarantine.

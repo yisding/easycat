@@ -25,24 +25,26 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - `just`: list every developer task.
 - `just check`: run the pre-PR gauntlet (format check, lint, full serial tests).
 - `just validate-quick`: run the deterministic local validation slice.
-- `just guard-docs`: guard root onboarding docs, install guidance, `easycat docs`, public API docs, and CLI JSON envelopes.
-- `just guard-teaching`: guard teaching ladder chapters and generated README blocks.
+<!-- BEGIN auto:guard-commands format=bullets -->
+- `just guard-docs`: guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
+- `just guard-teaching`: guard teaching ladder chapters, generated README blocks, and learner route hints.
 - `just guard-examples`: guard examples README, support files, script smoke checks, and docs-route hints.
 - `just guard-templates`: guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
-- `just guard-contributing`: guard contributor docs, agent guide contracts, validation state, and route hints.
+- `just guard-contributing`: guard contributor guidance, agent guide contracts, validation state, and route hints.
 - `just guard-validation`: guard validation workflow docs, validation reference docs, and validate CLI behavior.
-- `just guard-contracts`: guard provider contract docs, offline contract suite, and provider wiring matrix.
+- `just guard-contracts`: guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix.
 - `just guard-ops`: guard operator docs, deployment guide, observability docs, journal CLI, and durability.
-- `just guard-markdown`: guard maintained Markdown links, anchors, and docs-route targets.
-- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py`.
+- `just guard-markdown`: guard maintained Markdown links, anchors, and docs-route Markdown targets.
+- Raw fallback for `just guard-docs`: `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py`.
 - Raw fallback for `just guard-teaching`: `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras`.
 - Raw fallback for `just guard-examples`: `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path`.
 - Raw fallback for `just guard-templates`: `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py`.
-- Raw fallback for `just guard-contributing`: `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'`.
+- Raw fallback for `just guard-contributing`: `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'`.
 - Raw fallback for `just guard-validation`: `uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py`.
 - Raw fallback for `just guard-contracts`: `uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py`.
 - Raw fallback for `just guard-ops`: `uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py`.
 - Raw fallback for `just guard-markdown`: `uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources`.
+<!-- END auto:guard-commands -->
 - `uv run pytest`: run full test suite.
 - `uv run pytest tests/tts/test_tts_openai.py`: run a focused test file.
 - `uv run pytest tests/transports/test_webrtc.py`: run focused WebRTC transport tests.
