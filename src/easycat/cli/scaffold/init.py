@@ -272,11 +272,14 @@ def _template_sources(template_name: str) -> list[Path]:
     for source in sorted(src_root.rglob("*")):
         if source.is_dir():
             continue
-        ignored_directory = any(part in _COPY_IGNORE for part in source.parts)
+        # Filter on template-relative parts only: the checkout itself may live
+        # under an ignored directory name (e.g. a git worktree in `.claude/`).
+        rel_parts = source.relative_to(src_root).parts
+        ignored_directory = any(part in _COPY_IGNORE for part in rel_parts)
         ignored_file = source.name in _COPY_FILE_IGNORE or source.name.startswith(
             _COPY_FILE_PREFIX_IGNORE
         )
-        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in source.parts)
+        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in rel_parts)
         ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
         if ignored_directory or ignored_file or ignored_part_suffix or ignored_suffix:
             continue
@@ -857,34 +860,13 @@ def init(
     stderr_console.print("[bold]Next steps:[/]")
     stderr_console.print(f"  cd {escape(shlex.quote(name))}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
-    stderr_console.print("  uv sync")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_COMMAND} [dim]# verify your setup[/]")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_JSON_COMMAND} [dim]# parseable setup checks[/]")
-    stderr_console.print(
-        f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
-    )
-    stderr_console.print(
-        f"  {_next_step_fix_command(cfg.template)} "
-        "[dim]# auto-fix Ruff issues if the check reports them[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_COMMAND} [dim]# find learning, maintenance, validation, "
-        "and operations routes[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_COMMAND} [dim]# app-builder routes only[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND} [dim]# parseable app-builder route map[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_JSON_COMMAND} "
-        "[dim]# route map with command hints and audience labels[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND} [dim]# JSON envelope and field contract[/]"
-    )
+    stderr_console.print(f"  uv sync && {_NEXT_STEP_DOCTOR_COMMAND}", soft_wrap=True)
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
+    stderr_console.print(
+        "[dim]The full post-scaffold command catalog stays in "
+        "`easycat init --list-templates --json` (next_step_commands).[/]",
+        soft_wrap=True,
+    )
 
 
 __all__: list[str] = ["init"]
