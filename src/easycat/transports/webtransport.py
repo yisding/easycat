@@ -107,7 +107,7 @@ from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
 )
 from easycat.transports._base import (
-    _AudioQueueMixin,
+    AudioQueueMixin,
     _enqueue_inbound_chunk,
 )
 from easycat.transports.websocket import _valid_config_sample_rate
@@ -1101,7 +1101,7 @@ def _protocol_factory(
 # ── Per-session transport ──────────────────────────────────────────
 
 
-class WebTransportConnectionTransport(_AudioQueueMixin):
+class WebTransportConnectionTransport(AudioQueueMixin):
     """Per-session :class:`~easycat.providers.Transport`.
 
     Normally yielded to your config factory by
@@ -1132,7 +1132,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         )
         self._on_close = asyncio.Event()
         # ``_event_bus`` / ``_emit_tasks`` / ``_emit_degraded`` come from
-        # ``_AudioQueueMixin`` (initialised by ``_init_audio_queue`` above).
+        # ``AudioQueueMixin`` (initialised by ``_init_audio_queue`` above).
         # Session attaches the bus post-construction via
         # ``_maybe_attach_event_bus``; the session built below is handed the
         # bound ``_emit_degraded`` and reads the bus live at emit time.
@@ -1268,7 +1268,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         :meth:`_WebTransportSession._outbound_writer` exit; a full
         ``_out_queue`` (e.g. a stalled client) must not be allowed to
         swallow it, otherwise the writer wedges.  Mirrors
-        :meth:`_AudioQueueMixin._enqueue_sentinel`.
+        :meth:`AudioQueueMixin._enqueue_sentinel`.
         """
         try:
             self._out_queue.put_nowait(None)
@@ -1297,7 +1297,7 @@ class WebTransportConnectionTransport(_AudioQueueMixin):
         self._enqueue_sentinel()
         self._enqueue_out_sentinel()
 
-    # ``_emit_degraded`` is inherited from ``_AudioQueueMixin`` — it reads
+    # ``_emit_degraded`` is inherited from ``AudioQueueMixin`` — it reads
     # ``self._event_bus`` live and tags events with ``transport_kind``.
 
     def version_info(self) -> dict[str, str]:
@@ -1526,7 +1526,7 @@ def run_webtransport_config_server(
 # ── Single-client convenience wrapper ─────────────────────────────
 
 
-class WebTransportTransport(_AudioQueueMixin):
+class WebTransportTransport(AudioQueueMixin):
     """Single-client server :class:`~easycat.providers.Transport`.
 
     Parallels :class:`~easycat.transports.websocket.WebSocketTransport`'s
@@ -1555,7 +1555,7 @@ class WebTransportTransport(_AudioQueueMixin):
         self._init_audio_queue(self._config.max_pending_chunks)
         self._server: WebTransportServer | None = None
         self._active: WebTransportConnectionTransport | None = None
-        # ``_event_bus`` comes from ``_AudioQueueMixin`` (``_init_audio_queue``
+        # ``_event_bus`` comes from ``AudioQueueMixin`` (``_init_audio_queue``
         # above).  Session attaches it post-construction
         # (``_maybe_attach_event_bus``); ``connect``'s ``handle`` closure
         # forwards it to the inner per-session transport so degraded events

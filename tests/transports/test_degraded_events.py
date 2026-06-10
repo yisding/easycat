@@ -1,6 +1,6 @@
 """TransportDegraded emission across transports.
 
-Covers the shared ``_AudioQueueMixin`` emit seam (inbound queue-full +
+Covers the shared ``AudioQueueMixin`` emit seam (inbound queue-full +
 provider tagging + no-bus / no-loop no-ops) and the WebSocket-specific
 degradation paths.  WebRTC-specific paths live in ``test_webrtc.py`` (they
 need the fake-aiortc harness); WebTransport's are in
@@ -21,7 +21,7 @@ from easycat.transports._base import (
     _DEGRADED_EMIT_MIN_INTERVAL_SECONDS,
     _DEGRADED_INBOUND_QUEUE_FULL,
     _DEGRADED_MAX_DETAIL_CHARS,
-    _AudioQueueMixin,
+    AudioQueueMixin,
 )
 from easycat.transports.websocket import (
     _DEGRADED_CONTROL_DECODE_FAILED,
@@ -48,10 +48,10 @@ def _bus_with_collector() -> tuple[EventBus, list[TransportDegraded]]:
     return bus, received
 
 
-# ── Shared _AudioQueueMixin seam ──────────────────────────────────
+# ── Shared AudioQueueMixin seam ──────────────────────────────────
 
 
-class _MixinHarness(_AudioQueueMixin):
+class _MixinHarness(AudioQueueMixin):
     transport_kind = "harness"
 
     def __init__(self, max_pending: int) -> None:

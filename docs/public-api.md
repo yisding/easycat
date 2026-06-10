@@ -90,6 +90,28 @@ session = Session.from_providers(
 )
 ```
 
+## Transport Extension Surface
+
+Out-of-tree transports build on a small public surface re-exported from
+`easycat.transports` (not from the top level, so `import easycat` stays
+cheap). This surface is pinned by `tests/test_public_api.py` alongside the
+top-level allowlist:
+
+- `AudioQueueMixin` — inbound audio queue, `receive_audio()` iterator, and
+  `TransportDegraded` emission plumbing for any custom transport.
+- `ServerTransportBase` — `AudioQueueMixin` plus a managed `websockets`
+  server lifecycle for server-style transports.
+- `TransportDegraded` — the event those base classes emit on the session
+  bus when frames are dropped or a peer tears down abnormally.
+
+```python
+from easycat.transports import AudioQueueMixin, ServerTransportBase, TransportDegraded
+```
+
+See the [extending guides](extending/) for complete custom provider and
+transport walkthroughs, and `examples/custom_transport.py` for a runnable
+custom transport.
+
 ## Top-Level Allowlist
 
 ### App Construction

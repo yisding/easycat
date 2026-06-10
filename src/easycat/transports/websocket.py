@@ -27,7 +27,7 @@ from easycat._audio_utils import resample_chunk
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.session_manager import SessionManager
-from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,7 +39,7 @@ _MIN_NEGOTIATED_SAMPLE_RATE = 8000
 _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 
 # WebSocket-specific ``TransportDegraded.reason`` codes emitted on the session
-# event bus (via the inherited ``_AudioQueueMixin._emit_degraded``).  These
+# event bus (via the inherited ``AudioQueueMixin._emit_degraded``).  These
 # mirror conditions that previously only reached ``logger.warning``; emitting
 # them keeps the journal the single source of truth for observability.  The
 # cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
@@ -232,7 +232,7 @@ def run_websocket_config_server(
     )
 
 
-class WebSocketTransport(_ServerTransportBase):
+class WebSocketTransport(ServerTransportBase):
     """Transport that accepts a single WebSocket client connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -423,7 +423,7 @@ class WebSocketTransport(_ServerTransportBase):
         }
 
 
-class WebSocketConnectionTransport(_AudioQueueMixin):
+class WebSocketConnectionTransport(AudioQueueMixin):
     """Transport bound to a single existing WebSocket connection.
 
     Useful for servers that already own the WebSocket accept loop and want
