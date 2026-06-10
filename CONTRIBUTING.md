@@ -49,7 +49,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
-| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug` |
+| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations` |
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
@@ -308,9 +308,11 @@ use the matching raw command from
 - `just check` is green (format + lint + tests).
 - New code is typed (Python `>=3.11`, typing-first). `mypy` is the
   authoritative type checker: `just typecheck` gates the clean core
-  (`easycat.debug`) and must stay green, while `just typecheck-all` is the
-  advisory whole-repo report we ratchet down over time. `just typecheck-fast`
-  (Astral `ty`) is faster local feedback but advisory only (beta).
+  (`easycat.debug`, `easycat.runtime`, `easycat.stages`, `easycat.session`,
+  and `easycat.integrations`) and must stay green, while `just typecheck-all`
+  is the advisory whole-repo report we ratchet down over time.
+  `just typecheck-fast` (Astral `ty`) is faster local feedback but advisory
+  only (beta).
 - **Patch coverage**: cover the lines your PR changes (`just cov` locally).
   There is no hard global coverage gate; reviewers look at the diff.
 - Tests added/updated for every behavior change.
