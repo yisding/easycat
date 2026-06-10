@@ -132,6 +132,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_install_guidance.py "
         "tests/test_docs_index.py "
         "tests/test_public_api.py "
+        "tests/test_llms_txt.py "
         "tests/cli/test_app.py "
         "tests/cli/test_json_schema.py"
     ),
@@ -313,13 +314,9 @@ _DOCS_LINKS: list[_DocsLink] = [
         "commands": (
             "easycat docs",
             "easycat docs --audience learners",
-            "easycat docs --audience learners --json",
             "easycat docs --audience app-builders",
-            "easycat docs --audience app-builders --json",
             "easycat docs --audience operators",
-            "easycat docs --audience operators --json",
             "easycat docs --audience maintainers",
-            "easycat docs --audience maintainers --json",
             "easycat docs --json",
         ),
     },

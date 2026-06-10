@@ -25,8 +25,8 @@ Edit `.env` and set `OPENAI_API_KEY`. Run doctor with that file loaded:
 uv run easycat doctor --env-file .env
 ```
 
-Use `uv run easycat doctor --env-file .env --json` when a script or coding
-agent needs parseable environment/check rows.
+Add `--json` (`uv run easycat doctor --env-file .env --json`) for parseable
+environment/check rows.
 
 For browser sessions beyond localhost, set `TURN_SERVER_URL`, `TURN_USERNAME`,
 and `TURN_CREDENTIAL` so WebRTC can relay audio when direct peer connections
@@ -72,13 +72,15 @@ If Ruff reports an auto-fixable issue, run
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to
-  app-building routes. Use
-  `uv run easycat docs --audience app-builders --json` when automation needs
-  that smaller route map, or `uv run easycat docs --json` when a script or
-  coding agent needs the full route map with command hints and audience labels.
+  app-building routes; add `--json`
+  (`uv run easycat docs --audience app-builders --json`,
+  `uv run easycat docs --json`) when automation needs the route map with
+  command hints and audience labels.
   If this is not the right starter, run `uv run easycat init --list-templates`; use
   `uv run easycat init --list-templates --json` when automation needs the
   template catalog. Replace uppercase or angle-bracket placeholders such as
-  `PATH` or `<session_id>` before running those hints. Run
+  `PATH` or `<session_id>` before running those hints.
+  Coding agent? Start at EasyCat's
+  [llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt) or run
   `uv run easycat explain json-schema` for the JSON envelope and field
   contract.

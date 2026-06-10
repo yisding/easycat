@@ -6,14 +6,15 @@ layout, or teardown semantics, run
 
 Route discovery: use
 `uv run easycat docs --audience operators-and-maintainers` for the focused
-operator/maintainer route set, or
-`uv run easycat docs --audience operators-and-maintainers --json` when a script
-or coding agent needs the route entry and command hints.
+operator/maintainer route set
+(`uv run easycat docs --audience operators-and-maintainers --json` emits the
+same route entries and command hints). Coding agent? Start at
+[llms.txt](../../../llms.txt) or run `uv run easycat explain json-schema`.
 
 Operator inspection: after a run, inspect a live SQLite journal with
-`uv run easycat inspect .easycat/journals/<session_id>.sqlite`; use
-`uv run easycat inspect .easycat/journals/<session_id>.sqlite --json` when a
-script or coding agent needs a parseable summary. Inspect promoted crash dumps
+`uv run easycat inspect .easycat/journals/<session_id>.sqlite`; add `--json`
+(`uv run easycat inspect .easycat/journals/<session_id>.sqlite --json`) for a
+parseable summary. Inspect promoted crash dumps
 with `uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json`.
 
 ## Application-crash durability (default)

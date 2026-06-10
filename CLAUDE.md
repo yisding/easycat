@@ -32,7 +32,7 @@ just guard-validation            # Guard validation workflow, reference docs, an
 just guard-contracts             # Guard provider contracts, cassettes, matrix, and bridge grammar
 just guard-ops                   # Guard operator docs, deployment, observability, journal CLI, and durability
 just guard-markdown              # Guard maintained Markdown links, anchors, and docs-route targets
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py  # Raw fallback for just guard-docs
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py  # Raw fallback for just guard-docs
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras  # Raw fallback for just guard-teaching
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path  # Raw fallback for just guard-examples
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py  # Raw fallback for just guard-templates
@@ -52,6 +52,8 @@ uv run easycat docs --json       # Docs route map with audiences and command hin
 uv run easycat doctor --json     # Parseable first-run environment checks
 uv run easycat doctor --env-file .env --json  # Parseable checks with project .env loaded
 uv run easycat explain json-schema  # CLI JSON envelope and field contract
+uv run python scripts/regen_llms_txt.py  # Regenerate llms.txt / llms-full.txt from the docs route map
+uv run python scripts/regen_llms_txt.py --check  # Verify generated llms.txt / llms-full.txt are current
 uv run easycat bundles show PATH --json  # Parseable bundle/journal summary
 uv run easycat bundles export PATH --output DIR --json  # Redacted context pack metadata
 uv run easycat replay PATH --json  # Parseable replay summary

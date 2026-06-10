@@ -90,10 +90,10 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `easycat inspect <path>`,
   `easycat replay <path>`, and
   `easycat bundles export <path>`.
-  Use `easycat bundles list --json`, `easycat bundles show <path> --json`,
-  `easycat inspect <path> --json`, `easycat replay <path> --json`, or
-  `easycat bundles export <path> --output DIR --json` when a script or coding
-  agent needs a parseable summary.
+  Add `--json` (`easycat bundles list --json`, `easycat bundles show <path> --json`,
+  `easycat inspect <path> --json`, `easycat replay <path> --json`,
+  `easycat bundles export <path> --output DIR --json`) for a
+  parseable summary.
 - Optional debugger UI:
   install the extra with `uv sync --extra debugger --group dev` from this repo,
   or `uv add 'easycat[debugger]'` in an app. Then import

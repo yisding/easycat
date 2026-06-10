@@ -140,14 +140,12 @@ def test_docs_index_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in text
     assert "uv run easycat docs --audience learners" in text
-    assert "uv run easycat docs --audience learners --json" in text
     assert "uv run easycat docs --json" in text
     assert "uv run easycat docs --audience app-builders" in text
-    assert "uv run easycat docs --audience app-builders --json" in text
     assert "uv run easycat docs --audience operators" in text
-    assert "uv run easycat docs --audience operators --json" in text
     assert "uv run easycat docs --audience maintainers" in text
-    assert "uv run easycat docs --audience maintainers --json" in text
+    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized
+    assert "when a script or coding agent" not in normalized
     assert "repository path chooser" in normalized
     assert "installed app environment" in text
     assert "prints the same map" in text
@@ -157,7 +155,7 @@ def test_docs_index_points_to_docs_command() -> None:
         "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
         "or `<session_id>`"
     ) in normalized
-    assert "The human docs menu also prints the available audience labels" in normalized
+    assert "human docs menu also prints the available audience labels" in normalized
     assert "uv run easycat docs --audience app-builders" in text
     assert 'uv run easycat docs --audience "app builders"' in text
     assert "`maintainers` and `operators` filters also include compound labels" in normalized
@@ -209,9 +207,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in text
     assert "automation needs validation run/report payloads" in normalized
-    assert "script or coding agent needs validation output inside the standard CLI envelope" in (
-        normalized
-    )
+    assert "automation needs validation output inside the standard CLI envelope" in normalized
     assert "journal CLI commands, the debugger UI, metrics, and traces" in normalized
     assert "Start with `easycat bundles list`" in normalized
     assert "uv sync --extra debugger --group dev" in text
