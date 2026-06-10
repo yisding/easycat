@@ -60,7 +60,9 @@ class AgentStreamResult:
 
     text: str = ""
     structured_output: Any = None
-    error: BaseException | None = None
+    # Only ``Exception`` is ever stored here (``consume_agent_stream``
+    # lets CancelledError and other BaseExceptions propagate).
+    error: Exception | None = None
     interrupted: bool = False
 
 

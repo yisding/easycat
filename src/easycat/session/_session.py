@@ -152,9 +152,9 @@ class Session:
         # ``auto_adapt_agent`` returns plain ``async run(text)`` agents
         # unchanged; we wrap here as a safety net so the bridge interface
         # Session relies on (``reset``, ``replace_last_assistant_text``) is
-        # always present.
-        self._agent: Agent = (
-            _ensure_bridge(auto_adapt_agent(cfg.agent)) if cfg.agent else NoopAgent()
+        # always present — including for the default NoopAgent.
+        self._agent: ExternalAgentBridge = _ensure_bridge(
+            auto_adapt_agent(cfg.agent) if cfg.agent else NoopAgent()
         )
         # Stashed by create_session/create_text_session so mid-session
         # agent swaps to a URL-backed agent can forward model/key context.
@@ -677,17 +677,20 @@ class Session:
             logger.exception("Failed to record debug bundle to %s", record_to)
 
     @property
-    def agent(self) -> Agent:
-        """Current agent provider.
+    def agent(self) -> ExternalAgentBridge:
+        """Current agent provider, always wrapped as a bridge.
 
         Exposed as a property so callers that swap the agent mid-session
         (``session.agent = FailingAgent()``) automatically re-point the
-        AgentStage wrapper at the new provider.
+        AgentStage wrapper at the new provider.  The setter accepts any
+        supported agent shape (framework object, bare ``Agent``, bridge,
+        or ``None``) and adapts it; the getter always returns the
+        resulting :class:`ExternalAgentBridge`.
         """
         return self._agent
 
     @agent.setter
-    def agent(self, value: Agent) -> None:
+    def agent(self, value: Any) -> None:
         from easycat.integrations.agents._agent_runner import AgentRunner
 
         previous_agent = getattr(self, "_agent", None)

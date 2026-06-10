@@ -12,7 +12,7 @@ import dataclasses
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from easycat.events import (
     AgentDelta,
@@ -112,6 +112,18 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+class TurnIdResolver(Protocol):
+    """Resolve the turn id to record, defaulting to the active turn.
+
+    Matches the ``current_turn_id`` member of the runtime layer's
+    structural ``JournalSink`` protocols (callable with an optional
+    ``turn_id`` keyword), so a ``SessionJournalSink`` instance satisfies
+    them without adapters.
+    """
+
+    def __call__(self, turn_id: str | None = None) -> str | None: ...
+
+
 @dataclass(slots=True)
 class SessionJournalSink:
     """Write session activity to an execution journal."""
@@ -120,7 +132,7 @@ class SessionJournalSink:
     journal: ExecutionJournal | None
     artifact_store: ArtifactStore | None
     session_id: str
-    current_turn_id: Callable[[str | None], str | None]
+    current_turn_id: TurnIdResolver
     max_session_cost_usd: float | None = None
     on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], None] | None = None
     _subscribed: bool = field(default=False, init=False)
@@ -341,7 +353,7 @@ class SessionJournalSink:
             exc = getattr(event, "exception", None)
             if exc is not None:
                 stage = getattr(event, "stage", None)
-                if hasattr(stage, "value"):
+                if stage is not None and hasattr(stage, "value"):
                     data["stage"] = stage.value
                 provider = getattr(event, "provider", None)
                 if provider:

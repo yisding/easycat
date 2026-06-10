@@ -108,8 +108,12 @@ class OptOutPolicy:
         if actions is not None:
             actions.end_call(reason="opt_out")
         else:
+
+            async def _stop_session() -> None:
+                await self._stop()
+
             self._runtime_scope.create_journaled_task(
-                self._stop(),
+                _stop_session(),
                 name="opt_out_stop",
                 journal_sink=self._journal_sink,
             )

@@ -249,7 +249,8 @@ class AudioRouter:
     async def stop_ingress(self) -> None:
         """Cancel the ingress task and wait for it to exit."""
         task = self._pipeline_task
-        if task is asyncio.current_task():
+        current = asyncio.current_task()
+        if current is not None and task is current:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._INGRESS_TASK_NAME)
@@ -258,7 +259,8 @@ class AudioRouter:
     async def stop_outbound(self) -> None:
         """Cancel the outbound drain task and wait for it to exit."""
         task = self._outbound_task
-        if task is asyncio.current_task():
+        current = asyncio.current_task()
+        if current is not None and task is current:
             self._runtime_scope.discard(task)
         else:
             await self._runtime_scope.cancel_and_drain(self._OUTBOUND_TASK_NAME)

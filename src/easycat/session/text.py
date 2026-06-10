@@ -64,7 +64,10 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
         return text, ""
     if len(result.segments) == 1:
         return "", text
-    last_start = result.segments[-1].start
+    last = result.segments[-1]
+    # ``char_span=True`` yields TextSpan objects with offsets; the plain
+    # string variant of the union is narrowed via suffix length.
+    last_start = len(text) - len(last) if isinstance(last, str) else last.start
     return text[:last_start], text[last_start:]
 
 
@@ -130,7 +133,7 @@ def _chunk_has_speech_energy(chunk: AudioChunk, *, threshold: int = 500) -> bool
         return False
 
     try:
-        import numpy as np  # type: ignore[import-untyped]
+        import numpy as np
 
         # Widen to int32 before abs so abs(-32768) does not overflow int16.
         samples = np.frombuffer(data, dtype="<i2").astype(np.int32)
