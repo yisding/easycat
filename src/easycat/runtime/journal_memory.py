@@ -165,13 +165,7 @@ class InMemoryRingBuffer:
             was_full = len(self._buf) == self._capacity
 
             # Collect artifact refs from the record about to be evicted.
-            evicted_refs: list[str] = []
-            if was_full and self._buf:
-                evicted = self._buf[0]
-                if evicted.input_ref:
-                    evicted_refs.append(evicted.input_ref)
-                if evicted.output_ref:
-                    evicted_refs.append(evicted.output_ref)
+            evicted_refs = self._refs_of_next_eviction() if was_full else []
 
             self._seq += 1
             seq = self._seq
@@ -203,13 +197,9 @@ class InMemoryRingBuffer:
             if was_full and not self._overflow_pending:
                 self._overflow_pending = True
                 # The overflow marker itself may evict another record.
-                evicted_refs_marker: list[str] = []
-                if len(self._buf) == self._capacity and self._buf:
-                    evicted_m = self._buf[0]
-                    if evicted_m.input_ref:
-                        evicted_refs_marker.append(evicted_m.input_ref)
-                    if evicted_m.output_ref:
-                        evicted_refs_marker.append(evicted_m.output_ref)
+                evicted_refs_marker = (
+                    self._refs_of_next_eviction() if len(self._buf) == self._capacity else []
+                )
 
                 self._seq += 1
                 marker = BufferOverflow(
@@ -223,6 +213,17 @@ class InMemoryRingBuffer:
                 if evicted_refs_marker:
                     self._decrement_and_evict_refs(evicted_refs_marker)
         return seq
+
+    def _refs_of_next_eviction(self) -> list[str]:
+        """Artifact refs held by the record about to be evicted. Caller holds lock."""
+        refs: list[str] = []
+        if self._buf:
+            evicted = self._buf[0]
+            if evicted.input_ref:
+                refs.append(evicted.input_ref)
+            if evicted.output_ref:
+                refs.append(evicted.output_ref)
+        return refs
 
     def _decrement_and_evict_refs(self, refs: list[str]) -> None:
         """Decrement ref counts and delete orphaned artifacts. Caller holds lock."""

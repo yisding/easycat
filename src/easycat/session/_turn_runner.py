@@ -300,6 +300,23 @@ class TurnRunner:
         if turn is None:
             turn = self._turn.current
         token = turn.cancel_token if turn else None
+
+        transcript = await self._finalize_turn_transcript(turn)
+
+        if not transcript or (token and token.is_cancelled):
+            if self._turn.current is turn:
+                self._reset_turn_state()
+            return
+
+        await self._emit(AgentRequestStarted())
+        await self.run_streaming_agent(transcript, token, turn=turn)
+
+    async def _finalize_turn_transcript(self, turn: TurnContext | None) -> str:
+        """Stop STT input, drain pending commits, and return the final transcript.
+
+        Returns ``""`` when a pending STT future resolved empty/cancelled —
+        the caller resets the turn state in that case.
+        """
         self._stt.cancel_scheduled()
 
         # Stop forwarding audio to STT immediately so trailing frames
@@ -310,17 +327,13 @@ class TurnRunner:
         await self._stt.await_inflight_commit()
 
         if not await self._stt.await_pending(turn):
-            if self._turn.current is turn:
-                self._reset_turn_state()
-            return
+            return ""
 
         if stt_needs_close:
             await self._stt.end_stream(turn)
 
         if not await self._stt.await_pending(turn):
-            if self._turn.current is turn:
-                self._reset_turn_state()
-            return
+            return ""
 
         transcript = ""
         if turn is not None:
@@ -328,14 +341,7 @@ class TurnRunner:
 
         if transcript and turn:
             turn.stt_final_time = time.monotonic()
-
-        if not transcript or (token and token.is_cancelled):
-            if self._turn.current is turn:
-                self._reset_turn_state()
-            return
-
-        await self._emit(AgentRequestStarted())
-        await self.run_streaming_agent(transcript, token, turn=turn)
+        return transcript
 
     def _reset_turn_manager_preserving_token(self) -> None:
         """Reset the TurnManager to IDLE without cancelling the live turn token.
@@ -575,10 +581,7 @@ class TurnRunner:
             else:
                 await agent_task
         except asyncio.CancelledError:
-            if not agent_task.done():
-                agent_task.cancel()
-            if not tts_task.done():
-                tts_task.cancel()
+            self._cancel_pending(agent_task, tts_task)
             for t in (agent_task, tts_task):
                 try:
                     await t
@@ -590,12 +593,15 @@ class TurnRunner:
             if not isinstance(exc, AgentTimeoutError):
                 logger.exception("Streaming agent error")
                 await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            if not agent_task.done():
-                agent_task.cancel()
-            if not tts_task.done():
-                tts_task.cancel()
+            self._cancel_pending(agent_task, tts_task)
             return exc
         return None
+
+    @staticmethod
+    def _cancel_pending(*tasks: asyncio.Task[None]) -> None:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
 
     def _finalize_streamed_text(self, turn: TurnContext, accumulated_text: str) -> str:
         """Apply the final markdown strip and sync the agent framework state."""
@@ -715,6 +721,75 @@ class TurnRunner:
             if self._text_turn_cancel_token is token:
                 self._text_turn_cancel_token = None
 
+    async def _stream_text_turn(
+        self,
+        text: str,
+        cancel_token: CancelToken | None,
+        *,
+        turn_id: str,
+    ) -> tuple[str, object | None]:
+        """Drive the agent stream for a text turn; returns (text, structured output).
+
+        Progress is mirrored onto ``_text_turn_accumulated`` so a barge-in
+        ``send_text`` can report what had already been delivered.
+        """
+        structured_output: object | None = None
+        accumulated = ""
+        # Build a turn context for this text turn so AgentStage can
+        # stamp records with the right turn_id.
+        text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
+        system_prefix = self._caller_id_system_message()
+        stream = self._agent_stage.execute_streaming(
+            text,
+            self._run_ctx,
+            text_turn,
+            cancel_token=cancel_token,
+            system_prefix=system_prefix,
+        )
+        try:
+            async for event in stream:
+                kind = getattr(event, "kind", None)
+                if kind is None:
+                    continue
+                if kind == "done":
+                    if event.text:
+                        accumulated = event.text
+                    if getattr(event, "structured_output", None) is not None:
+                        structured_output = event.structured_output
+                    break
+                if kind == "text_delta" and event.text:
+                    accumulated += event.text
+                    self._text_turn_accumulated = accumulated
+                    await self._emit(
+                        AgentDelta(
+                            text=event.text,
+                            session_id=self._session_id,
+                            turn_id=turn_id,
+                        )
+                    )
+                else:
+                    # tool_started / tool_delta / tool_result share the same
+                    # event-translation as the voice path via emit_tool_event,
+                    # so the two cannot drift.  The per-tool observability span
+                    # is text-path specific and threaded in via tool_span.
+                    await emit_tool_event(
+                        event,
+                        kind,
+                        emit=self._emit,
+                        session_id=self._session_id,
+                        turn_id=turn_id,
+                        tool_span=lambda: observability.span(
+                            "easycat.agent.tool",
+                            {
+                                "easycat.stage": "agent",
+                                "easycat.surface": "agent_bridge",
+                            },
+                        ),
+                    )
+        finally:
+            await stream.aclose()
+        return accumulated, structured_output
+
     async def _execute_text_turn(
         self,
         text: str,
@@ -729,63 +804,10 @@ class TurnRunner:
         try:
             await self._emit(TurnStarted(session_id=self._session_id, turn_id=turn_id))
             await self._emit(AgentRequestStarted(session_id=self._session_id, turn_id=turn_id))
-            structured_output = None
             self._text_turn_accumulated = ""
-            # Build a turn context for this text turn so AgentStage can
-            # stamp records with the right turn_id.
-            text_turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token or CancelToken())
-            accumulated = ""
-            system_prefix = self._caller_id_system_message()
-            stream = self._agent_stage.execute_streaming(
-                text,
-                self._run_ctx,
-                text_turn,
-                cancel_token=cancel_token,
-                system_prefix=system_prefix,
+            response, structured_output = await self._stream_text_turn(
+                text, cancel_token, turn_id=turn_id
             )
-            try:
-                async for event in stream:
-                    kind = getattr(event, "kind", None)
-                    if kind is None:
-                        continue
-                    if kind == "done":
-                        if event.text:
-                            accumulated = event.text
-                        if getattr(event, "structured_output", None) is not None:
-                            structured_output = event.structured_output
-                        break
-                    if kind == "text_delta" and event.text:
-                        accumulated += event.text
-                        self._text_turn_accumulated = accumulated
-                        await self._emit(
-                            AgentDelta(
-                                text=event.text,
-                                session_id=self._session_id,
-                                turn_id=turn_id,
-                            )
-                        )
-                    else:
-                        # tool_started / tool_delta / tool_result share the same
-                        # event-translation as the voice path via emit_tool_event,
-                        # so the two cannot drift.  The per-tool observability span
-                        # is text-path specific and threaded in via tool_span.
-                        await emit_tool_event(
-                            event,
-                            kind,
-                            emit=self._emit,
-                            session_id=self._session_id,
-                            turn_id=turn_id,
-                            tool_span=lambda: observability.span(
-                                "easycat.agent.tool",
-                                {
-                                    "easycat.stage": "agent",
-                                    "easycat.surface": "agent_bridge",
-                                },
-                            ),
-                        )
-            finally:
-                await stream.aclose()
-            response = accumulated
             elapsed_ms = (time.monotonic() - t0) * 1000
             await self._emit(
                 AgentFinal(

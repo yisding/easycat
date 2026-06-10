@@ -214,124 +214,11 @@ class SqliteJournal(_SqlJournalBase):
         existed = self._db_path.exists()
 
         # Eager warmup — open DB and apply PRAGMAs now.
-        self._conn = sqlite3.connect(
-            str(self._db_path),
-            check_same_thread=False,
-            isolation_level=None,  # autocommit for PRAGMAs
-        )
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("PRAGMA wal_autocheckpoint=0")
+        self._conn = self._open_connection()
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
-        # Detect unclean shutdown: file existed but clean_close marker absent.
-        if existed:
-            row = self._conn.execute(
-                "SELECT value FROM session_state WHERE key = 'clean_close'"
-            ).fetchone()
-            prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
-            prior_count = prior_count_row[0] if prior_count_row else 0
-
-            if row is None and prior_count > 0:
-                # Unclean shutdown from a previous session — promote to crash-dump.
-                # Capture the prior session's id before we truncate so it can be
-                # recorded on the recovery marker (see ``original_session_id``).
-                prior_session_row = self._conn.execute(
-                    "SELECT session_id FROM journal ORDER BY sequence DESC LIMIT 1"
-                ).fetchone()
-                self._original_session_id = (
-                    prior_session_row[0] if prior_session_row else session_id
-                )
-                crash_dir = root / "crash-dumps"
-                crash_dir.mkdir(parents=True, exist_ok=True)
-                crash_path = crash_dir / f"{session_id}.sqlite"
-                # Copy rather than move so we can keep writing to the current path.
-                import shutil
-
-                # Hold the lock across the close→copy→reopen sequence so no
-                # concurrent append() can use the connection while it's closed.
-                with self._lock:
-                    try:
-                        # Checkpoint WAL into the main database before copying.
-                        # With wal_autocheckpoint=0, recent records may only
-                        # exist in the WAL file; a bare file copy would lose them.
-                        try:
-                            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                        except sqlite3.OperationalError:
-                            pass  # Best-effort; copy WAL files as fallback below.
-                        self._conn.close()
-                        shutil.copy2(str(self._db_path), str(crash_path))
-                        # Also copy WAL/SHM if they still exist (checkpoint may
-                        # have been incomplete due to concurrent readers).
-                        for suffix in ("-wal", "-shm"):
-                            wal_src = Path(str(self._db_path) + suffix)
-                            if wal_src.exists():
-                                shutil.copy2(str(wal_src), str(crash_path) + suffix)
-                        self._conn = sqlite3.connect(
-                            str(self._db_path),
-                            check_same_thread=False,
-                            isolation_level=None,
-                        )
-                        self._conn.execute("PRAGMA journal_mode=WAL")
-                        self._conn.execute("PRAGMA synchronous=NORMAL")
-                        self._conn.execute("PRAGMA wal_autocheckpoint=0")
-                        # The prior session's records are now safely preserved
-                        # in the crash dump.  Truncate the live journal so the
-                        # new session starts fresh at sequence=1 (the documented
-                        # contract) instead of continuing the prior counter and
-                        # interleaving prior-session rows under the same id.
-                        self._conn.execute("DELETE FROM journal")
-                        # Only now — after the crash dump was copied AND the live
-                        # journal truncated — is the recovery fully successful.
-                        # Setting the flag here (rather than before the copy)
-                        # guarantees the seq=0 recovery marker is emitted only on
-                        # a consistent "started fresh at sequence=1" state.
-                        self._recovered = True
-                        logger.info(
-                            "Recovered unclean journal for session %s (%d records) → %s",
-                            session_id,
-                            prior_count,
-                            crash_path,
-                        )
-                    except OSError:
-                        logger.warning(
-                            "Failed to promote crash dump for session %s",
-                            session_id,
-                            exc_info=True,
-                        )
-                        # The copy or a PRAGMA may have failed after we closed the
-                        # connection (close happens before copy).  Reopen it so the
-                        # rest of __init__ does not run against a closed handle, and
-                        # truncate the prior-session rows directly: _recovered stays
-                        # False (no recovery marker), but the new session must still
-                        # start fresh rather than interleave prior-session records.
-                        try:
-                            self._conn.close()
-                        except sqlite3.Error:
-                            pass
-                        self._conn = sqlite3.connect(
-                            str(self._db_path),
-                            check_same_thread=False,
-                            isolation_level=None,
-                        )
-                        self._conn.execute("PRAGMA journal_mode=WAL")
-                        self._conn.execute("PRAGMA synchronous=NORMAL")
-                        self._conn.execute("PRAGMA wal_autocheckpoint=0")
-                        try:
-                            self._conn.execute("DELETE FROM journal")
-                        except sqlite3.Error:
-                            logger.warning(
-                                "Failed to truncate live journal after crash-dump "
-                                "failure for session %s",
-                                session_id,
-                                exc_info=True,
-                            )
-
-            if row is not None and prior_count > 0:
-                # Clean reuse — prior session closed normally. Truncate stale
-                # records so the new session starts with an empty journal.
-                self._conn.execute("DELETE FROM journal")
+        prior_count = self._reconcile_prior_session(session_id) if existed else 0
 
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
@@ -349,31 +236,151 @@ class SqliteJournal(_SqlJournalBase):
 
         # Emit recovery marker at sequence=0 if we detected unclean shutdown.
         if self._recovered:
-            now = TimingInfo(
-                wall_ns=time.time_ns(),
-                mono_ns=time.monotonic_ns(),
-                cpu_ns=time.process_time_ns(),
-            )
-            self._conn.execute(
-                "INSERT OR REPLACE INTO journal "
-                "(sequence, session_id, kind, name, wall_ns, mono_ns, data, tags) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    0,
+            self._insert_recovery_marker(session_id, prior_count)
+
+    # ── Startup phases ────────────────────────────────────────────
+
+    def _open_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(
+            str(self._db_path),
+            check_same_thread=False,
+            isolation_level=None,  # autocommit for PRAGMAs
+        )
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA wal_autocheckpoint=0")
+        return conn
+
+    def _reconcile_prior_session(self, session_id: str) -> int:
+        """Handle a pre-existing DB file: crash recovery or clean reuse.
+
+        Detects unclean shutdown (file existed but ``clean_close`` marker
+        absent) and promotes the prior records to a crash dump; a cleanly
+        closed prior session is simply truncated.  Returns the prior
+        record count for the recovery marker.
+        """
+        row = self._conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        prior_count_row = self._conn.execute("SELECT COUNT(*) FROM journal").fetchone()
+        prior_count = prior_count_row[0] if prior_count_row else 0
+
+        if row is None and prior_count > 0:
+            # Unclean shutdown from a previous session — promote to crash-dump.
+            self._promote_crash_dump(session_id, prior_count)
+
+        if row is not None and prior_count > 0:
+            # Clean reuse — prior session closed normally. Truncate stale
+            # records so the new session starts with an empty journal.
+            self._conn.execute("DELETE FROM journal")
+        return prior_count
+
+    def _promote_crash_dump(self, session_id: str, prior_count: int) -> None:
+        """Copy the unclean prior journal to ``crash-dumps/`` and start fresh."""
+        # Capture the prior session's id before we truncate so it can be
+        # recorded on the recovery marker (see ``original_session_id``).
+        prior_session_row = self._conn.execute(
+            "SELECT session_id FROM journal ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        self._original_session_id = prior_session_row[0] if prior_session_row else session_id
+        crash_dir = self._root / "crash-dumps"
+        crash_dir.mkdir(parents=True, exist_ok=True)
+        crash_path = crash_dir / f"{session_id}.sqlite"
+
+        # Copy rather than move so we can keep writing to the current path.
+        # Hold the lock across the close→copy→reopen sequence so no
+        # concurrent append() can use the connection while it's closed.
+        with self._lock:
+            try:
+                # Checkpoint WAL into the main database before copying.
+                # With wal_autocheckpoint=0, recent records may only
+                # exist in the WAL file; a bare file copy would lose them.
+                try:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.OperationalError:
+                    pass  # Best-effort; copy WAL files as fallback below.
+                self._conn.close()
+                shutil.copy2(str(self._db_path), str(crash_path))
+                # Also copy WAL/SHM if they still exist (checkpoint may
+                # have been incomplete due to concurrent readers).
+                for suffix in ("-wal", "-shm"):
+                    wal_src = Path(str(self._db_path) + suffix)
+                    if wal_src.exists():
+                        shutil.copy2(str(wal_src), str(crash_path) + suffix)
+                self._conn = self._open_connection()
+                # The prior session's records are now safely preserved
+                # in the crash dump.  Truncate the live journal so the
+                # new session starts fresh at sequence=1 (the documented
+                # contract) instead of continuing the prior counter and
+                # interleaving prior-session rows under the same id.
+                self._conn.execute("DELETE FROM journal")
+                # Only now — after the crash dump was copied AND the live
+                # journal truncated — is the recovery fully successful.
+                # Setting the flag here (rather than before the copy)
+                # guarantees the seq=0 recovery marker is emitted only on
+                # a consistent "started fresh at sequence=1" state.
+                self._recovered = True
+                logger.info(
+                    "Recovered unclean journal for session %s (%d records) → %s",
                     session_id,
-                    JournalRecordKind.RECOVERY.value,
-                    "recovered_session",
-                    now.wall_ns,
-                    now.mono_ns,
-                    json.dumps(
-                        {
-                            "recovered_record_count": prior_count,
-                            "original_session_id": self._original_session_id,
-                        }
-                    ),
-                    "",
-                ),
+                    prior_count,
+                    crash_path,
+                )
+            except OSError:
+                logger.warning(
+                    "Failed to promote crash dump for session %s",
+                    session_id,
+                    exc_info=True,
+                )
+                self._reopen_after_failed_crash_dump(session_id)
+
+    def _reopen_after_failed_crash_dump(self, session_id: str) -> None:
+        # The copy or a PRAGMA may have failed after we closed the
+        # connection (close happens before copy).  Reopen it so the
+        # rest of __init__ does not run against a closed handle, and
+        # truncate the prior-session rows directly: _recovered stays
+        # False (no recovery marker), but the new session must still
+        # start fresh rather than interleave prior-session records.
+        try:
+            self._conn.close()
+        except sqlite3.Error:
+            pass
+        self._conn = self._open_connection()
+        try:
+            self._conn.execute("DELETE FROM journal")
+        except sqlite3.Error:
+            logger.warning(
+                "Failed to truncate live journal after crash-dump failure for session %s",
+                session_id,
+                exc_info=True,
             )
+
+    def _insert_recovery_marker(self, session_id: str, prior_count: int) -> None:
+        now = TimingInfo(
+            wall_ns=time.time_ns(),
+            mono_ns=time.monotonic_ns(),
+            cpu_ns=time.process_time_ns(),
+        )
+        self._conn.execute(
+            "INSERT OR REPLACE INTO journal "
+            "(sequence, session_id, kind, name, wall_ns, mono_ns, data, tags) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                0,
+                session_id,
+                JournalRecordKind.RECOVERY.value,
+                "recovered_session",
+                now.wall_ns,
+                now.mono_ns,
+                json.dumps(
+                    {
+                        "recovered_record_count": prior_count,
+                        "original_session_id": self._original_session_id,
+                    }
+                ),
+                "",
+            ),
+        )
 
     # ── ExecutionJournal interface ────────────────────────────────
     # append(), read(), slice(), latest_sequence, degraded, db_path, and

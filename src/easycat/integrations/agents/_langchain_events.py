@@ -542,6 +542,18 @@ def _on_custom_event(ctx: _EventContext) -> Iterator[AgentBridgeEvent]:
         yield AgentBridgeEvent(kind="text_delta", text=text)
 
 
+def _tool_args_preview(args_input: Any) -> str:
+    """Best-effort JSON-ish preview of tool args for the tool_started payload."""
+    if isinstance(args_input, dict):
+        try:
+            return json.dumps(args_input, default=str)
+        except Exception:
+            return str(args_input)
+    if args_input is not None:
+        return str(args_input)
+    return ""
+
+
 def _on_tool_start(ctx: _EventContext) -> Iterator[AgentBridgeEvent]:
     tool_name = ctx.name
     # Default to the LangChain run_id; substitute the provider tool-call
@@ -564,15 +576,7 @@ def _on_tool_start(ctx: _EventContext) -> Iterator[AgentBridgeEvent]:
             run_to_call[ctx.run_id] = chunk_call_id
         return
     args_input = ctx.data.get("input") if isinstance(ctx.data, dict) else None
-    args_text = ""
-    if isinstance(args_input, dict):
-        # Best-effort JSON-ish preview for tool_started payload.
-        try:
-            args_text = json.dumps(args_input, default=str)
-        except Exception:
-            args_text = str(args_input)
-    elif args_input is not None:
-        args_text = str(args_input)
+    args_text = _tool_args_preview(args_input)
     if ctx.recorder is not None:
         ctx.recorder.record_tool_call(
             phase="start",

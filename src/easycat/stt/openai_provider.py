@@ -247,6 +247,7 @@ class OpenAISTT(STTBase):
 
     @staticmethod
     def _extract_stream_text(payload: str) -> tuple[str | None, bool, bool]:
+        """Parse one stream payload into ``(text, is_delta, is_final)``."""
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
@@ -254,29 +255,41 @@ class OpenAISTT(STTBase):
 
         if isinstance(data, dict) and isinstance(data.get("data"), dict):
             data = data["data"]
+        if not isinstance(data, dict):
+            return None, False, False
 
-        if isinstance(data, dict) and isinstance(data.get("choices"), list):
-            choice = data["choices"][0] if data["choices"] else {}
-            if isinstance(choice, dict):
-                delta = choice.get("delta")
-                if isinstance(delta, dict):
-                    if isinstance(delta.get("text"), str):
-                        return delta["text"], True, False
-                    if isinstance(delta.get("content"), str):
-                        return delta["content"], True, False
-                if isinstance(choice.get("text"), str):
-                    return choice["text"], False, choice.get("finish_reason") is not None
+        choice_result = OpenAISTT._extract_choice_text(data)
+        if choice_result is not None:
+            return choice_result
+        return OpenAISTT._extract_flat_text(data)
 
-        if isinstance(data, dict):
-            if isinstance(data.get("delta"), str):
-                return data["delta"], True, False
-            if isinstance(data.get("text"), str):
+    @staticmethod
+    def _extract_choice_text(data: dict) -> tuple[str | None, bool, bool] | None:
+        """Handle the chat-completions-shaped ``choices[0]`` payload variant."""
+        if not isinstance(data.get("choices"), list):
+            return None
+        choice = data["choices"][0] if data["choices"] else {}
+        if not isinstance(choice, dict):
+            return None
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            if isinstance(delta.get("text"), str):
+                return delta["text"], True, False
+            if isinstance(delta.get("content"), str):
+                return delta["content"], True, False
+        if isinstance(choice.get("text"), str):
+            return choice["text"], False, choice.get("finish_reason") is not None
+        return None
+
+    @staticmethod
+    def _extract_flat_text(data: dict) -> tuple[str | None, bool, bool]:
+        """Handle the flat ``delta`` / ``text`` / ``transcript`` payload variants."""
+        if isinstance(data.get("delta"), str):
+            return data["delta"], True, False
+        for key in ("text", "transcript"):
+            if isinstance(data.get(key), str):
                 is_final = bool(data.get("is_final") or data.get("final"))
-                return data["text"], False, is_final
-            if isinstance(data.get("transcript"), str):
-                is_final = bool(data.get("is_final") or data.get("final"))
-                return data["transcript"], False, is_final
-
+                return data[key], False, is_final
         return None, False, False
 
     def version_info(self) -> dict[str, str]:
