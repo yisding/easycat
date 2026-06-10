@@ -108,6 +108,8 @@ The commands below use the installed CLI form. From this repository, prefix
 them with `uv run`, for example `uv run easycat doctor`.
 
 ```bash
+easycat console          # try EasyCat in your terminal — no API keys required
+easycat console --voice-demo # run one scripted no-key turn through the full audio pipeline
 easycat init my-agent    # scaffold a new project from a template
 easycat init --list-templates # compare templates, base package requirements, env vars, files, preflight/check/fix/docs/json-schema/run commands
 easycat init --list-templates --json # emit the machine-readable template catalog

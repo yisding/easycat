@@ -784,6 +784,7 @@ $ uvx easycat
 EasyCat — voice bot framework
 
   Scaffold
+    console     Try EasyCat in your terminal with no API keys
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     explain     Look up errors and CLI schema topics

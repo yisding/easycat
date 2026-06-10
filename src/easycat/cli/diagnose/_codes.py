@@ -200,6 +200,11 @@ relevant path field when it helps automation recover:
   `path`        - `easycat bundles show PATH --json` and `easycat replay PATH --json`
   `output_path` - `easycat bundles export PATH --output DIR --json`
 
+`easycat console` is interactive-only and exempt from this envelope: it
+never accepts `--json`.  It always ends by printing the exported debug
+bundle path; automation should replay that bundle instead with
+`easycat replay PATH --json`.
+
 Stdout carries the envelope; stderr carries logs and diagnostics so
 `2>/dev/null` remains safe.  Automation should branch on `command`,
 `status`, and `exit_code`, then inspect command-specific fields only for
