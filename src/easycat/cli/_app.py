@@ -69,6 +69,10 @@ class _CommandText(NamedTuple):
 
 
 _COMMAND_TEXT: dict[str, _CommandText] = {
+    "console": _CommandText(
+        help="Try EasyCat in your terminal — no API keys required.",
+        journey="Try EasyCat in your terminal with no API keys",
+    ),
     "init": _CommandText(
         help="Scaffold a new project from a template.",
         journey="Scaffold a new project from a template",
@@ -104,7 +108,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("init", "doctor", "explain")),
+    ("Scaffold", ("console", "init", "doctor", "explain")),
     ("Debug with the journal", ("bundles", "inspect", "replay")),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
@@ -287,6 +291,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "and learn CLI JSON envelopes."
         ),
         "commands": (
+            "easycat console",
+            "easycat console --voice-demo",
             "easycat init --list-templates",
             "easycat init --list-templates --json",
             "easycat init my-agent",
@@ -798,12 +804,14 @@ def _register_commands() -> None:
     if _COMMANDS_REGISTERED:
         return
 
+    from easycat.cli.console import console as console_cmd
     from easycat.cli.debug.bundles import bundles_app, inspect_bundle, replay_bundle
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
     from easycat.cli.validate import validate_app
 
+    app.command(name="console", help=_COMMAND_TEXT["console"].help)(console_cmd)
     app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
     app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
     app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)
