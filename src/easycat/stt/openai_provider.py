@@ -159,152 +159,17 @@ class OpenAISTT(STTBase):
         await self._flush_buffer()
 
     async def _transcribe_streaming(self, wav_data: bytes) -> str:
-        url = f"{self._config.base_url}/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {self._config.api_key}"}
+        """Submit *wav_data* with retries; returns the final transcript text.
 
-        data: dict[str, str] = {"model": self._config.model}
-        if self._config.language:
-            data["language"] = self._config.language
-        if self._config.prompt:
-            data["prompt"] = self._config.prompt
-        data["stream"] = "true"
-
-        # ``max_retries`` is the total attempt count; clamp to at least one
-        # so a misconfigured ``max_retries=0`` still sends a single request
-        # rather than raising a causeless "no attempts" error.
+        ``max_retries`` is the total attempt count; clamp to at least one
+        so a misconfigured ``max_retries=0`` still sends a single request
+        rather than raising a causeless "no attempts" error.
+        """
         total_attempts = max(1, self._config.max_retries)
         last_exc: Exception | None = None
         for attempt in range(total_attempts):
-            full_text = ""
-            emitted_final = False
-            # Buffer events for this attempt so a mid-stream retry does not
-            # replay duplicate PARTIAL/FINAL events onto the queue. Events are
-            # only flushed once the attempt completes successfully.
-            pending_events: list[STTEvent] = []
             try:
-                client = self._config.http_client or httpx.AsyncClient(
-                    timeout=self._config.timeout
-                )
-                owns_client = self._config.http_client is None
-                try:
-                    async with client.stream(
-                        "POST",
-                        url,
-                        headers=headers,
-                        files={"file": ("audio.wav", wav_data, "audio/wav")},
-                        data=data,
-                    ) as response:
-                        response.raise_for_status()
-                        stream_timeout = self._config.stream_timeout or self._config.timeout
-                        # Track the byte caps incrementally as raw network
-                        # chunks arrive so an unbounded no-newline body is
-                        # aborted *before* httpx fully materializes it, rather
-                        # than after a whole decoded line is buffered by
-                        # ``aiter_lines()``.
-                        buffer = bytearray()
-                        total_bytes = 0
-                        stream_events = 0
-                        partial_events = 0
-                        done = False
-
-                        def _line_too_large() -> OpenAISTTStreamLimitError:
-                            return OpenAISTTStreamLimitError(
-                                "OpenAI STT streaming response line exceeded "
-                                f"{self._config.max_stream_line_bytes} bytes"
-                            )
-
-                        def _process_line(raw_line: bytes) -> bool:
-                            """Apply per-event caps; return True when the stream is done."""
-                            nonlocal full_text, emitted_final, stream_events, partial_events
-                            line = raw_line.decode("utf-8", "replace").strip()
-                            if not line:
-                                return False
-                            stream_events += 1
-                            if stream_events > self._config.max_stream_events:
-                                raise OpenAISTTStreamLimitError(
-                                    "OpenAI STT streaming response exceeded "
-                                    f"{self._config.max_stream_events} events"
-                                )
-                            payload = line
-                            if payload.startswith("data:"):
-                                payload = payload[5:].strip()
-                            if payload == "[DONE]":
-                                return True
-                            text, is_delta, is_final = self._extract_stream_text(payload)
-                            if not text:
-                                return False
-                            next_text = full_text + text if is_delta else text
-                            if len(next_text) > self._config.max_transcript_chars:
-                                raise OpenAISTTStreamLimitError(
-                                    "OpenAI STT transcript exceeded "
-                                    f"{self._config.max_transcript_chars} characters"
-                                )
-                            full_text = next_text
-                            partial_events += 1
-                            if partial_events > self._config.max_partial_events:
-                                raise OpenAISTTStreamLimitError(
-                                    "OpenAI STT streaming response exceeded "
-                                    f"{self._config.max_partial_events} partial events"
-                                )
-                            pending_events.append(
-                                STTEvent(type=STTEventType.PARTIAL, text=full_text)
-                            )
-                            if is_final:
-                                pending_events.append(
-                                    STTEvent(type=STTEventType.FINAL, text=full_text)
-                                )
-                                emitted_final = True
-                                return True
-                            return False
-
-                        try:
-                            async with asyncio.timeout(stream_timeout):
-                                async for chunk in response.aiter_bytes():
-                                    if not chunk:
-                                        continue
-                                    total_bytes += len(chunk)
-                                    if total_bytes > self._config.max_stream_total_bytes:
-                                        raise OpenAISTTStreamLimitError(
-                                            "OpenAI STT streaming response exceeded "
-                                            f"{self._config.max_stream_total_bytes} total bytes"
-                                        )
-                                    buffer.extend(chunk)
-                                    while (newline := buffer.find(b"\n")) != -1:
-                                        raw_line = bytes(buffer[:newline])
-                                        del buffer[: newline + 1]
-                                        if len(raw_line) > self._config.max_stream_line_bytes:
-                                            raise _line_too_large()
-                                        if _process_line(raw_line):
-                                            done = True
-                                            break
-                                    if done:
-                                        break
-                                    # A pending fragment without a newline still
-                                    # counts against the per-line cap so a single
-                                    # gigantic no-newline line is rejected before
-                                    # it grows without bound.
-                                    if len(buffer) > self._config.max_stream_line_bytes:
-                                        raise _line_too_large()
-                                if not done and buffer:
-                                    # Flush a trailing newline-less final line.
-                                    if len(buffer) > self._config.max_stream_line_bytes:
-                                        raise _line_too_large()
-                                    _process_line(bytes(buffer))
-                        except TimeoutError as exc:
-                            raise OpenAISTTStreamLimitError(
-                                f"OpenAI STT streaming response exceeded {stream_timeout:.1f}s"
-                            ) from exc
-                        if full_text and not emitted_final:
-                            pending_events.append(
-                                STTEvent(type=STTEventType.FINAL, text=full_text)
-                            )
-                            emitted_final = True
-                        for event in pending_events:
-                            self._emit_event(event)
-                        return full_text
-                finally:
-                    if owns_client:
-                        await client.aclose()
+                return await self._attempt_streaming_transcription(wav_data)
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 if exc.response.status_code == 429 and attempt < total_attempts - 1:
@@ -329,6 +194,56 @@ class OpenAISTT(STTBase):
         raise RuntimeError(
             f"OpenAI STT: all {total_attempts} transcription attempt(s) failed"
         ) from last_exc
+
+    def _request_form_data(self) -> dict[str, str]:
+        """Multipart form fields for the streaming transcription request."""
+        data: dict[str, str] = {"model": self._config.model}
+        if self._config.language:
+            data["language"] = self._config.language
+        if self._config.prompt:
+            data["prompt"] = self._config.prompt
+        data["stream"] = "true"
+        return data
+
+    async def _attempt_streaming_transcription(self, wav_data: bytes) -> str:
+        """Run one streaming transcription attempt and emit its events.
+
+        Events are buffered in the parser for the whole attempt so a
+        mid-stream retry does not replay duplicate PARTIAL/FINAL events
+        onto the queue — they are only flushed once the attempt completes
+        successfully.
+        """
+        url = f"{self._config.base_url}/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {self._config.api_key}"}
+        client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
+        owns_client = self._config.http_client is None
+        try:
+            async with client.stream(
+                "POST",
+                url,
+                headers=headers,
+                files={"file": ("audio.wav", wav_data, "audio/wav")},
+                data=self._request_form_data(),
+            ) as response:
+                response.raise_for_status()
+                parser = _TranscriptStreamParser(self._config)
+                stream_timeout = self._config.stream_timeout or self._config.timeout
+                try:
+                    async with asyncio.timeout(stream_timeout):
+                        async for chunk in response.aiter_bytes():
+                            if parser.feed(chunk):
+                                break
+                        parser.finish()
+                except TimeoutError as exc:
+                    raise OpenAISTTStreamLimitError(
+                        f"OpenAI STT streaming response exceeded {stream_timeout:.1f}s"
+                    ) from exc
+                for event in parser.pending_events:
+                    self._emit_event(event)
+                return parser.full_text
+        finally:
+            if owns_client:
+                await client.aclose()
 
     @staticmethod
     def _extract_stream_text(payload: str) -> tuple[str | None, bool, bool]:
@@ -371,3 +286,106 @@ class OpenAISTT(STTBase):
             "api_version": "v1",
             "sdk_version": get_package_version("httpx"),
         }
+
+
+class _TranscriptStreamParser:
+    """Incremental SSE-line parser for one streaming transcription attempt.
+
+    Tracks the byte caps as raw network chunks arrive so an unbounded
+    no-newline body is aborted *before* httpx fully materializes it,
+    rather than after a whole decoded line is buffered by
+    ``aiter_lines()``.  Emitted events are buffered on ``pending_events``
+    so the caller can flush them only after the attempt succeeds.
+    """
+
+    def __init__(self, config: OpenAISTTConfig) -> None:
+        self._config = config
+        self._buffer = bytearray()
+        self._total_bytes = 0
+        self._stream_events = 0
+        self._partial_events = 0
+        self._done = False
+        self._emitted_final = False
+        self.full_text = ""
+        self.pending_events: list[STTEvent] = []
+
+    def feed(self, chunk: bytes) -> bool:
+        """Consume one raw network chunk; return ``True`` when the stream is done."""
+        if not chunk:
+            return False
+        self._total_bytes += len(chunk)
+        if self._total_bytes > self._config.max_stream_total_bytes:
+            raise OpenAISTTStreamLimitError(
+                "OpenAI STT streaming response exceeded "
+                f"{self._config.max_stream_total_bytes} total bytes"
+            )
+        self._buffer.extend(chunk)
+        while (newline := self._buffer.find(b"\n")) != -1:
+            raw_line = bytes(self._buffer[:newline])
+            del self._buffer[: newline + 1]
+            if len(raw_line) > self._config.max_stream_line_bytes:
+                raise self._line_too_large()
+            if self._process_line(raw_line):
+                self._done = True
+                return True
+        # A pending fragment without a newline still counts against the
+        # per-line cap so a single gigantic no-newline line is rejected
+        # before it grows without bound.
+        if len(self._buffer) > self._config.max_stream_line_bytes:
+            raise self._line_too_large()
+        return False
+
+    def finish(self) -> None:
+        """Flush a trailing newline-less final line and ensure a FINAL event."""
+        if not self._done and self._buffer:
+            if len(self._buffer) > self._config.max_stream_line_bytes:
+                raise self._line_too_large()
+            self._process_line(bytes(self._buffer))
+        if self.full_text and not self._emitted_final:
+            self.pending_events.append(STTEvent(type=STTEventType.FINAL, text=self.full_text))
+            self._emitted_final = True
+
+    # ── Internals ─────────────────────────────────────────────────
+
+    def _line_too_large(self) -> OpenAISTTStreamLimitError:
+        return OpenAISTTStreamLimitError(
+            "OpenAI STT streaming response line exceeded "
+            f"{self._config.max_stream_line_bytes} bytes"
+        )
+
+    def _process_line(self, raw_line: bytes) -> bool:
+        """Apply per-event caps; return ``True`` when the stream is done."""
+        line = raw_line.decode("utf-8", "replace").strip()
+        if not line:
+            return False
+        self._stream_events += 1
+        if self._stream_events > self._config.max_stream_events:
+            raise OpenAISTTStreamLimitError(
+                f"OpenAI STT streaming response exceeded {self._config.max_stream_events} events"
+            )
+        payload = line
+        if payload.startswith("data:"):
+            payload = payload[5:].strip()
+        if payload == "[DONE]":
+            return True
+        text, is_delta, is_final = OpenAISTT._extract_stream_text(payload)
+        if not text:
+            return False
+        next_text = self.full_text + text if is_delta else text
+        if len(next_text) > self._config.max_transcript_chars:
+            raise OpenAISTTStreamLimitError(
+                f"OpenAI STT transcript exceeded {self._config.max_transcript_chars} characters"
+            )
+        self.full_text = next_text
+        self._partial_events += 1
+        if self._partial_events > self._config.max_partial_events:
+            raise OpenAISTTStreamLimitError(
+                "OpenAI STT streaming response exceeded "
+                f"{self._config.max_partial_events} partial events"
+            )
+        self.pending_events.append(STTEvent(type=STTEventType.PARTIAL, text=self.full_text))
+        if is_final:
+            self.pending_events.append(STTEvent(type=STTEventType.FINAL, text=self.full_text))
+            self._emitted_final = True
+            return True
+        return False
