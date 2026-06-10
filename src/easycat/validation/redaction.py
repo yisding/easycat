@@ -7,6 +7,8 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
+from easycat._provider_catalog import sensitive_api_domains
+
 REDACTION_VERSION = 1
 
 REDACTED_PHONE = "[REDACTED_PHONE]"
@@ -62,10 +64,12 @@ _SECRET_KEY_RE = re.compile(
 )
 
 _URL_RE = re.compile(r"https?://[^\s\"')\]}]+")
+# Provider API domains come from the STT/TTS provider catalogs, so a
+# newly registered provider's URLs are flagged without touching this file.
 _SENSITIVE_URL_RE = re.compile(
     r"https?://(?:[^/\s:@]+:[^/\s:@]+@)?[^\s\"')\]}]*(?:"
-    r"openai\.com|deepgram\.com|elevenlabs\.io|cartesia\.ai"
-    r")[^\s\"')\]}]*",
+    + "|".join(re.escape(domain) for domain in sensitive_api_domains())
+    + r")[^\s\"')\]}]*",
     re.IGNORECASE,
 )
 _SECRET_RE = re.compile(r"\b(?:sk|sess|key|tok)-[A-Za-z0-9_-]{12,}\b")

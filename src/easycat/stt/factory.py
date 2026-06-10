@@ -48,9 +48,31 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "cartesia": "CARTESIA_API_KEY",
 }
 
+# Provider name → optional install extra shipping its dependencies.
+# Consumed by ``easycat init`` to scaffold ``pyproject.toml`` extras.
+_PROVIDER_EXTRA: dict[str, str] = {
+    "openai": "openai",
+    "openai-realtime": "openai",
+    "deepgram": "deepgram",
+    "elevenlabs": "elevenlabs",
+    "cartesia": "cartesia",
+}
+
+# Provider name → API host domains. Consumed by validation redaction to
+# scrub provider URLs from exported artifacts.
+_PROVIDER_API_DOMAINS: dict[str, tuple[str, ...]] = {
+    "openai": ("openai.com",),
+    "openai-realtime": ("openai.com",),
+    "deepgram": ("deepgram.com",),
+    "elevenlabs": ("elevenlabs.io",),
+    "cartesia": ("cartesia.ai",),
+}
+
 _CATALOG = ProviderCatalog(
     providers=_PROVIDER_TO_CONFIG,
     env_vars=_PROVIDER_ENV_VAR,
+    extras=_PROVIDER_EXTRA,
+    api_domains=_PROVIDER_API_DOMAINS,
     kind="STT",
 )
 _CONFIG_TO_PROVIDER: dict[STTConfigType, type[STTBase]] = _CATALOG.config_to_provider

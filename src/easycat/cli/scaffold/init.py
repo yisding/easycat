@@ -22,6 +22,7 @@ import typer
 from rich.markup import escape
 from rich.prompt import Prompt
 
+from easycat._provider_catalog import provider_env_vars, provider_extras
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
     emit_command_error,
@@ -57,23 +58,13 @@ _TEMPLATED_SUFFIXES: frozenset[str] = frozenset({".py", ".toml", ".md", ".txt", 
 # Provider name → optional extra that ships its SDK.  Used to keep the
 # scaffolded ``pyproject.toml`` in sync with the requested providers
 # (e.g. ``stt="deepgram/flux"`` adds ``deepgram`` to the extras list).
-_PROVIDER_TO_EXTRA: dict[str, str] = {
-    "openai": "openai",
-    "openai-realtime": "openai",
-    "deepgram": "deepgram",
-    "elevenlabs": "elevenlabs",
-    "cartesia": "cartesia",
-}
+# Derived from the STT/TTS provider catalogs so new providers scaffold
+# correctly without touching this file.
+_PROVIDER_TO_EXTRA: dict[str, str] = provider_extras()
 
 # Provider name → env var that holds its API key.  Used to extend the
 # scaffolded ``.env.example`` so the developer sees every key they need.
-_PROVIDER_TO_ENV_VAR: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "openai-realtime": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+_PROVIDER_TO_ENV_VAR: dict[str, str] = provider_env_vars()
 
 # Per-template baseline extras that must always be present in the
 # generated ``pyproject.toml`` regardless of provider choices.

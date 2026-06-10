@@ -176,13 +176,25 @@ def test_legacy_transport_satisfies_transport_like():
     assert isinstance(StubTransport(), TransportLike)
 
 
+class _CatalogProvider:
+    pass
+
+
+class _CatalogConfig:
+    pass
+
+
+def _catalog_kwargs() -> dict:
+    return {
+        "providers": {"known": (_CatalogProvider, _CatalogConfig)},
+        "env_vars": {"known": "KNOWN_API_KEY"},
+        "extras": {"known": "known"},
+        "api_domains": {"known": ("known.example",)},
+        "kind": "Test",
+    }
+
+
 def test_provider_catalog_rejects_mismatched_provider_and_env_var_keys():
-    class _Provider:
-        pass
-
-    class _Config:
-        pass
-
     with pytest.raises(
         ValueError,
         match=(
@@ -190,8 +202,28 @@ def test_provider_catalog_rejects_mismatched_provider_and_env_var_keys():
             "missing env_vars for: known; env_vars without providers: extra"
         ),
     ):
+        ProviderCatalog(**{**_catalog_kwargs(), "env_vars": {"extra": "EXTRA_API_KEY"}})
+
+
+def test_provider_catalog_rejects_mismatched_extras_keys():
+    with pytest.raises(
+        ValueError,
+        match="Test provider catalog keys must match extra keys; missing extras for: known",
+    ):
+        ProviderCatalog(**{**_catalog_kwargs(), "extras": {}})
+
+
+def test_provider_catalog_rejects_mismatched_api_domain_keys():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Test provider catalog keys must match api domain keys; "
+            "api_domains without providers: extra"
+        ),
+    ):
         ProviderCatalog(
-            providers={"known": (_Provider, _Config)},
-            env_vars={"extra": "EXTRA_API_KEY"},
-            kind="Test",
+            **{
+                **_catalog_kwargs(),
+                "api_domains": {"known": ("known.example",), "extra": ("extra.example",)},
+            }
         )

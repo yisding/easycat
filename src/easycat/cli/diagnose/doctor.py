@@ -29,6 +29,7 @@ import typer
 from rich.markup import escape
 from rich.table import Table
 
+from easycat._provider_catalog import credential_env_vars
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, emit_json, json_envelope, stderr_console
 
@@ -112,12 +113,9 @@ def check_easycat_version() -> CheckResult:
 
 # Provider → env var that holds its API key.  Used for both the
 # env-var presence check (E203) and the reachability check (E204).
-_PROVIDER_ENV: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+# Derived from the STT/TTS provider catalogs (one check per distinct
+# credential), so registering a new provider extends doctor automatically.
+_PROVIDER_ENV: dict[str, str] = credential_env_vars()
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -209,9 +207,8 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 detail="no provider API keys set",
                 code="EASYCAT_E203",
                 fix=(
-                    "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, "
-                    "ELEVENLABS_API_KEY, or CARTESIA_API_KEY. If your keys are "
-                    "in `.env`, run `easycat doctor --env-file .env`."
+                    f"Set at least one of {', '.join(sorted(_PROVIDER_ENV.values()))}. "
+                    "If your keys are in `.env`, run `easycat doctor --env-file .env`."
                 ),
             )
         )
