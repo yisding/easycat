@@ -64,7 +64,7 @@ elevenlabs = ["elevenlabs>=2.50.0"]
 # can enumerate the provider surface uniformly with the other ``[stt]``
 # / ``[tts]`` extras.
 cartesia = []
-telephony = ["fastapi>=0.110.0", "python-multipart>=0.0.29", "twilio>=9.0.0", "uvicorn>=0.29.0"]
+telephony = ["fastapi>=0.136.3", "python-multipart>=0.0.29", "twilio>=9.0.0", "uvicorn>=0.29.0"]
 aec = ["livekit>=1.0.0"]
 local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
@@ -103,7 +103,7 @@ all = [
     "aiohttp>=3.14.0",
     "deepgram-sdk>=3.0.0",
     "elevenlabs>=2.50.0",
-    "fastapi>=0.110.0",
+    "fastapi>=0.136.3",
     "openai>=1.0.0",
     "openai-agents>=0.6.2",
     "llama-index-workflows>=2.15.0,<3.0.0",
