@@ -30,7 +30,7 @@ Source: https://github.com/yisding/easycat
 - [Observability](https://github.com/yisding/easycat/blob/main/docs/observability.md) — for operators: Inspect journals, debug bundles, the debugger UI, metrics, and traces.
 - [Latency](https://github.com/yisding/easycat/blob/main/docs/latency.md) — for operators: Answer "why was that turn slow?" with per-turn CLI waterfalls and the table of latency-adding defaults.
 - [Journal durability](https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md) — for operators and maintainers: Understand SQLite journal persistence, recovery, and storage layout.
-- [Validation](https://github.com/yisding/easycat/blob/main/README.md#validation-workflow) — for contributors: Run docs/onboarding guards, the right validation lane, and inspect .easycat/validation/latest.json.
+- [Validation](https://github.com/yisding/easycat/blob/main/docs/validation.md) — for contributors: Run docs/onboarding guards, the right validation lane, and inspect .easycat/validation/latest.json.
 - [Validation reference](https://github.com/yisding/easycat/blob/main/plan/validation/reference.md) — for release maintainers: Read provider and report vocabulary used by validation.
 
 ## Optional

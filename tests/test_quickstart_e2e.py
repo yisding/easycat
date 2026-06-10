@@ -221,6 +221,7 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "Run a local mic/speaker voice bot": ("[Install](#install)", "uv run easycat doctor"),
         "No mic or API key yet": (
             "[Journal demo](examples/journal_demo.py)",
+            "uv run easycat console",
             "uv run python examples/journal_demo.py",
         ),
         "Learn the pipeline step by step": (
@@ -249,10 +250,11 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         ),
     }
 
-    for goal, (link, first_move) in expected_rows.items():
+    for goal, (link, *first_moves) in expected_rows.items():
         assert goal in section
         assert link in section
-        assert first_move in normalized
+        for first_move in first_moves:
+            assert first_move in normalized
     for route in (
         "docs/teaching/",
         "docs/teaching/11-journal/",
