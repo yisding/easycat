@@ -3,9 +3,12 @@
 For each template:
 * Scaffold into a tmpdir via the CLI.
 * Assert the generated Python files pass ``py_compile`` AND ``ruff``.
+* Assert the generated ``pyproject.toml`` *resolves* with ``uv lock``
+  (the pre-launch ``[tool.uv.sources]`` block points at this checkout).
 
-Full ``uv sync`` round-trip is intentionally skipped (requires the
-template-pinned ``easycat`` version on PyPI — see TEST_PLANS.md §17).
+A full ``uv sync`` round-trip stays out of the guard path on purpose —
+it would download numpy/onnxruntime wheels on every run.  Resolution is
+enough to prove the install path works; it is skipped offline.
 
 See ``TEST_PLANS.md`` §17.
 """
@@ -14,6 +17,8 @@ from __future__ import annotations
 
 import json
 import py_compile
+import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +31,8 @@ from easycat.cli.scaffold._schema import available_templates
 
 pytestmark = pytest.mark.integration_local
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 @pytest.fixture
 def cli() -> CliRunner:
@@ -33,7 +40,13 @@ def cli() -> CliRunner:
     return CliRunner()
 
 
-def _scaffold_project(cli: CliRunner, tmp_path: Path, template: str) -> Path:
+def _scaffold_project(
+    cli: CliRunner,
+    tmp_path: Path,
+    template: str,
+    *,
+    easycat_source: Path | None = None,
+) -> Path:
     config = json.dumps(
         {
             "schema_version": 1,
@@ -43,9 +56,20 @@ def _scaffold_project(cli: CliRunner, tmp_path: Path, template: str) -> Path:
         }
     )
     project = tmp_path / f"demo-{template}"
-    result = cli.invoke(app, ["init", str(project), "--config", config, "--no-git"])
+    args = ["init", str(project), "--config", config, "--no-git"]
+    if easycat_source is not None:
+        args += ["--easycat-source", str(easycat_source)]
+    result = cli.invoke(app, args)
     assert result.exit_code == 0, result.stderr
     return project
+
+
+def _pypi_reachable() -> bool:
+    try:
+        with socket.create_connection(("pypi.org", 443), timeout=5):
+            return True
+    except OSError:
+        return False
 
 
 def _generated_python_files(project: Path) -> list[Path]:
@@ -87,3 +111,37 @@ def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, templat
     assert proc.returncode == 0, (
         f"ruff check failed on scaffolded {template} Python files:\n{proc.stdout}\n{proc.stderr}"
     )
+
+
+@pytest.mark.parametrize("template", sorted(available_templates()))
+def test_scaffold_dependencies_resolve_with_uv_lock(
+    cli: CliRunner, tmp_path: Path, template: str
+) -> None:
+    """Resolution-only install smoke: ``uv lock`` must succeed.
+
+    Pre-launch, ``easycat`` 404s on PyPI; the scaffold therefore pins
+    this checkout via ``[tool.uv.sources]``.  Locking proves the
+    generated project's ``uv sync`` can actually resolve — without
+    dragging the full wheel download into every guard run.
+    """
+    if shutil.which("uv") is None:
+        pytest.skip("uv executable not on PATH")
+    if not _pypi_reachable():
+        pytest.skip("PyPI unreachable — offline environment")
+
+    project = _scaffold_project(cli, tmp_path, template, easycat_source=REPO_ROOT)
+
+    proc = subprocess.run(
+        ["uv", "lock", "--no-progress"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    assert proc.returncode == 0, (
+        f"uv lock failed for scaffolded {template}:\n{proc.stdout}\n{proc.stderr}"
+    )
+
+    lock_text = (project / "uv.lock").read_text(encoding="utf-8")
+    assert 'name = "easycat"' in lock_text
+    assert str(REPO_ROOT) in lock_text

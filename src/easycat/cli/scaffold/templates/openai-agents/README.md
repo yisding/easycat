@@ -13,6 +13,12 @@ uv sync
 This installs `easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR` from
 `pyproject.toml`, including the extras this generated project needs.
 
+EasyCat is not on PyPI yet. If this project was scaffolded from a local
+EasyCat checkout (the default for repo/editable installs, or via
+`--easycat-source`), `pyproject.toml` also carries a `[tool.uv.sources]`
+block so `uv sync` resolves `easycat` from that checkout. Delete the
+block and re-run `uv sync` once you depend on the published package.
+
 ## Configure
 
 ```bash

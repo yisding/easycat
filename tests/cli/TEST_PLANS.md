@@ -516,10 +516,12 @@ support module failing at import time; env var not loading from `.env`.
   actually running the agent.
 - Every top-level scaffolded Python file passes `ruff check` with the
   project's own ruff config.
-- Optional (gated on PyPI availability or a local index): full
-  `uv sync` round-trip. This is marked `integration_local` and
-  skipped when `EASYCAT_LOCAL_INDEX` isn't set — we don't publish
-  on every test run.
+- Resolution-only install smoke: `uv lock` succeeds in the scaffolded
+  project with `--easycat-source` pointed at this checkout (the
+  pre-launch `[tool.uv.sources]` wiring). Skipped when `uv` is missing
+  or PyPI is unreachable. A full `uv sync` round-trip is intentionally
+  *not* run — it would download numpy/onnxruntime wheels on every
+  guard run; resolution proves the install path without the weight.
 
-**Backed by.** `tests/cli/e2e/test_scaffold_smoke.py` (already covers
-`py_compile` + `ruff` per template; `uv sync` skipped in base CI).
+**Backed by.** `tests/cli/e2e/test_scaffold_smoke.py` (covers
+`py_compile` + `ruff` + `uv lock` resolution per template).

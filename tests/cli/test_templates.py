@@ -981,3 +981,44 @@ def test_template_sources_skip_generated_artifacts(
     monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
 
     assert _template_sources("demo") == [kept]
+
+
+# ── pre-launch local-source wiring ───────────────────────────────────
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_pyproject_carries_sources_block_placeholder(name: str) -> None:
+    """Every template pyproject must carry the `$EASYCAT_SOURCES_BLOCK` hook.
+
+    Pre-launch, `easycat` is not on PyPI; without this placeholder a
+    scaffold generated from a repo/editable install could never `uv sync`.
+    """
+    pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+    assert "$EASYCAT_SOURCES_BLOCK" in pyproject
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_pyproject_renders_uv_sources_for_local_checkout(name: str) -> None:
+    template_text = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+
+    published = _render_text(template_text, _substitutions(InitConfig(template=name), "demo"))
+    assert "$EASYCAT_SOURCES_BLOCK" not in published
+    assert "[tool.uv.sources]" not in published
+    tomllib.loads(published)
+
+    dev = _render_text(
+        template_text,
+        _substitutions(InitConfig(template=name), "demo", easycat_source=REPO_ROOT),
+    )
+    parsed = tomllib.loads(dev)
+    assert parsed["tool"]["uv"]["sources"]["easycat"] == {
+        "path": str(REPO_ROOT),
+        "editable": True,
+    }
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_template_readme_explains_local_source_block(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "[tool.uv.sources]" in readme
+    assert "not on PyPI yet" in readme

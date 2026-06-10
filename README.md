@@ -33,10 +33,17 @@ For the maintained docs map, see [`docs/README.md`](docs/README.md).
 
 Python 3.11+ is required.
 
-For an application that depends on the published package:
+EasyCat is not published to PyPI yet, so `uv add 'easycat[quickstart]'`
+will work only after launch. Until then, an application should depend on a
+local checkout — scaffolds from `easycat init` wire this automatically with
+a `[tool.uv.sources]` block; for a hand-written `pyproject.toml`, add:
 
-```bash
-uv add 'easycat[quickstart]'
+```toml
+[project]
+dependencies = ["easycat[quickstart]"]
+
+[tool.uv.sources]
+easycat = { path = "/path/to/easycat", editable = true }
 ```
 
 For this repository:
