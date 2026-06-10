@@ -71,7 +71,7 @@ cov:
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py
+    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
@@ -87,7 +87,7 @@ guard-templates:
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
-    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 
 # Guard validation workflow docs, validation reference docs, and validate CLI behavior.
 guard-validation:

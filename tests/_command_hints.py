@@ -13,7 +13,7 @@ from easycat.cli._app import (
     _register_commands,
     app,
 )
-from tests._justfile import just_recipe_commands
+from scripts._justfile import just_recipe_commands
 from tests._pytest_targets import pytest_target_problems
 
 INLINE_CODE_RE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
