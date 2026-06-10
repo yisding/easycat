@@ -8,7 +8,7 @@ from easycat.integrations.agents._pydantic_ai_events import translate_event
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import AgentTurnInput, BridgeInputError, RecorderContext
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge, _GraphEventHandler
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 
 class TextPartDelta:

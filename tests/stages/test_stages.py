@@ -9,8 +9,8 @@ import pytest
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentTurnInput
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.stages import (
     NONDETERMINISTIC_FIELDS,
     AgentStage,

@@ -5,12 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from easycat.runtime.artifacts import ArtifactStore, SnapshotArtifactStore
-from easycat.runtime.journal import (
-    ExecutionJournal,
-    InMemoryRingBuffer,
-    JournalView,
-    ReadonlySqliteJournal,
-)
+from easycat.runtime.journal import ExecutionJournal, JournalView
+from easycat.runtime.journal_memory import InMemoryRingBuffer
+from easycat.runtime.journal_views import ReadonlySqliteJournal
 from easycat.session._journal_sink import SessionJournalSink
 
 

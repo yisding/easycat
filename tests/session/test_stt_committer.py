@@ -22,7 +22,7 @@ from easycat.events import (
     VADStopSpeaking,
     WordTimestamp,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._stt_committer import STTCommitter

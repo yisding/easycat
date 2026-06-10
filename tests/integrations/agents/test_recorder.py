@@ -12,7 +12,7 @@ from easycat.integrations.agents.base import (
     RecorderInvariantError,
     UnitKind,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import ErrorInfo
 
 

@@ -13,8 +13,8 @@ from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
 from easycat.events import EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
