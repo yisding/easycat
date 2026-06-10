@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from easycat._provider_catalog import provider_names
 from easycat.validation.latency import (
     DEFAULT_RELIABILITY_BUDGETS,
     FailureCategory,
@@ -1600,10 +1601,11 @@ def _live_marker_expression(spec: ProviderSurfaceSpec) -> str:
 
 
 def _provider_marker(provider: str) -> str | None:
-    normalized = provider.removeprefix("openai-")
-    if provider.startswith("openai"):
-        normalized = "openai"
-    if normalized in {"openai", "deepgram", "elevenlabs", "cartesia"}:
+    # OpenAI variants (openai-realtime, openai-agents, ...) all share the
+    # provider_openai marker; the known-provider set comes from the
+    # STT/TTS provider catalogs instead of a hardcoded copy.
+    normalized = "openai" if provider.startswith("openai") else provider
+    if normalized in provider_names():
         return f"provider_{normalized}"
     return None
 

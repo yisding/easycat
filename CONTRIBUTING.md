@@ -276,10 +276,16 @@ EasyCat uses **registries**, not inheritance. To add a provider:
    `src/easycat/tts/`, satisfying the `STTProvider` / `TTSProvider` Protocol
    in `src/easycat/providers.py`. Reuse `STTBase` / `TTSBase` plumbing.
 2. **Add a config dataclass** for the provider's options.
-3. **Register** the `(provider class, config class)` pair:
-   - STT: `_PROVIDER_TO_CONFIG` in `src/easycat/stt/factory.py`.
-   - TTS: `_PROVIDER_TO_CONFIG` (aliased `_PROVIDERS`) in
+3. **Register** the `(provider class, config class)` pair plus catalog
+   metadata (credential env var, install extra, API domains — the
+   `ProviderCatalog` rejects incomplete entries at import):
+   - STT: `_PROVIDER_TO_CONFIG` + metadata maps in `src/easycat/stt/factory.py`.
+   - TTS: `_PROVIDER_TO_CONFIG` (aliased `_PROVIDERS`) + metadata maps in
      `src/easycat/tts/factory.py`.
+
+   `easycat doctor`, `easycat init` scaffolding, validation provider
+   markers, and redaction's sensitive-URL policy all derive from the
+   catalog, so they pick the new provider up automatically.
 4. **Declare the contract row** in
    `tests/contracts/provider_surface_matrix.py` (a `ProviderSurfaceContract`
    with adapter path, protocol, required extra, credential env var, and
