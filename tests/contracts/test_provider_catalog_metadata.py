@@ -30,7 +30,10 @@ def test_every_registered_provider_has_catalog_metadata_and_doctor_tracks_it() -
             assert all(catalog.api_domains[provider]), f"{label} has an empty API domain"
 
     # Doctor checks exactly the catalog's credential set: one check per
-    # distinct credential env var, and a probe URL for each checked provider.
-    assert doctor._PROVIDER_ENV == credential_env_vars()
-    assert set(doctor._PROVIDER_PROBE_URL) == set(doctor._PROVIDER_ENV)
-    assert sorted(doctor._PROVIDER_ENV.values()) == sorted(set(provider_env_vars().values()))
+    # distinct credential env var, and a probe URL for each checked
+    # built-in provider (discovered third-party providers carry no
+    # static probe URL and are skipped by the reachability check).
+    provider_env = doctor._provider_env()
+    assert provider_env == credential_env_vars()
+    assert set(doctor._PROVIDER_PROBE_URL) == set(provider_env)
+    assert sorted(provider_env.values()) == sorted(set(provider_env_vars().values()))

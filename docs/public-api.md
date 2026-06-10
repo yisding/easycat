@@ -162,6 +162,8 @@ custom transport.
 - `create_stt_provider`
 - `create_tts_provider`
 - `create_vad`
+- `register_stt_provider`
+- `register_tts_provider`
 
 ### Events
 

@@ -103,6 +103,8 @@ PUBLIC_API_SNAPSHOT = (
     "create_vad",
     "default_pronunciation_processors",
     "export_debug_bundle",
+    "register_stt_provider",
+    "register_tts_provider",
     "require_env",
     "run",
     "set_easycat_log_level",
@@ -119,7 +121,7 @@ TRANSPORT_EXTENSION_SURFACE = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 90
+    assert len(easycat.__all__) <= 92
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

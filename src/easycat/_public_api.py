@@ -56,8 +56,8 @@ _register("easycat.noise_reduction", "NoiseReducerConfig", "create_noise_reducer
 # Provider factory functions and explicit config types.
 _register("easycat.stt.factory", "STTProviderConfig", "create_stt_provider")
 _register("easycat.tts.factory", "TTSProviderConfig", "create_tts_provider")
-_register("easycat.stt.factory", "available_stt_providers")
-_register("easycat.tts.factory", "available_tts_providers")
+_register("easycat.stt.factory", "available_stt_providers", "register_stt_provider")
+_register("easycat.tts.factory", "available_tts_providers", "register_tts_provider")
 
 # Speech and output-processing knobs commonly used by applications.
 _register(

@@ -13,6 +13,11 @@ from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
 
+# Typing aliases for the *built-in* configs. The runtime registry is open:
+# third-party providers registered via :func:`register_tts_provider` (or the
+# ``easycat.tts_providers`` entry-point group) dispatch through the catalog,
+# so runtime checks must use :func:`is_tts_config`, never ``isinstance``
+# against this union.
 TTSConfig = OpenAITTSConfig | DeepgramTTSConfig | ElevenLabsTTSConfig | CartesiaTTSConfig
 TTSConfigType = (
     type[OpenAITTSConfig]
@@ -62,14 +67,62 @@ _PROVIDER_API_DOMAINS: dict[str, tuple[str, ...]] = {
     "cartesia": ("cartesia.ai",),
 }
 
+# Entry-point group scanned (lazily, at first factory call) for
+# third-party TTS providers. Each entry point must load to a zero-arg
+# callable that calls :func:`register_tts_provider`.
+TTS_PROVIDER_ENTRY_POINT_GROUP = "easycat.tts_providers"
+
 _CATALOG = ProviderCatalog(
     providers=_PROVIDER_TO_CONFIG,
     env_vars=_PROVIDER_ENV_VAR,
     extras=_PROVIDER_EXTRA,
     api_domains=_PROVIDER_API_DOMAINS,
     kind="TTS",
+    entry_point_group=TTS_PROVIDER_ENTRY_POINT_GROUP,
 )
 _CONFIG_TO_PROVIDER: dict[TTSConfigType, type[TTSProvider]] = _CATALOG.config_to_provider
+
+
+def register_tts_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+) -> None:
+    """Register a third-party TTS provider under a string shortcut name.
+
+    After registration the provider participates everywhere built-ins do:
+    ``tts="<name>/<model>"`` shortcuts, :func:`create_tts_provider`,
+    :func:`available_tts_providers`, ``easycat doctor`` env-var checks,
+    and ``easycat init`` scaffold validation.
+
+    ``provider_cls`` must accept its ``config_cls`` instance as the sole
+    constructor argument (the same contract built-in providers follow);
+    ``env_var`` names the environment variable holding the API key.
+    ``extra`` optionally names an install extra surfaced by ``easycat
+    init`` scaffold extras; ``api_domains`` optionally lists API host
+    domains folded into validation's URL redaction.
+
+    Packages can register automatically by exposing a zero-arg callable
+    that performs this call under the ``easycat.tts_providers``
+    entry-point group.
+    """
+    _CATALOG.register(
+        name, provider_cls, config_cls, env_var=env_var, extra=extra, api_domains=api_domains
+    )
+
+
+def is_tts_config(value: object) -> bool:
+    """True when ``value`` is an instance of a registered TTS config class."""
+    return _CATALOG.is_config_instance(value)
+
+
+def provider_env_vars() -> dict[str, str]:
+    """Return the provider-name → API-key-env-var map (discovery included)."""
+    return _CATALOG.provider_env_vars()
 
 
 @dataclass

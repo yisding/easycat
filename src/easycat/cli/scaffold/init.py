@@ -56,16 +56,31 @@ _SCAFFOLD_DEFAULTS: dict[str, str] = {
 # else is copied byte-for-byte.
 _TEMPLATED_SUFFIXES: frozenset[str] = frozenset({".py", ".toml", ".md", ".txt", ".example"})
 
-# Provider name → optional extra that ships its SDK.  Used to keep the
-# scaffolded ``pyproject.toml`` in sync with the requested providers
-# (e.g. ``stt="deepgram/flux"`` adds ``deepgram`` to the extras list).
-# Derived from the STT/TTS provider catalogs so new providers scaffold
-# correctly without touching this file.
-_PROVIDER_TO_EXTRA: dict[str, str] = provider_extras()
 
-# Provider name → env var that holds its API key.  Used to extend the
-# scaffolded ``.env.example`` so the developer sees every key they need.
-_PROVIDER_TO_ENV_VAR: dict[str, str] = provider_env_vars()
+def _provider_to_extra() -> dict[str, str]:
+    """Provider name → optional extra that ships its SDK.
+
+    Used to keep the scaffolded ``pyproject.toml`` in sync with the
+    requested providers (e.g. ``stt="deepgram/flux"`` adds ``deepgram``
+    to the extras list).  Derived from the live STT/TTS provider catalogs
+    (entry-point discovery included) so new providers scaffold correctly
+    without touching this file.
+    """
+    return provider_extras()
+
+
+def _provider_to_env_var() -> dict[str, str]:
+    """Provider name → env var that holds its API key.
+
+    Used to extend the scaffolded ``.env.example`` so the developer sees
+    every key they need.  Derived from the live STT/TTS provider catalogs
+    (entry-point discovery included), so third-party providers registered
+    via ``register_stt_provider`` / ``register_tts_provider`` or the
+    ``easycat.stt_providers`` / ``easycat.tts_providers`` entry-point
+    groups surface here too.
+    """
+    return provider_env_vars()
+
 
 # Per-template baseline extras that must always be present in the
 # generated ``pyproject.toml`` regardless of provider choices.
@@ -653,7 +668,7 @@ def _extras_for(cfg: InitConfig) -> str:
     for spec in (cfg.stt, cfg.tts):
         if not spec:
             continue
-        extra = _PROVIDER_TO_EXTRA.get(_provider_name(spec))
+        extra = _provider_to_extra().get(_provider_name(spec))
         if extra and extra not in seen:
             extras.append(extra)
             seen.add(extra)
@@ -672,7 +687,7 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     for spec in (cfg.stt, cfg.tts):
         if not spec:
             continue
-        var = _PROVIDER_TO_ENV_VAR.get(_provider_name(spec))
+        var = _provider_to_env_var().get(_provider_name(spec))
         if var and var not in seen:
             extra.append(f"{var}=")
             seen.add(var)
