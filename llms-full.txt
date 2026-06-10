@@ -391,6 +391,22 @@ easycat bundles export PATH --output DIR --json
 uv sync --extra debugger --group dev
 ```
 
+## Latency
+
+- Path: docs/latency.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/latency.md
+- Audience: operators
+- Answer "why was that turn slow?" with per-turn CLI waterfalls and the table of latency-adding defaults.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators
+easycat bundles show PATH --json
+easycat inspect PATH --json
+uv run easycat validate latency --smoke
+```
+
 ## Journal durability
 
 - Path: src/easycat/runtime/DURABILITY.md
