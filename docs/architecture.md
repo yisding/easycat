@@ -126,13 +126,21 @@ captured mic signal.
 
 `stt/`, `tts/`, `vad/`, `transports/`, `telephony/`: one provider per file,
 each implementing the corresponding Protocol. Base classes (`STTBase`,
-`TTSBase`, `_ServerTransportBase`) provide shared plumbing.
+`TTSBase`, `ServerTransportBase`) provide shared plumbing; `AudioQueueMixin`,
+`ServerTransportBase`, and `TransportDegraded` are re-exported from
+`easycat.transports` for out-of-tree transports (see
+[extending/](extending/README.md)).
 
-`stt/factory.py` and `tts/factory.py` each have a central
-`_PROVIDER_TO_CONFIG` dict mapping a provider name to its
-`(provider class, config class)` pair. `tts/factory.py` still exposes
-`_PROVIDERS` as a back-compat alias. To add a new STT/TTS provider: add an
-entry to the registry and a corresponding config dataclass.
+`stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog`
+(`_provider_catalog.py`) from a central `_PROVIDER_TO_CONFIG` dict (provider
+name → `(provider class, config class)`) plus per-provider metadata maps:
+credential env var, install extra, and API domains (key-completeness enforced
+at import). The catalog is the single source of provider metadata — doctor's
+env checks, scaffold's extras/env hints, validation's pytest provider markers,
+and redaction's sensitive-URL regex all derive from it. To add a new STT/TTS
+provider: add a registry entry + catalog metadata + a config dataclass, and
+doctor/scaffold/redaction pick it up automatically. `tts/factory.py` still
+exposes `_PROVIDERS` as a back-compat alias.
 
 ## Agent Bridges
 

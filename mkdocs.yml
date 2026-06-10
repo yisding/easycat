@@ -131,11 +131,22 @@ nav:
           - Chapter 15 — Operate in production:
               - teaching/15-operate-in-production/README.md
               - Exercises: teaching/15-operate-in-production/EXERCISES.md
+      - From EasyConfig to Session: from-easyconfig-to-session.md
+      - Testing and evals: testing-and-evals.md
   - Reference:
       - Architecture: architecture.md
       - Events: reference/events.md
       - EasyConfig fields: reference/easyconfig.md
       - Session lifecycle: reference/session-lifecycle.md
       - Public API contract: public-api.md
+      - Extending providers:
+          - extending/README.md
+          - STT: extending/stt.md
+          - TTS: extending/tts.md
+          - VAD: extending/vad.md
+          - Transport: extending/transport.md
+          - Agent bridge: extending/agent-bridge.md
+      - Latency: latency.md
+      - Validation workflow: validation.md
       - Observability: observability.md
       - Deployment — Docker: deployment/docker.md

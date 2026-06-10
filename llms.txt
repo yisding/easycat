@@ -21,10 +21,14 @@ Source: https://github.com/yisding/easycat
 - [Teaching ladder](https://github.com/yisding/easycat/tree/main/docs/teaching) — for learners: Learn voice pipelines chapter by chapter.
 - [First lesson](https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio) — for learners: Start with audio chunks before agents or providers.
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
-- [Architecture](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
+- [Architecture](https://github.com/yisding/easycat/blob/main/docs/architecture.md) — for maintainers: Understand the pipeline, session collaborators, stages, providers, and agent bridges.
+- [Maintainer guide](https://github.com/yisding/easycat/blob/main/CLAUDE.md) — for maintainers: Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
 - [Coding agents](https://github.com/yisding/easycat/blob/main/AGENTS.md) — for coding agents: Follow repo structure, development commands, docs/onboarding guards, and PR expectations.
 - [Session graduation](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md) — for app builders: Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 - [Testing and evals](https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md) — for app builders: Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
+- [Events reference](https://github.com/yisding/easycat/blob/main/docs/reference/events.md) — for app builders: Look up every public session event type and when it is emitted.
+- [EasyConfig reference](https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md) — for app builders: Look up every EasyConfig field, grouped config object, and legacy alias.
+- [Session lifecycle](https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md) — for app builders: Start, stop, force-stop, and read the journal after teardown.
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
 - [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
 - [Extending providers](https://github.com/yisding/easycat/tree/main/docs/extending) — for provider maintainers: Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.

@@ -176,6 +176,20 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 ## Architecture
 
+- Path: docs/architecture.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/architecture.md
+- Audience: maintainers
+- Understand the pipeline, session collaborators, stages, providers, and agent bridges.
+
+Commands:
+
+```bash
+uv run easycat docs --audience maintainers
+uv run easycat docs --audience maintainers --json
+```
+
+## Maintainer guide
+
 - Path: CLAUDE.md
 - URL: https://github.com/yisding/easycat/blob/main/CLAUDE.md
 - Audience: maintainers
@@ -298,6 +312,46 @@ uv run pytest tests/debug/test_testing_helpers.py
 uv run python docs/teaching/12-evals-and-latency/llm_judge.py docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
 uv run easycat validate latency --smoke
 uv run easycat validate live --provider openai
+```
+
+## Events reference
+
+- Path: docs/reference/events.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/events.md
+- Audience: app builders
+- Look up every public session event type and when it is emitted.
+
+Commands:
+
+```bash
+uv run easycat explain events
+uv run easycat docs --audience app-builders
+```
+
+## EasyConfig reference
+
+- Path: docs/reference/easyconfig.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md
+- Audience: app builders
+- Look up every EasyConfig field, grouped config object, and legacy alias.
+
+Commands:
+
+```bash
+uv run easycat docs --audience app-builders
+```
+
+## Session lifecycle
+
+- Path: docs/reference/session-lifecycle.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md
+- Audience: app builders
+- Start, stop, force-stop, and read the journal after teardown.
+
+Commands:
+
+```bash
+uv run easycat explain journal
 ```
 
 ## Public API
