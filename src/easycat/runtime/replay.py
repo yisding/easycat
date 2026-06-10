@@ -327,7 +327,9 @@ def check_provider_versions(
     for provider, installed_version in installed.items():
         bundle_version_raw = captured.get(provider)
         bundle_version = _stringify_version(bundle_version_raw)
-        installed_str = _stringify_version(installed_version)
+        # A ``None`` installed version means the provider could not report
+        # one — fold it into the explicit ``UNKNOWN`` sentinel policy.
+        installed_str = _stringify_version(installed_version) or _UNKNOWN_VERSION
         if bundle_version is None:
             # Installed provider not captured in bundle.  Determinism
             # can't be guaranteed against a version we never recorded, so

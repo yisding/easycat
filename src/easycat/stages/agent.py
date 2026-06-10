@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 from uuid import uuid4
 
@@ -164,7 +164,7 @@ class AgentStage:
         *,
         cancel_token: Any | None = None,
         system_prefix: str | None = None,
-    ) -> AsyncIterator[AgentBridgeEvent]:
+    ) -> AsyncGenerator[AgentBridgeEvent, None]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
 
         ``system_prefix`` is an optional system-role message prepended
