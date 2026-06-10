@@ -951,34 +951,13 @@ def init(
     stderr_console.print("[bold]Next steps:[/]")
     stderr_console.print(f"  cd {escape(shlex.quote(name))}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
-    stderr_console.print("  uv sync")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_COMMAND} [dim]# verify your setup[/]")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_JSON_COMMAND} [dim]# parseable setup checks[/]")
-    stderr_console.print(
-        f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
-    )
-    stderr_console.print(
-        f"  {_next_step_fix_command(cfg.template)} "
-        "[dim]# auto-fix Ruff issues if the check reports them[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_COMMAND} [dim]# find learning, maintenance, validation, "
-        "and operations routes[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_COMMAND} [dim]# app-builder routes only[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND} [dim]# parseable app-builder route map[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_JSON_COMMAND} "
-        "[dim]# route map with command hints and audience labels[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND} [dim]# JSON envelope and field contract[/]"
-    )
+    stderr_console.print(f"  uv sync && {_NEXT_STEP_DOCTOR_COMMAND}", soft_wrap=True)
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
+    stderr_console.print(
+        "[dim]The full post-scaffold command catalog stays in "
+        "`easycat init --list-templates --json` (next_step_commands).[/]",
+        soft_wrap=True,
+    )
 
 
 __all__: list[str] = ["init"]

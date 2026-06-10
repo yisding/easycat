@@ -108,8 +108,8 @@ running them. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat validate release --json`, and
   `uv run easycat validate report .easycat/validation/latest.json --json`) when
   automation needs validation output inside the standard CLI
-  envelope. Then use the validation workflow in the
-  [root README](../README.md#validation-workflow) and the
+  envelope. Then use the
+  [validation workflow](validation.md) and the
   [validation reference](../plan/validation/reference.md) for provider and
   report vocabulary. Run `just guard-validation` when editing these
   validation-facing docs or the validate CLI behavior they describe.

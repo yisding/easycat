@@ -257,12 +257,12 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run --env-file .env python examples/openai_agents_voice.py",
+            "uv run python examples/journal_demo.py",
             "uv run easycat init --list-templates",
             "uv run easycat init my-agent",
             "uv run easycat docs --audience maintainers",
             "uv run easycat docs --audience coding-agents",
             "uv run easycat validate quick",
-            "uv run pytest tests/test_install_guidance.py",
             "easycat bundles list",
             "uv sync --extra debugger --group dev",
         ),
@@ -566,7 +566,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
     {
         "label": "Validation",
-        "path": "README.md#validation-workflow",
+        "path": "docs/validation.md",
         "audience": "contributors",
         "description": (
             "Run docs/onboarding guards, the right validation lane, and inspect "

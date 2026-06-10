@@ -453,7 +453,7 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
     ).read_text(encoding="utf-8")
     package_doc = easycat.__doc__ or ""
     quickstart = readme.split("### Quickstart (EasyConfig)", 1)[1].split(
-        "### Advanced: own the lifecycle",
+        "## Install",
         1,
     )[0]
     advanced = readme.split("### Advanced: own the lifecycle", 1)[1].split(

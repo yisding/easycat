@@ -210,8 +210,8 @@ def test_documented_canonical_voice_quickstart_shape_stays_consistent() -> None:
     assert not missing, "Canonical quickstart shape drifted in: " + ", ".join(missing)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "the same one shown above" not in readme
-    assert "the same one shown below" in readme
+    assert "the same one shown below" not in readme
+    assert "the same one shown above" in readme
 
 
 def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
@@ -219,6 +219,10 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
     normalized = re.sub(r"\s+", " ", section)
     expected_rows = {
         "Run a local mic/speaker voice bot": ("[Install](#install)", "uv run easycat doctor"),
+        "No mic or API key yet": (
+            "[Journal demo](examples/journal_demo.py)",
+            "uv run python examples/journal_demo.py",
+        ),
         "Learn the pipeline step by step": (
             "[Teaching ladder](docs/teaching/)",
             "starting-point table",
@@ -251,29 +255,37 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         assert first_move in normalized
     for route in (
         "docs/teaching/",
+        "docs/teaching/11-journal/",
+        "docs/teaching/12-evals-and-latency/",
         "examples/README.md",
+        "examples/journal_demo.py",
         "CONTRIBUTING.md",
         "CLAUDE.md",
         "AGENTS.md",
         "docs/observability.md",
         "docs/deployment/docker.md",
+        "docs/validation.md",
     ):
         assert (REPO_ROOT / route.rstrip("/")).exists()
+    assert "[validation workflow](docs/validation.md)" in section
+    assert "(#validation-workflow)" not in section
     assert "uv sync --extra quickstart --group dev" in section
     assert "uv sync --extra debugger --group dev" in section
     assert "uv run easycat docs --audience coding-agents" in section
     assert "uv run easycat init my-agent" in section
 
 
-def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:
+def test_readme_quickstart_leads_and_install_block_uses_env_convention() -> None:
+    """The 3-line quickstart sits above the fold, followed by a 4-command install."""
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert readme.count("## Install") == 1
-    install_index = readme.index("## Install")
-    cli_index = readme.index("## CLI")
     quickstart_index = readme.index("### Quickstart (EasyConfig)")
+    install_index = readme.index("## Install")
+    chooser_index = readme.index("## Choose Your Path")
+    cli_index = readme.index("## CLI")
 
-    assert install_index < cli_index < quickstart_index
+    assert quickstart_index < install_index < chooser_index < cli_index
     assert "uv add 'easycat[quickstart]'" in readme
     assert "uv sync --extra quickstart --group dev" in readme
     assert "uv run easycat doctor" in readme
@@ -281,13 +293,13 @@ def test_readme_install_guidance_precedes_first_runnable_quickstart() -> None:
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in readme
 
-    repo_block = readme.split("For this repository:", 1)[1]
+    repo_block = readme.split("For this repository, four commands", 1)[1]
     repo_commands = repo_block.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
     assert repo_commands == [
         "uv sync --extra quickstart --group dev",
-        'export OPENAI_API_KEY="your-api-key"',
-        "uv run easycat doctor",
-        "uv run python examples/openai_agents_voice.py",
+        "echo 'OPENAI_API_KEY=your-api-key' > .env",
+        "uv run easycat doctor --env-file .env",
+        "uv run --env-file .env python examples/openai_agents_voice.py",
     ]
 
 
@@ -377,7 +389,9 @@ def test_readme_bring_your_own_agent_tracks_auto_adapt_surface() -> None:
     auto_detected_bridges.add("PydanticAIBridge")
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("## Bring your own agent", 1)[1].split("### Quickstart", 1)[0]
+    section = readme.split("## Bring your own agent", 1)[1].split(
+        "### Advanced: own the lifecycle", 1
+    )[0]
     normalized_section = re.sub(r"\s+", " ", section)
 
     missing_display_names = sorted(
@@ -618,7 +632,7 @@ def test_readme_cli_section_does_not_advertise_stale_top_level_commands() -> Non
     assert not stale, "README.md CLI section advertises stale commands: " + ", ".join(stale)
 
 
-def test_readme_validation_workflow_lists_registered_validate_commands() -> None:
+def test_validation_workflow_doc_lists_registered_validate_commands() -> None:
     from typer.main import get_command
 
     from easycat.cli.validate import validate_app
@@ -626,7 +640,8 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
     command_names = set(get_command(validate_app).commands)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+    assert "## Validation Workflow" not in readme
+    validation_section = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
 
     missing = sorted(
         command_name
@@ -634,7 +649,7 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
         if f"easycat validate {command_name}" not in validation_section
     )
 
-    assert not missing, "README.md validation section missing commands: " + ", ".join(missing)
+    assert not missing, "docs/validation.md missing validate commands: " + ", ".join(missing)
     assert "easycat validate latency --smoke" in validation_section
 
     advertised = set(
@@ -644,7 +659,7 @@ def test_readme_validation_workflow_lists_registered_validate_commands() -> None
         )
     )
     stale = sorted(advertised - command_names)
-    assert not stale, "README.md validation section advertises stale commands: " + ", ".join(stale)
+    assert not stale, "docs/validation.md advertises stale validate commands: " + ", ".join(stale)
 
     validation_blocks = re.findall(r"```bash\n(.*?)\n```", validation_section, flags=re.DOTALL)
     commands = [

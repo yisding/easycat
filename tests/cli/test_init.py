@@ -892,27 +892,37 @@ def test_init_next_steps_load_env_for_doctor(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     normalized_stderr = " ".join(result.stderr.split())
     assert result.exit_code == 0, result.stderr
-    assert "uv run easycat doctor --env-file .env" in result.stderr
-    assert "uv run easycat doctor --env-file .env --json" in result.stderr
-    assert "parseable setup checks" in result.stderr
-    assert "uv run ruff check agent.py" in result.stderr
-    assert "lint and syntax check" in result.stderr
-    assert "uv run ruff check --fix agent.py" in result.stderr
-    assert "auto-fix Ruff issues if the check reports them" in normalized_stderr
-    assert "uv run python -m py_compile" not in result.stderr
-    assert "uv run easycat docs" in result.stderr
-    assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
-    assert "find learning, maintenance, and operations routes" not in normalized_stderr
-    assert "uv run easycat docs --audience app-builders" in result.stderr
-    assert "app-builder routes only" in result.stderr
-    assert "uv run easycat docs --audience app-builders --json" in result.stderr
-    assert "parseable app-builder route map" in normalized_stderr
-    assert "uv run easycat docs --json" in result.stderr
-    assert "route map with command hints" in result.stderr
-    assert "audience labels" in result.stderr
-    assert "uv run easycat explain json-schema" in result.stderr
-    assert "JSON envelope and field contract" in result.stderr
+    assert "cd demo" in result.stderr
+    assert "cp .env.example .env" in result.stderr
+    assert "fill in your API keys" in normalized_stderr
+    assert "uv sync && uv run easycat doctor --env-file .env" in normalized_stderr
     assert "uvx easycat doctor" not in result.stderr
+    assert "uv run python -m py_compile" not in result.stderr
+
+
+def test_init_next_steps_human_output_is_trimmed(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The human footer stays short; the full catalog lives in the JSON envelope."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    normalized_stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 0, result.stderr
+
+    next_steps = result.stderr.split("Next steps:", 1)[1]
+    command_lines = [
+        line for line in next_steps.splitlines() if line.startswith("  ") and line.strip()
+    ]
+    assert len(command_lines) <= 5
+
+    assert "uv run easycat doctor --env-file .env --json" not in result.stderr
+    assert "uv run ruff check agent.py" not in result.stderr
+    assert "uv run ruff check --fix agent.py" not in result.stderr
+    assert "uv run easycat docs --audience app-builders" not in result.stderr
+    assert "uv run easycat explain json-schema" not in result.stderr
+    assert "easycat init --list-templates --json" in normalized_stderr
+    assert "next_step_commands" in normalized_stderr
 
 
 def test_init_next_steps_quote_project_name_for_shell(
@@ -959,20 +969,27 @@ def test_init_next_steps_match_template_readme_run_command(
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
-def test_init_next_steps_match_template_readme_check_command(
+def test_init_next_steps_omit_check_and_fix_commands(
     cli: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     template: str,
 ) -> None:
+    """Check/fix commands stay out of the trimmed footer but in the JSON catalog."""
     monkeypatch.chdir(tmp_path)
     name = f"demo-{template}"
     config = json.dumps({"schema_version": 1, "template": template})
     result = cli.invoke(app, ["init", name, "--config", config, "--no-git"])
 
     assert result.exit_code == 0, result.stderr
-    assert _template_readme_check_command(template) in " ".join(result.stderr.split())
-    assert _template_readme_fix_command(template) in " ".join(result.stderr.split())
+    assert _template_readme_check_command(template) not in " ".join(result.stderr.split())
+    assert _template_readme_fix_command(template) not in " ".join(result.stderr.split())
+    assert _template_readme_check_command(template) in init_module._next_step_commands(
+        Path(name), template
+    )
+    assert _template_readme_fix_command(template) in init_module._next_step_commands(
+        Path(name), template
+    )
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))

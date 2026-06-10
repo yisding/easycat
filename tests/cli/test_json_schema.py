@@ -384,7 +384,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["CLAUDE.md"] == "maintainers"
     assert audiences["AGENTS.md"] == "coding agents"
-    assert audiences["README.md#validation-workflow"] == "contributors"
+    assert audiences["docs/validation.md"] == "contributors"
     assert "uv run easycat init --list-templates" in commands["README.md#choose-your-path"]
     assert "uv run easycat init my-agent" in commands["README.md#choose-your-path"]
     assert "uv run easycat docs --audience maintainers" in commands["README.md#choose-your-path"]
@@ -395,7 +395,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
         in commands["README.md#choose-your-path"]
     )
     assert "uv run easycat validate quick" in commands["README.md#choose-your-path"]
-    assert "uv run pytest tests/test_install_guidance.py" in commands["README.md#choose-your-path"]
+    assert "uv run python examples/journal_demo.py" in commands["README.md#choose-your-path"]
     assert "easycat init --list-templates" in commands["README.md#cli"]
     assert "easycat doctor --json" in commands["README.md#cli"]
     assert "easycat doctor --env-file .env --json" in commands["README.md#cli"]
@@ -470,10 +470,10 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "uv run easycat validate contracts" in commands["tests/contracts/README.md"]
     assert "uv run easycat validate contracts --json" in commands["tests/contracts/README.md"]
     assert "uv run pytest tests/contracts" in commands["tests/contracts/README.md"]
-    assert "uv run easycat validate quick" in commands["README.md#validation-workflow"]
+    assert "uv run easycat validate quick" in commands["docs/validation.md"]
     assert (
         "uv run easycat validate report .easycat/validation/latest.json --json"
-        in commands["README.md#validation-workflow"]
+        in commands["docs/validation.md"]
     )
     assert (
         "easycat docs --audience release-maintainers --json"

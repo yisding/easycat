@@ -4,30 +4,41 @@ Slim, batteries-included voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow.
 
-## Choose Your Path
+### Quickstart (EasyConfig)
+A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
+canonical shape, identical in this README, `examples/openai_agents_voice.py`,
+and the scaffold that `easycat init my-agent` writes:
 
-| You want to | Start here | First move |
-|---|---|---|
-| Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor`; for `.env` keys, use `uv run easycat doctor --env-file .env` and `uv run --env-file .env python examples/openai_agents_voice.py` |
-| Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
-| Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
-| Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |
-| Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](#validation-workflow) | `uv run easycat validate quick` |
-| Maintain architecture, package boundaries, or coding-agent context | [Architecture map](CLAUDE.md) and [agent guide](AGENTS.md) | Review provider registries, session lifecycle, `uv run easycat docs --audience maintainers`, and `uv run easycat docs --audience coding-agents` |
-| Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Run `easycat bundles list`; add `uv sync --extra debugger --group dev` for the UI |
+```python
+from agents import Agent
 
-## Learn the pipeline from scratch
+from easycat import EasyConfig, run
 
-The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
-pipeline ground-up, in the spirit of *Crafting Interpreters* and
-`nanoGPT`. Each chapter is a self-contained folder with a runnable
-`main.py` and a narrative `README.md`. Start at
-[`docs/teaching/00-hello-audio/`](docs/teaching/00-hello-audio/) and add
-one stage per chapter (echo → transcribe → VAD → blocking agent →
-streaming agent → tools → smart-turn → interruption → noise/AEC →
-journal → evals → swap providers → BYO agent → operate in production).
+run(
+    EasyConfig.mic(
+        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
+    )
+)
+```
 
-For the maintained docs map, see [`docs/README.md`](docs/README.md).
+By default, `run(...)` shows live console feedback only on an interactive
+stderr. Use `run(config, feedback="off")` to keep a process quiet, or
+`feedback="on"` to force the same first-run transcript/status output when
+stderr is redirected.
+
+> Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
+> (gpt-realtime-whisper) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
+> environment) when you do not override `stt` or `tts`. The Realtime STT
+> streams transcription over a WebSocket as audio arrives — sub-second
+> stop-to-final latency, not a batch upload at end of turn. The Realtime
+> API is priced separately from `/v1/audio/transcriptions`; see OpenAI's
+> pricing page. If you omit the API key, you must supply `stt` and `tts`
+> configs explicitly.
+>
+> The underlying bridge classes live in `easycat.integrations.agents`
+> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
+> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`, `LangChainBridge`,
+> `LangGraphBridge`) for callers who want to construct them by hand.
 
 ## Install
 
@@ -46,22 +57,47 @@ dependencies = ["easycat[quickstart]"]
 easycat = { path = "/path/to/easycat", editable = true }
 ```
 
-For this repository:
+For this repository, four commands go from clone to a talking bot. Keys live
+in a project `.env` — the same convention `easycat init` scaffolds:
 
 ```bash
 uv sync --extra quickstart --group dev
-export OPENAI_API_KEY="your-api-key"
-uv run easycat doctor
-uv run python examples/openai_agents_voice.py
-```
-
-If you keep provider keys in a project `.env` instead of exporting them in the
-shell, load that file explicitly:
-
-```bash
+echo 'OPENAI_API_KEY=your-api-key' > .env
 uv run easycat doctor --env-file .env
 uv run --env-file .env python examples/openai_agents_voice.py
 ```
+
+Prefer exported shell variables? `uv run easycat doctor` and
+`uv run python examples/openai_agents_voice.py` work the same once
+`OPENAI_API_KEY` is exported.
+
+## Choose Your Path
+
+| You want to | Start here | First move |
+|---|---|---|
+| Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor`; for `.env` keys, use `uv run easycat doctor --env-file .env` and `uv run --env-file .env python examples/openai_agents_voice.py` |
+| No mic or API key yet | [Journal demo](examples/journal_demo.py) | `uv run python examples/journal_demo.py`, then teaching ch. [11 journal](docs/teaching/11-journal/) and [12 evals & latency](docs/teaching/12-evals-and-latency/) |
+| Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
+| Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
+| Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |
+| Contribute or validate a change | [Contributing](CONTRIBUTING.md) and [validation workflow](docs/validation.md) | `uv run easycat validate quick` |
+| Maintain architecture, package boundaries, or coding-agent context | [Architecture map](CLAUDE.md) and [agent guide](AGENTS.md) | Review provider registries, session lifecycle, `uv run easycat docs --audience maintainers`, and `uv run easycat docs --audience coding-agents` |
+| Operate or debug sessions | [Observability](docs/observability.md) and [Docker deployment](docs/deployment/docker.md) | Run `easycat bundles list`; add `uv sync --extra debugger --group dev` for the UI |
+
+## Learn the pipeline from scratch
+
+The 16-chapter [teaching ladder](docs/teaching/) walks the entire voice
+pipeline ground-up, in the spirit of *Crafting Interpreters* and
+`nanoGPT`. Each chapter is a self-contained folder with a runnable
+`main.py` and a narrative `README.md`. Start at
+[`docs/teaching/00-hello-audio/`](docs/teaching/00-hello-audio/) and add
+one stage per chapter (echo → transcribe → VAD → blocking agent →
+streaming agent → tools → smart-turn → interruption → noise/AEC →
+journal → evals → swap providers → BYO agent → operate in production).
+
+For the maintained docs map, see [`docs/README.md`](docs/README.md).
+
+## Optional extras
 
 The `quickstart` extra bundles local audio, OpenAI providers, OpenAI Agents
 SDK, RNNoise dependencies, numpy, and onnxruntime. It does not include TEN VAD;
@@ -154,7 +190,7 @@ scaffolds with best-fit guidance, the base `easycat[...]` package requirement
 and extras, required environment variables, optional environment knobs,
 generated files, transport, framework, and copyable
 create/preflight/check/fix/docs/json-schema/run commands.
-`easycat init my-agent` scaffolds the same one shown below: the canonical
+`easycat init my-agent` scaffolds the same one shown above: the canonical
 `run(EasyConfig.mic(agent=...))` shape.
 Then `easycat doctor` validates your environment before the first run. If your
 provider keys live in a project `.env`, use `easycat doctor --env-file .env`;
@@ -183,111 +219,6 @@ as `entries`, `commands`, `catalog`, `audience`, `audience_filter`,
 `output_path`. Replace uppercase or angle-bracket placeholders in command
 hints, such as `PATH` or `<session_id>`, before running them.
 
-## Validation Workflow
-
-For normal PR work, run the public quick validation lane:
-
-```bash
-uv run easycat validate quick
-```
-
-For docs and onboarding-only edits, run the narrower guard that owns the
-surface first, then run quick validation before a PR:
-
-```bash
-just guard-docs          # root README e2e, install guidance, docs map, public API docs, CLI JSON envelopes
-just guard-teaching      # teaching ladder, generated blocks, learner routes
-just guard-examples      # examples README, support files, script smoke, docs route
-just guard-templates     # scaffold templates, init flows, generated project smoke, secret/artifact hygiene
-just guard-contributing  # contributor guidance, agent guide contracts, validation state
-just guard-validation    # validation workflow, reference docs, validate CLI behavior
-just guard-contracts     # provider contracts, cassettes, matrix, bridge grammar
-just guard-ops           # operator deployment, observability, journal CLI, durability
-just guard-markdown      # maintained Markdown links, anchors, docs-route targets
-```
-
-If `just` is not installed, use the raw command table in
-[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop) for the equivalent
-`uv run pytest ...` command behind each guard, or run the matching command
-directly:
-
-```bash
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/cli/test_app.py tests/cli/test_json_schema.py
-uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
-uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
-uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
-uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
-uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
-uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
-uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
-uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
-```
-
-The quick validation lane runs deterministic local tests only: no live
-credentials, no localhost socket lane, no slow tests, and no flaky quarantine.
-Each run writes an isolated report under
-`.easycat/validation/runs/<run_id>/report.json`, plus JUnit and stdout/stderr
-logs, and updates `.easycat/validation/latest.json` after the report is
-complete. `.easycat/validation/` is ignored by git; remove old run directories
-when you no longer need the artifacts.
-
-Use the socket lane when touching WebSocket, transport, or localhost
-integration behavior:
-
-```bash
-uv run easycat validate socket
-```
-
-Other validation lanes use the same repo-local `uv run easycat validate`
-command:
-
-```bash
-uv run easycat validate quick      # deterministic local validation
-uv run easycat validate socket     # localhost socket / transport integration validation
-uv run easycat validate stress     # local stress validation and saturation-signal capture
-uv run easycat validate contracts  # offline provider/protocol/bridge contracts
-uv run easycat validate latency --smoke # low-cost live latency validation
-uv run easycat validate live       # live provider canaries (filter with --provider / --surface)
-uv run easycat validate release    # build, install, and run release validation
-uv run easycat validate report .easycat/validation/latest.json # render latest report summary
-uv run easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
-```
-
-`easycat validate release` builds the sdist and wheel, checks package metadata,
-installs the wheel into a clean temporary venv, clears `PYTHONPATH`, verifies
-the installed package outside the source tree, smokes `easycat --help`,
-`easycat init`, `python -m easycat`, and documented top-level API imports, then
-runs quick, stress, contracts, live, and latency release gates through that
-installed environment. Use `--python`, `--extra`, `--provider`, and `--surface`
-to match the release target.
-
-`scripts/validate.py` remains as a compatibility shim for pytest-backed slice
-runs, but new docs and local workflows should use
-`uv run easycat validate`.
-
-`--json` emits the standard machine-readable stdout envelope for validation
-lanes such as `quick`, `contracts`, and `release`; `--report PATH` writes a
-persisted validation report JSON, and `--junit PATH` writes JUnit XML
-(available on the `quick`, `socket`, `stress`, and `contracts` lanes). Common
-automation entry points are `uv run easycat validate quick --json`,
-`uv run easycat validate contracts --json`,
-`uv run easycat validate release --json`, and
-`uv run easycat validate report .easycat/validation/latest.json --json`, which
-re-emits the latest saved validation report inside the same envelope for
-coding-agent consumers. For the lower-level marker/direct entry points, see
-[`plan/validation/README.md`](plan/validation/README.md).
-
-Flaky quarantine is explicit debt. Use
-`@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`; missing
-metadata, stale `review_by` dates, or release-scoped flaky tests fail
-collection. Quick and socket validation exclude flaky tests.
-
-Provider validation scope is tracked with provider and surface markers such as
-`provider_openai` and `surface_stt`. See
-[`plan/validation/reference.md`](plan/validation/reference.md) for the
-provider-surface matrix vocabulary covering extras, credential env vars,
-contract status, cassette status, and live canaries.
-
 ## Current capabilities
 - Session runtime that wires the audio pipeline (`AudioProcessingConfig` controls optional noise reduction, echo cancellation, VAD, and smart-turn tuning) -> STT -> agent -> TTS
 - Typed event system with an EventBus for streaming-first voice events and
@@ -312,43 +243,8 @@ yourself.
 
 The top-level import surface is intentionally curated and lazy. See the
 [public API contract](docs/public-api.md) before adding or depending on new
-`from easycat import ...` names.
-
-### Quickstart (EasyConfig)
-A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
-canonical shape, identical in this README, `examples/openai_agents_voice.py`,
-and the scaffold that `easycat init my-agent` writes:
-
-```python
-from agents import Agent
-
-from easycat import EasyConfig, run
-
-run(
-    EasyConfig.mic(
-        agent=Agent(name="assistant", instructions="You are a helpful voice assistant.")
-    )
-)
-```
-
-By default, `run(...)` shows live console feedback only on an interactive
-stderr. Use `run(config, feedback="off")` to keep a process quiet, or
-`feedback="on"` to force the same first-run transcript/status output when
-stderr is redirected.
-
-> Note: `EasyConfig` will automatically wire **OpenAI Realtime STT
-> (gpt-realtime-whisper) + OpenAI TTS** from `OPENAI_API_KEY` (picked up from the
-> environment) when you do not override `stt` or `tts`. The Realtime STT
-> streams transcription over a WebSocket as audio arrives — sub-second
-> stop-to-final latency, not a batch upload at end of turn. The Realtime
-> API is priced separately from `/v1/audio/transcriptions`; see OpenAI's
-> pricing page. If you omit the API key, you must supply `stt` and `tts`
-> configs explicitly.
->
-> The underlying bridge classes live in `easycat.integrations.agents`
-> (`OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`,
-> `LlamaAgentsBridge`, `RemoteResponsesAPIBridge`, `LangChainBridge`,
-> `LangGraphBridge`) for callers who want to construct them by hand.
+`from easycat import ...` names. The canonical entry point is the
+[quickstart](#quickstart-easyconfig) at the top of this README.
 
 ### Advanced: own the lifecycle
 `run()` hides the asyncio/signal/teardown ceremony. When you need the

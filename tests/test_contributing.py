@@ -247,7 +247,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "validation lanes, docs-route hints, and plan current-state evidence"
         ),
         (
-            "README validation workflow, validation reference route hints, "
+            "The `docs/validation.md` workflow, validation reference route hints, "
             "validation plan current state, validate CLI reports, JSON envelopes, "
             "latency options, and error handling"
         ),
