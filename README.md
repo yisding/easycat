@@ -247,35 +247,7 @@ The top-level import surface is intentionally curated and lazy. See the
 [quickstart](#quickstart-easyconfig) at the top of this README.
 
 ### Advanced: own the lifecycle
-`run()` hides the asyncio/signal/teardown ceremony. When you need the
-session object before startup — for event subscriptions, a debugger UI,
-or app-specific hooks — create it first with `create_session(...)` and hand it
-to `run_session(...)`:
-
-```python
-from agents import Agent
-
-from easycat import EasyConfig, STTFinal, create_session
-from easycat.helpers import run_session
-
-agent = Agent(name="Support", instructions="Help customers with account issues.")
-
-
-def main() -> None:
-    session = create_session(EasyConfig.mic(agent=agent))
-    subscription = session.subscribe_event(STTFinal, lambda e: print("You said:", e.text))
-    try:
-        run_session(session)
-    finally:
-        subscription.unsubscribe()
-
-
-main()
-```
-
-If you already own an event loop, use the same public teardown idiom directly:
-`async with session:` starts the session on entry and calls
-`stop(force=True)` on exit.
+When you need the session object itself — event subscriptions, text turns, debug bundles, or your own event loop — follow the graduation guide [from EasyConfig to Session](docs/from-easyconfig-to-session.md).
 
 ## Telephony (inbound + outbound)
 

@@ -71,6 +71,10 @@ If Ruff reports an auto-fixable issue, run
   `EasyConfig.mic(...)`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+- **Graduate to the Session API:** when you need event subscriptions, text
+  turns, or replayable debug bundles beyond `run(...)`, follow the
+  from-EasyConfig-to-Session guide:
+  <https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md>.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to

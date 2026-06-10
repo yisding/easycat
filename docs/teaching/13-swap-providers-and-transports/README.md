@@ -5,6 +5,12 @@
 > WebRTC / Twilio). With eval numbers from chapter 12 in hand,
 > every swap is a measured decision.
 
+This is the first chapter on the production wiring
+(`create_session()` + `EasyConfig`). For the app-builder version of
+the same graduation — lifecycle, event subscriptions, text turns, and
+debug bundles — see the
+[from-EasyConfig-to-Session guide](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md).
+
 ## Prerequisites
 
 - [Chapters 0-12.](../)

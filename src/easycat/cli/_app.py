@@ -442,6 +442,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Session graduation",
+        "path": "docs/from-easyconfig-to-session.md",
+        "audience": "app builders",
+        "description": (
+            "Graduate from the EasyConfig quickstart to the production Session "
+            "API: lifecycle, events, text turns, session actions, and replayable "
+            "debug bundles."
+        ),
+        "commands": (
+            "uv run easycat docs --audience app-builders",
+            "uv run easycat docs --audience app-builders --json",
+            "uv run easycat replay PATH",
+            "uv run easycat replay PATH --json",
+            "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
+        ),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",
