@@ -26,6 +26,7 @@ Source: https://github.com/yisding/easycat
 - [Session graduation](https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md) — for app builders: Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
 - [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
+- [Extending providers](https://github.com/yisding/easycat/tree/main/docs/extending) — for provider maintainers: Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.
 - [Contributing](https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md) — for contributors: Follow the development loop, docs/onboarding guards, and validation slices.
 - [Deployment](https://github.com/yisding/easycat/blob/main/docs/deployment/docker.md) — for operators: Package the WebSocket example for container deployment.
 - [Observability](https://github.com/yisding/easycat/blob/main/docs/observability.md) — for operators: Inspect journals, debug bundles, the debugger UI, metrics, and traces.

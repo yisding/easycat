@@ -322,6 +322,24 @@ uv run pytest tests/contracts
 uv run pytest tests/integration/test_provider_contract_matrix.py
 ```
 
+## Extending providers
+
+- Path: docs/extending/
+- URL: https://github.com/yisding/easycat/tree/main/docs/extending
+- Audience: provider maintainers
+- Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.
+
+Commands:
+
+```bash
+uv run easycat docs --audience provider-maintainers
+uv run easycat docs --audience provider-maintainers --json
+uv run easycat init my-provider --template provider
+uv run python examples/custom_transport.py
+uv run pytest tests/test_public_api.py
+uv run pytest tests/contracts
+```
+
 ## Contributing
 
 - Path: CONTRIBUTING.md
