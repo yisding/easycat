@@ -354,6 +354,24 @@ Commands:
 uv run easycat explain journal
 ```
 
+## Browser playground
+
+- Path: docs/browser-playground.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/browser-playground.md
+- Audience: app builders
+- Talk to a bot in the browser with one command, and read the WebSocket/WebRTC wire protocol behind the playground page.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --extra webrtc --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat serve
+uv run python examples/webrtc_server.py
+uv run pytest tests/transports/test_webrtc.py
+```
+
 ## Public API
 
 - Path: docs/public-api.md

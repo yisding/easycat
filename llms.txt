@@ -29,6 +29,7 @@ Source: https://github.com/yisding/easycat
 - [Events reference](https://github.com/yisding/easycat/blob/main/docs/reference/events.md) — for app builders: Look up every public session event type and when it is emitted.
 - [EasyConfig reference](https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md) — for app builders: Look up every EasyConfig field, grouped config object, and legacy alias.
 - [Session lifecycle](https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md) — for app builders: Start, stop, force-stop, and read the journal after teardown.
+- [Browser playground](https://github.com/yisding/easycat/blob/main/docs/browser-playground.md) — for app builders: Talk to a bot in the browser with one command, and read the WebSocket/WebRTC wire protocol behind the playground page.
 - [Public API](https://github.com/yisding/easycat/blob/main/docs/public-api.md) — for maintainers: Review the stable import surface before changing exports.
 - [Provider contracts](https://github.com/yisding/easycat/blob/main/tests/contracts/README.md) — for provider maintainers: Maintain offline provider, protocol, cassette, and bridge contract coverage.
 - [Extending providers](https://github.com/yisding/easycat/tree/main/docs/extending) — for provider maintainers: Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.

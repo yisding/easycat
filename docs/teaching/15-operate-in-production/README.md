@@ -426,6 +426,7 @@ EasyCat — voice bot framework
     console     Try EasyCat in your terminal with no API keys
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
+    serve       Serve the browser voice playground on localhost
     explain     Look up errors and CLI schema topics
 
   Debug with the journal
@@ -470,6 +471,13 @@ Run easycat explain json-schema for CLI JSON.
   (`uv run easycat doctor --json`,
   `uv run easycat doctor --env-file .env --json`) for parseable first-run
   environment checks.
+- **`uv run easycat serve`** — serves the browser voice playground on
+  localhost (`src/easycat/cli/serve.py`): one command that wires
+  `EasyConfig.browser()` to the bundled WebRTC client and prints an
+  `Open http://localhost:8080` URL, with live transcript, interruption
+  indicator, and per-turn latency readout in the page. Needs an OpenAI
+  key; a non-loopback `--host` requires `--token` (or
+  `EASYCAT_SERVE_TOKEN`).
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, architecture and maintenance guides, deployment, observability,
