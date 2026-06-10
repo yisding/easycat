@@ -35,6 +35,7 @@ def _project_root() -> Path:
 
 _EXPECTED_TEMPLATES: tuple[str, ...] = (
     "openai-agents",
+    "provider",
     "pydantic-ai",
     "pydantic-ai-workflow",
     "text-chat",
