@@ -2,6 +2,12 @@
 
 Supports user-defined orchestration code that does not use
 ``pydantic_ai.Agent`` or ``pydantic_graph.Graph``.
+
+Built on :class:`~easycat.integrations.agents.template.BridgeTemplate`,
+which owns the ``invoke()`` cursor lifecycle, the four-step atomic
+interruption journal protocol, and the safe no-op mutation defaults —
+this module only implements event streaming, interruption planning,
+and state snapshots.
 """
 
 from __future__ import annotations
@@ -9,10 +15,8 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents.base import (
@@ -21,20 +25,17 @@ from easycat.integrations.agents.base import (
     AgentTurnInput,
     BridgeInputError,
     CancellationMode,
-    CommitRule,
-    ExecutionCursor,
     FrameworkStateSnapshot,
     InterruptionPlan,
     ShallowModeInterruptionError,
-    UnitKind,
-    run_interruption_journal_protocol,
 )
+from easycat.integrations.agents.template import BridgeTemplate
 from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
 
-class GenericWorkflowBridge:
+class GenericWorkflowBridge(BridgeTemplate):
     """Bridge for user-defined orchestration code.
 
     Two modes:
@@ -67,9 +68,7 @@ class GenericWorkflowBridge:
     write ordering used by deep mode.
     """
 
-    COMMITTABLE_BOUNDARIES = {
-        UnitKind.WORKFLOW_NODE: CommitRule.BETWEEN_TURNS,
-    }
+    TURN_UNIT_ID_PREFIX = "workflow"
 
     def __init__(
         self,
@@ -77,8 +76,8 @@ class GenericWorkflowBridge:
         *,
         display_name: str | None = None,
     ) -> None:
+        super().__init__(display_name=display_name or type(workflow).__name__)
         self._workflow = workflow
-        self._display_name = display_name or type(workflow).__name__
 
         fn = getattr(workflow, "on_user_turn", None)
         if not callable(fn):
@@ -90,30 +89,15 @@ class GenericWorkflowBridge:
         sig = inspect.signature(fn)
         self._deep_mode = "recorder" in sig.parameters
         self._accepts_cancel_token = "cancel_token" in sig.parameters
-        self._last_output: Any = None
         self._mcp_warning_emitted = False
 
     @property
     def deep_mode(self) -> bool:
         return self._deep_mode
 
-    # ── ExternalAgentBridge interface ─────────────────────────────
+    # ── BridgeTemplate hooks ──────────────────────────────────────
 
-    async def invoke(
-        self,
-        turn_input: AgentTurnInput,
-        recorder: AgentRecorder,
-        cancel_token: CancelToken | None = None,
-    ) -> AsyncIterator[AgentBridgeEvent]:
-        cursor = ExecutionCursor(
-            unit_id=f"workflow-{uuid4().hex[:8]}",
-            unit_kind=UnitKind.WORKFLOW_NODE,
-            display_name=self._display_name,
-            entered_at=time.monotonic_ns(),
-            committable=False,
-        )
-        recorder.record_unit_entered(cursor)
-
+    def on_turn_start(self, turn_input: AgentTurnInput, recorder: AgentRecorder) -> None:
         # Emit one-time warning if MCP servers configured on shallow workflow.
         if not self._mcp_warning_emitted and not self._deep_mode and recorder.context.mcp_servers:
             self._mcp_warning_emitted = True
@@ -129,43 +113,15 @@ class GenericWorkflowBridge:
                 )
             )
 
-        self._last_output = None
-        accumulated = ""
-        try:
-            if self._deep_mode:
-                async for ev in self._invoke_deep(turn_input, recorder, cancel_token):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    yield ev
-            else:
-                async for ev in self._invoke_shallow(turn_input, cancel_token):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    yield ev
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(cursor, reason="error")
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # block above is skipped and the still-open workflow cursor
-            # would be left without a ``unit_exited`` record, breaking the
-            # recorder's strict stack invariant for the postmortem journal.
-            # Close it defensively (so a recorder error can't mask the
-            # cancellation) before re-raising; no ``record_framework_error``
-            # since a cancelled turn isn't a framework fault.
-            recorder.safe_exit_cursor(cursor)
-            raise
-
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
-        yield AgentBridgeEvent(
-            kind="done",
-            text=accumulated,
-            structured_output=self._last_output,
-        )
+    def stream_events(
+        self,
+        turn_input: AgentTurnInput,
+        recorder: AgentRecorder,
+        cancel_token: CancelToken | None,
+    ) -> AsyncIterator[AgentBridgeEvent]:
+        if self._deep_mode:
+            return self._invoke_deep(turn_input, recorder, cancel_token)
+        return self._invoke_shallow(turn_input, cancel_token)
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         fields: dict[str, Any] = {
@@ -184,13 +140,7 @@ class GenericWorkflowBridge:
             kind="generic_workflow",
         )
 
-    def apply_interruption(
-        self,
-        delivered_text: str,
-        mode: CancellationMode,
-        recorder: AgentRecorder | None = None,
-        caused_by_signal_id: str | None = None,
-    ) -> None:
+    def check_interruption_supported(self) -> None:
         # Shallow mode without explicit override → raise immediately.
         if not self._deep_mode and not hasattr(self._workflow, "apply_interruption"):
             raise ShallowModeInterruptionError(
@@ -200,17 +150,6 @@ class GenericWorkflowBridge:
                 "or implement `workflow.apply_interruption(delivered_text, "
                 "mode)` on the workflow object itself."
             )
-
-        # Step 1: plan the mutation.
-        plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
-            plan,
-            mode,
-            recorder,
-            caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
-        )
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize workflow state for artifact storage.
@@ -276,7 +215,7 @@ class GenericWorkflowBridge:
             self._workflow.reset()
         elif hasattr(self._workflow, "clear_history"):
             self._workflow.clear_history()
-        self._last_output = None
+        super().reset()
 
     # ── History post-processing ──────────────────────────────────
 

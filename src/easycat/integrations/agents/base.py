@@ -466,29 +466,11 @@ class ExternalAgentBridge(Protocol):
         ...
 
     # NOTE: ``configure_runtime`` is an *optional* extension surface, not a
-    # required member of this protocol.  It is intentionally **not** declared
-    # in the protocol body because ``ExternalAgentBridge`` is
-    # ``@runtime_checkable`` — adding it here would make ``isinstance(obj,
-    # ExternalAgentBridge)`` return ``False`` for every bridge / ``AgentRunner``
-    # that legitimately no-ops it.  The session factory probes for it with
-    # ``getattr(bridge, "configure_runtime", None)`` (see
-    # ``easycat.config._inject_agent_runtime``) and falls back to the
-    # historical private-attribute path when absent.  Bridges that consume
-    # session-level ``mcp_servers`` / ``model`` / ``api_key`` settings
-    # implement the following signature::
-    #
-    #     def configure_runtime(
-    #         self,
-    #         *,
-    #         mcp_servers: list[str] | None = None,
-    #         model: str | None = None,
-    #         api_key: str | None = None,
-    #     ) -> None: ...
-    #
-    # ``mcp_servers`` is a list of EasyCat MCP URI strings; ``None`` means
-    # "leave unchanged".  Passing an empty list explicitly clears any
-    # previously-configured servers so a bridge reused across sessions does
-    # not leak the prior list.
+    # protocol member — declaring it here would break ``isinstance`` checks
+    # because ``ExternalAgentBridge`` is ``@runtime_checkable`` and most
+    # bridges legitimately omit it.  The full contract lives in prose docs:
+    # see "The configure_runtime contract" in
+    # ``docs/teaching/14-bring-your-own-agent/README.md``.
 
 
 # ── Errors ───────────────────────────────────────────────────────
