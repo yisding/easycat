@@ -47,6 +47,11 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat init --list-templates --json` when a script or coding agent
   needs the same template catalog and post-scaffold command previews, then use
   the CLI commands documented in the [root README](../README.md#cli).
+- Graduating from the quickstart to the production `Session` API: follow
+  [from EasyConfig to Session](from-easyconfig-to-session.md) for
+  `create_session`, the `async with session:` lifecycle, event
+  subscriptions, `send_text` and session actions, and `debug="full"`
+  bundles you can inspect with `uv run easycat replay PATH`.
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,
