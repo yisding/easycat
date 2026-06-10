@@ -72,7 +72,8 @@ _INIT_SCHEMA_BODY = """\
       "agent_name": "string",                 // optional
       "agent_instructions": "string",         // optional
       "tools": ["tool-name", ...],            // reserved; currently rejected
-      "mcp_servers": ["stdio://...", ...]     // optional MCP URIs
+      "mcp_servers": ["stdio://...", ...],    // optional MCP URIs
+      "easycat_source": "path/to/easycat"     // optional local checkout path
     }
 
 Required keys: `schema_version`, `template`.  Unknown keys are
@@ -83,6 +84,12 @@ templates, local microphone, browser WebRTC, and Twilio phone transports
 through separate templates, and MCP server URIs starting with
 `stdio://`, `sse://`, `http://`, or `https://`. Plain MCP names such as
 `"filesystem"` are rejected.
+`easycat_source` points the generated `pyproject.toml` at a local
+EasyCat checkout via a `[tool.uv.sources]` block (the `--easycat-source`
+flag overrides it). When omitted, editable/repo installs are
+auto-detected and wired the same way; published installs render no
+block. Pre-launch this is what makes a scaffold's `uv sync` resolve at
+all — `easycat` is not on PyPI yet.
 Reserved keys `llm` and `tools` are accepted by schema_version 1 so
 callers get a stable EASYCAT_E102 explanation; this release does not
 wire them into templates yet. Add LLM or tool setup directly in the
