@@ -671,6 +671,29 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
     assert "easycat validate contracts" not in route_commands
 
 
+def test_extending_docs_route_matches_provider_author_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    extending_readme = (REPO_ROOT / "docs" / "extending" / "README.md").read_text(encoding="utf-8")
+    route = entries["docs/extending/"]
+    route_commands = route.get("commands", ())
+
+    assert route["audience"] == "provider maintainers"
+    for command in (
+        "uv run easycat docs --audience provider-maintainers",
+        "uv run easycat docs --audience provider-maintainers --json",
+        "uv run easycat init my-provider --template provider",
+        "uv run python examples/custom_transport.py",
+        "uv run pytest tests/test_public_api.py",
+        "uv run pytest tests/contracts",
+    ):
+        assert command in extending_readme
+        assert command in route_commands
+
+    for page in ("stt.md", "tts.md", "vad.md", "transport.md", "agent-bridge.md"):
+        assert (REPO_ROOT / "docs" / "extending" / page).is_file()
+        assert f"({page})" in extending_readme
+
+
 def test_deployment_docs_route_matches_docker_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     deployment = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")

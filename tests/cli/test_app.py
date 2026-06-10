@@ -654,8 +654,11 @@ def test_docs_command_accepts_underscored_json_audience_filter(cli: CliRunner) -
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["audience_filter"] == "provider_maintainers"
-    assert [entry["label"] for entry in payload["entries"]] == ["Provider contracts"]
-    assert payload["entries"][0]["audience"] == "provider maintainers"
+    assert [entry["label"] for entry in payload["entries"]] == [
+        "Provider contracts",
+        "Extending providers",
+    ]
+    assert all(entry["audience"] == "provider maintainers" for entry in payload["entries"])
 
 
 def test_docs_command_accepts_release_maintainers_json_filter(cli: CliRunner) -> None:
