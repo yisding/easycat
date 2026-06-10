@@ -11,6 +11,13 @@ schema drift fingerprints, and bridge event grammar. A provider surface must
 have a row in [`provider_surface_matrix.py`](provider_surface_matrix.py) or an
 explicit exclusion with a reason before it can be considered covered.
 
+The protocol-semantics assertions themselves ship in the installable contract
+kit (`src/easycat/testing/`): each per-surface contract file here subclasses
+the corresponding `easycat.testing` suite with its offline fake as
+`provider_factory`, so the kit external provider authors run and the in-tree
+contract tests cannot drift. The kit's own machinery tests live in
+`tests/testing/` and run in the same `just guard-contracts` lane.
+
 When adding or changing provider behavior:
 
 1. Update the relevant row in

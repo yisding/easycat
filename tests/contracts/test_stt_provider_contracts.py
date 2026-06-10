@@ -7,7 +7,7 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.events import STTEvent, STTEventType
-from easycat.providers import STTProvider
+from easycat.testing import STTProviderContractSuite
 from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
 
 pytestmark = [pytest.mark.contract, pytest.mark.surface_stt, pytest.mark.provider("matrix")]
@@ -58,30 +58,31 @@ def test_stt_provider_contract_matrix_has_rows() -> None:
     )
 
 
-async def test_stt_contract_lifecycle_and_normalized_events() -> None:
-    provider = _ContractSTT()
-    chunk = AudioChunk(data=b"\0" * 320, format=PCM16_MONO_16K)
+class TestSTTContractSuite(STTProviderContractSuite):
+    """Run the shipped provider-author kit suite against the offline fake.
 
-    assert isinstance(provider, STTProvider)
-    await provider.start_stream()
-    await provider.send_audio(chunk)
-    assert await provider.commit_segment() is True
-    await provider.end_stream()
-    events = [event async for event in provider.events()]
+    The protocol-semantics assertions live in
+    :class:`easycat.testing.STTProviderContractSuite` so this file and the
+    installable kit cannot drift; only fake-specific bookkeeping checks are
+    added below.
+    """
 
-    assert provider.started == 1
-    assert provider.ended == 1
-    assert provider.committed == 1
-    assert provider.sent == [chunk]
-    assert [event.type for event in events] == [STTEventType.PARTIAL, STTEventType.FINAL]
-    assert events[-1].text == "hello"
+    provider_factory = _ContractSTT
 
+    async def test_fake_observes_lifecycle_calls_and_payloads(
+        self, provider: _ContractSTT
+    ) -> None:
+        chunk = AudioChunk(data=b"\0" * 320, format=PCM16_MONO_16K)
 
-async def test_stt_contract_stop_semantics_are_idempotent() -> None:
-    provider = _ContractSTT()
+        await provider.start_stream()
+        await provider.send_audio(chunk)
+        assert await provider.commit_segment() is True
+        await provider.end_stream()
+        events = [event async for event in provider.events()]
 
-    await provider.start_stream()
-    await provider.end_stream()
-    await provider.end_stream()
-
-    assert provider.ended == 2
+        assert provider.started == 1
+        assert provider.ended == 1
+        assert provider.committed == 1
+        assert provider.sent == [chunk]
+        assert [event.type for event in events] == [STTEventType.PARTIAL, STTEventType.FINAL]
+        assert events[-1].text == "hello"

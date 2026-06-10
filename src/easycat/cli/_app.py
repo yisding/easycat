@@ -183,6 +183,7 @@ _DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
         "tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands "
         "tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map "
         "tests/contracts "
+        "tests/testing "
         "tests/integration/test_provider_contract_matrix.py"
     ),
     (

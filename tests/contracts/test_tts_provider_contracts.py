@@ -6,7 +6,7 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.events import TTSEvent, TTSEventType
-from easycat.providers import TTSProvider
+from easycat.testing import TTSProviderContractSuite
 from easycat.tts.input import TTSInput, coerce_tts_input
 from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
 
@@ -48,26 +48,33 @@ def test_tts_provider_contract_matrix_has_rows() -> None:
     )
 
 
-async def test_tts_contract_lifecycle_and_normalized_events() -> None:
-    provider = _ContractTTS()
+class TestTTSContractSuite(TTSProviderContractSuite):
+    """Run the shipped provider-author kit suite against the offline fake.
 
-    assert isinstance(provider, TTSProvider)
-    events = [event async for event in provider.synthesize("hello")]
+    The protocol-semantics assertions live in
+    :class:`easycat.testing.TTSProviderContractSuite` so this file and the
+    installable kit cannot drift; only fake-specific bookkeeping checks are
+    added below.
+    """
 
-    assert provider.payloads[0].text == "hello"
-    assert [event.type for event in events] == [TTSEventType.AUDIO, TTSEventType.MARKERS]
-    assert events[0].audio is not None
-    assert events[0].audio.format == PCM16_MONO_24K
-    assert events[1].markers == [{"word": "hello"}]
+    provider_factory = _ContractTTS
 
+    async def test_fake_normalizes_payloads_and_marker_events(
+        self, provider: _ContractTTS
+    ) -> None:
+        events = [event async for event in provider.synthesize("hello")]
 
-async def test_tts_contract_stop_and_cancel_are_idempotent() -> None:
-    provider = _ContractTTS()
+        assert provider.payloads[0].text == "hello"
+        assert [event.type for event in events] == [TTSEventType.AUDIO, TTSEventType.MARKERS]
+        assert events[0].audio is not None
+        assert events[0].audio.format == PCM16_MONO_24K
+        assert events[1].markers == [{"word": "hello"}]
 
-    await provider.stop()
-    await provider.stop()
-    await provider.cancel()
-    await provider.cancel()
+    async def test_fake_counts_stop_and_cancel_calls(self, provider: _ContractTTS) -> None:
+        await provider.stop()
+        await provider.stop()
+        await provider.cancel()
+        await provider.cancel()
 
-    assert provider.stop_calls == 2
-    assert provider.cancel_calls == 2
+        assert provider.stop_calls == 2
+        assert provider.cancel_calls == 2
