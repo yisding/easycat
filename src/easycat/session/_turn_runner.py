@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -48,7 +49,11 @@ from easycat.runtime.context import RunContext
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._latency_budget import LatencyBudgetMonitor
-from easycat.session._streaming import consume_agent_stream, emit_tool_event
+from easycat.session._streaming import (
+    AgentStreamResult,
+    consume_agent_stream,
+    emit_tool_event,
+)
 from easycat.session.interruption import (
     TtsChunk,
     estimate_and_notify_interruption,
@@ -77,6 +82,34 @@ if TYPE_CHECKING:
     from easycat.stages.stt import STTStage
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _StreamingTtsState:
+    """Mutable per-turn TTS state shared between the streaming phases.
+
+    Replaces the closure locals that ``run_streaming_agent`` used to share
+    with its nested ``_process_tts`` consumer.
+    """
+
+    turn: TurnContext
+    turn_gen: int
+    token: CancelToken | None
+    queue: asyncio.Queue[TTSInput | None]
+    #: The consumer received its first payload and decided gating/playback.
+    synth_started: bool = False
+    #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
+    gated: bool = False
+    playback_started: bool = False
+    # True only if playback was cut off mid-stream by a cancelled token
+    # (a genuine barge-in), as opposed to the queue draining naturally.
+    # A turn that finishes speaking and *then* has its token cancelled by a
+    # later turn must not be retro-truncated as "interrupted during
+    # playback".
+    playback_cut_short: bool = False
+    should_stop: bool = False
+    chunks: list[TtsChunk] = field(default_factory=list)
+    error: Exception | None = None
 
 
 class TurnRunner:
@@ -337,131 +370,30 @@ class TurnRunner:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
         Uses :func:`consume_agent_stream` to translate agent events into
-        TTS payloads, and runs TTS synthesis concurrently.
+        TTS payloads, and runs TTS synthesis concurrently.  The phases are
+        named methods: ``_consume_tts_payloads`` (the TTS consumer task),
+        ``_await_agent_task`` (agent timeout/cancellation handling),
+        ``_finalize_streamed_text`` (final markdown strip), and
+        ``_record_streaming_interruption`` (barge-in accounting).
         """
         if turn is None:
             turn = self._turn.current
         assert turn is not None
-        turn_gen = self._turn.generation
-        # Bounded so a fast agent against a slow/stalled TTS consumer applies
-        # natural backpressure via consume_agent_stream's awaited put(),
-        # matching the BoundedAudioQueue convention used elsewhere in the
-        # pipeline.  The payloads are lightweight per-sentence text, so 64 is
-        # ample headroom; the producer is bounded by agent_timeout and runs
-        # inside the cancellable agent_task, so a full queue cannot deadlock.
-        tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue(maxsize=64)
-        tts_playback_started = False
-        # True only if playback was cut off mid-stream by a cancelled token
-        # (a genuine barge-in), as opposed to the queue draining naturally.
-        # A turn that finishes speaking and *then* has its token cancelled by a
-        # later turn must not be retro-truncated as "interrupted during
-        # playback".
-        tts_playback_cut_short = False
-        tts_chunks: list[TtsChunk] = []
-        tts_should_stop = False
-        tts_error: Exception | None = None
+        st = _StreamingTtsState(
+            turn=turn,
+            turn_gen=self._turn.generation,
+            token=token,
+            # Bounded so a fast agent against a slow/stalled TTS consumer
+            # applies natural backpressure via consume_agent_stream's awaited
+            # put(), matching the BoundedAudioQueue convention used elsewhere
+            # in the pipeline.  The payloads are lightweight per-sentence
+            # text, so 64 is ample headroom; the producer is bounded by
+            # agent_timeout and runs inside the cancellable agent_task, so a
+            # full queue cannot deadlock.
+            queue=asyncio.Queue(maxsize=64),
+        )
 
-        # ── TTS consumer task ──
-
-        async def _process_tts() -> None:
-            nonlocal tts_should_stop
-            nonlocal tts_playback_started
-            nonlocal tts_playback_cut_short
-            nonlocal tts_error
-            started = False
-            # Snapshot the gate state at first-payload time and reuse it in
-            # the post-loop branch.  ``_is_gated`` is time-varying (the
-            # classification gate can flush mid-synthesis); re-reading it
-            # live below would tear down the turn pointer the gated replay
-            # still needs for mark accounting.
-            gated = False
-            try:
-                while True:
-                    payload = await tts_queue.get()
-                    if payload is None:
-                        break
-                    if token and token.is_cancelled:
-                        tts_chunks.append(
-                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
-                        )
-                        break
-                    if self._tts.is_playback_suppressed:
-                        tts_chunks.append(
-                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
-                        )
-                        break
-
-                    if not started:
-                        gated = self._is_gated()
-                        if not gated:
-                            await self._turn_manager.bot_started_speaking()
-                            tts_playback_started = True
-                        started = True
-
-                    result = await self._tts.synthesizer.synthesize(
-                        payload,
-                        token,
-                        is_active=(
-                            None
-                            if self._is_gated()
-                            else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                        ),
-                    )
-                    tts_chunks.append(
-                        TtsChunk(
-                            _text_for_estimation_timeline(payload),
-                            result.audio_bytes,
-                            result.completed,
-                        )
-                    )
-                    if result.first_audio_time is not None and turn.first_tts_audio_time is None:
-                        turn.first_tts_audio_time = result.first_audio_time
-            except asyncio.CancelledError:
-                pass
-            except TTSTimeoutError:
-                await self._tts.cancel()
-            except Exception as exc:
-                tts_error = exc
-                logger.exception("TTS streaming error")
-                await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
-
-            # Decide whether playback was cut short by a barge-in *now* — while
-            # still inside _process_tts and before ``finalize_speaking_turn``
-            # emits bot_stopped_speaking (after which the next turn can start and
-            # cancel this turn's now-superseded token). ``is_cancelled`` here
-            # therefore reflects a cancellation observed *during* this turn's
-            # playback, not a later turn retroactively cancelling the token.
-            tts_playback_cut_short = bool(token and token.is_cancelled)
-
-            while not tts_queue.empty():
-                remaining = tts_queue.get_nowait()
-                if remaining is not None:
-                    tts_chunks.append(TtsChunk(_text_for_estimation_timeline(remaining), 0, False))
-
-            if started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
-                tts_should_stop = await self._tts.finalize_speaking_turn(
-                    turn, turn_generation=turn_gen
-                )
-            elif started and not tts_playback_started:
-                if gated:
-                    # Keep current turn alive for gated replay mark accounting.
-                    # ``TurnManager.reset()`` now cancels the active token before
-                    # dropping it (so barge-in/idle teardown cooperatively stops
-                    # bound work).  Here we deliberately want the *opposite*: the
-                    # turn's token (still in use by the concurrently-running agent
-                    # stream and the gated replay) must survive the manager reset,
-                    # or the agent turn is killed mid-flight and never emits its
-                    # AgentFinal.  Detach the live token from the manager before
-                    # resetting so reset() has nothing to cancel; the turn keeps
-                    # its own token.
-                    self._audio.reset_speech_detection()
-                    self._reset_turn_manager_preserving_token()
-                else:
-                    self._reset_turn_state()
-
-        # ── Run agent stream + TTS concurrently ──
-
-        agent_result = None
+        agent_result: AgentStreamResult | None = None
         system_prefix = self._caller_id_system_message()
 
         async def _run_agent_consumer() -> None:
@@ -475,7 +407,7 @@ class TurnRunner:
                     system_prefix=system_prefix,
                 ),
                 cancel_token=token,
-                tts_queue=tts_queue,
+                tts_queue=st.queue,
                 emit=self._emit,
                 prepare_tts_payload=self._tts.prepare,
                 strip_md=self._tts.strip_markdown_enabled,
@@ -483,9 +415,156 @@ class TurnRunner:
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
-        tts_task = asyncio.create_task(_process_tts())
+        tts_task = asyncio.create_task(self._consume_tts_payloads(st))
 
-        caught_exc: Exception | None = None
+        caught_exc = await self._await_agent_task(agent_task, tts_task)
+        agent_error = agent_result.error if agent_result else caught_exc
+        interrupted = agent_result.interrupted if agent_result else False
+        accumulated_text = agent_result.text if agent_result else ""
+        structured_output = agent_result.structured_output if agent_result else None
+        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
+
+        if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
+            accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
+
+        if (accumulated_text or structured_output is not None) and stream_succeeded:
+            await self._emit(
+                AgentFinal(text=accumulated_text, structured_output=structured_output)
+            )
+
+        try:
+            await tts_task
+        except asyncio.CancelledError:
+            pass
+
+        if agent_error is not None and st.error is not None:
+            await self._emit(
+                Error(
+                    exception=ExceptionGroup(
+                        "streaming turn failed",
+                        [agent_error, st.error],
+                    ),
+                    stage=ErrorStage.PIPELINE,
+                    turn_id=turn.id,
+                )
+            )
+
+        self._record_streaming_interruption(st, interrupted=interrupted)
+
+        if st.should_stop:
+            await self._stop()
+            return
+
+        self._record_voice_total_latency(turn)
+
+        # If a newer turn started (e.g. barge-in), avoid clobbering its state.
+        if self._turn.current is turn and self._turn.generation == st.turn_gen:
+            if self._turn_manager.state != TurnManagerState.IDLE:
+                self._reset_turn_state()
+
+    # ── Streaming agent phases ─────────────────────────────────────
+
+    async def _consume_tts_payloads(self, st: _StreamingTtsState) -> None:
+        """TTS consumer task: synthesize queued payloads, then settle the turn."""
+        try:
+            await self._synthesize_queued_payloads(st)
+        except asyncio.CancelledError:
+            pass
+        except TTSTimeoutError:
+            await self._tts.cancel()
+        except Exception as exc:
+            st.error = exc
+            logger.exception("TTS streaming error")
+            await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
+
+        # Decide whether playback was cut short by a barge-in *now* — while
+        # still inside the consumer task and before ``finalize_speaking_turn``
+        # emits bot_stopped_speaking (after which the next turn can start and
+        # cancel this turn's now-superseded token). ``is_cancelled`` here
+        # therefore reflects a cancellation observed *during* this turn's
+        # playback, not a later turn retroactively cancelling the token.
+        st.playback_cut_short = bool(st.token and st.token.is_cancelled)
+
+        while not st.queue.empty():
+            remaining = st.queue.get_nowait()
+            if remaining is not None:
+                st.chunks.append(TtsChunk(_text_for_estimation_timeline(remaining), 0, False))
+
+        await self._settle_turn_after_tts(st)
+
+    async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
+        """Drain the payload queue through the synthesizer until the sentinel."""
+        while True:
+            payload = await st.queue.get()
+            if payload is None:
+                break
+            if st.token and st.token.is_cancelled:
+                st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
+                break
+            if self._tts.is_playback_suppressed:
+                st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
+                break
+
+            if not st.synth_started:
+                # Snapshot the gate state at first-payload time and reuse it in
+                # ``_settle_turn_after_tts``.  ``_is_gated`` is time-varying
+                # (the classification gate can flush mid-synthesis); re-reading
+                # it live later would tear down the turn pointer the gated
+                # replay still needs for mark accounting.
+                st.gated = self._is_gated()
+                if not st.gated:
+                    await self._turn_manager.bot_started_speaking()
+                    st.playback_started = True
+                st.synth_started = True
+
+            result = await self._tts.synthesizer.synthesize(
+                payload,
+                st.token,
+                is_active=(
+                    None
+                    if self._is_gated()
+                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ),
+            )
+            st.chunks.append(
+                TtsChunk(
+                    _text_for_estimation_timeline(payload),
+                    result.audio_bytes,
+                    result.completed,
+                )
+            )
+            if result.first_audio_time is not None and st.turn.first_tts_audio_time is None:
+                st.turn.first_tts_audio_time = result.first_audio_time
+
+    async def _settle_turn_after_tts(self, st: _StreamingTtsState) -> None:
+        """Return the TurnManager toward IDLE (or keep the gated turn alive)."""
+        if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            st.should_stop = await self._tts.finalize_speaking_turn(
+                st.turn, turn_generation=st.turn_gen
+            )
+        elif st.synth_started and not st.playback_started:
+            if st.gated:
+                # Keep current turn alive for gated replay mark accounting.
+                # ``TurnManager.reset()`` now cancels the active token before
+                # dropping it (so barge-in/idle teardown cooperatively stops
+                # bound work).  Here we deliberately want the *opposite*: the
+                # turn's token (still in use by the concurrently-running agent
+                # stream and the gated replay) must survive the manager reset,
+                # or the agent turn is killed mid-flight and never emits its
+                # AgentFinal.  Detach the live token from the manager before
+                # resetting so reset() has nothing to cancel; the turn keeps
+                # its own token.
+                self._audio.reset_speech_detection()
+                self._reset_turn_manager_preserving_token()
+            else:
+                self._reset_turn_state()
+
+    async def _await_agent_task(
+        self,
+        agent_task: asyncio.Task[None],
+        tts_task: asyncio.Task[None],
+    ) -> Exception | None:
+        """Await the agent under its timeout; cancel both tasks on failure."""
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
                 await with_agent_timeout(
@@ -507,7 +586,6 @@ class TurnRunner:
                     pass
             raise
         except Exception as exc:
-            caught_exc = exc
             # AgentTimeoutError is already logged and emitted by with_agent_timeout.
             if not isinstance(exc, AgentTimeoutError):
                 logger.exception("Streaming agent error")
@@ -516,58 +594,37 @@ class TurnRunner:
                 agent_task.cancel()
             if not tts_task.done():
                 tts_task.cancel()
-        agent_error = agent_result.error if agent_result else caught_exc
-        interrupted = agent_result.interrupted if agent_result else False
-        accumulated_text = agent_result.text if agent_result else ""
-        structured_output = agent_result.structured_output if agent_result else None
-        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
+            return exc
+        return None
 
-        if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
-            original_text = accumulated_text
-            stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
-            self._tts._record_markdown_strip(
-                phase="streaming_final",
-                original_text=original_text,
-                stripped_text=stripped,
-                turn_id=turn.id,
+    def _finalize_streamed_text(self, turn: TurnContext, accumulated_text: str) -> str:
+        """Apply the final markdown strip and sync the agent framework state."""
+        original_text = accumulated_text
+        stripped = strip_markdown(accumulated_text, normalize_code_spans=True)
+        self._tts._record_markdown_strip(
+            phase="streaming_final",
+            original_text=original_text,
+            stripped_text=stripped,
+            turn_id=turn.id,
+        )
+        if stripped != original_text:
+            # Route through the stage so the framework-state rewrite lands
+            # on the journal recording boundary alongside the streamed text.
+            self._agent_stage.replace_last_assistant_text(
+                stripped, ctx=self._run_ctx, turn_id=turn.id
             )
-            if stripped != original_text:
-                accumulated_text = stripped
-                # Route through the stage so the framework-state rewrite lands
-                # on the journal recording boundary alongside the streamed text.
-                self._agent_stage.replace_last_assistant_text(
-                    stripped, ctx=self._run_ctx, turn_id=turn.id
-                )
+            return stripped
+        return accumulated_text
 
-        if (accumulated_text or structured_output is not None) and stream_succeeded:
-            await self._emit(
-                AgentFinal(text=accumulated_text, structured_output=structured_output)
-            )
-
-        try:
-            await tts_task
-        except asyncio.CancelledError:
-            pass
-
-        if agent_error is not None and tts_error is not None:
-            await self._emit(
-                Error(
-                    exception=ExceptionGroup(
-                        "streaming turn failed",
-                        [agent_error, tts_error],
-                    ),
-                    stage=ErrorStage.PIPELINE,
-                    turn_id=turn.id,
-                )
-            )
-
+    def _record_streaming_interruption(self, st: _StreamingTtsState, *, interrupted: bool) -> None:
+        """Estimate what the caller heard and record a barge-in, if any."""
         interruption_notification = estimate_and_notify_interruption(
             self._agent_stage,
-            token,
-            turn,
-            tts_chunks,
-            tts_playback_started=tts_playback_started,
-            tts_playback_cut_short=tts_playback_cut_short,
+            st.token,
+            st.turn,
+            st.chunks,
+            tts_playback_started=st.playback_started,
+            tts_playback_cut_short=st.playback_cut_short,
             interrupted=interrupted,
             interruption_mode=self._cancel.interruption_mode,
             latency_compensation_ms=self._cancel.latency_compensation_ms,
@@ -581,19 +638,8 @@ class TurnRunner:
                 mode=interruption_notification.mode,
                 text_spoken=interruption_notification.text_spoken,
                 notified=interruption_notification.notified,
-                turn_id=turn.id,
+                turn_id=st.turn.id,
             )
-
-        if tts_should_stop:
-            await self._stop()
-            return
-
-        self._record_voice_total_latency(turn)
-
-        # If a newer turn started (e.g. barge-in), avoid clobbering its state.
-        if self._turn.current is turn and self._turn.generation == turn_gen:
-            if self._turn_manager.state != TurnManagerState.IDLE:
-                self._reset_turn_state()
 
     def _record_voice_total_latency(self, turn: TurnContext) -> None:
         """Record a configured turn total budget from speech end to first audio."""
