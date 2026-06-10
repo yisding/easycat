@@ -48,6 +48,12 @@ running them. Multi-word audience filters accept hyphens or underscores, so
   `create_session`, the `async with session:` lifecycle, event
   subscriptions, `send_text` and session actions, and `debug="full"`
   bundles you can inspect with `uv run easycat replay PATH`.
+- Testing agents and running evals: climb the
+  [testing and evals ladder](testing-and-evals.md) — bundle fixtures,
+  offline text turns through `easycat.debug.testing` (`run_text_turn`,
+  `assert_latency`, `assert_llm_judge`), teaching chapter 12 metrics, then
+  live audio with `uv run easycat validate latency --smoke`. Scaffolded
+  projects ship an offline `tests/test_agent.py` to start from.
 - Automating the CLI: start at [llms.txt](../llms.txt), use
   `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use

@@ -8,16 +8,23 @@ from pathlib import Path
 
 import pytest
 
+from easycat.config import TextSessionConfig, create_text_session
 from easycat.debug.bundle import FORMAT_VERSION, RunBundle
 from easycat.debug.testing import (
+    JUDGE_RUBRIC,
+    TurnResult,
     assert_exact_match,
+    assert_latency,
+    assert_llm_judge,
     assert_no_error,
     assert_regex,
     assert_tool_called,
     assert_turn_completed,
+    extract_transcript,
     find_record,
     iter_records,
     load_bundle,
+    run_text_turn,
     turn_records,
 )
 
@@ -161,3 +168,167 @@ def test_turn_records_and_find_record(tmp_path: Path):
     assert first is not None
     assert first["turn_id"] == "t1"
     assert find_record(bundle, name="does_not_exist") is None
+
+
+# ── run_text_turn / TurnResult ───────────────────────────────────
+
+
+class _EchoAgent:
+    """Deterministic stand-in for an LLM-backed agent."""
+
+    async def run(self, text: str) -> str:
+        return f"echo: {text}"
+
+
+async def test_run_text_turn_with_bare_agent_returns_journal_backed_result():
+    result = await run_text_turn(_EchoAgent(), "hello")
+
+    assert isinstance(result, TurnResult)
+    assert result.user_input == "hello"
+    assert result.response == "echo: hello"
+    assert result.turn_id.startswith("turn-")
+    assert result.latency_ms > 0
+    names = {r.get("name") for r in result.records()}
+    assert "turn_started" in names
+    assert "agent_final" in names
+    assert "turn_ended" in names
+
+
+async def test_run_text_turn_result_works_with_bundle_assert_helpers():
+    result = await run_text_turn(_EchoAgent(), "ping")
+
+    assert_turn_completed(result, result.turn_id)
+    assert_no_error(result, turn_id=result.turn_id)
+    assert_exact_match(result, expected="echo: ping")
+    assert_regex(result, pattern=r"^echo: ")
+
+
+async def test_run_text_turn_with_text_session_config():
+    cfg = TextSessionConfig(agent=_EchoAgent())  # debug defaults to "off"
+
+    result = await run_text_turn(cfg, "config path")
+
+    assert result.response == "echo: config path"
+    assert_turn_completed(result, result.turn_id)
+    # The caller's config must not be mutated to get a journal.
+    assert cfg.debug == "off"
+
+
+async def test_run_text_turn_with_caller_owned_session_runs_many_turns():
+    session = create_text_session(agent=_EchoAgent(), debug="light")
+    async with session:
+        first = await run_text_turn(session, "one")
+        second = await run_text_turn(session, "two")
+
+    assert first.response == "echo: one"
+    assert second.response == "echo: two"
+    assert first.turn_id != second.turn_id
+    assert_turn_completed(second, second.turn_id)
+    # The first result's window never sees the later turn.
+    assert not turn_records(first, second.turn_id)
+
+
+async def test_run_text_turn_rejects_session_without_journal():
+    session = create_text_session(agent=_EchoAgent(), debug="off")
+    async with session:
+        with pytest.raises(RuntimeError, match='debug="light"'):
+            await run_text_turn(session, "hi")
+
+
+# ── assert_latency ───────────────────────────────────────────────
+
+
+def test_assert_latency_passes_within_budget():
+    results = [
+        TurnResult(turn_id=f"t{i}", user_input="", response="", latency_ms=float(i))
+        for i in range(1, 11)
+    ]
+    assert_latency(results, max_ms=50.0)
+    assert_latency(results[0], max_ms=1.0, percentile="p50")
+    assert_latency([12.0, 14.0], max_ms=20.0, percentile="p99")
+
+
+def test_assert_latency_fails_over_budget():
+    with pytest.raises(AssertionError, match="exceeds budget"):
+        assert_latency([100.0, 200.0, 9000.0], max_ms=1000.0, percentile="p99")
+
+
+def test_assert_latency_rejects_unknown_percentile():
+    with pytest.raises(ValueError, match="percentile"):
+        assert_latency([1.0], max_ms=10.0, percentile="p42")
+
+
+def test_assert_latency_rejects_empty_samples():
+    with pytest.raises(AssertionError, match="no latency samples"):
+        assert_latency([], max_ms=10.0)
+
+
+# ── extract_transcript / assert_llm_judge ────────────────────────
+
+
+def test_extract_transcript_from_turn_result():
+    result = TurnResult(turn_id="t1", user_input="hi", response="hello!", latency_ms=1.0)
+    assert extract_transcript(result) == "User: hi\nBot: hello!"
+
+
+def test_extract_transcript_reads_session_sink_names(tmp_path: Path):
+    records = [
+        {"sequence": 1, "name": "stt_final", "data": {"text": "what time is it"}},
+        {"sequence": 2, "name": "agent_final", "data": {"text": "It is noon."}},
+    ]
+    bundle = load_bundle(_make_bundle(tmp_path, records))
+    assert extract_transcript(bundle) == "User: what time is it\nBot: It is noon."
+
+
+def test_extract_transcript_falls_back_to_stage_names(tmp_path: Path):
+    """Teaching chapter 12 bundles use stage-level names (stt.final / stage.tts.execute)."""
+    records = [
+        {"sequence": 1, "name": "stt.final", "data": {"text": "hi"}},
+        {"sequence": 2, "name": "stage.tts.execute", "data": {"text": "Hi there."}},
+    ]
+    bundle = load_bundle(_make_bundle(tmp_path, records))
+    assert extract_transcript(bundle) == "User: hi\nBot: Hi there."
+
+
+async def test_assert_llm_judge_passes_with_injected_judge():
+    result = TurnResult(turn_id="t1", user_input="hi", response="hello!", latency_ms=1.0)
+    seen: dict = {}
+
+    async def fake_judge(transcript: str, rubric: str) -> dict:
+        seen["transcript"] = transcript
+        seen["rubric"] = rubric
+        return {"relevance": 5, "fluency": 4, "appropriate_length": 5, "reasoning": "fine"}
+
+    verdict = await assert_llm_judge(result, judge=fake_judge)
+
+    assert verdict["reasoning"] == "fine"
+    assert seen["transcript"] == "User: hi\nBot: hello!"
+    assert seen["rubric"] == JUDGE_RUBRIC
+
+
+async def test_assert_llm_judge_fails_below_min_score():
+    result = TurnResult(turn_id="t1", user_input="hi", response="??", latency_ms=1.0)
+
+    async def harsh_judge(transcript: str, rubric: str) -> dict:
+        return {"relevance": 1, "fluency": 5, "reasoning": "did not answer"}
+
+    with pytest.raises(AssertionError, match="relevance"):
+        await assert_llm_judge(result, judge=harsh_judge)
+
+
+async def test_assert_llm_judge_requires_numeric_scores():
+    result = TurnResult(turn_id="t1", user_input="hi", response="x", latency_ms=1.0)
+
+    async def vague_judge(transcript: str, rubric: str) -> dict:
+        return {"reasoning": "no scores"}
+
+    with pytest.raises(AssertionError, match="no numeric scores"):
+        await assert_llm_judge(result, judge=vague_judge)
+
+
+async def test_assert_llm_judge_default_judge_requires_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = TurnResult(turn_id="t1", user_input="hi", response="x", latency_ms=1.0)
+
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        await assert_llm_judge(result)

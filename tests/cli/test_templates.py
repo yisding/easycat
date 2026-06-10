@@ -84,6 +84,8 @@ _REQUIRED_FILES: tuple[str, ...] = (
     "agent.py",
     "pyproject.toml",
     "README.md",
+    "AGENTS.md",
+    "tests/test_agent.py",
     ".env.example",
     ".gitignore",
 )
@@ -844,7 +846,9 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     assert "$EASYCAT_VERSION_FLOOR" in pyproject
     assert "$EASYCAT_VERSION_FLOOR" not in rendered
     assert _base_requirement(name) in rendered
-    assert parsed["dependency-groups"]["dev"] == _TEMPLATE_DEV_GROUPS.get(name, ["ruff>=0.9"])
+    assert parsed["dependency-groups"]["dev"] == _TEMPLATE_DEV_GROUPS.get(
+        name, ["pytest>=8", "ruff>=0.9"]
+    )
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject
@@ -1034,3 +1038,42 @@ def test_template_readme_explains_local_source_block(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     assert "[tool.uv.sources]" in readme
     assert "not on PyPI yet" in readme
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_ships_offline_agent_tests(name: str) -> None:
+    """Every scaffold ships a key-free test exercising the real turn pipeline."""
+    source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
+
+    assert "from easycat.debug.testing import" in source
+    assert "run_text_turn" in source
+    assert "assert_turn_completed" in source
+    assert "assert_no_error" in source
+    assert "assert_latency" in source
+    # Key-free by construction: a stub agent, never a live LLM client.
+    assert "StubAgent" in source
+    assert "OPENAI_API_KEY" not in source
+    # No placeholders — the same file works in every rendered project.
+    assert "$" not in source
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_ships_agents_md_guide(name: str) -> None:
+    """Every scaffold ships an AGENTS.md for coding agents in the new project."""
+    catalog = {entry["name"]: entry for entry in _available_template_catalog()}
+    agents_md = (_template_dir(name) / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "$PROJECT_NAME" in agents_md
+    assert "uv run pytest" in agents_md
+    assert "uv run easycat doctor --env-file .env" in agents_md
+    assert "uv run easycat doctor --env-file .env --json" in agents_md
+    assert "uv run easycat docs" in agents_md
+    assert "easycat.debug.testing" in agents_md
+    assert "run_text_turn" in agents_md
+    assert "assert_llm_judge" in agents_md
+    # The run/check hints must match the catalog's post-create commands.
+    entry = catalog[name]
+    assert entry["run_command"].removeprefix("uv run --env-file .env ").split()[0] in agents_md
+    assert entry["run_command"] in agents_md
+    assert entry["check_command"] in agents_md
+    assert entry["fix_command"] in agents_md

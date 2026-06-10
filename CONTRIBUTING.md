@@ -269,6 +269,15 @@ and iteration helpers `iter_records`, `turn_records`, `find_record`. To refresh
 a golden bundle, re-export it from a session run and re-run the test; review the
 bundle diff like any other fixture change.
 
+The same module also covers live text turns and evals (see the
+[testing and evals ladder](docs/testing-and-evals.md)):
+`run_text_turn` drives one real agent-bridge turn through `send_text` with
+Noop audio stages and returns a `TurnResult` — a `RecordSource` the
+assertion helpers above accept directly; `assert_latency` budgets turn
+latency with the validation percentile code; `assert_llm_judge` (with
+`extract_transcript` and the default `JUDGE_RUBRIC`) scores conversational
+quality, taking `judge=` for offline CI.
+
 ## Adding an STT or TTS provider
 
 EasyCat uses **registries**, not inheritance. To add a provider:
