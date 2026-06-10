@@ -149,6 +149,7 @@ Support files:
 | [custom_stt_provider.py](custom_stt_provider.py) | Wrap or replace the STT provider by hand. | `uv run python examples/custom_stt_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [custom_tts_provider.py](custom_tts_provider.py) | Wrap or replace the TTS provider by hand. | `uv run python examples/custom_tts_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [custom_vad_provider.py](custom_vad_provider.py) | Wrap or replace the VAD provider by hand. | `uv run python examples/custom_vad_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
+| [custom_transport.py](custom_transport.py) | Wrap or replace the audio transport by hand. | `uv run python examples/custom_transport.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [responses_api_bridge.py](responses_api_bridge.py) | Call a remote agent over the OpenAI Responses API protocol. | `uv run python examples/responses_api_bridge.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY`, `EASYCAT_REMOTE_AGENT_BASE_URL`, `EASYCAT_REMOTE_AGENT_API_KEY`, `EASYCAT_REMOTE_AGENT_MODEL` |
 
 ## Telephony Helpers
