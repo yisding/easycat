@@ -3,6 +3,12 @@
 Provides LocalTransport (mic/speaker), WebSocketTransport, TwilioTransport,
 WebRTCTransport, and WebTransportTransport.
 
+Also exports the building blocks for out-of-tree transports:
+``AudioQueueMixin`` (inbound audio queue, ``receive_audio`` iterator, and
+``TransportDegraded`` emission), ``ServerTransportBase`` (for transports that
+host a WebSocket server), and the ``TransportDegraded`` event itself. See
+``docs/extending/transport.md`` for the provider-author guide.
+
 Exports load lazily via PEP 562 so importing a single transport submodule
 (e.g. ``from easycat.transports.local import LocalTransportConfig``) does not
 drag in every other transport — keeping ``EasyConfig.mic(...)`` cold starts
@@ -15,6 +21,9 @@ import importlib
 from typing import TYPE_CHECKING
 
 _LAZY_ATTR: dict[str, str] = {
+    "AudioQueueMixin": "easycat.transports._base",
+    "ServerTransportBase": "easycat.transports._base",
+    "TransportDegraded": "easycat.events",
     "LocalTransport": "easycat.transports.local",
     "LocalTransportConfig": "easycat.transports.local",
     "TwilioTransport": "easycat.transports.twilio_media",
@@ -48,6 +57,8 @@ __all__ = sorted(_LAZY_ATTR)
 
 
 if TYPE_CHECKING:
+    from easycat.events import TransportDegraded
+    from easycat.transports._base import AudioQueueMixin, ServerTransportBase
     from easycat.transports.local import LocalTransport, LocalTransportConfig
     from easycat.transports.twilio_media import (
         TWILIO_STREAM_TOKEN_PARAMETER,

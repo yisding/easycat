@@ -1518,6 +1518,28 @@ def test_custom_stt_provider_example_imports():
     assert callable(custom_stt_provider.main)
 
 
+def test_custom_transport_example_imports():
+    import examples.custom_transport as custom_transport
+
+    assert callable(custom_transport.main)
+
+
+def test_custom_transport_example_uses_public_transport_surface():
+    path = REPO_ROOT / "examples/custom_transport.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 55
+    assert "from easycat.transports import LocalTransport" in source
+    assert "EasyConfig(" in source
+    assert "transport=transport" in source
+    assert "run(" in source
+    assert "easycat.transports.AudioQueueMixin" in source  # docstring pointer
+    assert "docs/extending/transport.md" in source
+    assert "create_session" not in source
+    assert "SessionConfig" not in source
+    assert "Session(" not in source
+
+
 def test_custom_provider_examples_use_easyconfig_surface():
     for relpath in (
         "examples/custom_stt_provider.py",
@@ -1910,6 +1932,7 @@ def _python_executable() -> str:
         "examples/custom_stt_provider.py",
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
+        "examples/custom_transport.py",
         "examples/output_processors.py",
         "examples/agent_event_subscription.py",
         "examples/vad_backends.py",

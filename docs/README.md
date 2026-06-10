@@ -88,6 +88,11 @@ running them. Multi-word audience filters accept hyphens or underscores, so
   [provider contract map](../tests/contracts/README.md) before changing
   provider adapters, protocol cassettes, schema fingerprints, or bridge event
   grammar. Run `just guard-contracts` for that focused maintenance surface.
+- Building a custom provider or transport: follow the
+  [extending guides](extending/) for the duck-typed STT, TTS, VAD, transport,
+  and agent-bridge surfaces, complete out-of-tree examples, and conformance
+  checks. Scaffold an external provider package with
+  `uv run easycat init my-provider --template provider`.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,

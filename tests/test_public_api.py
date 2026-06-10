@@ -110,6 +110,13 @@ PUBLIC_API_SNAPSHOT = (
 )
 
 
+TRANSPORT_EXTENSION_SURFACE = (
+    "AudioQueueMixin",
+    "ServerTransportBase",
+    "TransportDegraded",
+)
+
+
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
     assert len(easycat.__all__) <= 90
@@ -164,6 +171,38 @@ def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
     assert "subscription.unsubscribe()" in preferred
     assert "Session.from_providers(" in preferred
     assert "SessionConfig" not in preferred
+
+
+def test_transport_extension_surface_is_public_and_documented() -> None:
+    """`easycat.transports` exposes the out-of-tree transport building blocks.
+
+    Provider authors subclass ``AudioQueueMixin`` / ``ServerTransportBase``
+    and subscribe to ``TransportDegraded``; the extension surface must stay
+    importable from ``easycat.transports`` and documented in
+    ``docs/public-api.md``.
+    """
+    import easycat.transports as transports
+
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Transport Extension Surface", 1)[1].split(
+            "## Top-Level Allowlist", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Transport Extension Surface section"
+        ) from exc
+
+    for name in TRANSPORT_EXTENSION_SURFACE:
+        assert name in transports.__all__, f"easycat.transports.__all__ missing {name}"
+        assert getattr(transports, name) is not None
+        assert f"`{name}`" in section, f"docs/public-api.md does not document {name}"
+
+    from easycat.events import TransportDegraded as events_transport_degraded
+    from easycat.transports import TransportDegraded as transports_transport_degraded
+
+    assert transports_transport_degraded is events_transport_degraded
+    assert "extending/" in section
 
 
 def test_curated_public_api_lazy_imports() -> None:

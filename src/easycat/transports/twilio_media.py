@@ -32,7 +32,7 @@ from easycat.events import (
     PlaybackMarkAck,
 )
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
-from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +418,7 @@ async def _emit_parsed_twilio_dtmf(
         await event_bus.emit(event)
 
 
-class TwilioTransport(_ServerTransportBase):
+class TwilioTransport(ServerTransportBase):
     """Transport for Twilio Media Streams bidirectional WebSocket.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -897,7 +897,7 @@ def _mulaw_encode_sample(sample: int) -> int:
     return (~(sign | (exponent << 4) | mantissa)) & 0xFF
 
 
-class TwilioConnectionTransport(_AudioQueueMixin):
+class TwilioConnectionTransport(AudioQueueMixin):
     """Twilio Media Streams transport for one accepted WebSocket connection."""
 
     # Telephony policy: see ``TwilioTransport.default_echo_cancellation_enabled``.

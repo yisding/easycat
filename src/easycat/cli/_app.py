@@ -491,6 +491,23 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Extending providers",
+        "path": "docs/extending/",
+        "audience": "provider maintainers",
+        "description": (
+            "Build custom STT, TTS, VAD, transport, and agent-bridge providers "
+            "out of tree and verify conformance."
+        ),
+        "commands": (
+            "uv run easycat docs --audience provider-maintainers",
+            "uv run easycat docs --audience provider-maintainers --json",
+            "uv run easycat init my-provider --template provider",
+            "uv run python examples/custom_transport.py",
+            "uv run pytest tests/test_public_api.py",
+            "uv run pytest tests/contracts",
+        ),
+    },
+    {
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",

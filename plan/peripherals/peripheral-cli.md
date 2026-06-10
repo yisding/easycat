@@ -26,14 +26,14 @@ M1 (scaffolding) is effectively done:
   unknown codes.
 - Output contract (`--json`, stdout/stderr split, exit-code mapping)
   and top-level `EasyCatError` handler.
-- Six templates: `openai-agents`, `pydantic-ai`,
+- Seven templates: `openai-agents`, `provider`, `pydantic-ai`,
   `pydantic-ai-workflow`, `text-chat`, `twilio-phone`,
   `webrtc-browser`.
 
 M2 status:
 
 - Template `agent.py` line budgets are now enforced at the planned caps:
-  `openai-agents` ≤16 lines, `pydantic-ai` ≤17,
+  `openai-agents` ≤16 lines, `provider` ≤12, `pydantic-ai` ≤17,
   `pydantic-ai-workflow` ≤20, `text-chat` ≤17, `twilio-phone` ≤15, and
   `webrtc-browser` ≤14. Template content now matches the shipped starters:
   simple Python tools/workflows are built in, and optional MCP wiring is

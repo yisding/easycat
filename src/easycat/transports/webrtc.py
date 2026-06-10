@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports._base import _AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ _FRAME_DURATION_MS = 20
 _FRAME_SAMPLES = (_WEBRTC_SAMPLE_RATE * _FRAME_DURATION_MS) // 1000  # 960
 
 # WebRTC-specific ``TransportDegraded.reason`` codes emitted on the session
-# event bus (via the inherited ``_AudioQueueMixin._emit_degraded``).  These
+# event bus (via the inherited ``AudioQueueMixin._emit_degraded``).  These
 # mirror conditions that previously only reached ``logger.warning``; emitting
 # them keeps the journal the single source of truth for observability.  The
 # cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
@@ -465,7 +465,7 @@ class _OutboundAudioSource:
 # ── WebRTC Transport ─────────────────────────────────────────────
 
 
-class WebRTCTransport(_AudioQueueMixin):
+class WebRTCTransport(AudioQueueMixin):
     """Transport that exchanges audio over a WebRTC peer connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -510,7 +510,7 @@ class WebRTCTransport(_AudioQueueMixin):
         self._pc: Any | None = None
         self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
-        # ``_event_bus`` / ``_emit_degraded`` come from ``_AudioQueueMixin``
+        # ``_event_bus`` / ``_emit_degraded`` come from ``AudioQueueMixin``
         # (``_init_audio_queue`` above).  Session attaches the bus
         # post-construction; it is forwarded to ``_outbound`` (for
         # ``TransportAudioDelivered``) once a peer connects.

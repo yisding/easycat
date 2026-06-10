@@ -1,7 +1,11 @@
-"""Internal base classes for transports.
+"""Shared base classes for transports.
 
-Provides shared infrastructure used by multiple transport implementations.
-Not part of the public API — ``__init__.py`` does not export this module.
+Provides the audio-queue and server plumbing used by the built-in transports
+and by out-of-tree transports.  :class:`AudioQueueMixin` and
+:class:`ServerTransportBase` are public — import them (together with the
+:class:`~easycat.events.TransportDegraded` event they emit) from
+``easycat.transports``.  See ``docs/extending/transport.md`` for the
+provider-author guide.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from easycat.events import EventBus, TransportDegraded
 logger = logging.getLogger(__name__)
 
 # Canonical cross-transport ``TransportDegraded.reason`` code.  The inbound
-# queue-full drop is shared by every ``_AudioQueueMixin`` user (WebSocket /
+# queue-full drop is shared by every ``AudioQueueMixin`` user (WebSocket /
 # WebRTC / WebTransport), so it lives here rather than in any one transport.
 # Transport-specific codes stay in their own modules.
 _DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
@@ -46,7 +50,7 @@ def _enqueue_inbound_chunk(
     """Best-effort enqueue for inbound audio, dropping + degrading when full.
 
     The single definition of the inbound queue-full drop path, shared by every
-    transport.  ``_AudioQueueMixin._enqueue_chunk`` delegates here, and
+    transport.  ``AudioQueueMixin._enqueue_chunk`` delegates here, and
     standalone session helpers that hold an injected queue + emitter (e.g.
     WebTransport's per-session helper) call it directly so the drop message,
     degraded code, and logging stay in lock-step.
@@ -76,7 +80,7 @@ def _enqueue_inbound_chunk(
 # ── Shared queue / receive_audio logic ────────────────────────────
 
 
-class _AudioQueueMixin:
+class AudioQueueMixin:
     """Mixin that provides the inbound audio queue and ``receive_audio`` iterator.
 
     Transports that accept audio chunks from an external source can inherit
@@ -277,7 +281,7 @@ class _AudioQueueMixin:
 # ── WebSocket server base ─────────────────────────────────────────
 
 
-class _ServerTransportBase(_AudioQueueMixin):
+class ServerTransportBase(AudioQueueMixin):
     """Base for transports that host a ``websockets`` server.
 
     Subclasses must provide:

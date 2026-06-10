@@ -61,6 +61,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 16,
+    "provider": 12,
     "pydantic-ai": 17,
     "pydantic-ai-workflow": 20,
     "text-chat": 17,
@@ -69,7 +70,14 @@ _LINE_BUDGETS: dict[str, int] = {
 }
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
+    "provider": ("custom_vad.py", "test_custom_vad.py"),
     "twilio-phone": ("server.py",),
+}
+
+# Per-template dev dependency groups; the provider package skeleton ships a
+# conformance test, so it also pins pytest.
+_TEMPLATE_DEV_GROUPS: dict[str, list[str]] = {
+    "provider": ["ruff>=0.9", "pytest>=8"],
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
@@ -105,6 +113,7 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
     assert len(templates) >= 5
     for required in (
         "openai-agents",
+        "provider",
         "pydantic-ai",
         "pydantic-ai-workflow",
         "text-chat",
@@ -835,7 +844,7 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     assert "$EASYCAT_VERSION_FLOOR" in pyproject
     assert "$EASYCAT_VERSION_FLOOR" not in rendered
     assert _base_requirement(name) in rendered
-    assert parsed["dependency-groups"]["dev"] == ["ruff>=0.9"]
+    assert parsed["dependency-groups"]["dev"] == _TEMPLATE_DEV_GROUPS.get(name, ["ruff>=0.9"])
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject

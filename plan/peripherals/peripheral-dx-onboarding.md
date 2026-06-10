@@ -417,14 +417,17 @@ Template set:
 - `webrtc-browser`
 - `text-chat` (text-mode session for REPL-style testing of agent
   changes without audio infrastructure)
+- `provider` (external provider package skeleton: Protocol-conforming
+  provider, config dataclass, conformance test, and live mic demo)
 
 Voice-to-voice / realtime speech-to-speech templates are explicitly
 out of scope — EasyCat is a chained voice runtime, see the "Chained
 Only" rationale in `../roadmap/essential-debug-first-runtime.md`.
 
 Template `agent.py` line budgets match the shipped scaffold caps:
-`openai-agents` ≤16, `pydantic-ai` ≤17, `pydantic-ai-workflow` ≤20,
-`text-chat` ≤17, `twilio-phone` ≤15, and `webrtc-browser` ≤14. Each
+`openai-agents` ≤16, `provider` ≤12, `pydantic-ai` ≤17,
+`pydantic-ai-workflow` ≤20, `text-chat` ≤17, `twilio-phone` ≤15, and
+`webrtc-browser` ≤14. Each
 template ships with a concrete working tool or workflow instead of a
 blank TODO; MCP server wiring is generated when requested rather than
 forced into every starter. CI regression-tests line count and startup

@@ -76,6 +76,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "twilio-phone": ("openai-agents", "telephony"),
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
+    "provider": ("openai-agents", "local"),
 }
 _FALLBACK_EASYCAT_VERSION_FLOOR = "0.1.0"
 
@@ -158,6 +159,15 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "optional_env": ("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
         "description": "Browser voice agent using WebRTC audio.",
     },
+    "provider": {
+        "mode": "voice",
+        "transport": "local mic",
+        "framework": "OpenAI Agents",
+        "best_for": "Publishing a custom EasyCat provider package out of tree.",
+        "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
+        "description": "External provider package skeleton with conformance test and live demo.",
+    },
 }
 
 _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
@@ -166,6 +176,7 @@ _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
     ),
 }
 _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
+    "provider": ("agent.py", "custom_vad.py", "test_custom_vad.py"),
     "twilio-phone": ("agent.py", "server.py"),
 }
 _INIT_COMMAND_NOTE = (
