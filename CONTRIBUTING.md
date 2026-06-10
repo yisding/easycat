@@ -189,7 +189,10 @@ collection. The full list lives in `pyproject.toml` under
 - `surface_stt` / `surface_tts` / `surface_agent` / `surface_transport` /
   `surface_vad` — which provider surface is exercised.
 - `agent_bridge` — agent bridge contract or live coverage.
-- `requires_extra("name")` — needs an optional dependency extra.
+
+There is no marker for "needs an optional extra": tests that need one use
+`pytest.importorskip`, and the nightly extras install matrix re-runs the
+offline contract tests with each extra's real SDK installed.
 
 ### Provider / surface pairing (enforced)
 

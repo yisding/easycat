@@ -250,7 +250,6 @@ markers = [
     "surface_transport: transport surface coverage",
     "surface_vad: VAD surface coverage",
     "agent_bridge: agent bridge contract or live coverage",
-    "requires_extra(name): test requires an optional dependency extra",
     "provider(name): generic provider metadata for custom provider filtering",
 ]
 

@@ -11,6 +11,10 @@ WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
+NIGHTLY_LIVE_COMMAND = (
+    "easycat validate live --provider openai --provider deepgram "
+    "--provider elevenlabs --provider cartesia --surface stt --surface tts"
+)
 
 
 def _advertised_python_versions() -> list[str]:
@@ -496,7 +500,9 @@ def test_live_canary_workflows_are_guarded_and_redacted() -> None:
     assert "ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}" in nightly
     assert "CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}" in nightly
     assert "::add-mask::" in nightly
-    assert "easycat validate live --provider openai --surface stt --surface tts" in nightly
+    assert NIGHTLY_LIVE_COMMAND in nightly
+    # Deepgram/ElevenLabs live probes need their SDK extras synced.
+    assert "uv sync --group dev --extra deepgram --extra elevenlabs" in nightly
     assert "Upload redacted live validation artifacts" in nightly
 
     assert "environment: release-validation" in release
@@ -507,6 +513,64 @@ def test_live_canary_workflows_are_guarded_and_redacted() -> None:
         "--surface stt --surface tts"
     )
     assert release_live_command in release
+
+
+def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
+    text = NIGHTLY_WORKFLOW.read_text()
+    jobs = yaml.safe_load(text)["jobs"]
+
+    assert "extras-plan" in jobs, "expected an `extras-plan` job in nightly-validation.yml"
+    assert "extras-install" in jobs, "expected an `extras-install` job in nightly-validation.yml"
+
+    plan = jobs["extras-plan"]
+    plan_run_bodies = [
+        step.get("run", "") for step in plan.get("steps", []) if isinstance(step, dict)
+    ]
+    assert any("scripts/extras_matrix.py" in body for body in plan_run_bodies), (
+        "extras-plan must derive the matrix from pyproject via scripts/extras_matrix.py "
+        "so new extras are auto-covered"
+    )
+    assert plan["outputs"]["extras"] == "${{ steps.plan.outputs.extras }}"
+
+    install = jobs["extras-install"]
+    assert install["needs"] == "extras-plan"
+    assert install["strategy"]["fail-fast"] is False
+    assert install["strategy"]["matrix"]["extra"] == (
+        "${{ fromJSON(needs.extras-plan.outputs.extras) }}"
+    )
+    run_bodies = [
+        step.get("run", "") for step in install.get("steps", []) if isinstance(step, dict)
+    ]
+    assert any(
+        'uv sync --extra "${{ matrix.extra }}" --group dev' in body for body in run_bodies
+    ), "each cell must sync exactly its one extra plus the dev group"
+    assert any(
+        'scripts/extras_smoke.py "${{ matrix.extra }}"' in body and "--no-sync" in body
+        for body in run_bodies
+    ), "each cell must import-smoke the extra without re-syncing it away"
+    assert any("pytest tests/contracts" in body and "--no-sync" in body for body in run_bodies), (
+        "each cell must re-run the offline contract tests with the real SDK installed"
+    )
+
+    # funasr-vad installs nothing on Python >= 3.13, so the matrix pins 3.12.
+    setup_steps = [
+        step
+        for step in install.get("steps", [])
+        if isinstance(step, dict) and str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+    ]
+    assert setup_steps and setup_steps[0]["with"]["python-version"] == "3.12"
+
+    # Known cells must be deliberately documented in the workflow file.
+    for phrase in (
+        "cartesia is an empty marker extra",
+        "funasr-vad only installs on Python < 3.13",
+        "pydantic-ai and pydantic-ai-v2-beta are mutually exclusive",
+        "ten-vad is deliberately excluded",
+    ):
+        assert phrase in text, f"nightly workflow must document the known cell: {phrase!r}"
+
+    # Cassette recording stays out (needs live credentials) but the gap is tracked.
+    assert "TODO: cassette recording needs live credentials" in text
 
 
 def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
@@ -541,7 +605,7 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
     assert "Mask live provider secrets" in release_text
     assert "::add-mask::" in nightly_text
     assert "::add-mask::" in release_text
-    assert "easycat validate live --provider openai --surface stt --surface tts" in nightly_text
+    assert NIGHTLY_LIVE_COMMAND in nightly_text
     assert "--release --provider openai --surface stt --surface tts" in release_text
     assert "easycat validate latency --require-samples" in nightly_text
     assert "actions/upload-artifact@v4" in nightly_text
@@ -565,7 +629,7 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
         "ELEVENLABS_API_KEY",
         "CARTESIA_API_KEY",
         "::add-mask::",
-        "easycat validate live --provider openai --surface stt --surface tts",
+        NIGHTLY_LIVE_COMMAND,
         "--strict",
         "--release",
         "easycat validate latency --require-samples",
