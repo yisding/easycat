@@ -10,6 +10,11 @@ resampled to the pipeline's target rate (default 16 kHz PCM16 mono).
 Outbound audio (pipeline → remote peer) is resampled from whatever the TTS
 provider emits to 48 kHz and sent via an Opus-encoded audio track.
 
+Session events (transcripts, interruptions, per-turn latency) are forwarded
+to the browser over a client-created data channel named ``"events"`` using
+the JSON wire format in :mod:`easycat.transports._browser_events`; the
+maintained reader-facing description lives in ``docs/browser-playground.md``.
+
 Requires the ``webrtc`` extra: ``uv add 'easycat[webrtc]'``. From the
 EasyCat repo, use ``uv sync --extra webrtc --group dev``.
 """
@@ -24,6 +29,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from hmac import compare_digest
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -50,7 +56,11 @@ _DEGRADED_INBOUND_CONSUME_ERROR = "inbound_consume_error"
 _DEGRADED_OUTBOUND_QUEUE_FULL = "outbound_queue_full"
 
 _CORS_ALLOW_METHODS = "POST, GET, OPTIONS"
-_CORS_ALLOW_HEADERS = "Content-Type"
+_CORS_ALLOW_HEADERS = "Content-Type, Authorization"
+
+# Label of the browser-created data channel that carries session events
+# (transcripts, interruptions, per-turn latency) to the playground page.
+_EVENTS_CHANNEL_LABEL = "events"
 
 _WEBRTC_STATS_TOP_LEVEL_FIELDS = frozenset(
     {
@@ -212,6 +222,12 @@ class WebRTCTransportConfig:
         ``RTCPeerConnection.getStats()`` snapshots via ``/stats``.  Defaults to
         ``EASYCAT_WEBRTC_STATS_PATH`` when set so validation runs can advertise
         the artifact path without custom app wiring.
+    auth_token:
+        Optional shared secret required by ``/offer`` and ``/stats``.  Clients
+        present it as ``Authorization: Bearer <token>`` or a ``?token=`` query
+        parameter (the bundled client forwards ``?token=`` from the page URL
+        automatically).  Mirrors the WebSocket/docker ``EASYCAT_WS_TOKEN``
+        security default — pair it with a non-loopback ``host``.
     """
 
     _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
@@ -228,6 +244,7 @@ class WebRTCTransportConfig:
     expose_ice_credentials: bool = False
     cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
+    auth_token: str | None = None
 
 
 def _env_flag(name: str) -> bool:
@@ -510,6 +527,8 @@ class WebRTCTransport(AudioQueueMixin):
         self._pc: Any | None = None
         self._outbound: _OutboundAudioSource = _OutboundAudioSource()
         self._outbound_track: Any | None = None
+        # Browser-created "events" data channel for the playground UI.
+        self._events_channel: Any | None = None
         # ``_event_bus`` / ``_emit_degraded`` come from ``AudioQueueMixin``
         # (``_init_audio_queue`` above).  Session attaches the bus
         # post-construction; it is forwarded to ``_outbound`` (for
@@ -585,6 +604,33 @@ class WebRTCTransport(AudioQueueMixin):
             return False
         return origin.rstrip("/") == f"{scheme}://{host}"
 
+    def _request_authorized(self, request: Any) -> bool:
+        """Authorize a signaling request against the optional shared token.
+
+        Mirrors :func:`easycat.transports.websocket.websocket_server_authorized`:
+        no configured token means open access; otherwise accept a
+        ``Authorization: Bearer <token>`` header or a ``?token=`` query value.
+        """
+        token = self._config.auth_token
+        if token is None:
+            return True
+        value = getattr(request, "headers", {}).get("Authorization")
+        if value is not None:
+            scheme, separator, credential = value.partition(" ")
+            if separator == " " and scheme.lower() == "bearer":
+                return compare_digest(credential, token)
+        query_token = getattr(request, "query", {}).get("token")
+        return query_token is not None and compare_digest(query_token, token)
+
+    def _unauthorized_response(self, request: Any) -> Any:
+        web = self._web
+        return web.Response(
+            status=401,
+            text=json.dumps({"error": "Missing or invalid bearer token"}),
+            content_type="application/json",
+            headers=self._cors_headers(request),
+        )
+
     # ── Transport protocol ────────────────────────────────────────
 
     async def connect(self) -> None:
@@ -642,6 +688,7 @@ class WebRTCTransport(AudioQueueMixin):
             raise
 
         self._connected = True
+        self._ensure_browser_event_forwarder()
         logger.info(
             "WebRTC signaling server listening on http://%s:%d",
             self._config.host,
@@ -678,6 +725,8 @@ class WebRTCTransport(AudioQueueMixin):
             await self._pc.close()
             self._pc = None
 
+        self._close_browser_event_forwarder()
+        self._events_channel = None
         self._outbound.stop()  # no-op by design; track is discarded with the PC
 
         # Shut down HTTP server.
@@ -728,6 +777,13 @@ class WebRTCTransport(AudioQueueMixin):
         """Discard queued outbound audio (useful during barge-in)."""
         self._outbound.clear()
 
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        """Push one JSON event message over the browser's "events" data channel."""
+        channel = self._events_channel
+        if channel is None or getattr(channel, "readyState", None) != "open":
+            return
+        channel.send(json.dumps(payload))
+
     # ── Signaling handlers ────────────────────────────────────────
 
     async def _handle_offer(self, request: Any) -> Any:
@@ -753,6 +809,8 @@ class WebRTCTransport(AudioQueueMixin):
         # value is stable for the duration of this handler.
         if not self._connected:
             return self._unavailable_response(request)
+        if not self._request_authorized(request):
+            return self._unauthorized_response(request)
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
         RTCSessionDescription = aiortc.RTCSessionDescription
@@ -831,6 +889,19 @@ class WebRTCTransport(AudioQueueMixin):
                     logger.info("WebRTC remote audio track received")
                     captured_track = track
 
+            # The browser playground creates an "events" data channel before
+            # offering; capture it so session events (transcripts,
+            # interruptions, latency) can be pushed to the page. The channel
+            # opens only after the connection is established — well past the
+            # generation commit below — so guard against stale peers here.
+            @pc.on("datachannel")
+            def on_datachannel(channel: Any) -> None:
+                if not self._is_current_peer_generation(peer_generation):
+                    return
+                if channel.label == _EVENTS_CHANNEL_LABEL:
+                    logger.info("WebRTC events data channel received")
+                    self._events_channel = channel
+
             @pc.on("connectionstatechange")
             async def on_connectionstatechange() -> None:
                 if not self._is_current_peer_generation(peer_generation):
@@ -904,6 +975,9 @@ class WebRTCTransport(AudioQueueMixin):
         self._pc = pc
         self._outbound = outbound
         self._outbound_track = outbound_track
+        # Drop the previous peer's events channel; the replacement peer's
+        # channel arrives via the generation-guarded ``datachannel`` callback.
+        self._events_channel = None
 
         # Now that the new generation is current, start the inbound reader for
         # the track captured during ``setRemoteDescription`` and register its
@@ -960,6 +1034,8 @@ class WebRTCTransport(AudioQueueMixin):
         snapshots become a first-class JSONL artifact.
         """
         web = self._web
+        if not self._request_authorized(request):
+            return self._unauthorized_response(request)
         try:
             payload = await request.json()
             snapshot = _sanitize_webrtc_stats_snapshot(payload)

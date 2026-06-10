@@ -87,6 +87,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Check API keys, optional extras, and provider reachability.",
         journey="Check API keys, optional extras, and provider reachability",
     ),
+    "serve": _CommandText(
+        help="Serve the browser voice playground on localhost.",
+        journey="Serve the browser voice playground on localhost",
+    ),
     "explain": _CommandText(
         help="Look up errors and CLI schema topics.",
         journey="Look up errors and CLI schema topics",
@@ -114,7 +118,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("console", "init", "doctor", "explain")),
+    ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
     ("Debug with the journal", ("bundles", "inspect", "replay")),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
@@ -439,6 +443,24 @@ _DOCS_LINKS: list[_DocsLink] = [
         "diataxis": "reference",
         "description": ("Start, stop, force-stop, and read the journal after teardown."),
         "commands": ("uv run easycat explain journal",),
+    },
+    {
+        "label": "Browser playground",
+        "path": "docs/browser-playground.md",
+        "audience": "app builders",
+        "diataxis": "how-to",
+        "description": (
+            "Talk to a bot in the browser with one command, and read the "
+            "WebSocket/WebRTC wire protocol behind the playground page."
+        ),
+        "commands": (
+            "uv sync --extra quickstart --extra webrtc --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat serve",
+            "uv run python examples/webrtc_server.py",
+            "uv run pytest tests/transports/test_webrtc.py",
+        ),
     },
     {
         "label": "Public API",
@@ -849,11 +871,13 @@ def _register_commands() -> None:
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
+    from easycat.cli.serve import serve as serve_cmd
     from easycat.cli.validate import validate_app
 
     app.command(name="console", help=_COMMAND_TEXT["console"].help)(console_cmd)
     app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
     app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
+    app.command(name="serve", help=_COMMAND_TEXT["serve"].help)(serve_cmd)
     app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)
     app.command(name="explain", help=_COMMAND_TEXT["explain"].help)(explain_cmd)
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)

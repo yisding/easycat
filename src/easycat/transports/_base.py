@@ -13,12 +13,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
+from easycat.transports._browser_events import BrowserEventForwarder
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +106,7 @@ class AudioQueueMixin:
     _emit_tasks: set[asyncio.Task[None]]
     _degraded_last_emit: dict[tuple[str, bool], float]
     _degraded_suppressed: dict[tuple[str, bool], int]
+    _browser_event_forwarder: BrowserEventForwarder | None
 
     def _init_audio_queue(self, max_pending_chunks: int) -> None:
         self._max_pending_chunks = max_pending_chunks
@@ -126,6 +129,9 @@ class AudioQueueMixin:
         # Per-reason coalescing for attacker-triggerable drop/control paths.
         self._degraded_last_emit = getattr(self, "_degraded_last_emit", {})
         self._degraded_suppressed = getattr(self, "_degraded_suppressed", {})
+        # Browser event channel (transcripts / interruptions / latency) for
+        # transports that opt in via ``_ensure_browser_event_forwarder``.
+        self._browser_event_forwarder = getattr(self, "_browser_event_forwarder", None)
 
     def _emit_degraded(self, reason: str, detail: str = "", *, fatal: bool = False) -> None:
         """Publish a :class:`TransportDegraded` on the session event bus.
@@ -191,6 +197,34 @@ class AudioQueueMixin:
         # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
         pending = list(self._emit_tasks)
         await asyncio.gather(*pending, return_exceptions=True)
+
+    # ── Browser event channel ─────────────────────────────────────
+    #
+    # Browser-facing transports (WebSocket / WebRTC) forward session events
+    # (transcripts, interruptions, per-turn latency) to the connected client
+    # as JSON messages; see ``transports/_browser_events.py`` for the wire
+    # format. Transports opt in by implementing ``_send_client_event`` and
+    # calling the ensure/close pair from ``connect``/``disconnect``.
+
+    def _ensure_browser_event_forwarder(self) -> None:
+        """Start forwarding session events to the browser when a bus is attached."""
+        if getattr(self, "_browser_event_forwarder", None) is not None:
+            return
+        if self._event_bus is None:
+            return
+        self._browser_event_forwarder = BrowserEventForwarder(
+            self._event_bus, self._send_client_event
+        )
+
+    def _close_browser_event_forwarder(self) -> None:
+        forwarder = getattr(self, "_browser_event_forwarder", None)
+        if forwarder is not None:
+            forwarder.close()
+            self._browser_event_forwarder = None
+
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        """Send one JSON event message to the connected client (best effort)."""
+        raise NotImplementedError
 
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""

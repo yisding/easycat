@@ -152,6 +152,7 @@ easycat init --list-templates --json # emit the machine-readable template catalo
 easycat doctor           # check API keys, optional extras, provider reachability
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
+easycat serve            # serve the browser voice playground on localhost
 easycat docs             # show docs for learning, maintenance, validation, operations
 easycat docs --audience learners # filter docs by reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners

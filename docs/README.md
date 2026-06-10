@@ -91,6 +91,10 @@ running them. Multi-word audience filters accept hyphens or underscores, so
   matching docs route. Every `easycat docs --json` route entry also carries a
   `diataxis` field (`tutorial`, `how-to`, `reference`, or `explanation`) so
   automation can pick the right kind of page.
+- Talking to a bot in the browser: run `uv run easycat serve` and follow the
+  [browser playground guide](browser-playground.md) for the one-command
+  playground page (live transcript, interruption indicator, per-turn latency)
+  and the WebSocket/WebRTC wire protocol behind it.
 - Maintaining architecture or package boundaries: use the
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
   registries, session lifecycle, test layout, and maintainer command block,
