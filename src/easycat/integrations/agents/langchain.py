@@ -644,13 +644,13 @@ class LangChainBridge:
             clear = getattr(store, "clear", None)
             add_messages = getattr(store, "add_messages", None)
             add_message = getattr(store, "add_message", None)
-            if callable(clear) and (callable(add_messages) or callable(add_message)):
+            if callable(clear) and callable(add_messages):
                 clear()
-                if callable(add_messages):
-                    add_messages(rewritten)
-                else:
-                    for message in rewritten:
-                        add_message(message)
+                add_messages(rewritten)
+            elif callable(clear) and callable(add_message):
+                clear()
+                for message in rewritten:
+                    add_message(message)
             else:
                 # No persistence API — best effort: an in-place edit
                 # still takes effect for in-memory / live-list stores.
@@ -720,10 +720,11 @@ class LangChainBridge:
         specs = getattr(self._runnable, "history_factory_config", None)
         if specs:
             try:
-                spec_ids = [getattr(s, "id", None) for s in specs]
+                raw_spec_ids = [getattr(s, "id", None) for s in specs]
             except TypeError:
-                spec_ids = []
-            if spec_ids and all(isinstance(k, str) for k in spec_ids):
+                raw_spec_ids = []
+            spec_ids = [k for k in raw_spec_ids if isinstance(k, str)]
+            if spec_ids and len(spec_ids) == len(raw_spec_ids):
                 # Dispatch on factory arity exactly as LangChain does.
                 try:
                     parameter_names = list(inspect.signature(factory).parameters)

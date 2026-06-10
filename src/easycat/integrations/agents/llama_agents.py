@@ -12,7 +12,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -395,7 +395,7 @@ class LlamaAgentsBridge:
         self,
         turn_input: AgentTurnInput,
         cancel_token: CancelToken | None,
-    ) -> AsyncIterator[AgentBridgeEvent]:
+    ) -> AsyncGenerator[AgentBridgeEvent, None]:
         assert self._workflow is not None
 
         handler = self._pending_local_handler
@@ -535,7 +535,7 @@ class LlamaAgentsBridge:
         if not callable(stream_events):
             return None
         try:
-            params = inspect.signature(stream_events).parameters
+            params: Mapping[str, inspect.Parameter] = inspect.signature(stream_events).parameters
         except (TypeError, ValueError):
             params = {}
         if "expose_internal" in params:
@@ -605,7 +605,7 @@ class LlamaAgentsBridge:
         self,
         turn_input: AgentTurnInput,
         cancel_token: CancelToken | None,
-    ) -> AsyncIterator[AgentBridgeEvent]:
+    ) -> AsyncGenerator[AgentBridgeEvent, None]:
         assert self._client is not None
         assert self._workflow_name is not None
 
@@ -1062,7 +1062,7 @@ _REMOTE_FAILURE_STATUSES = frozenset(
 
 def _raise_if_remote_failed(handler_data: Any, workflow_name: str | None) -> None:
     status = getattr(handler_data, "status", None)
-    status_str = status.value if hasattr(status, "value") else status
+    status_str = getattr(status, "value", status)
     if not isinstance(status_str, str):
         return
     if status_str.lower() not in _REMOTE_FAILURE_STATUSES:
@@ -1208,6 +1208,7 @@ def _extract_text_field(value: Any) -> str | None:
 
 
 def _event_mapping(event: Any) -> dict[str, Any]:
+    data: dict[str, Any]
     if isinstance(event, dict):
         data = dict(event)
         extra = data.get("_data")
@@ -1227,7 +1228,7 @@ def _event_mapping(event: Any) -> dict[str, Any]:
         except Exception:
             pass
 
-    data: dict[str, Any] = {}
+    data = {}
     for key in (*_TEXT_FIELDS, "value", "result"):
         try:
             if hasattr(event, key):

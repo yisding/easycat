@@ -36,9 +36,9 @@ from easycat.integrations.agents.base import (
 from easycat.runtime.records import ErrorInfo
 
 try:
-    from agents import Runner  # type: ignore[import-untyped]
+    from agents import Runner
 except ImportError:
-    Runner = None  # type: ignore[assignment,misc]
+    Runner = None
 
 logger = logging.getLogger(__name__)
 
