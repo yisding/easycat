@@ -56,7 +56,7 @@ from easycat.transports.twilio_media import TwilioTransportConfig
 from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
-from easycat.tts.factory import TTSConfig, parse_tts_string
+from easycat.tts.factory import TTSConfig, is_tts_config, parse_tts_string
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
 from easycat.vad import VADConfig
@@ -814,7 +814,10 @@ class EasyConfig(_AgentSessionConfig):
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
-        if isinstance(self.tts, TTSConfig) and self.auto_align_tts_output_to_transport:
+        # Catalog membership (not an isinstance against the built-in
+        # ``TTSConfig`` union) so third-party configs registered via
+        # ``register_tts_provider`` take the same alignment path.
+        if is_tts_config(self.tts) and self.auto_align_tts_output_to_transport:
             from ._tts_alignment import align_tts_config_to_transport
 
             self.tts = align_tts_config_to_transport(self.tts, self.transport)

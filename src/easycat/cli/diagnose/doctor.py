@@ -110,14 +110,32 @@ def check_easycat_version() -> CheckResult:
     return CheckResult(name="easycat_version", status="ok", detail=detail)
 
 
-# Provider → env var that holds its API key.  Used for both the
-# env-var presence check (E203) and the reachability check (E204).
-_PROVIDER_ENV: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+def _provider_env() -> dict[str, str]:
+    """Provider → env var that holds its API key.
+
+    Derived from the live STT/TTS factory catalogs (which run entry-point
+    discovery), so third-party providers registered via
+    ``register_stt_provider`` / ``register_tts_provider`` or the
+    ``easycat.stt_providers`` / ``easycat.tts_providers`` entry-point
+    groups get the same env-var (E203) and reachability (E204) checks as
+    built-ins.  Providers sharing an env var are collapsed to one row
+    (e.g. ``openai`` and ``openai-realtime`` both use ``OPENAI_API_KEY``).
+    """
+    from easycat.stt.factory import provider_env_vars as stt_env_vars
+    from easycat.tts.factory import provider_env_vars as tts_env_vars
+
+    merged = {**tts_env_vars(), **stt_env_vars()}
+    by_provider: dict[str, str] = {}
+    seen_vars: set[str] = set()
+    for provider in sorted(merged):
+        var = merged[provider]
+        if var in seen_vars:
+            continue
+        seen_vars.add(var)
+        by_provider[provider] = var
+    return by_provider
+
+
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -165,8 +183,9 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
     # Scoped mode: user asked to verify a specific provider.  A missing
     # key for *that* provider must fail — otherwise `doctor --provider X`
     # can false-green when a different provider happens to be configured.
+    provider_env = _provider_env()
     if only_provider is not None:
-        var = _PROVIDER_ENV.get(only_provider)
+        var = provider_env.get(only_provider)
         if var is None:
             return []
         if os.getenv(var, ""):
@@ -186,7 +205,7 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
 
     results: list[CheckResult] = []
     any_set = False
-    for provider, var in _PROVIDER_ENV.items():
+    for provider, var in provider_env.items():
         value = os.getenv(var, "")
         if value:
             any_set = True
@@ -209,9 +228,10 @@ def check_env_vars(only_provider: str | None = None) -> list[CheckResult]:
                 detail="no provider API keys set",
                 code="EASYCAT_E203",
                 fix=(
-                    "Set at least one of OPENAI_API_KEY, DEEPGRAM_API_KEY, "
-                    "ELEVENLABS_API_KEY, or CARTESIA_API_KEY. If your keys are "
-                    "in `.env`, run `easycat doctor --env-file .env`."
+                    "Set at least one of "
+                    + ", ".join(sorted(set(provider_env.values())))
+                    + ". If your keys are in `.env`, run "
+                    "`easycat doctor --env-file .env`."
                 ),
             )
         )
@@ -235,14 +255,18 @@ def check_provider_reachability(
     import httpx
 
     results: list[CheckResult] = []
-    for provider, var in _PROVIDER_ENV.items():
+    for provider, var in _provider_env().items():
         if only_provider and only_provider != provider:
             continue
         if not os.getenv(var):
             # Skip probes for unconfigured providers; we only care that
             # the configured ones are reachable.
             continue
-        url = _PROVIDER_PROBE_URL[provider]
+        url = _PROVIDER_PROBE_URL.get(provider)
+        if url is None:
+            # Discovered third-party providers carry no probe URL; their
+            # availability is covered by the env-var check above.
+            continue
         try:
             r = httpx.head(url, timeout=timeout, follow_redirects=True)
             # Any response (even 4xx) means the host is reachable.
@@ -565,12 +589,13 @@ def doctor(
             json_output=json_output,
         )
 
-    if only_provider is not None and only_provider not in _PROVIDER_ENV:
+    provider_env = _provider_env()
+    if only_provider is not None and only_provider not in provider_env:
         # A typo or mis-cased provider must fail loudly rather than fall
         # through to the generic checks and exit 0 — automation that
         # scopes doctor to one provider would otherwise treat the typo as
         # a green run.
-        supported = ", ".join(sorted(_PROVIDER_ENV))
+        supported = ", ".join(sorted(provider_env))
         _doctor_usage_error(
             f"Unknown --provider {only_provider!r}. Supported: {supported}.",
             json_output=json_output,

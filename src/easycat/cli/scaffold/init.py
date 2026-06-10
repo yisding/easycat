@@ -65,15 +65,22 @@ _PROVIDER_TO_EXTRA: dict[str, str] = {
     "cartesia": "cartesia",
 }
 
-# Provider name → env var that holds its API key.  Used to extend the
-# scaffolded ``.env.example`` so the developer sees every key they need.
-_PROVIDER_TO_ENV_VAR: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "openai-realtime": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+
+def _provider_to_env_var() -> dict[str, str]:
+    """Provider name → env var that holds its API key.
+
+    Used to extend the scaffolded ``.env.example`` so the developer sees
+    every key they need.  Derived from the live STT/TTS factory catalogs
+    (entry-point discovery included), so third-party providers registered
+    via ``register_stt_provider`` / ``register_tts_provider`` or the
+    ``easycat.stt_providers`` / ``easycat.tts_providers`` entry-point
+    groups surface here too.
+    """
+    from easycat.stt.factory import provider_env_vars as stt_env_vars
+    from easycat.tts.factory import provider_env_vars as tts_env_vars
+
+    return {**tts_env_vars(), **stt_env_vars()}
+
 
 # Per-template baseline extras that must always be present in the
 # generated ``pyproject.toml`` regardless of provider choices.
@@ -589,7 +596,7 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     for spec in (cfg.stt, cfg.tts):
         if not spec:
             continue
-        var = _PROVIDER_TO_ENV_VAR.get(_provider_name(spec))
+        var = _provider_to_env_var().get(_provider_name(spec))
         if var and var not in seen:
             extra.append(f"{var}=")
             seen.add(var)

@@ -671,7 +671,7 @@ def test_scaffold_provider_shortcuts_have_install_and_env_mappings() -> None:
     provider_names = set(available_stt_providers()) | set(available_tts_providers())
 
     missing_extras = sorted(provider_names - set(init_module._PROVIDER_TO_EXTRA))
-    missing_env_vars = sorted(provider_names - set(init_module._PROVIDER_TO_ENV_VAR))
+    missing_env_vars = sorted(provider_names - set(init_module._provider_to_env_var()))
     unknown_extras = sorted(set(init_module._PROVIDER_TO_EXTRA.values()) - known_extras)
 
     assert not missing_extras, "Scaffold missing provider extra mappings: " + ", ".join(
