@@ -47,6 +47,12 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat init --list-templates --json` when a script or coding agent
   needs the same template catalog and post-scaffold command previews, then use
   the CLI commands documented in the [root README](../README.md#cli).
+- Testing agents and running evals: climb the
+  [testing and evals ladder](testing-and-evals.md) — bundle fixtures,
+  offline text turns through `easycat.debug.testing` (`run_text_turn`,
+  `assert_latency`, `assert_llm_judge`), teaching chapter 12 metrics, then
+  live audio with `uv run easycat validate latency --smoke`. Scaffolded
+  projects ship an offline `tests/test_agent.py` to start from.
 - Automating the CLI: use `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,

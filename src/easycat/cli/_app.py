@@ -437,6 +437,22 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Testing and evals",
+        "path": "docs/testing-and-evals.md",
+        "audience": "app builders",
+        "description": (
+            "Climb the eval ladder: bundle fixtures, offline text turns, "
+            "latency budgets and LLM-as-judge, then live audio validation."
+        ),
+        "commands": (
+            "uv run pytest tests/debug/test_testing_helpers.py",
+            "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
+            "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
+            "uv run easycat validate latency --smoke",
+            "uv run easycat validate live --provider openai",
+        ),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",
