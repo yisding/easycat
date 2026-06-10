@@ -28,7 +28,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
     UnitKind,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 
 def _recorder(journal=None):
