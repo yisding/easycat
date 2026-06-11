@@ -1111,7 +1111,7 @@ async def test_session_errors_counter_increments_on_dispatch_failure(
 # ── docs/latency.md guard ────────────────────────────────────────
 
 _LATENCY_DOC = REPO_ROOT / "docs/latency.md"
-# Rows look like: | `TurnManagerConfig.end_of_turn_silence_ms` | `1000` | ... |
+# Rows look like: | `TurnManagerConfig.end_of_turn_silence_ms` | `800` | ... |
 _LATENCY_DEFAULT_ROW = re.compile(
     r"^\| `(?P<cls>\w+)\.(?P<field>\w+)` \| `(?P<value>[0-9]+(?:\.[0-9]+)?)` \|",
     re.MULTILINE,

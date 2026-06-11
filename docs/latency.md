@@ -55,7 +55,7 @@ value below is asserted against the code by a guard test
 
 | Default | Value | Where it waits | Tuning guidance |
 | --- | --- | --- | --- |
-| `TurnManagerConfig.end_of_turn_silence_ms` | `1000` | After VAD reports silence, the turn stays open this long before the agent is invoked. Usually the single largest fixed cost in `vad_endpoint_to_stt_final_ms`. | Set via `EasyConfig(turn_taking=TurnManagerConfig(...))`. 600–800 ms feels noticeably snappier; below ~400 ms expect mid-sentence cutoffs unless smart-turn is enabled. With `smart_turn=True` this becomes the *fallback* timer, so a confident endpoint ends the turn well before it expires. |
+| `TurnManagerConfig.end_of_turn_silence_ms` | `800` | After VAD reports silence, the turn stays open this long before the agent is invoked. Usually the single largest fixed cost in `vad_endpoint_to_stt_final_ms`. | Set via `EasyConfig(turn_taking=TurnManagerConfig(...))`. 600–800 ms feels noticeably snappier; below ~400 ms expect mid-sentence cutoffs unless smart-turn is enabled. With `smart_turn=True` this becomes the *fallback* timer, so a confident endpoint ends the turn well before it expires. |
 | `TurnManagerConfig.stt_segment_silence_ms` | `0` | Extra silence budget, after VAD stop, before the current STT segment is finalized. | Already zero — the segment commits as soon as VAD pauses. Raise it only if your STT provider splits sentences too eagerly; every millisecond lands directly on the response path. |
 | `VADConfig.min_silence_duration_ms` | `150` | The VAD must observe this much continuous silence before emitting the stop-of-speech event that *starts* the end-of-turn countdown. | Adds directly in front of `end_of_turn_silence_ms`. Lowering makes endpointing twitchier on breaths and pauses; 100–200 ms is the practical range. |
 | `VADConfig.min_speech_duration_ms` | `250` | Speech must persist this long before the VAD reports start-of-speech. | Delays turn start and barge-in detection slightly. Lowering increases false triggers from coughs and background noise. |
@@ -87,8 +87,8 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 ## A worked triage
 
 1. `easycat bundles show .easycat/recordings/<bundle>.zip --json | jq '.turns'`
-2. A turn shows `vad_endpoint_to_stt_final_ms: 1180` — about 150 ms of VAD
-   silence confirmation plus the 1000 ms end-of-turn timer plus STT
+2. A turn shows `vad_endpoint_to_stt_final_ms: 980` — about 150 ms of VAD
+   silence confirmation plus the 800 ms end-of-turn timer plus STT
    finalization. That is the configured floor, not a regression.
 3. Enable `smart_turn=True` (or lower `end_of_turn_silence_ms`) and re-run;
    the same delta should drop to roughly the STT finalization cost.

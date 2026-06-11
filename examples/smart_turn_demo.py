@@ -1,6 +1,6 @@
 """Smart-turn endpoint detection — finish turns early via ONNX classifier.
 
-By default ``TurnManager`` waits ``end_of_turn_silence_ms`` (1 s) of silence
+By default ``TurnManager`` waits ``end_of_turn_silence_ms`` (0.8 s) of silence
 before ending the turn. Smart-turn classifies captured audio with a ~8 MB
 Whisper-Tiny ONNX model and ends early when confident.
 
