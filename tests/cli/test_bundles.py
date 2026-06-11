@@ -17,6 +17,16 @@ from easycat.debug.export import export_debug_bundle
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
 
 
+def _unwrapped(text: str) -> str:
+    """Collapse Rich's width-dependent line wrapping for substring asserts.
+
+    Long absolute paths (e.g. pytest-xdist tmp dirs) can exceed the 80-column
+    non-TTY console width and get broken mid-word, so substring checks must
+    not depend on where the wrap lands.
+    """
+    return text.replace("\n", "")
+
+
 class _FakeJournal:
     """Minimal journal stub exposing ``read`` for ``export_debug_bundle``."""
 
@@ -111,7 +121,7 @@ def test_bundles_list_empty_renders_bracketed_path_literally(
     result = cli.invoke(app, ["bundles", "list", "--path", str(scan_path)])
 
     assert result.exit_code == 0
-    assert "recordings[red]" in result.stderr
+    assert "recordings[red]" in _unwrapped(result.stderr)
 
 
 def test_bundles_list_finds_recordings(cli: CliRunner, tmp_path: Path) -> None:
@@ -389,9 +399,9 @@ def test_bundles_show_renders_bracketed_summary_values_literally(
     result = cli.invoke(app, ["bundles", "show", str(bundle)])
 
     assert result.exit_code == 0, result.stderr
-    assert "demo[red].zip" in result.stderr
-    assert "sess[red]" in result.stdout
-    assert "stt[red]=provider[red]" in result.stdout
+    assert "demo[red].zip" in _unwrapped(result.stderr)
+    assert "sess[red]" in _unwrapped(result.stdout)
+    assert "stt[red]=provider[red]" in _unwrapped(result.stdout)
 
 
 def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
@@ -470,7 +480,7 @@ def test_bundles_export_renders_output_path_literally(cli: CliRunner, tmp_path: 
     result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", str(output)])
 
     assert result.exit_code == 0, result.stderr
-    assert str(output) in result.stdout
+    assert str(output) in _unwrapped(result.stdout)
     assert (output / "summary.json").exists()
 
 
@@ -674,8 +684,8 @@ def test_replay_summary_renders_bracketed_stage_and_tool_names_literally(
     result = cli.invoke(app, ["replay", str(bundle), "--tool-policy", "stub"])
 
     assert result.exit_code == 0, result.stderr
-    assert "replay[red].zip" in result.stderr
-    assert "lookup[red](c1)" in result.stdout
+    assert "replay[red].zip" in _unwrapped(result.stderr)
+    assert "lookup[red](c1)" in _unwrapped(result.stdout)
 
 
 def test_replay_bundle_blocks_tool_side_effects_by_default(
