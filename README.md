@@ -132,11 +132,13 @@ frameworks, and debugging/audio-processing features:
   range needed by the fixed ONNX package on Python 3.13+.
 - pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise --group dev`
 - Krisp SDK (krisp_audio): `uv pip install krisp_audio`
-- Provider SDKs/keys:
+- Provider extras/keys:
   `uv sync --extra openai --group dev`,
   `uv sync --extra deepgram --group dev`,
   `uv sync --extra elevenlabs --group dev`,
-  or `uv sync --extra cartesia --group dev` (Cartesia uses EasyCat's core WebSocket stack).
+  or `uv sync --extra cartesia --group dev` (Deepgram, ElevenLabs, and Cartesia
+  use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
+  add no vendor SDK).
 
 ## CLI
 
@@ -656,7 +658,7 @@ session = create_session(config)
 ```
 
 The `pydantic-ai` extra targets stable PydanticAI v1. The
-`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b3` exactly for local
+`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b7` exactly for local
 verification and apps that want to opt into the prerelease before it is stable.
 
 ### Workflows (recommended for multi-step voice apps)
