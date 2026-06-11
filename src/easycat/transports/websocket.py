@@ -3,7 +3,12 @@
 Hosts a WebSocket server on a configurable port. Each client connection maps
 to a single audio session. The wire protocol uses:
   - **Binary frames** for raw PCM16 audio chunks.
-  - **Text frames** for JSON control messages (``start``, ``stop``, ``config``).
+  - **Text frames** for JSON control messages (``start``, ``stop``, ``config``)
+    and server → browser event messages (transcripts, interruptions, per-turn
+    latency; see ``transports/_browser_events.py``).
+
+The maintained reader-facing description of the wire protocol lives in
+``docs/browser-playground.md``.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from easycat._audio_utils import resample_chunk
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.session_manager import SessionManager
-from easycat.transports._base import _AudioQueueMixin, _ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,7 +44,7 @@ _MIN_NEGOTIATED_SAMPLE_RATE = 8000
 _MAX_NEGOTIATED_SAMPLE_RATE = 384000
 
 # WebSocket-specific ``TransportDegraded.reason`` codes emitted on the session
-# event bus (via the inherited ``_AudioQueueMixin._emit_degraded``).  These
+# event bus (via the inherited ``AudioQueueMixin._emit_degraded``).  These
 # mirror conditions that previously only reached ``logger.warning``; emitting
 # them keeps the journal the single source of truth for observability.  The
 # cross-transport ``inbound_queue_full`` code is emitted by ``_enqueue_chunk``
@@ -232,7 +237,7 @@ def run_websocket_config_server(
     )
 
 
-class WebSocketTransport(_ServerTransportBase):
+class WebSocketTransport(ServerTransportBase):
     """Transport that accepts a single WebSocket client connection.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -248,7 +253,13 @@ class WebSocketTransport(_ServerTransportBase):
 
     **Outbound (server -> client):**
       - Binary frame: raw PCM16 audio bytes.
-      - Text frame: JSON control message (e.g., ``{"type": "ready"}``).
+      - Text frame: JSON control message (e.g., ``{"type": "ready"}``) or
+        session event message (``stt_partial``, ``stt_final``, ``agent_delta``,
+        ``agent_final``, ``turn_started``, ``interruption``, ``turn_latency``;
+        see :mod:`easycat.transports._browser_events`).
+
+    The maintained reader-facing description of this protocol lives in
+    ``docs/browser-playground.md``.
     """
 
     transport_kind = "websocket"
@@ -266,6 +277,20 @@ class WebSocketTransport(_ServerTransportBase):
         self._outbound_rate: int | None = None
 
     # ── Transport protocol ────────────────────────────────────────
+
+    async def connect(self) -> None:
+        await super().connect()
+        self._ensure_browser_event_forwarder()
+
+    async def disconnect(self) -> None:
+        self._close_browser_event_forwarder()
+        await super().disconnect()
+
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        ws = self._ws
+        if ws is None:
+            return
+        await ws.send(json.dumps(payload))
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the connected WebSocket client as a binary frame.
@@ -423,7 +448,7 @@ class WebSocketTransport(_ServerTransportBase):
         }
 
 
-class WebSocketConnectionTransport(_AudioQueueMixin):
+class WebSocketConnectionTransport(AudioQueueMixin):
     """Transport bound to a single existing WebSocket connection.
 
     Useful for servers that already own the WebSocket accept loop and want
@@ -457,12 +482,14 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
         self._connected = True
         self._client_connected.set()
         self._outbound_rate = None
+        self._ensure_browser_event_forwarder()
         await self._ws.send(json.dumps({"type": "ready"}))
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def disconnect(self) -> None:
         if not self._connected:
             return
+        self._close_browser_event_forwarder()
         self._connected = False
         self._client_connected.clear()
         if self._receive_task is not None and not self._receive_task.done():
@@ -496,6 +523,11 @@ class WebSocketConnectionTransport(_AudioQueueMixin):
 
     async def clear_audio(self) -> None:
         """No-op — WebSocket sends frames immediately without buffering."""
+
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        if not self._connected:
+            return
+        await self._ws.send(json.dumps(payload))
 
     async def _receive_loop(self) -> None:
         target_rate = self._config.audio_format.sample_rate

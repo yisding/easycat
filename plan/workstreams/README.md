@@ -18,7 +18,7 @@ Known drift from the records:
 - The old root `src/easycat/agent_runner.py` and `src/easycat/agents/` are
   gone, but `easycat.integrations.agents._agent_runner.AgentRunner` remains
   active.
-- `Session` is reduced but still roughly 1,437 lines, so the historical
+- `Session` is reduced but still roughly 1,440 lines, so the historical
   `<500` target was not met.
 - `easycat inspect`, `easycat replay`, `easycat validate`, and
   `python -m easycat` exist.

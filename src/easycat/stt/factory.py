@@ -14,6 +14,11 @@ from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
 
+# Typing aliases for the *built-in* configs. The runtime registry is open:
+# third-party providers registered via :func:`register_stt_provider` (or the
+# ``easycat.stt_providers`` entry-point group) dispatch through the catalog,
+# so runtime checks must use :func:`is_stt_config`, never ``isinstance``
+# against this union.
 STTConfig = (
     OpenAISTTConfig
     | OpenAIRealtimeSTTConfig
@@ -48,12 +53,82 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "cartesia": "CARTESIA_API_KEY",
 }
 
+# Provider name → optional install extra shipping its dependencies.
+# Consumed by ``easycat init`` to scaffold ``pyproject.toml`` extras.
+_PROVIDER_EXTRA: dict[str, str] = {
+    "openai": "openai",
+    "openai-realtime": "openai",
+    "deepgram": "deepgram",
+    "elevenlabs": "elevenlabs",
+    "cartesia": "cartesia",
+}
+
+# Provider name → API host domains. Consumed by validation redaction to
+# scrub provider URLs from exported artifacts.
+_PROVIDER_API_DOMAINS: dict[str, tuple[str, ...]] = {
+    "openai": ("openai.com",),
+    "openai-realtime": ("openai.com",),
+    "deepgram": ("deepgram.com",),
+    "elevenlabs": ("elevenlabs.io",),
+    "cartesia": ("cartesia.ai",),
+}
+
+# Entry-point group scanned (lazily, at first factory call) for
+# third-party STT providers. Each entry point must load to a zero-arg
+# callable that calls :func:`register_stt_provider`.
+STT_PROVIDER_ENTRY_POINT_GROUP = "easycat.stt_providers"
+
 _CATALOG = ProviderCatalog(
     providers=_PROVIDER_TO_CONFIG,
     env_vars=_PROVIDER_ENV_VAR,
+    extras=_PROVIDER_EXTRA,
+    api_domains=_PROVIDER_API_DOMAINS,
     kind="STT",
+    entry_point_group=STT_PROVIDER_ENTRY_POINT_GROUP,
 )
 _CONFIG_TO_PROVIDER: dict[STTConfigType, type[STTBase]] = _CATALOG.config_to_provider
+
+
+def register_stt_provider(
+    name: str,
+    provider_cls: type,
+    config_cls: type,
+    *,
+    env_var: str,
+    extra: str | None = None,
+    api_domains: tuple[str, ...] = (),
+) -> None:
+    """Register a third-party STT provider under a string shortcut name.
+
+    After registration the provider participates everywhere built-ins do:
+    ``stt="<name>/<model>"`` shortcuts, :func:`create_stt_provider`,
+    :func:`available_stt_providers`, ``easycat doctor`` env-var checks,
+    and ``easycat init`` scaffold validation.
+
+    ``provider_cls`` must accept its ``config_cls`` instance as the sole
+    constructor argument (the same contract built-in providers follow);
+    ``env_var`` names the environment variable holding the API key.
+    ``extra`` optionally names an install extra surfaced by ``easycat
+    init`` scaffold extras; ``api_domains`` optionally lists API host
+    domains folded into validation's URL redaction.
+
+    Packages can register automatically by exposing a zero-arg callable
+    that performs this call under the ``easycat.stt_providers``
+    entry-point group.
+    """
+    _CATALOG.register(
+        name, provider_cls, config_cls, env_var=env_var, extra=extra, api_domains=api_domains
+    )
+
+
+def is_stt_config(value: object) -> bool:
+    """True when ``value`` is an instance of a registered STT config class."""
+    return _CATALOG.is_config_instance(value)
+
+
+def provider_env_vars() -> dict[str, str]:
+    """Return the provider-name → API-key-env-var map (discovery included)."""
+    return _CATALOG.provider_env_vars()
 
 
 @dataclass

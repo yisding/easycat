@@ -27,7 +27,7 @@ from easycat.integrations.agents.base import (
     RecorderContext,
     UnitKind,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import ErrorInfo
 
 # ── Custom bridge (matches plan appendix Example 5) ─────────────

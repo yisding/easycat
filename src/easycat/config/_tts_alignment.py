@@ -69,7 +69,14 @@ def align_tts_config_to_transport(
     tts_config: TTSConfig,
     transport: object,
 ) -> TTSConfig:
-    """Re-target a default TTS config to the transport's preferred PCM rate."""
+    """Re-target a default TTS config to the transport's preferred PCM rate.
+
+    Dispatch below is per-built-in-provider on purpose: each branch encodes
+    that provider's supported output rates. Any other catalog-registered
+    config (e.g. a third-party provider added via ``register_tts_provider``)
+    reaches this function too — ``EasyConfig`` gates on catalog membership,
+    not the built-in ``TTSConfig`` union — and falls through unchanged.
+    """
     target_format = _transport_tts_output_format(transport)
     if target_format is None:
         return tts_config

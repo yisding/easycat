@@ -24,7 +24,7 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 # ── Workflow (matches plan appendix Example 4) ───────────────────
 

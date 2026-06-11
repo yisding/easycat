@@ -401,6 +401,35 @@ class TestWebSocketTransport(_UsesPytestTcpPortFactory):
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_server_forwards_session_events_as_json_text_frames(self):
+        """Session events reach the browser as JSON control messages."""
+        from easycat.events import STTFinal
+
+        port = self._unused_port()
+        config = WebSocketTransportConfig(host="127.0.0.1", port=port)
+        transport = WebSocketTransport(config)
+        bus = EventBus()
+        transport._event_bus = bus  # Session attaches the bus pre-connect.
+        await transport.connect()
+
+        async with websockets.connect(f"ws://127.0.0.1:{port}") as ws:
+            await ws.recv()  # ready
+            await asyncio.sleep(0.05)
+
+            await bus.emit(STTFinal(text="hello there", turn_id="t1"))
+            message = await asyncio.wait_for(ws.recv(), timeout=2.0)
+            assert json.loads(message) == {
+                "type": "stt_final",
+                "text": "hello there",
+                "turn_id": "t1",
+            }
+
+        await transport.disconnect()
+
+        # Teardown unsubscribes the forwarder; later emits must not raise.
+        await bus.emit(STTFinal(text="late", turn_id="t2"))
+
+    @pytest.mark.asyncio
     async def test_control_message_config(self):
         """Client can send a config control message to negotiate format."""
         port = self._unused_port()

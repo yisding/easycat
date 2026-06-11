@@ -148,7 +148,7 @@ async def test_openai_agents_bridge_atomic_interruption_ordering() -> None:
     from easycat.integrations.agents._recorder import JournalAgentRecorder
     from easycat.integrations.agents.base import RecorderContext
     from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
-    from easycat.runtime.journal import InMemoryRingBuffer
+    from easycat.runtime import InMemoryRingBuffer
 
     class StubAgent:
         name = "stub"
@@ -231,7 +231,7 @@ async def test_remote_bridge_applies_interruption_with_n1_chain() -> None:
     from easycat.integrations.agents.responses_api import (
         RemoteResponsesAPIBridge,
     )
-    from easycat.runtime.journal import InMemoryRingBuffer
+    from easycat.runtime import InMemoryRingBuffer
     from tests.integrations.agents.mock_responses_server import (
         MockResponsesServer,
     )

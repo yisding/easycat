@@ -1,6 +1,6 @@
 from easycat.events import EventBus
+from easycat.runtime import InMemoryRingBuffer, JournalView
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from easycat.runtime.journal import InMemoryRingBuffer, JournalView
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._debug_backends import SessionDebugBackends
 from easycat.session._journal_sink import SessionJournalSink

@@ -36,9 +36,8 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
-from easycat.runtime import JournalRecordKind
+from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.turn_manager import TurnManagerConfig
@@ -149,7 +148,7 @@ async def test_export_overwrite_guard(tmp_path: pathlib.Path) -> None:
 async def test_recover_from_partial_journal(tmp_path: pathlib.Path) -> None:
     """After an unclean shutdown, ``from_partial_journal`` must load the
     remaining records into a valid bundle."""
-    from easycat.runtime.journal import SqliteJournal
+    from easycat.runtime import SqliteJournal
 
     data_dir = tmp_path / "recovery"
     data_dir.mkdir()

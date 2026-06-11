@@ -13,6 +13,12 @@ uv sync
 This installs `easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR` from
 `pyproject.toml`, including the extras this generated project needs.
 
+EasyCat is not on PyPI yet. If this project was scaffolded from a local
+EasyCat checkout (the default for repo/editable installs, or via
+`--easycat-source`), `pyproject.toml` also carries a `[tool.uv.sources]`
+block so `uv sync` resolves `easycat` from that checkout. Delete the
+block and re-run `uv sync` once you depend on the published package.
+
 ## Configure
 
 ```bash
@@ -25,8 +31,8 @@ Edit `.env` and set `OPENAI_API_KEY`. Run doctor with that file loaded:
 uv run easycat doctor --env-file .env
 ```
 
-Use `uv run easycat doctor --env-file .env --json` when a script or coding
-agent needs parseable environment/check rows.
+Add `--json` (`uv run easycat doctor --env-file .env --json`) for parseable
+environment/check rows.
 
 ## Run
 
@@ -50,6 +56,14 @@ uv run ruff check agent.py
 If Ruff reports an auto-fixable issue, run
 `uv run ruff check --fix agent.py` and then re-run the check.
 
+Then run the offline agent tests — no API keys or network needed
+(`tests/test_agent.py` exercises the real turn pipeline with a stub
+agent; see `AGENTS.md` for the testing-and-evals ladder):
+
+```bash
+uv run pytest
+```
+
 ## Next steps
 
 - **Change the routing:** edit the keyword checks in `on_user_turn(...)`.
@@ -65,16 +79,22 @@ If Ruff reports an auto-fixable issue, run
   `EasyConfig.mic(...)`. EasyCat writes a SQLite journal under
   `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+- **Graduate to the Session API:** when you need event subscriptions, text
+  turns, or replayable debug bundles beyond `run(...)`, follow the
+  from-EasyConfig-to-Session guide:
+  <https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md>.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to
-  app-building routes. Use
-  `uv run easycat docs --audience app-builders --json` when automation needs
-  that smaller route map, or `uv run easycat docs --json` when a script or
-  coding agent needs the full route map with command hints and audience labels.
+  app-building routes; add `--json`
+  (`uv run easycat docs --audience app-builders --json`,
+  `uv run easycat docs --json`) when automation needs the route map with
+  command hints and audience labels.
   If this is not the right starter, run `uv run easycat init --list-templates`; use
   `uv run easycat init --list-templates --json` when automation needs the
   template catalog. Replace uppercase or angle-bracket placeholders such as
-  `PATH` or `<session_id>` before running those hints. Run
+  `PATH` or `<session_id>` before running those hints.
+  Coding agent? Start at EasyCat's
+  [llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt) or run
   `uv run easycat explain json-schema` for the JSON envelope and field
   contract.

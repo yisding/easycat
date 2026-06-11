@@ -7,7 +7,7 @@ from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from easycat.transports._base import _AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin
 from easycat.transports.local import LocalTransport
 from easycat.transports.webrtc import WebRTCTransport
 from easycat.transports.websocket import WebSocketTransport
@@ -29,8 +29,8 @@ class TestBaseClassesHaveVersionInfo:
         assert set(info.keys()) == EXPECTED_KEYS
 
     def test_transport_base(self):
-        # _AudioQueueMixin isn't instantiated directly, but check the method exists.
-        assert hasattr(_AudioQueueMixin, "version_info")
+        # AudioQueueMixin isn't instantiated directly, but check the method exists.
+        assert hasattr(AudioQueueMixin, "version_info")
 
 
 class TestSTTProviderVersionInfo:

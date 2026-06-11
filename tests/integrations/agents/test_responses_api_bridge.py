@@ -42,7 +42,7 @@ from easycat.integrations.agents.base import (
     UnitKind,
 )
 from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 
 from .mock_responses_server import MockResponsesServer
 

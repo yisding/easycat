@@ -9,9 +9,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=8",
     "ruff>=0.9",
 ]
 
 [tool.ruff]
 line-length = 99
 target-version = "py311"
+$EASYCAT_SOURCES_BLOCK

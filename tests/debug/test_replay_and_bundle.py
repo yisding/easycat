@@ -574,7 +574,7 @@ class TestBundlePartialJournal:
         degradation signal — the journal_degraded marker is persisted to disk
         and flows into the bundle records (regression for runtime-observability-1).
         """
-        from easycat.runtime.journal import SqliteJournal
+        from easycat.runtime import SqliteJournal
 
         j = SqliteJournal("degraded-sess", data_dir=tmp_path)
         circular: dict[str, object] = {}

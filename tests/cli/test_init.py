@@ -180,9 +180,11 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert catalog["openai-agents"]["files"] == [
         ".env.example",
         ".gitignore",
+        "AGENTS.md",
         "README.md",
         "agent.py",
         "pyproject.toml",
+        "tests/test_agent.py",
     ]
     assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
     assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
@@ -493,14 +495,14 @@ def test_init_omits_cache_artifacts(
     generated_paths = [
         path.relative_to(project).as_posix() for path in project.rglob("*") if path != project
     ]
-    offenders = release_artifact_offenders(generated_paths)
+    offenders = release_artifact_offenders(generated_paths, scaffold_project=True)
     assert not offenders, "generated project shipped local/generated artifacts: " + ", ".join(
         offenders
     )
 
     # The reported file manifest is equally clean.
     payload = json.loads(result.stdout)
-    manifest_offenders = release_artifact_offenders(payload["files"])
+    manifest_offenders = release_artifact_offenders(payload["files"], scaffold_project=True)
     assert not manifest_offenders, "reported generated-project manifest is not clean: " + (
         ", ".join(manifest_offenders)
     )
@@ -670,9 +672,9 @@ def test_scaffold_provider_shortcuts_have_install_and_env_mappings() -> None:
     known_extras = set(pyproject["project"]["optional-dependencies"])
     provider_names = set(available_stt_providers()) | set(available_tts_providers())
 
-    missing_extras = sorted(provider_names - set(init_module._PROVIDER_TO_EXTRA))
-    missing_env_vars = sorted(provider_names - set(init_module._PROVIDER_TO_ENV_VAR))
-    unknown_extras = sorted(set(init_module._PROVIDER_TO_EXTRA.values()) - known_extras)
+    missing_extras = sorted(provider_names - set(init_module._provider_to_extra()))
+    missing_env_vars = sorted(provider_names - set(init_module._provider_to_env_var()))
+    unknown_extras = sorted(set(init_module._provider_to_extra().values()) - known_extras)
 
     assert not missing_extras, "Scaffold missing provider extra mappings: " + ", ".join(
         missing_extras
@@ -892,27 +894,37 @@ def test_init_next_steps_load_env_for_doctor(
     result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
     normalized_stderr = " ".join(result.stderr.split())
     assert result.exit_code == 0, result.stderr
-    assert "uv run easycat doctor --env-file .env" in result.stderr
-    assert "uv run easycat doctor --env-file .env --json" in result.stderr
-    assert "parseable setup checks" in result.stderr
-    assert "uv run ruff check agent.py" in result.stderr
-    assert "lint and syntax check" in result.stderr
-    assert "uv run ruff check --fix agent.py" in result.stderr
-    assert "auto-fix Ruff issues if the check reports them" in normalized_stderr
-    assert "uv run python -m py_compile" not in result.stderr
-    assert "uv run easycat docs" in result.stderr
-    assert "find learning, maintenance, validation, and operations routes" in normalized_stderr
-    assert "find learning, maintenance, and operations routes" not in normalized_stderr
-    assert "uv run easycat docs --audience app-builders" in result.stderr
-    assert "app-builder routes only" in result.stderr
-    assert "uv run easycat docs --audience app-builders --json" in result.stderr
-    assert "parseable app-builder route map" in normalized_stderr
-    assert "uv run easycat docs --json" in result.stderr
-    assert "route map with command hints" in result.stderr
-    assert "audience labels" in result.stderr
-    assert "uv run easycat explain json-schema" in result.stderr
-    assert "JSON envelope and field contract" in result.stderr
+    assert "cd demo" in result.stderr
+    assert "cp .env.example .env" in result.stderr
+    assert "fill in your API keys" in normalized_stderr
+    assert "uv sync && uv run easycat doctor --env-file .env" in normalized_stderr
     assert "uvx easycat doctor" not in result.stderr
+    assert "uv run python -m py_compile" not in result.stderr
+
+
+def test_init_next_steps_human_output_is_trimmed(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The human footer stays short; the full catalog lives in the JSON envelope."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    normalized_stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 0, result.stderr
+
+    next_steps = result.stderr.split("Next steps:", 1)[1]
+    command_lines = [
+        line for line in next_steps.splitlines() if line.startswith("  ") and line.strip()
+    ]
+    assert len(command_lines) <= 5
+
+    assert "uv run easycat doctor --env-file .env --json" not in result.stderr
+    assert "uv run ruff check agent.py" not in result.stderr
+    assert "uv run ruff check --fix agent.py" not in result.stderr
+    assert "uv run easycat docs --audience app-builders" not in result.stderr
+    assert "uv run easycat explain json-schema" not in result.stderr
+    assert "easycat init --list-templates --json" in normalized_stderr
+    assert "next_step_commands" in normalized_stderr
 
 
 def test_init_next_steps_quote_project_name_for_shell(
@@ -959,20 +971,27 @@ def test_init_next_steps_match_template_readme_run_command(
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
-def test_init_next_steps_match_template_readme_check_command(
+def test_init_next_steps_omit_check_and_fix_commands(
     cli: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     template: str,
 ) -> None:
+    """Check/fix commands stay out of the trimmed footer but in the JSON catalog."""
     monkeypatch.chdir(tmp_path)
     name = f"demo-{template}"
     config = json.dumps({"schema_version": 1, "template": template})
     result = cli.invoke(app, ["init", name, "--config", config, "--no-git"])
 
     assert result.exit_code == 0, result.stderr
-    assert _template_readme_check_command(template) in " ".join(result.stderr.split())
-    assert _template_readme_fix_command(template) in " ".join(result.stderr.split())
+    assert _template_readme_check_command(template) not in " ".join(result.stderr.split())
+    assert _template_readme_fix_command(template) not in " ".join(result.stderr.split())
+    assert _template_readme_check_command(template) in init_module._next_step_commands(
+        Path(name), template
+    )
+    assert _template_readme_fix_command(template) in init_module._next_step_commands(
+        Path(name), template
+    )
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
@@ -1051,3 +1070,156 @@ def test_init_list_templates_json_catalog_includes_next_step_commands(cli: CliRu
         assert catalog[template]["run_command"] == _template_readme_run_command(template)
         assert catalog[template]["check_command"] == _template_readme_check_command(template)
         assert catalog[template]["fix_command"] == _template_readme_fix_command(template)
+
+
+# ── easycat source wiring (pre-launch local checkout) ────────────────
+
+
+def _fake_checkout(tmp_path: Path) -> Path:
+    checkout = tmp_path / "easycat-checkout"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text('[project]\nname = "easycat"\n', encoding="utf-8")
+    return checkout
+
+
+def test_init_easycat_source_flag_writes_uv_sources_block(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        ["init", "demo", "--config", config, "--no-git", "--easycat-source", str(REPO_ROOT)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {
+        "path": str(REPO_ROOT),
+        "editable": True,
+    }
+    assert "local checkout" in result.stderr
+
+
+def test_init_config_easycat_source_writes_uv_sources_block(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    checkout = _fake_checkout(tmp_path)
+    config = json.dumps(
+        {"schema_version": 1, "template": "text-chat", "easycat_source": str(checkout)}
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {
+        "path": str(checkout),
+        "editable": True,
+    }
+
+
+def test_init_easycat_source_flag_overrides_config_field(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    checkout = _fake_checkout(tmp_path)
+    config = json.dumps(
+        {"schema_version": 1, "template": "text-chat", "easycat_source": str(checkout)}
+    )
+    result = cli.invoke(
+        app,
+        ["init", "demo", "--config", config, "--no-git", "--easycat-source", str(REPO_ROOT)],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = (tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8")
+    assert str(REPO_ROOT) in pyproject
+    assert str(checkout) not in pyproject
+
+
+def test_init_auto_detects_editable_install_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    checkout = _fake_checkout(tmp_path)
+    monkeypatch.setattr(init_module, "_editable_easycat_source", lambda: checkout)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = tomllib.loads((tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["tool"]["uv"]["sources"]["easycat"] == {
+        "path": str(checkout),
+        "editable": True,
+    }
+
+
+def test_init_published_install_renders_no_sources_block(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(init_module, "_editable_easycat_source", lambda: None)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+
+    assert result.exit_code == 0, result.stderr
+    pyproject = (tmp_path / "demo" / "pyproject.toml").read_text(encoding="utf-8")
+    assert "$EASYCAT_SOURCES_BLOCK" not in pyproject
+    assert "[tool.uv.sources]" not in pyproject
+    assert pyproject.endswith('target-version = "py311"\n')
+
+
+def test_init_easycat_source_rejects_path_without_pyproject(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    empty = tmp_path / "not-a-checkout"
+    empty.mkdir()
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        ["init", "demo", "--config", config, "--no-git", "--easycat-source", str(empty)],
+    )
+
+    assert result.exit_code == 4
+    assert "EASYCAT_E102" in result.stderr
+    assert "pyproject.toml" in result.stderr
+    assert not (tmp_path / "demo").exists()
+
+
+def test_init_json_reports_easycat_source(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(
+        app,
+        [
+            "init",
+            "demo",
+            "--config",
+            config,
+            "--no-git",
+            "--json",
+            "--easycat-source",
+            str(REPO_ROOT),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["easycat_source"] == str(REPO_ROOT)
+
+
+def test_init_json_easycat_source_is_null_for_published_install(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(init_module, "_editable_easycat_source", lambda: None)
+    config = json.dumps({"schema_version": 1, "template": "text-chat"})
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git", "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["easycat_source"] is None

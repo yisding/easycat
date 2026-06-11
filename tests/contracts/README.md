@@ -11,6 +11,13 @@ schema drift fingerprints, and bridge event grammar. A provider surface must
 have a row in [`provider_surface_matrix.py`](provider_surface_matrix.py) or an
 explicit exclusion with a reason before it can be considered covered.
 
+The protocol-semantics assertions themselves ship in the installable contract
+kit (`src/easycat/testing/`): each per-surface contract file here subclasses
+the corresponding `easycat.testing` suite with its offline fake as
+`provider_factory`, so the kit external provider authors run and the in-tree
+contract tests cannot drift. The kit's own machinery tests live in
+`tests/testing/` and run in the same `just guard-contracts` lane.
+
 When adding or changing provider behavior:
 
 1. Update the relevant row in
@@ -28,13 +35,14 @@ When adding or changing provider behavior:
    matrix separate from protocol contract assertions.
 
 From the repository root, run `uv run easycat validate contracts` for the
-offline provider, protocol, and bridge contract lane. Use
-`uv run easycat validate contracts --json` when a script or coding agent needs
-the same contract run inside the standard CLI envelope. Use
+offline provider, protocol, and bridge contract lane (add `--json` for the
+same run inside the standard CLI envelope:
+`uv run easycat validate contracts --json`). Use
 `uv run easycat docs --audience provider-maintainers` to narrow the maintained
 docs map to provider-facing routes, or
 `uv run easycat docs --audience provider-maintainers --json` when automation
-needs that smaller route map with command hints. Use
+needs that smaller route map. Coding agent? Start at
+[llms.txt](../../llms.txt) or run `uv run easycat explain json-schema`. Use
 `uv run pytest tests/contracts` for the focused contract suite, and
 `uv run pytest tests/integration/test_provider_contract_matrix.py` when you
 need to verify the separate factory/session wiring matrix.

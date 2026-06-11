@@ -522,8 +522,12 @@ Add planned markers:
 - `surface_transport`
 - `surface_vad`
 - `agent_bridge`
-- `requires_extra(name)`: optional dependency extra needed for a test
 - `provider(name)`: generic provider metadata for future/custom providers
+
+There is deliberately no `requires_extra` marker: it marked zero tests and
+was dropped (2026-06-09). Optional-extra coverage comes from the nightly
+extras install matrix (import smoke plus offline contract tests with the
+real SDK installed) rather than marker bookkeeping.
 
 Cost markers and provider markers should stay orthogonal so selectors can
 combine them, for example `contract and provider_openai and surface_stt`.
@@ -558,7 +562,6 @@ markers = [
     "surface_transport: transport surface coverage",
     "surface_vad: VAD surface coverage",
     "agent_bridge: agent bridge contract or live coverage",
-    "requires_extra(name): test requires an optional dependency extra",
     "provider(name): generic provider metadata for custom provider filtering",
 ]
 ```
@@ -591,6 +594,7 @@ Planned manual/nightly/release:
 - manual provider-specific live smoke
 - nightly full local suite
 - nightly socket suite
+- nightly extras install matrix with import smoke and offline contract tests
 - nightly live canaries for configured secrets
 - nightly latency sweep
 - nightly flaky quarantine lane with rerun counts

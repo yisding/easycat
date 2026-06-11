@@ -11,8 +11,8 @@ from easycat.events import (
     SupervisorListenerDetached,
     TransportDegraded,
 )
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._session import Session

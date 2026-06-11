@@ -502,6 +502,122 @@ each bridge injects it into its framework's agent object
 wire MCP into your hand-rolled workflow — deep mode makes it your
 responsibility.
 
+## The bring-your-own-agent ladder
+
+Four rungs, in order of power and effort:
+
+| Rung | You write | You get |
+|---|---|---|
+| 1. Plain agent | `async run(text) -> str` | `AgentRunner` wraps it: timeout, history, cancellation |
+| 2. Shallow workflow | `on_user_turn(text)` | streaming + session actions; end-of-turn cancellation only |
+| 3. Deep workflow | `on_user_turn(text, *, recorder, cancel_token)` | mid-turn barge-in, journaled tool calls |
+| 4. Full bridge | a `BridgeTemplate` subclass | custom event grammar, framework state snapshots, atomic interruption mutations |
+
+This chapter's script lives on rung 3. The top rung is for when you
+are integrating a *framework* — something with its own event stream
+and persistent state — rather than a single workflow object.
+
+### The top rung: a full bridge via `BridgeTemplate`
+
+Subclass `BridgeTemplate`
+(`src/easycat/integrations/agents/template.py::BridgeTemplate`). It
+owns the boilerplate every bridge repeats — the `invoke()` cursor
+lifecycle (including the cancellation-safe cleanup arm), the
+four-step atomic interruption journal protocol, scrubbed state
+serialization for artifacts, the default `COMMITTABLE_BOUNDARIES`,
+and safe no-op history-mutation methods. You implement three
+things: event streaming, interruption planning, and a state
+snapshot.
+
+```python
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    FrameworkStateSnapshot,
+    InterruptionPlan,
+)
+from easycat.integrations.agents.template import BridgeTemplate
+
+
+class MyFrameworkBridge(BridgeTemplate):
+    def __init__(self, agent) -> None:
+        super().__init__(display_name=type(agent).__name__)
+        self._agent = agent
+
+    async def stream_events(self, turn_input, recorder, cancel_token):
+        async for chunk in self._agent.stream(turn_input.text):
+            yield AgentBridgeEvent(kind="text_delta", text=chunk)
+
+    def snapshot_state(self):
+        return FrameworkStateSnapshot(
+            fields={"history_len": len(self._agent.history)},
+            kind="my_framework",
+        )
+
+    def _plan_interruption(self, delivered_text, mode):
+        return InterruptionPlan(
+            mutation_kind="interrupt_truncate",
+            pre_state_ref=f"my-pre-{id(self._agent):x}",
+            post_state_ref=f"my-post-{id(self._agent):x}",
+            framework_instructions={"delivered_text": delivered_text},
+        )
+
+    def _apply_planned_mutation(self, plan):
+        self._agent.truncate(plan.framework_instructions["delivered_text"])
+```
+
+`GenericWorkflowBridge` itself is built on the template — read
+`src/easycat/integrations/agents/generic_workflow.py` as the in-tree
+reference implementation.
+
+To make `EasyConfig(agent=my_framework_obj)` find your bridge
+automatically, register a detector:
+
+```python
+from easycat.integrations.agents import register_agent_detector
+
+register_agent_detector(
+    lambda obj: isinstance(obj, MyFrameworkAgent),
+    lambda obj: MyFrameworkBridge(obj),
+)
+```
+
+Detectors are consulted by `auto_adapt_agent()` after the
+`AgentRunner` unwrap and the bridge passthrough but *before* the
+built-in framework branches, so your detector wins over the
+built-ins. Registration is programmatic only — call it from your
+application or plugin setup code; there is no entry-point or
+config-file mechanism.
+
+### The configure_runtime contract
+
+`configure_runtime` is an *optional* extension surface for bridges
+that consume session-level `mcp_servers` / `model` / `api_key`
+settings. It is deliberately **not** part of the
+`ExternalAgentBridge` protocol: the protocol is
+`@runtime_checkable`, and declaring an optional method there would
+make `isinstance(obj, ExternalAgentBridge)` return `False` for
+every bridge that legitimately omits it. The session factory probes
+for it with `getattr(bridge, "configure_runtime", None)` (see
+`easycat.config._inject_agent_runtime`) and falls back to the
+historical private-attribute path when absent.
+
+Bridges that opt in implement this signature:
+
+```python
+def configure_runtime(
+    self,
+    *,
+    mcp_servers: list[str] | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> None: ...
+```
+
+`mcp_servers` is a list of EasyCat MCP URI strings; `None` means
+"leave unchanged". Passing an empty list explicitly clears any
+previously configured servers, so a bridge reused across sessions
+does not leak the prior list.
+
 ## Try breaking it
 
 1. Change `on_user_turn` to `async def on_user_turn(self, text)`

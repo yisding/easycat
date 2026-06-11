@@ -95,9 +95,12 @@ Current verified state:
 
 - `pyproject.toml` registers `integration_local`, `integration_socket`,
   `integration_live`, `slow`, `contract`, `latency`, `stress`, `release`,
-  `flaky`, provider markers, surface markers, `agent_bridge`,
-  `requires_extra(name)`, and `provider(name)`, with
-  `strict_markers = true`.
+  `flaky`, provider markers, surface markers, `agent_bridge`, and
+  `provider(name)`, with `strict_markers = true`.
+- The `requires_extra(name)` marker was dropped on 2026-06-09: it marked zero
+  tests. Optional-extra coverage now relies on the nightly extras install
+  matrix (import smoke plus offline contract tests with the real SDK
+  installed) instead of marker bookkeeping.
 - `tests/conftest.py` delegates provider/surface marker checks and flaky
   quarantine metadata checks to `tests/_marker_lint.py`.
 - Validation-specific markers are used by the contract, latency, stress,
@@ -113,8 +116,7 @@ Tasks:
 - Register `contract`, `latency`, `stress`, `release`, `flaky`,
   `provider_openai`, `provider_deepgram`, `provider_elevenlabs`,
   `provider_cartesia`, `surface_stt`, `surface_tts`, `surface_agent`,
-  `surface_transport`, `surface_vad`, `agent_bridge`, `requires_extra`, and
-  `provider`.
+  `surface_transport`, `surface_vad`, `agent_bridge`, and `provider`.
 - Decide and document that `quick` means PR-local validation: deterministic,
   no sockets, no live credentials, no slow/flaky tests. It may include
   `integration_local` tests, but if measured runtime gets too high, split a
@@ -417,8 +419,9 @@ Dependencies:
 
 Current verified state:
 
-- `src/easycat/cli/_app.py` registers top-level `init`, `doctor`, `docs`,
-  `explain`, `inspect`, `replay`, plus the `bundles` and `validate` groups.
+- `src/easycat/cli/_app.py` registers top-level `console`, `init`, `doctor`,
+  `serve`, `docs`, `explain`, `inspect`, `replay`, plus the `bundles` and
+  `validate` groups.
 - The bare `easycat` journey menu includes `Scaffold`,
   `Debug with the journal`, `Validation`, and `Docs and guidance`; the
   `Validation` section points at `easycat validate`.
@@ -541,7 +544,17 @@ Current verified state:
 
 - `.github/workflows/nightly-validation.yml` runs on a schedule and
   `workflow_dispatch`; it has `full-local`, `quick`, `socket`, `stress`,
-  `flaky-quarantine`, `live-canaries`, and `latency` jobs.
+  `flaky-quarantine`, `extras-plan`, `extras-install`, `live-canaries`, and
+  `latency` jobs.
+- The `extras-plan` job reads `[project.optional-dependencies]` via
+  `scripts/extras_matrix.py` into a `fromJSON` matrix; each `extras-install`
+  cell runs `uv sync --extra <name> --group dev` in a clean environment,
+  import-smokes the extra with `scripts/extras_smoke.py` (provider import
+  targets derived from the `required_extra` mapping in
+  `tests/contracts/provider_surface_matrix.py`), and re-runs the offline
+  contract tests with the real SDK installed. `ten-vad` is deliberately
+  excluded for licensing; the decision is documented in the workflow and in
+  `scripts/extras_matrix.py`.
 - Nightly `live-canaries` and `latency` are gated to protected, non-PR runs
   and use the `live-validation` environment.
 - Nightly latency is a real `easycat validate latency --require-samples` job,
@@ -1029,8 +1042,9 @@ Tasks:
 - Validate the bridge event grammar: text delta, done, tool start/result,
   handoff triple, framework snapshot safety, interruption modes, recorder
   writes, and normalized errors.
-- Mark bridge tests with `contract`, `agent_bridge`, provider/bridge metadata,
-  and `requires_extra(...)` where optional dependencies are needed.
+- Mark bridge tests with `contract`, `agent_bridge`, and provider/bridge
+  metadata; optional bridge dependencies stay `importorskip`-gated and run
+  for real in the nightly extras install matrix.
 - Keep optional bridge dependencies as expected skips unless a command or
   release profile explicitly requires that extra.
 
@@ -1366,9 +1380,13 @@ Current verified state:
   the `live-validation` environment.
 - Nightly `live-canaries` maps `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`,
   `ELEVENLABS_API_KEY`, and `CARTESIA_API_KEY` from GitHub secrets at job
-  scope, masks any non-empty values with `::add-mask::`, then runs
-  `easycat validate live --provider openai --surface stt --surface tts`
+  scope, masks any non-empty values with `::add-mask::`, syncs the
+  `deepgram` and `elevenlabs` extras for their live SDK probes, then runs
+  `easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts`
   without `--strict` or `--release`.
+- Cassette recording stays out of nightly (it needs live credentials); the
+  workflow carries a TODO noting the all-OpenAI cassette corpus should
+  diversify to Deepgram/ElevenLabs/Cartesia.
 - Because nightly live validation is non-strict, missing live credentials are
   represented by the V4.2 runner as expected provider-check skips and
   redacted provider capability reports instead of failed workflow prerequisites.
@@ -1676,7 +1694,8 @@ Current verified state:
   `easycat.transport.disconnects.total` or `easycat.validation.failures.total`.
 - Metric wiring is present in `src/easycat/_bounded_queue.py`,
   `src/easycat/session/_session.py`, `src/easycat/session/_turn_runner.py`,
-  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal.py`,
+  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal_memory.py`,
+  `src/easycat/runtime/journal_sql.py`,
   and the stage modules under `src/easycat/stages/`.
 - `tests/test_observability.py` verifies metric definitions, fake meter
   counter/histogram/gauge behavior, observable-gauge callback behavior,

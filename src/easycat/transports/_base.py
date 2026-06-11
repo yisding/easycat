@@ -1,7 +1,11 @@
-"""Internal base classes for transports.
+"""Shared base classes for transports.
 
-Provides shared infrastructure used by multiple transport implementations.
-Not part of the public API — ``__init__.py`` does not export this module.
+Provides the audio-queue and server plumbing used by the built-in transports
+and by out-of-tree transports.  :class:`AudioQueueMixin` and
+:class:`ServerTransportBase` are public — import them (together with the
+:class:`~easycat.events.TransportDegraded` event they emit) from
+``easycat.transports``.  See ``docs/extending/transport.md`` for the
+provider-author guide.
 """
 
 from __future__ import annotations
@@ -9,17 +13,19 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
+from easycat.transports._browser_events import BrowserEventForwarder
 
 logger = logging.getLogger(__name__)
 
 # Canonical cross-transport ``TransportDegraded.reason`` code.  The inbound
-# queue-full drop is shared by every ``_AudioQueueMixin`` user (WebSocket /
+# queue-full drop is shared by every ``AudioQueueMixin`` user (WebSocket /
 # WebRTC / WebTransport), so it lives here rather than in any one transport.
 # Transport-specific codes stay in their own modules.
 _DEGRADED_INBOUND_QUEUE_FULL = "inbound_queue_full"
@@ -46,7 +52,7 @@ def _enqueue_inbound_chunk(
     """Best-effort enqueue for inbound audio, dropping + degrading when full.
 
     The single definition of the inbound queue-full drop path, shared by every
-    transport.  ``_AudioQueueMixin._enqueue_chunk`` delegates here, and
+    transport.  ``AudioQueueMixin._enqueue_chunk`` delegates here, and
     standalone session helpers that hold an injected queue + emitter (e.g.
     WebTransport's per-session helper) call it directly so the drop message,
     degraded code, and logging stay in lock-step.
@@ -76,7 +82,7 @@ def _enqueue_inbound_chunk(
 # ── Shared queue / receive_audio logic ────────────────────────────
 
 
-class _AudioQueueMixin:
+class AudioQueueMixin:
     """Mixin that provides the inbound audio queue and ``receive_audio`` iterator.
 
     Transports that accept audio chunks from an external source can inherit
@@ -100,6 +106,7 @@ class _AudioQueueMixin:
     _emit_tasks: set[asyncio.Task[None]]
     _degraded_last_emit: dict[tuple[str, bool], float]
     _degraded_suppressed: dict[tuple[str, bool], int]
+    _browser_event_forwarder: BrowserEventForwarder | None
 
     def _init_audio_queue(self, max_pending_chunks: int) -> None:
         self._max_pending_chunks = max_pending_chunks
@@ -122,6 +129,9 @@ class _AudioQueueMixin:
         # Per-reason coalescing for attacker-triggerable drop/control paths.
         self._degraded_last_emit = getattr(self, "_degraded_last_emit", {})
         self._degraded_suppressed = getattr(self, "_degraded_suppressed", {})
+        # Browser event channel (transcripts / interruptions / latency) for
+        # transports that opt in via ``_ensure_browser_event_forwarder``.
+        self._browser_event_forwarder = getattr(self, "_browser_event_forwarder", None)
 
     def _emit_degraded(self, reason: str, detail: str = "", *, fatal: bool = False) -> None:
         """Publish a :class:`TransportDegraded` on the session event bus.
@@ -187,6 +197,34 @@ class _AudioQueueMixin:
         # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
         pending = list(self._emit_tasks)
         await asyncio.gather(*pending, return_exceptions=True)
+
+    # ── Browser event channel ─────────────────────────────────────
+    #
+    # Browser-facing transports (WebSocket / WebRTC) forward session events
+    # (transcripts, interruptions, per-turn latency) to the connected client
+    # as JSON messages; see ``transports/_browser_events.py`` for the wire
+    # format. Transports opt in by implementing ``_send_client_event`` and
+    # calling the ensure/close pair from ``connect``/``disconnect``.
+
+    def _ensure_browser_event_forwarder(self) -> None:
+        """Start forwarding session events to the browser when a bus is attached."""
+        if getattr(self, "_browser_event_forwarder", None) is not None:
+            return
+        if self._event_bus is None:
+            return
+        self._browser_event_forwarder = BrowserEventForwarder(
+            self._event_bus, self._send_client_event
+        )
+
+    def _close_browser_event_forwarder(self) -> None:
+        forwarder = getattr(self, "_browser_event_forwarder", None)
+        if forwarder is not None:
+            forwarder.close()
+            self._browser_event_forwarder = None
+
+    async def _send_client_event(self, payload: dict[str, Any]) -> None:
+        """Send one JSON event message to the connected client (best effort)."""
+        raise NotImplementedError
 
     def _reset_audio_queue(self) -> None:
         """Reinitialize the queue to clear any stale sentinels from a previous session."""
@@ -277,7 +315,7 @@ class _AudioQueueMixin:
 # ── WebSocket server base ─────────────────────────────────────────
 
 
-class _ServerTransportBase(_AudioQueueMixin):
+class ServerTransportBase(AudioQueueMixin):
     """Base for transports that host a ``websockets`` server.
 
     Subclasses must provide:

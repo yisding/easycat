@@ -260,6 +260,39 @@ def test_explain_meta_exit_codes(cli: CliRunner) -> None:
     assert "Exit codes form a stable contract" in result.stdout
 
 
+def test_explain_concept_topics_render_summary_and_docs_route(cli: CliRunner) -> None:
+    expected = {
+        "events": ("Provider-scoped events", "docs/reference/events.md"),
+        "turn-taking": ("IDLE -> USER_SPEAKING", "docs/architecture.md"),
+        "journal": ("single source of truth", "docs/reference/session-lifecycle.md"),
+    }
+
+    for slug, (summary_fragment, docs_route) in expected.items():
+        result = cli.invoke(app, ["explain", slug])
+        assert result.exit_code == 0, result.stderr
+        assert summary_fragment in result.stdout, slug
+        assert docs_route in result.stdout, slug
+
+
+def test_explain_concept_topic_json_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "events", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "explain"
+    assert payload["status"] == "ok"
+    assert payload["slug"] == "events"
+    assert "docs/reference/events.md" in payload["body"]
+
+
+def test_explain_list_includes_concept_topics(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "--list"])
+
+    assert result.exit_code == 0
+    for slug in ("events", "turn-taking", "journal"):
+        assert slug in result.stdout
+
+
 def test_explain_meta_init_schema(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "init-schema"])
     stdout = re.sub(r"\s+", " ", result.stdout)

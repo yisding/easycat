@@ -26,14 +26,14 @@ M1 (scaffolding) is effectively done:
   unknown codes.
 - Output contract (`--json`, stdout/stderr split, exit-code mapping)
   and top-level `EasyCatError` handler.
-- Six templates: `openai-agents`, `pydantic-ai`,
+- Seven templates: `openai-agents`, `provider`, `pydantic-ai`,
   `pydantic-ai-workflow`, `text-chat`, `twilio-phone`,
   `webrtc-browser`.
 
 M2 status:
 
 - Template `agent.py` line budgets are now enforced at the planned caps:
-  `openai-agents` ≤16 lines, `pydantic-ai` ≤17,
+  `openai-agents` ≤16 lines, `provider` ≤12, `pydantic-ai` ≤17,
   `pydantic-ai-workflow` ≤20, `text-chat` ≤17, `twilio-phone` ≤15, and
   `webrtc-browser` ≤14. Template content now matches the shipped starters:
   simple Python tools/workflows are built in, and optional MCP wiring is
@@ -203,6 +203,9 @@ src/easycat/cli/
     _app.py               # Typer app construction
     _output.py            # Rich console, --json mode, exit codes
     _errors.py            # EASYCAT_Exxx → CLI exit code mapping
+    _guard_commands.py    # generated guard-lane command hints (regen_guard_commands.py)
+    console.py            # `easycat console` keyless terminal demo
+    serve.py              # `easycat serve` browser voice playground
     validate.py           # `easycat validate ...`
     scaffold/
         __init__.py
@@ -784,8 +787,10 @@ $ uvx easycat
 EasyCat — voice bot framework
 
   Scaffold
+    console     Try EasyCat in your terminal with no API keys
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
+    serve       Serve the browser voice playground on localhost
     explain     Look up errors and CLI schema topics
 
   Debug with the journal

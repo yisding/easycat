@@ -18,7 +18,7 @@ from typing import ClassVar
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports._base import _AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class LocalTransportConfig:
     max_pending_out_chunks: int = 200
 
 
-class LocalTransport(_AudioQueueMixin):
+class LocalTransport(AudioQueueMixin):
     """Transport backed by local microphone and speaker via ``sounddevice``.
 
     Implements the ``Transport`` protocol from :mod:`easycat.providers`.
@@ -260,7 +260,7 @@ class LocalTransport(_AudioQueueMixin):
                 return
             # Retain the emit task so it is not GC'd mid-flight before the
             # AudioRouter sees the TransportAudioDelivered event (matches the
-            # ``_AudioQueueMixin._emit_tasks`` pattern used elsewhere).
+            # ``AudioQueueMixin._emit_tasks`` pattern used elsewhere).
             task = loop.create_task(
                 self._event_bus.emit(
                     TransportAudioDelivered(

@@ -7,13 +7,9 @@ import re
 import tomllib
 from pathlib import Path
 
-from easycat.cli._app import (
-    _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-)
 from easycat.cli.diagnose._codes import META_ENTRIES
+from scripts._justfile import just_recipe_names
 from tests._command_hints import command_hint_problems, documented_commands
-from tests._justfile import just_recipe_names
 from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -105,38 +101,6 @@ def _guide_pytest_commands(command_section: str) -> list[str]:
     return commands
 
 
-def _agent_guide_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
-    commands: list[str] = []
-
-    for line in command_section.splitlines():
-        stripped = line.strip()
-        if filename == "AGENTS.md":
-            match = re.match(r"^- `(?P<command>just guard-[^`]+)`:", stripped)
-            if match is not None:
-                commands.append(match.group("command"))
-        elif stripped.startswith("just guard-"):
-            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
-
-    return tuple(commands)
-
-
-def _agent_guide_raw_guard_commands(filename: str, command_section: str) -> tuple[str, ...]:
-    commands: list[str] = []
-
-    for line in command_section.splitlines():
-        stripped = line.strip()
-        if filename == "AGENTS.md":
-            if not stripped.startswith("- Raw fallback for "):
-                continue
-            spans = CODE_SPAN_RE.findall(stripped)
-            if len(spans) == 2 and spans[0].startswith("just guard-"):
-                commands.append(spans[1])
-        elif "# Raw fallback for just guard-" in stripped:
-            commands.append(re.split(r"\s+#", stripped, maxsplit=1)[0].rstrip())
-
-    return tuple(commands)
-
-
 def _agent_guide_command_sections() -> dict[str, str]:
     return {
         "AGENTS.md": (REPO_ROOT / "AGENTS.md")
@@ -153,6 +117,9 @@ def _agent_guide_command_sections() -> dict[str, str]:
 AGENT_GUIDE_SOURCE_PATH_SECTIONS = {
     "AGENTS.md": ("## Project Structure & Module Organization", "## Build, Test"),
     "CLAUDE.md": ("## Architecture", "## Session Lifecycle"),
+    # The architecture explanation moved out of CLAUDE.md; keep its source
+    # paths honest with the same guard. Related Pages holds only doc links.
+    "docs/architecture.md": ("# EasyCat Architecture", "## Related Pages"),
 }
 REPO_REL_PATH_PREFIXES = ("src/", "tests/", "docs/", "examples/", "plan/", "scripts/")
 SOURCE_REL_PATH_PREFIXES = (
@@ -230,7 +197,7 @@ def _clean_code_span_path(code_span: str) -> str:
 
 def _readme_cli_section() -> str:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    return readme.split("## CLI", 1)[1].split("## Validation Workflow", 1)[0]
+    return readme.split("## CLI", 1)[1].split("## Current capabilities", 1)[0]
 
 
 def _source_path_candidates_for_agent_guide(
@@ -668,6 +635,7 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     """Bare ``easycat validate`` shows help; the README should show useful subcommands."""
     cli_section = _readme_cli_section()
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    validation_doc = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
 
     assert not re.search(r"(?m)^easycat validate\s+#", cli_section)
     assert "easycat validate quick" in cli_section
@@ -678,11 +646,14 @@ def test_readme_cli_validate_examples_are_copyable() -> None:
     assert "easycat validate release --json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json" in cli_section
     assert "easycat validate report .easycat/validation/latest.json --json" in cli_section
-    assert "uv run easycat validate quick --json" in readme
-    assert "uv run easycat validate contracts --json" in readme
-    assert "uv run easycat validate release --json" in readme
-    assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
+    assert "uv run easycat validate quick --json" in validation_doc
+    assert "uv run easycat validate contracts --json" in validation_doc
+    assert "uv run easycat validate release --json" in validation_doc
+    assert "uv run easycat validate report .easycat/validation/latest.json --json" in (
+        validation_doc
+    )
     assert "easycat validate report PATH" not in readme
+    assert "easycat validate report PATH" not in validation_doc
 
 
 def test_readme_cli_doctor_documents_env_file_option() -> None:
@@ -799,18 +770,8 @@ def test_agent_guide_command_examples_are_current() -> None:
         assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in (command_section), (
             filename
         )
-        assert _agent_guide_guard_commands(filename, command_section) == (
-            _DOCS_ONBOARDING_GUARD_COMMANDS
-        ), filename
-        assert _agent_guide_raw_guard_commands(filename, command_section) == (
-            _DOCS_ONBOARDING_RAW_GUARD_COMMANDS
-        ), filename
         assert "just check" in command_section
         assert "just validate-quick" in command_section
-        for recipe in _DOCS_ONBOARDING_GUARD_COMMANDS:
-            assert recipe in command_section, filename
-        for command in _DOCS_ONBOARDING_RAW_GUARD_COMMANDS:
-            assert command in command_section, filename
         assert "uv run easycat docs" in command_section
         assert "uv run easycat docs --json" in command_section
         assert "uv run easycat doctor --json" in command_section

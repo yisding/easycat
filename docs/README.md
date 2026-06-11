@@ -3,25 +3,21 @@
 Use this page as the map for the maintained docs. Planning notes live under
 `plan/`; the files below are the current reader-facing documentation.
 From this repository, `uv run easycat docs` prints the same map; in an
-installed app environment, use `easycat docs`. Use
-`uv run easycat docs --json` when a script or coding agent needs the route map
-with command hints and audience labels. Replace uppercase or angle-bracket
+installed app environment, use `easycat docs`. Narrow the map by audience —
+the human docs menu also prints the available audience labels:
+
+```bash
+uv run easycat docs --audience learners      # learning routes
+uv run easycat docs --audience app-builders  # scaffold/app-building routes
+uv run easycat docs --audience operators     # deployment/observability routes
+uv run easycat docs --audience maintainers   # architecture/maintenance routes
+uv run easycat docs --json                   # route map with command hints and audience labels
+```
+
+Coding agent? Start at [llms.txt](../llms.txt) or run
+`uv run easycat explain json-schema`. Replace uppercase or angle-bracket
 placeholders in command hints, such as `PATH` or `<session_id>`, before
-running them. Use
-`uv run easycat docs --audience learners` to narrow the human map,
-`uv run easycat docs --audience learners --json` when automation needs only
-learner-facing route entries, or
-`uv run easycat docs --audience app-builders` for scaffold/app-building routes,
-`uv run easycat docs --audience app-builders --json` when automation needs only
-app-builder route entries, or
-`uv run easycat docs --audience operators` for deployment/observability routes,
-`uv run easycat docs --audience operators --json` when automation needs only
-operator-facing route entries, or
-`uv run easycat docs --audience maintainers` for architecture/maintenance routes,
-`uv run easycat docs --audience maintainers --json` when automation needs only
-maintainer-facing route entries. The human docs menu also prints the available
-audience labels so readers can choose a narrower route map without switching
-to JSON first. Multi-word audience filters accept hyphens or underscores, so
+running them. Multi-word audience filters accept hyphens or underscores, so
 `uv run easycat docs --audience app-builders` is equivalent to
 `uv run easycat docs --audience "app builders"`. The `maintainers` and
 `operators` filters also include compound labels such as `provider maintainers`,
@@ -43,11 +39,23 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat init --list-templates` to compare templates with best-fit
   guidance, base `easycat[...]` package requirements and extras, required
   environment variables, optional environment knobs, generated files, and
-  copyable create/preflight/check/fix/docs/json-schema/run commands. Use
-  `uv run easycat init --list-templates --json` when a script or coding agent
-  needs the same template catalog and post-scaffold command previews, then use
+  copyable create/preflight/check/fix/docs/json-schema/run commands
+  (`uv run easycat init --list-templates --json` emits the same template
+  catalog and post-scaffold command previews), then use
   the CLI commands documented in the [root README](../README.md#cli).
-- Automating the CLI: use `uv run easycat docs --json` to inspect the docs
+- Graduating from the quickstart to the production `Session` API: follow
+  [from EasyConfig to Session](from-easyconfig-to-session.md) for
+  `create_session`, the `async with session:` lifecycle, event
+  subscriptions, `send_text` and session actions, and `debug="full"`
+  bundles you can inspect with `uv run easycat replay PATH`.
+- Testing agents and running evals: climb the
+  [testing and evals ladder](testing-and-evals.md) — bundle fixtures,
+  offline text turns through `easycat.debug.testing` (`run_text_turn`,
+  `assert_latency`, `assert_llm_judge`), teaching chapter 12 metrics, then
+  live audio with `uv run easycat validate latency --smoke`. Scaffolded
+  projects ship an offline `tests/test_agent.py` to start from.
+- Automating the CLI: start at [llms.txt](../llms.txt), use
+  `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,
   including command-specific success and error fields. Use
@@ -72,10 +80,26 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
 - Looking for runnable reference apps: use the
   [examples command matrix](../examples/README.md) for local mic, WebSocket,
   WebRTC, Twilio, provider swaps, tools, and debug-bundle examples.
+- Looking up the production API: start with the
+  [architecture explanation](architecture.md) for how the pipeline and
+  session collaborators fit together, then use the
+  [events reference](reference/events.md), the
+  [EasyConfig field reference](reference/easyconfig.md), and the
+  [session lifecycle reference](reference/session-lifecycle.md). Run
+  `uv run easycat explain events`, `uv run easycat explain turn-taking`, or
+  `uv run easycat explain journal` for terminal summaries that print the
+  matching docs route. Every `easycat docs --json` route entry also carries a
+  `diataxis` field (`tutorial`, `how-to`, `reference`, or `explanation`) so
+  automation can pick the right kind of page.
+- Talking to a bot in the browser: run `uv run easycat serve` and follow the
+  [browser playground guide](browser-playground.md) for the one-command
+  playground page (live transcript, interruption indicator, per-turn latency)
+  and the WebSocket/WebRTC wire protocol behind it.
 - Maintaining architecture or package boundaries: use the
   [architecture map](../CLAUDE.md) for the pipeline, key packages, provider
   registries, session lifecycle, test layout, and maintainer command block,
-  including docs/onboarding guard recipes. Coding agents should also read the
+  including docs/onboarding guard recipes; the full architecture explanation
+  lives in [docs/architecture.md](architecture.md). Coding agents should also read the
   [repository agent guide](../AGENTS.md) for repo structure, development
   commands, docs/onboarding guard recipes, validation commands, and PR
   expectations.
@@ -86,6 +110,11 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [provider contract map](../tests/contracts/README.md) before changing
   provider adapters, protocol cassettes, schema fingerprints, or bridge event
   grammar. Run `just guard-contracts` for that focused maintenance surface.
+- Building a custom provider or transport: follow the
+  [extending guides](extending/) for the duck-typed STT, TTS, VAD, transport,
+  and agent-bridge surfaces, complete out-of-tree examples, and conformance
+  checks. Scaffold an external provider package with
+  `uv run easycat init my-provider --template provider`.
 - Contributing code or tests: use the
   [contributor guide](../CONTRIBUTING.md) for the development loop, validation
   slices, docs/onboarding guard recipes (`just guard-docs`,
@@ -98,7 +127,9 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   [deployment with Docker](deployment/docker.md) and
   [observability](observability.md) for journal CLI commands, the debugger UI,
   metrics, and traces. Start with `easycat bundles list`; from this repo, add
-  `uv sync --extra debugger --group dev` when you need the UI. Then review the
+  `uv sync --extra debugger --group dev` when you need the UI. When a turn
+  feels slow, use the [latency guide](latency.md) for the per-turn CLI
+  waterfall and the table of latency-adding defaults. Then review the
   [journal durability contract](../src/easycat/runtime/DURABILITY.md) for
   persistence, recovery, and storage layout. Run `just guard-ops` when editing
   these operator-facing pages.
@@ -108,9 +139,9 @@ to JSON first. Multi-word audience filters accept hyphens or underscores, so
   `uv run easycat validate contracts --json`,
   `uv run easycat validate release --json`, and
   `uv run easycat validate report .easycat/validation/latest.json --json`) when
-  a script or coding agent needs validation output inside the standard CLI
-  envelope. Then use the validation workflow in the
-  [root README](../README.md#validation-workflow) and the
+  automation needs validation output inside the standard CLI
+  envelope. Then use the
+  [validation workflow](validation.md) and the
   [validation reference](../plan/validation/reference.md) for provider and
   report vocabulary. Run `just guard-validation` when editing these
   validation-facing docs or the validate CLI behavior they describe.

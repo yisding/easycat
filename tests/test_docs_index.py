@@ -125,7 +125,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "deployment/docker.md",
         "observability.md",
         "../src/easycat/runtime/DURABILITY.md",
-        "../README.md#validation-workflow",
+        "validation.md",
         "../plan/validation/reference.md",
     ]
 
@@ -140,14 +140,12 @@ def test_docs_index_points_to_docs_command() -> None:
 
     assert "uv run easycat docs" in text
     assert "uv run easycat docs --audience learners" in text
-    assert "uv run easycat docs --audience learners --json" in text
     assert "uv run easycat docs --json" in text
     assert "uv run easycat docs --audience app-builders" in text
-    assert "uv run easycat docs --audience app-builders --json" in text
     assert "uv run easycat docs --audience operators" in text
-    assert "uv run easycat docs --audience operators --json" in text
     assert "uv run easycat docs --audience maintainers" in text
-    assert "uv run easycat docs --audience maintainers --json" in text
+    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized
+    assert "when a script or coding agent" not in normalized
     assert "repository path chooser" in normalized
     assert "installed app environment" in text
     assert "prints the same map" in text
@@ -157,7 +155,7 @@ def test_docs_index_points_to_docs_command() -> None:
         "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
         "or `<session_id>`"
     ) in normalized
-    assert "The human docs menu also prints the available audience labels" in normalized
+    assert "human docs menu also prints the available audience labels" in normalized
     assert "uv run easycat docs --audience app-builders" in text
     assert 'uv run easycat docs --audience "app builders"' in text
     assert "`maintainers` and `operators` filters also include compound labels" in normalized
@@ -209,9 +207,7 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat validate report .easycat/validation/latest.json" in text
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in text
     assert "automation needs validation run/report payloads" in normalized
-    assert "script or coding agent needs validation output inside the standard CLI envelope" in (
-        normalized
-    )
+    assert "automation needs validation output inside the standard CLI envelope" in normalized
     assert "journal CLI commands, the debugger UI, metrics, and traces" in normalized
     assert "Start with `easycat bundles list`" in normalized
     assert "uv sync --extra debugger --group dev" in text
@@ -278,6 +274,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "First lesson",
         "Examples",
         "Architecture",
+        "Maintainer guide",
         "Coding agents",
     ]
     expected_suffix = ["Validation", "Validation reference"]
@@ -327,7 +324,7 @@ def test_cli_docs_routes_have_audience_labels() -> None:
     assert audiences["README.md#cli"] == "app builders"
     assert audiences["AGENTS.md"] == "coding agents"
     assert audiences["docs/observability.md"] == "operators"
-    assert audiences["README.md#validation-workflow"] == "contributors"
+    assert audiences["docs/validation.md"] == "contributors"
 
 
 def test_cli_docs_routes_have_useful_command_hints() -> None:
@@ -348,9 +345,7 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
         "src/easycat/runtime/DURABILITY.md": (
             "uv run pytest tests/runtime/test_sqlite_journal.py"
         ),
-        "README.md#validation-workflow": (
-            "uv run easycat validate report .easycat/validation/latest.json"
-        ),
+        "docs/validation.md": ("uv run easycat validate report .easycat/validation/latest.json"),
     }
 
     missing = [
@@ -395,9 +390,9 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run --env-file .env python examples/openai_agents_voice.py" in entries[
         "README.md#choose-your-path"
     ].get("commands", ())
-    assert "uv run pytest tests/test_install_guidance.py" in entries[
-        "README.md#choose-your-path"
-    ].get("commands", ())
+    assert "uv run python examples/journal_demo.py" in entries["README.md#choose-your-path"].get(
+        "commands", ()
+    )
 
 
 def test_cli_docs_env_file_doctor_hints_include_json_variant() -> None:
@@ -469,7 +464,9 @@ def test_quickstart_docs_route_matches_install_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     route_commands = set(entries["README.md#install"].get("commands", ()))
     install_section = (
-        _route_target_text("README.md#install").split("## Install", 1)[1].split("## CLI", 1)[0]
+        _route_target_text("README.md#install")
+        .split("## Install", 1)[1]
+        .split("## Choose Your Path", 1)[0]
     )
     install_commands = [
         match.group(1)
@@ -506,7 +503,7 @@ def test_coding_agents_docs_route_matches_guide_command_hints() -> None:
         assert command in route_commands
 
 
-def test_architecture_docs_route_matches_guide_command_hints() -> None:
+def test_maintainer_guide_docs_route_matches_guide_command_hints() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     command_section = guide.split("## Commands", 1)[1].split("## Architecture", 1)[0]
@@ -525,6 +522,169 @@ def test_architecture_docs_route_matches_guide_command_hints() -> None:
     ):
         assert command in command_section
         assert command in route_commands
+
+
+def test_architecture_explanation_carries_claude_guide_prose() -> None:
+    """docs/architecture.md owns the architecture explanation; CLAUDE.md links to it."""
+    page = re.sub(
+        r"\s+", " ", (REPO_ROOT / "docs" / "architecture.md").read_text(encoding="utf-8")
+    )
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    architecture_section = guide.split("## Architecture", 1)[1].split("## Key Patterns", 1)[0]
+
+    assert "[docs/architecture.md](docs/architecture.md)" in architecture_section
+    # The deep per-collaborator prose lives in the docs page, not CLAUDE.md.
+    for marker in (
+        "session/_builder.py",
+        "session/_wiring.py",
+        "session/_turn_runner.py",
+        "ExternalAgentBridge",
+        "_PROVIDER_TO_CONFIG",
+        "Silero → FunASR → TEN → Krisp",
+        "IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING",
+    ):
+        assert marker in page, f"docs/architecture.md missing {marker!r}"
+    assert "SessionWiringContext" in page
+    assert "SessionWiringContext" not in guide
+
+
+def test_cli_docs_routes_declare_diataxis_categories() -> None:
+    allowed = {"tutorial", "how-to", "reference", "explanation"}
+    invalid = [
+        f"{entry['label']} ({entry.get('diataxis')!r})"
+        for entry in _DOCS_LINKS
+        if entry.get("diataxis") not in allowed
+    ]
+
+    assert not invalid, "easycat docs routes missing valid diataxis labels: " + ", ".join(invalid)
+
+    diataxis = {entry["path"]: entry["diataxis"] for entry in _DOCS_LINKS}
+    assert diataxis["README.md#install"] == "tutorial"
+    assert diataxis["docs/teaching/"] == "tutorial"
+    assert diataxis["docs/architecture.md"] == "explanation"
+    assert diataxis["docs/reference/events.md"] == "reference"
+    assert diataxis["docs/reference/easyconfig.md"] == "reference"
+    assert diataxis["docs/reference/session-lifecycle.md"] == "reference"
+    assert diataxis["docs/public-api.md"] == "reference"
+
+    docs_index = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    assert "`diataxis`" in docs_index
+
+
+def test_events_reference_tracks_public_event_types() -> None:
+    """docs/reference/events.md must list exactly the exported concrete events."""
+    import easycat
+    from easycat.events import Event
+
+    text = (REPO_ROOT / "docs" / "reference" / "events.md").read_text(encoding="utf-8")
+    catalog = text.split("## Event Catalog", 1)[1].split("\n## ", 1)[0]
+    documented = set(re.findall(r"^- `([A-Za-z]+)`", catalog, flags=re.MULTILINE))
+    exported = {
+        name
+        for name in easycat.__all__
+        if isinstance(getattr(easycat, name), type)
+        and issubclass(getattr(easycat, name), Event)
+        and getattr(easycat, name) is not Event
+    }
+
+    missing = sorted(exported - documented)
+    extra = sorted(documented - exported)
+    assert not missing, "docs/reference/events.md missing events: " + ", ".join(missing)
+    assert not extra, "docs/reference/events.md lists non-exported events: " + ", ".join(extra)
+
+    # The page must teach the provider-scoped vs EasyCat-level distinction.
+    assert "provider-scoped" in text.lower()
+    assert "`STTEvent`" in text
+    assert "`TTSEvent`" in text
+    assert "easycat.events" in text
+
+
+def _reference_section_field_names(text: str, heading: str) -> set[str]:
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
+    return set(re.findall(r"^- `([A-Za-z_][A-Za-z0-9_]*)`", section, flags=re.MULTILINE))
+
+
+def test_easyconfig_reference_tracks_config_fields() -> None:
+    """The handwritten EasyConfig reference must match the live dataclasses."""
+    import dataclasses
+
+    from easycat import (
+        AudioProcessingConfig,
+        EasyConfig,
+        ObservabilityConfig,
+        SessionPolicyConfig,
+    )
+
+    text = (REPO_ROOT / "docs" / "reference" / "easyconfig.md").read_text(encoding="utf-8")
+    expected = {
+        "## Construction Fields": {f.name for f in dataclasses.fields(EasyConfig)},
+        "## Audio Processing Fields": {f.name for f in dataclasses.fields(AudioProcessingConfig)},
+        "## Observability Fields": {f.name for f in dataclasses.fields(ObservabilityConfig)},
+        "## Session Policy Fields": {f.name for f in dataclasses.fields(SessionPolicyConfig)},
+    }
+
+    problems: list[str] = []
+    for heading, names in expected.items():
+        documented = _reference_section_field_names(text, heading)
+        for name in sorted(names - documented):
+            problems.append(f"{heading}: missing `{name}`")
+        for name in sorted(documented - names):
+            problems.append(f"{heading}: documents unknown `{name}`")
+
+    assert not problems, "docs/reference/easyconfig.md is out of sync:\n" + "\n".join(problems)
+
+    # The grouped fields double as top-level InitVar aliases; the page must say so.
+    from easycat.config.easy import (
+        _AUDIO_PROCESSING_ALIAS_FIELDS,
+        _OBSERVABILITY_ALIAS_FIELDS,
+        _SESSION_POLICY_ALIAS_FIELDS,
+    )
+
+    alias_names = (
+        _AUDIO_PROCESSING_ALIAS_FIELDS | _OBSERVABILITY_ALIAS_FIELDS | _SESSION_POLICY_ALIAS_FIELDS
+    )
+    grouped_documented = (
+        _reference_section_field_names(text, "## Audio Processing Fields")
+        | _reference_section_field_names(text, "## Observability Fields")
+        | _reference_section_field_names(text, "## Session Policy Fields")
+    )
+    assert alias_names == grouped_documented
+    assert "## Top-Level Aliases" in text
+    assert "test_easyconfig_reference_tracks_config_fields" in text
+
+
+def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
+    text = (REPO_ROOT / "docs" / "reference" / "session-lifecycle.md").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    lifecycle_section = guide.split("## Session Lifecycle", 1)[1].split("## Style", 1)[0]
+
+    assert "docs/reference/session-lifecycle.md" in lifecycle_section
+    for marker in (
+        "`stop(force=True)`",
+        "`session.shutdown()`",
+        "`session.journal.read()`",
+        "`session.export_debug_bundle(path)`",
+        "`async with session:`",
+        "record_to",
+    ):
+        assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"
+
+
+def test_explain_concept_topics_print_docs_routes() -> None:
+    """`easycat explain events|turn-taking|journal` must point at live docs routes."""
+    from easycat.cli.diagnose._codes import META_ENTRIES
+
+    route_paths = {entry["path"] for entry in _DOCS_LINKS}
+    expected_routes = {
+        "events": "docs/reference/events.md",
+        "turn-taking": "docs/architecture.md",
+        "journal": "docs/reference/session-lifecycle.md",
+    }
+
+    for slug, route in expected_routes.items():
+        assert slug in META_ENTRIES, f"easycat explain is missing the {slug!r} concept topic"
+        assert route in META_ENTRIES[slug].body
+        assert route in route_paths
 
 
 def test_cli_docs_command_hints_are_visible_on_target_pages() -> None:
@@ -671,6 +831,29 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
     assert "easycat validate contracts" not in route_commands
 
 
+def test_extending_docs_route_matches_provider_author_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    extending_readme = (REPO_ROOT / "docs" / "extending" / "README.md").read_text(encoding="utf-8")
+    route = entries["docs/extending/"]
+    route_commands = route.get("commands", ())
+
+    assert route["audience"] == "provider maintainers"
+    for command in (
+        "uv run easycat docs --audience provider-maintainers",
+        "uv run easycat docs --audience provider-maintainers --json",
+        "uv run easycat init my-provider --template provider",
+        "uv run python examples/custom_transport.py",
+        "uv run pytest tests/test_public_api.py",
+        "uv run pytest tests/contracts",
+    ):
+        assert command in extending_readme
+        assert command in route_commands
+
+    for page in ("stt.md", "tts.md", "vad.md", "transport.md", "agent-bridge.md"):
+        assert (REPO_ROOT / "docs" / "extending" / page).is_file()
+        assert f"({page})" in extending_readme
+
+
 def test_deployment_docs_route_matches_docker_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     deployment = (REPO_ROOT / "docs" / "deployment" / "docker.md").read_text(encoding="utf-8")
@@ -750,9 +933,8 @@ def test_journal_durability_docs_route_matches_inspection_commands() -> None:
 
 def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
-    route_commands = entries["README.md#validation-workflow"].get("commands", ())
+    validation_section = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/validation.md"].get("commands", ())
     guard_commands = _documented_commands(validation_section, prefixes=("just guard-",))
     raw_guard_commands = _documented_command_lines(
         validation_section,
@@ -764,11 +946,10 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
     )
 
     assert guard_commands
-    assert guard_commands == ONBOARDING_GUARD_COMMANDS
-    assert raw_guard_commands == RAW_ONBOARDING_GUARD_COMMANDS
+    assert raw_guard_commands
     assert validation_commands
     assert "If `just` is not installed" in validation_section
-    assert "[`CONTRIBUTING.md`](CONTRIBUTING.md#the-development-loop)" in validation_section
+    assert "[`CONTRIBUTING.md`](../CONTRIBUTING.md#the-development-loop)" in validation_section
     assert "`uv run pytest ...` command behind each guard" in validation_section
     for command in guard_commands:
         assert command in validation_section
@@ -788,8 +969,7 @@ def test_validation_docs_route_matches_validation_workflow_commands() -> None:
 
 
 def test_validation_workflow_command_hints_are_locally_valid() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    validation_section = readme.split("## Validation Workflow", 1)[1].split("## ", 1)[0]
+    validation_section = (REPO_ROOT / "docs" / "validation.md").read_text(encoding="utf-8")
     commands = _documented_command_lines(
         validation_section,
         prefixes=("just ", "uv run easycat ", "uv run pytest "),
@@ -797,19 +977,17 @@ def test_validation_workflow_command_hints_are_locally_valid() -> None:
     problems = _cli_docs_command_hint_problems(
         [
             {
-                "label": "README.md validation workflow",
-                "path": "README.md#validation-workflow",
+                "label": "docs/validation.md validation workflow",
+                "path": "docs/validation.md",
                 "audience": "contributors",
-                "description": "Root README validation workflow commands.",
+                "description": "Validation workflow doc commands.",
                 "commands": commands,
             }
         ]
     )
 
     assert commands
-    assert not problems, "README.md validation workflow commands are stale:\n" + "\n".join(
-        problems
-    )
+    assert not problems, "docs/validation.md workflow commands are stale:\n" + "\n".join(problems)
 
 
 def test_contributing_docs_route_matches_validation_lane_commands() -> None:
@@ -909,7 +1087,7 @@ def test_cli_docs_command_hint_validator_checks_pytest_node_ids() -> None:
         [
             {
                 "label": "Broken pytest hint",
-                "path": "README.md#validation-workflow",
+                "path": "docs/validation.md",
                 "audience": "contributors",
                 "description": "Regression fixture for pytest node validation.",
                 "commands": (

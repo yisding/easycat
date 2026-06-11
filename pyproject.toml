@@ -176,8 +176,10 @@ source-exclude = [
     "plan/**",
     "site",
     "site/**",
-    "tests",
-    "tests/**",
+    # Anchored: only the repo-root test suite. Scaffold templates ship a
+    # nested ``tests/`` directory that must reach the sdist/wheel.
+    "/tests",
+    "/tests/**",
 ]
 
 [tool.uv]
@@ -209,10 +211,106 @@ target-version = "py311"
 extend-exclude = ["src/easycat/cli/scaffold/templates"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP"]
+# C901 (mccabe complexity) and PLR0912/PLR0915 (branch/statement counts) keep
+# new code out of the >10-complexity territory the M4 refactor cleaned up in
+# the streaming/bridge hot spots.  Existing offenders are enumerated in
+# per-file-ignores below — shrink that list, never grow it.
+select = ["E", "F", "I", "W", "UP", "C901", "PLR0912", "PLR0915"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+# ── Complexity-lint grandfather list (M4) ─────────────────────────
+# Pre-existing C901/PLR0912/PLR0915 offenders at the time the rules were
+# enabled.  Fix a file → delete its line.  Do not add new entries.
+"docs/teaching/03-parrot-naive/main.py" = ["C901"]
+"docs/teaching/07-tools/blocking_tool.py" = ["C901", "PLR0912"]
+"docs/teaching/07-tools/main.py" = ["C901", "PLR0912"]
+"docs/teaching/08-smart-turn/main.py" = ["C901", "PLR0912"]
+"docs/teaching/09-interruption/cancel.py" = ["C901"]
+"docs/teaching/09-interruption/estimate.py" = ["C901", "PLR0915"]
+"docs/teaching/09-interruption/ignore.py" = ["C901"]
+"docs/teaching/10-cleaning-signal/main.py" = ["C901"]
+"docs/teaching/10-cleaning-signal/wrong_order.py" = ["C901", "PLR0915"]
+"docs/teaching/12-evals-and-latency/evals.py" = ["C901", "PLR0912", "PLR0915"]
+"examples/reconnecting_ws_client.py" = ["C901"]
+"examples/twilio_app.py" = ["C901", "PLR0915"]
+# Landed in concurrent wave-4 items, grandfathered at integration time.
+"scripts/extras_smoke.py" = ["C901", "PLR0912"]
+"src/easycat/_bounded_queue.py" = ["C901"]
+"src/easycat/_observability.py" = ["C901"]
+"src/easycat/cli/debug/bundles.py" = ["C901", "PLR0912"]
+"src/easycat/cli/diagnose/explain.py" = ["PLR0912"]
+"src/easycat/cli/scaffold/_schema.py" = ["C901"]
+"src/easycat/cli/scaffold/init.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/config/_factory.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/config/_telephony_wiring.py" = ["C901", "PLR0915"]
+"src/easycat/config/easy.py" = ["C901", "PLR0912"]
+# Landed in a concurrent wave-4 item, grandfathered at integration time.
+"src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debug/bundle.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debug/export.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debugger/server.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/_agent_runner.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/_factory.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/_pydantic_ai_events.py" = ["C901", "PLR0912"]
+"src/easycat/integrations/agents/_responses_api_events.py" = ["C901"]
+"src/easycat/integrations/agents/generic_workflow.py" = ["C901"]
+"src/easycat/integrations/agents/langchain.py" = ["C901", "PLR0912"]
+"src/easycat/integrations/agents/langgraph.py" = ["C901", "PLR0912"]
+"src/easycat/integrations/agents/llama_agents.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/openai_agents.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/pydantic_ai.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/integrations/agents/responses_api.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/llm_output_processing.py" = ["C901"]
+"src/easycat/push_to_talk.py" = ["C901", "PLR0915"]
+"src/easycat/runtime/safe_defaults.py" = ["C901"]
+"src/easycat/session/_audio_router.py" = ["C901"]
+"src/easycat/session/_journal_sink.py" = ["C901"]
+"src/easycat/session/_session.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/session/_stt_committer.py" = ["C901", "PLR0912"]
+"src/easycat/session/text.py" = ["C901", "PLR0912"]
+"src/easycat/smart_turn.py" = ["C901"]
+"src/easycat/stages/agent.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/stages/audio.py" = ["C901"]
+"src/easycat/stages/stt.py" = ["C901"]
+"src/easycat/stages/transport.py" = ["C901"]
+"src/easycat/stages/tts.py" = ["C901", "PLR0912"]
+"src/easycat/stages/turn.py" = ["C901"]
+"src/easycat/stages/vad.py" = ["C901"]
+"src/easycat/strip_markdown.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/stt/openai_realtime_provider.py" = ["C901", "PLR0912"]
+"src/easycat/telephony/call_state.py" = ["C901"]
+"src/easycat/telephony/ivr.py" = ["C901"]
+"src/easycat/telephony/screening.py" = ["C901"]
+"src/easycat/telephony/voicemail.py" = ["C901", "PLR0912"]
+"src/easycat/transports/twilio_media.py" = ["C901", "PLR0912"]
+"src/easycat/transports/webrtc.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/transports/webtransport.py" = ["C901"]
+"src/easycat/tts/cartesia_tts.py" = ["C901", "PLR0912"]
+"src/easycat/tts/deepgram_tts.py" = ["C901"]
+"src/easycat/tts/elevenlabs_tts.py" = ["C901"]
+"src/easycat/vad/factory.py" = ["C901"]
+"src/easycat/validation/report.py" = ["C901"]
+"src/easycat/validation/runner.py" = ["C901", "PLR0912", "PLR0915"]
+"tests/_command_hints.py" = ["C901"]
+"tests/cli/test_app.py" = ["PLR0915"]
+"tests/cli/test_explain.py" = ["PLR0915"]
+"tests/cli/test_json_schema.py" = ["PLR0915"]
+"tests/cli/test_templates.py" = ["C901", "PLR0912"]
+"tests/e2e/test_plan_1_baseline_voice_roundtrip.py" = ["PLR0915"]
+"tests/e2e/test_plan_7_latency_benchmark.py" = ["C901", "PLR0912", "PLR0915"]
+"tests/integration/test_session_pipeline.py" = ["C901"]
+"tests/integration/test_twilio_session_integration.py" = ["PLR0915"]
+"tests/integration/test_twilio_transport_e2e.py" = ["PLR0915"]
+"tests/integration/test_ws_transport_e2e.py" = ["PLR0915"]
+"tests/session/test_session_smoke.py" = ["PLR0915"]
+"tests/teaching/test_diagrams.py" = ["C901", "PLR0912"]
+"tests/teaching/test_ladder_index.py" = ["PLR0915"]
+"tests/test_config.py" = ["C901"]
+"tests/test_docs_index.py" = ["PLR0915"]
+"tests/test_dx_helpers.py" = ["PLR0915"]
+"tests/test_examples.py" = ["C901"]
+"tests/vad/test_vad.py" = ["C901"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -250,7 +348,6 @@ markers = [
     "surface_transport: transport surface coverage",
     "surface_vad: VAD surface coverage",
     "agent_bridge: agent bridge contract or live coverage",
-    "requires_extra(name): test requires an optional dependency extra",
     "provider(name): generic provider metadata for custom provider filtering",
 ]
 
@@ -276,18 +373,23 @@ exclude = [
 warn_unused_ignores = false
 warn_redundant_casts = true
 
-# --- GATED core. Day-one this is exactly the package that is already
-# --- clean (easycat.debug = 0 errors with these settings). Ratchet by
-# --- adding modules to this list as they reach zero errors:
-# ---   easycat.stages.*   (2 errors today)
-# ---   easycat.runtime.*  (3 errors today)
-# ---   easycat.session.*  (13 errors today)
+# --- GATED core: every module listed here is clean (0 errors) under the
+# --- stricter settings below and is graded by `just typecheck` / CI.
+# --- The path list lives in the justfile (`mypy_gated_paths`); keep the
+# --- two in sync when ratcheting. Remaining ratchet candidates (advisory
+# --- whole-repo pass: ~72 errors across optional providers / config /
+# --- cli / debugger today):
+# ---   easycat.config.* / easycat.cli.* / provider subpackages
 # --- NOTE: deliberately NOT enabling warn_return_any here - it surfaces
 # --- a no-any-return error in debug/bundle.py:205 and would turn the
-# --- day-one gate RED. Add it (and fix the return) in a later ratchet.
+# --- gate RED. Add it (and fix the return) in a later ratchet.
 [[tool.mypy.overrides]]
 module = [
     "easycat.debug.*",
+    "easycat.runtime.*",
+    "easycat.stages.*",
+    "easycat.session.*",
+    "easycat.integrations.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true

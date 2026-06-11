@@ -453,7 +453,7 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
     ).read_text(encoding="utf-8")
     package_doc = easycat.__doc__ or ""
     quickstart = readme.split("### Quickstart (EasyConfig)", 1)[1].split(
-        "### Advanced: own the lifecycle",
+        "## Install",
         1,
     )[0]
     advanced = readme.split("### Advanced: own the lifecycle", 1)[1].split(
@@ -478,12 +478,16 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
     assert "create_session" not in example
     assert "run(EasyConfig.mic(agent=agent, **__EASYCAT_CONFIG_EXTRA__))" in scaffold
 
-    assert "create_session(...)" in advanced
-    assert "from easycat import EasyConfig, STTFinal, create_session" in advanced
-    assert "from easycat.helpers import run_session" in advanced
-    assert "session = create_session(EasyConfig.mic(agent=agent))" in advanced
-    assert "run_session(session)" in advanced
-    assert "async with session:" in advanced
+    # The advanced section is now a one-line door into the graduation guide,
+    # which carries the full create_session/run_session lifecycle example.
+    guide = (REPO_ROOT / "docs" / "from-easyconfig-to-session.md").read_text(encoding="utf-8")
+    assert "docs/from-easyconfig-to-session.md" in advanced
+    assert "create_session(...)" in guide
+    assert "from easycat import EasyConfig, STTFinal, create_session" in guide
+    assert "from easycat.helpers import run_session" in guide
+    assert "session = create_session(EasyConfig.mic(agent=agent))" in guide
+    assert "run_session(session)" in guide
+    assert "async with session:" in guide
 
 
 def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> None:

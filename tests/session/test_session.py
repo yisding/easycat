@@ -43,8 +43,8 @@ from easycat.llm_output_processing import (
     PhoneticReplacementProcessor,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
+from easycat.runtime import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
-from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig, TurnState

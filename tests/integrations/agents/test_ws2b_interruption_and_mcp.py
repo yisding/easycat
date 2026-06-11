@@ -37,7 +37,7 @@ from easycat.integrations.agents.base import (
 from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
 from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
 from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import ErrorInfo
 
 # ── Helpers ─────────────────────────────────────────────────────

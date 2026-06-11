@@ -40,7 +40,7 @@ from easycat.integrations.agents.base import (
     AgentRecorder,
     AgentTurnInput,
 )
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.session.interruption import (

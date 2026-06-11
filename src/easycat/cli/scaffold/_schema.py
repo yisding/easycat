@@ -31,6 +31,7 @@ SCHEMA_V1_KEYS: frozenset[str] = frozenset(
         "agent_instructions",
         "tools",
         "mcp_servers",
+        "easycat_source",
     }
 )
 
@@ -48,6 +49,7 @@ class InitConfig:
     agent_instructions: str | None = None
     tools: list[str] = field(default_factory=list)
     mcp_servers: list[str] = field(default_factory=list)
+    easycat_source: str | None = None
 
 
 def available_templates() -> list[str]:
@@ -135,4 +137,5 @@ def parse_config(raw: str) -> InitConfig:
         agent_instructions=_as_optional_str("agent_instructions"),
         tools=_as_str_list("tools"),
         mcp_servers=_as_str_list("mcp_servers"),
+        easycat_source=_as_optional_str("easycat_source"),
     )

@@ -5,12 +5,8 @@ import shlex
 import tomllib
 from pathlib import Path
 
-from easycat.cli._app import (
-    _DOCS_ONBOARDING_GUARD_COMMANDS,
-    _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
-)
+from scripts._justfile import just_recipe_commands
 from tests._command_hints import command_hint_problems
-from tests._justfile import just_recipe_commands
 from tests._pytest_targets import pytest_target_problems
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -159,20 +155,16 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "maintained reader-facing map" in quick_start
     assert "narrow the map to contributor-facing routes" in normalized
     assert "automation needs that smaller route map" in normalized
-    assert "script or coding agent needs the full route map with command hints" in normalized
-    assert (
-        "replace uppercase or angle-bracket placeholders such as `PATH` or "
-        "`<session_id>` before running those hints"
-    ) in normalized
-    assert "standard `--json` envelope" in normalized
-    assert "command-specific fields" in normalized
+    assert "Coding agent? Start at [llms.txt](llms.txt)" in normalized
+    assert "when a script or coding agent" not in normalized
+    assert "scripts/regen_llms_txt.py" in quick_start
     assert "CLI and scaffold commands" in quick_start
     assert "uv run easycat doctor" in quick_start
     assert "uv run easycat doctor --env-file .env" in quick_start
     assert "uv run easycat doctor --json" in quick_start
     assert "uv run easycat doctor --env-file .env --json" in quick_start
     assert "when those keys live in a project `.env`" in normalized
-    assert "script or coding agent needs parseable environment/check rows" in normalized
+    assert "for parseable environment/check rows" in normalized
     assert "before debugging tests or examples" in quick_start
 
     registered_commands = _registered_easycat_commands()
@@ -193,13 +185,9 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
     assert "uv run easycat validate release --json" in contributing
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in contributing
     assert "renders the latest saved report" in normalized
-    current_run_phrase = (
-        "script or coding agent needs the current validation run inside the standard CLI envelope"
-    )
-    assert current_run_phrase in normalized
-    assert "script or coding agent needs a saved report re-emitted inside that envelope" in (
-        normalized
-    )
+    assert "for the current validation run inside the standard CLI envelope" in normalized
+    assert "re-emit a saved report inside that envelope" in normalized
+    assert "when a script or coding agent" not in normalized
     assert ".easycat/validation/runs/<run_id>/report.json" in contributing
     assert "uv run easycat validate report <path>" not in contributing
 
@@ -255,7 +243,7 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             "validation lanes, docs-route hints, and plan current-state evidence"
         ),
         (
-            "README validation workflow, validation reference route hints, "
+            "The `docs/validation.md` workflow, validation reference route hints, "
             "validation plan current state, validate CLI reports, JSON envelopes, "
             "latency options, and error handling"
         ),
@@ -308,26 +296,6 @@ def test_contributing_development_loop_just_recipes_stay_current() -> None:
     assert not stale_raw_commands, "CONTRIBUTING.md stale raw commands: " + "; ".join(
         stale_raw_commands
     )
-
-
-def test_docs_route_guard_commands_match_contributing_table() -> None:
-    rows = {row["recipe"]: row["raw"] for row in _development_loop_rows()}
-    guard_recipes = (
-        "guard-docs",
-        "guard-teaching",
-        "guard-examples",
-        "guard-templates",
-        "guard-contributing",
-        "guard-validation",
-        "guard-contracts",
-        "guard-ops",
-        "guard-markdown",
-    )
-    expected_guard_commands = tuple(f"just {recipe}" for recipe in guard_recipes)
-    expected_raw_commands = tuple(rows[recipe] for recipe in guard_recipes)
-
-    assert _DOCS_ONBOARDING_GUARD_COMMANDS == expected_guard_commands
-    assert _DOCS_ONBOARDING_RAW_GUARD_COMMANDS == expected_raw_commands
 
 
 def test_contributing_development_loop_pytest_targets_resolve() -> None:

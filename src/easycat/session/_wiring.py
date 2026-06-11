@@ -33,9 +33,9 @@ from typing import TYPE_CHECKING, Any
 from easycat._turn_context import TurnContext
 
 if TYPE_CHECKING:
+    from easycat.integrations.agents.base import ExternalAgentBridge
     from easycat.providers import STTProvider, TTSProvider
     from easycat.session._session import Session
-    from easycat.session._types import Agent
     from easycat.session.actions import SessionActions
 
 
@@ -102,7 +102,7 @@ class SessionWiringContext:
     # ── Provider / agent getters ─────────────────────────────────
     stt: Callable[[], STTProvider]
     tts: Callable[[], TTSProvider]
-    agent: Callable[[], Agent]
+    agent: Callable[[], ExternalAgentBridge]
 
     # Inbound STT track label declared by the transport (e.g. Twilio's
     # ``"inbound"``), or ``None`` for transports that do not guarantee

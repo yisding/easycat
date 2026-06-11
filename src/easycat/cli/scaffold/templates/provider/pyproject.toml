@@ -1,0 +1,19 @@
+[project]
+name = "$PYPROJECT_NAME"
+version = "0.1.0"
+description = "Custom EasyCat provider package with a conformance test."
+requires-python = ">=3.11"
+dependencies = [
+    "easycat[$EXTRAS]>=$EASYCAT_VERSION_FLOOR",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+    "pytest>=8",
+]
+
+[tool.ruff]
+line-length = 99
+target-version = "py311"
+$EASYCAT_SOURCES_BLOCK

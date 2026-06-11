@@ -26,8 +26,7 @@ import uuid
 
 import pytest
 
-from easycat.runtime import JournalRecordKind
-from easycat.runtime.journal import InMemoryRingBuffer
+from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.validation.latency import (
     ReliabilitySample,
     ReliabilitySignals,

@@ -17,11 +17,13 @@ from importlib.resources import files
 from pathlib import Path
 from string import Template
 from typing import TypedDict
+from urllib.parse import unquote, urlsplit
 
 import typer
 from rich.markup import escape
 from rich.prompt import Prompt
 
+from easycat._provider_catalog import provider_env_vars, provider_extras
 from easycat.cli._errors import cli_command
 from easycat.cli._output import (
     emit_command_error,
@@ -54,26 +56,31 @@ _SCAFFOLD_DEFAULTS: dict[str, str] = {
 # else is copied byte-for-byte.
 _TEMPLATED_SUFFIXES: frozenset[str] = frozenset({".py", ".toml", ".md", ".txt", ".example"})
 
-# Provider name → optional extra that ships its SDK.  Used to keep the
-# scaffolded ``pyproject.toml`` in sync with the requested providers
-# (e.g. ``stt="deepgram/flux"`` adds ``deepgram`` to the extras list).
-_PROVIDER_TO_EXTRA: dict[str, str] = {
-    "openai": "openai",
-    "openai-realtime": "openai",
-    "deepgram": "deepgram",
-    "elevenlabs": "elevenlabs",
-    "cartesia": "cartesia",
-}
 
-# Provider name → env var that holds its API key.  Used to extend the
-# scaffolded ``.env.example`` so the developer sees every key they need.
-_PROVIDER_TO_ENV_VAR: dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
-    "openai-realtime": "OPENAI_API_KEY",
-    "deepgram": "DEEPGRAM_API_KEY",
-    "elevenlabs": "ELEVENLABS_API_KEY",
-    "cartesia": "CARTESIA_API_KEY",
-}
+def _provider_to_extra() -> dict[str, str]:
+    """Provider name → optional extra that ships its SDK.
+
+    Used to keep the scaffolded ``pyproject.toml`` in sync with the
+    requested providers (e.g. ``stt="deepgram/flux"`` adds ``deepgram``
+    to the extras list).  Derived from the live STT/TTS provider catalogs
+    (entry-point discovery included) so new providers scaffold correctly
+    without touching this file.
+    """
+    return provider_extras()
+
+
+def _provider_to_env_var() -> dict[str, str]:
+    """Provider name → env var that holds its API key.
+
+    Used to extend the scaffolded ``.env.example`` so the developer sees
+    every key they need.  Derived from the live STT/TTS provider catalogs
+    (entry-point discovery included), so third-party providers registered
+    via ``register_stt_provider`` / ``register_tts_provider`` or the
+    ``easycat.stt_providers`` / ``easycat.tts_providers`` entry-point
+    groups surface here too.
+    """
+    return provider_env_vars()
+
 
 # Per-template baseline extras that must always be present in the
 # generated ``pyproject.toml`` regardless of provider choices.
@@ -84,6 +91,7 @@ _TEMPLATE_BASE_EXTRAS: dict[str, tuple[str, ...]] = {
     "twilio-phone": ("openai-agents", "telephony"),
     "webrtc-browser": ("openai-agents", "webrtc"),
     "text-chat": ("openai-agents",),
+    "provider": ("openai-agents", "local"),
 }
 _FALLBACK_EASYCAT_VERSION_FLOOR = "0.1.0"
 
@@ -166,6 +174,15 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "optional_env": ("TURN_SERVER_URL", "TURN_USERNAME", "TURN_CREDENTIAL"),
         "description": "Browser voice agent using WebRTC audio.",
     },
+    "provider": {
+        "mode": "voice",
+        "transport": "local mic",
+        "framework": "OpenAI Agents",
+        "best_for": "Publishing a custom EasyCat provider package out of tree.",
+        "required_env": ("OPENAI_API_KEY",),
+        "optional_env": (),
+        "description": "External provider package skeleton with conformance test and live demo.",
+    },
 }
 
 _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
@@ -174,6 +191,7 @@ _TEMPLATE_RUN_COMMANDS: dict[str, str] = {
     ),
 }
 _TEMPLATE_CHECK_FILES: dict[str, tuple[str, ...]] = {
+    "provider": ("agent.py", "custom_vad.py", "test_custom_vad.py"),
     "twilio-phone": ("agent.py", "server.py"),
 }
 _INIT_COMMAND_NOTE = (
@@ -272,11 +290,15 @@ def _template_sources(template_name: str) -> list[Path]:
     for source in sorted(src_root.rglob("*")):
         if source.is_dir():
             continue
-        ignored_directory = any(part in _COPY_IGNORE for part in source.parts)
+        # Filter on the path *relative to the template root* — the absolute
+        # path may legitimately contain ignored names (e.g. a checkout under
+        # a `.claude/worktrees/...` directory) that must not hide templates.
+        rel_parts = source.relative_to(src_root).parts
+        ignored_directory = any(part in _COPY_IGNORE for part in rel_parts)
         ignored_file = source.name in _COPY_FILE_IGNORE or source.name.startswith(
             _COPY_FILE_PREFIX_IGNORE
         )
-        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in source.parts)
+        ignored_part_suffix = any(part.endswith(_COPY_PART_SUFFIX_IGNORE) for part in rel_parts)
         ignored_suffix = source.suffix in _COPY_SUFFIX_IGNORE
         if ignored_directory or ignored_file or ignored_part_suffix or ignored_suffix:
             continue
@@ -305,6 +327,82 @@ def _easycat_version_floor() -> str:
         return importlib.metadata.version("easycat")
     except importlib.metadata.PackageNotFoundError:
         return _FALLBACK_EASYCAT_VERSION_FLOOR
+
+
+def _editable_easycat_source() -> Path | None:
+    """Return the local EasyCat checkout for an editable/repo install.
+
+    Pre-launch, ``easycat`` is not on PyPI, so a scaffold that only
+    declares ``easycat[...]>=X`` in its dependencies can never resolve.
+    When the running CLI comes from an editable install (``uv sync`` in
+    the repo, ``pip install -e``), PEP 610 ``direct_url.json`` points at
+    the checkout — the scaffold can then pin that path via
+    ``[tool.uv.sources]``.  Returns ``None`` for published installs.
+    """
+    try:
+        dist = importlib.metadata.distribution("easycat")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    try:
+        raw = dist.read_text("direct_url.json")
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not data.get("dir_info", {}).get("editable"):
+        return None
+    url = data.get("url", "")
+    if not isinstance(url, str) or not url.startswith("file://"):
+        return None
+    source = Path(unquote(urlsplit(url).path))
+    return source if (source / "pyproject.toml").is_file() else None
+
+
+def _resolve_easycat_source(cli_source: str | None, cfg: InitConfig) -> Path | None:
+    """Resolve where the generated project should source ``easycat`` from.
+
+    Priority: ``--easycat-source`` flag > ``easycat_source`` in
+    ``--config`` JSON > auto-detected editable install.  Explicit paths
+    are validated up front (must contain a ``pyproject.toml``) so the
+    scaffold cannot generate a project whose ``uv sync`` dead-ends.
+    """
+    explicit = cli_source if cli_source is not None else cfg.easycat_source
+    if explicit is None:
+        return _editable_easycat_source()
+    source = Path(explicit).expanduser().resolve()
+    if not (source / "pyproject.toml").is_file():
+        raise EASYCAT_E102(
+            problem=(
+                f"easycat_source {explicit!r} is not an EasyCat checkout "
+                "(no pyproject.toml found there). Point it at the repository "
+                "root, e.g. --easycat-source ~/Code/easycat."
+            )
+        )
+    return source
+
+
+def _sources_block(easycat_source: Path | None) -> str:
+    """Render the ``[tool.uv.sources]`` block for the generated pyproject.
+
+    Returns an empty string for published installs — the
+    ``$EASYCAT_SOURCES_BLOCK`` placeholder line is then dropped entirely
+    by :func:`_render_text`.
+    """
+    if easycat_source is None:
+        return ""
+    path_literal = json.dumps(str(easycat_source))
+    return (
+        "\n"
+        "# EasyCat is not on PyPI yet, so resolve it from the local checkout\n"
+        "# this project was scaffolded from. Delete this block and run\n"
+        "# `uv sync` again once you depend on the published package.\n"
+        "[tool.uv.sources]\n"
+        f"easycat = {{ path = {path_literal}, editable = true }}"
+    )
 
 
 def _available_template_catalog() -> list[_TemplateCatalogEntry]:
@@ -570,7 +668,7 @@ def _extras_for(cfg: InitConfig) -> str:
     for spec in (cfg.stt, cfg.tts):
         if not spec:
             continue
-        extra = _PROVIDER_TO_EXTRA.get(_provider_name(spec))
+        extra = _provider_to_extra().get(_provider_name(spec))
         if extra and extra not in seen:
             extras.append(extra)
             seen.add(extra)
@@ -589,7 +687,7 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     for spec in (cfg.stt, cfg.tts):
         if not spec:
             continue
-        var = _PROVIDER_TO_ENV_VAR.get(_provider_name(spec))
+        var = _provider_to_env_var().get(_provider_name(spec))
         if var and var not in seen:
             extra.append(f"{var}=")
             seen.add(var)
@@ -608,7 +706,12 @@ def _python_string_literal_contents(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)[1:-1]
 
 
-def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
+def _substitutions(
+    cfg: InitConfig,
+    project_name: str,
+    *,
+    easycat_source: Path | None = None,
+) -> dict[str, str]:
     return {
         "AGENT_NAME": _python_string_literal_contents(
             cfg.agent_name or _SCAFFOLD_DEFAULTS["AGENT_NAME"]
@@ -622,6 +725,7 @@ def _substitutions(cfg: InitConfig, project_name: str) -> dict[str, str]:
         "EASYCAT_VERSION_FLOOR": _easycat_version_floor(),
         "EXTRAS": _extras_for(cfg),
         "EXTRA_ENV_VARS": _extra_env_vars(cfg),
+        "EASYCAT_SOURCES_BLOCK": _sources_block(easycat_source),
     }
 
 
@@ -639,6 +743,10 @@ def _should_template(source: Path) -> bool:
 
 
 def _render_text(text: str, mapping: dict[str, str]) -> str:
+    if not mapping.get("EASYCAT_SOURCES_BLOCK"):
+        # Published install: drop the placeholder line entirely so the
+        # generated pyproject.toml ends cleanly after `[tool.ruff]`.
+        text = text.replace("$EASYCAT_SOURCES_BLOCK\n", "")
     rendered = Template(text).safe_substitute(mapping)
     extra_kwargs = mapping["EASYCAT_CONFIG_EXTRA"]
     for indent in ("        ", "            "):
@@ -759,6 +867,14 @@ def init(
             "and preflight/check/fix/docs/json-schema/run commands."
         ),
     ),
+    easycat_source: str | None = typer.Option(
+        None,
+        "--easycat-source",
+        help=(
+            "Path to a local EasyCat checkout the generated project should "
+            "resolve `easycat` from (auto-detected for editable/repo installs)."
+        ),
+    ),
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing non-empty directory."
     ),
@@ -811,6 +927,7 @@ def init(
         )
 
     _validate_for_template(cfg)
+    source = _resolve_easycat_source(easycat_source, cfg)
 
     target = Path(name).resolve()
     if _is_existing_non_dir(target) or (not force and _is_non_empty_dir(target)):
@@ -818,7 +935,7 @@ def init(
 
     target.mkdir(parents=True, exist_ok=True)
 
-    mapping = _substitutions(cfg, target.name)
+    mapping = _substitutions(cfg, target.name, easycat_source=source)
     written = _copy_template(cfg.template, target, mapping)
     git_ok = False if no_git else _maybe_git_init(target)
 
@@ -834,6 +951,7 @@ def init(
                 pyproject_name=_pyproject_name(target.name),
                 files=[str(p.relative_to(target)) for p in written],
                 agent_lines=agent_lines,
+                easycat_source=str(source) if source else None,
                 git=git_ok,
                 run_command=_next_step_run_command(cfg.template),
                 check_command=_next_step_check_command(cfg.template),
@@ -849,6 +967,8 @@ def init(
         rel = p.relative_to(target)
         extra = f" ({agent_lines} lines)" if rel.name == "agent.py" else ""
         success(f"{rel}{extra}")
+    if source is not None:
+        info(f"easycat resolved from local checkout: {escape(str(source))}")
     if git_ok:
         success("git init")
     elif not no_git:
@@ -857,34 +977,13 @@ def init(
     stderr_console.print("[bold]Next steps:[/]")
     stderr_console.print(f"  cd {escape(shlex.quote(name))}")
     stderr_console.print("  cp .env.example .env  [dim]# then fill in your API keys[/]")
-    stderr_console.print("  uv sync")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_COMMAND} [dim]# verify your setup[/]")
-    stderr_console.print(f"  {_NEXT_STEP_DOCTOR_JSON_COMMAND} [dim]# parseable setup checks[/]")
-    stderr_console.print(
-        f"  {_next_step_check_command(cfg.template)} [dim]# lint and syntax check[/]"
-    )
-    stderr_console.print(
-        f"  {_next_step_fix_command(cfg.template)} "
-        "[dim]# auto-fix Ruff issues if the check reports them[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_COMMAND} [dim]# find learning, maintenance, validation, "
-        "and operations routes[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_COMMAND} [dim]# app-builder routes only[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_APP_BUILDER_DOCS_JSON_COMMAND} [dim]# parseable app-builder route map[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_DOCS_JSON_COMMAND} "
-        "[dim]# route map with command hints and audience labels[/]"
-    )
-    stderr_console.print(
-        f"  {_NEXT_STEP_EXPLAIN_JSON_SCHEMA_COMMAND} [dim]# JSON envelope and field contract[/]"
-    )
+    stderr_console.print(f"  uv sync && {_NEXT_STEP_DOCTOR_COMMAND}", soft_wrap=True)
     stderr_console.print(f"  {_next_step_run_command(cfg.template)}", soft_wrap=True)
+    stderr_console.print(
+        "[dim]The full post-scaffold command catalog stays in "
+        "`easycat init --list-templates --json` (next_step_commands).[/]",
+        soft_wrap=True,
+    )
 
 
 __all__: list[str] = ["init"]

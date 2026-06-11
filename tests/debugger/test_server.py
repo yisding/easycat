@@ -38,8 +38,8 @@ from easycat.events import (  # noqa: E402
     VADStopSpeaking,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer  # noqa: E402
+from easycat.runtime import InMemoryRingBuffer  # noqa: E402
 from easycat.runtime.artifacts import InMemoryArtifactStore  # noqa: E402
-from easycat.runtime.journal import InMemoryRingBuffer  # noqa: E402
 from easycat.runtime.records import ErrorInfo, JournalRecordKind  # noqa: E402
 from easycat.session._session import Session  # noqa: E402
 from easycat.session._types import SessionConfig  # noqa: E402
@@ -417,7 +417,7 @@ def test_debugger_source_session_adapts_live_journal():
 def test_journal_view_exposes_latest_sequence():
     """``JournalView`` re-exposes the backend's O(1) ``latest_sequence`` so
     live-tailing callers can detect growth without re-reading the journal."""
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=8)
     view = JournalView(journal)
@@ -436,7 +436,7 @@ def test_session_source_progress_is_cheap_and_tracks_growth():
     ``records()`` (full ``read()`` + ``_record_to_dict`` per record) every
     500ms just to compare a count.
     """
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=8)
 
@@ -504,6 +504,42 @@ async def test_api_timeline_emits_per_stage_spans(tmp_path):
                     "turn",
                     "telephony",
                 }
+
+
+async def test_timeline_helpers_are_shared_with_cli(tmp_path):
+    """The waterfall math lives once in ``debug/_turn_timeline``.
+
+    The debugger endpoints and ``easycat bundles show`` / ``inspect``
+    must compute identical per-turn spans, so the server's helpers are
+    the shared functions and ``turn_waterfall`` decorates the same
+    timeline with milestone deltas for the CLI.
+    """
+    from easycat.debug import _turn_timeline
+    from easycat.debugger import server
+
+    assert server._summarise_turns is _turn_timeline.summarise_turns
+    assert server._build_timeline is _turn_timeline.build_timeline
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    records = list(RunBundle.load(bundle_path).records())
+    timeline = _turn_timeline.build_timeline(records)
+    waterfall = _turn_timeline.turn_waterfall(records)
+
+    assert waterfall, "expected at least one turn"
+    by_turn = {turn["turn_id"]: turn for turn in timeline}
+    for turn in waterfall:
+        assert turn["spans"] == by_turn[turn["turn_id"]]["spans"]
+        assert set(turn["milestones"]) == {
+            "vad_endpoint_to_stt_final_ms",
+            "stt_final_to_agent_first_token_ms",
+            "agent_first_token_to_tts_first_byte_ms",
+            "vad_endpoint_to_tts_first_byte_ms",
+        }
+    # A real voice turn reaches TTS, so at least one turn resolves the
+    # full VAD endpoint → TTS first byte delta.
+    assert any(
+        turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None for turn in waterfall
+    )
 
 
 async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
@@ -799,7 +835,7 @@ async def test_websocket_live_source_pushes_on_growth_without_serializing():
     """A live source should push a fresh snapshot when the journal grows,
     and the WS loop must drive change detection off the cheap O(1)
     ``progress()`` probe — never re-serializing the journal per tick."""
-    from easycat.runtime.journal import JournalView
+    from easycat.runtime import JournalView
 
     journal = InMemoryRingBuffer(capacity=32)
 

@@ -13,16 +13,11 @@ runnable artifact you can visit independently.
 From this repository, `uv run easycat docs` prints the maintained
 docs map that links back to this ladder. Use
 `uv run easycat docs --audience learners` to narrow that map to learner-facing
-routes. Use `uv run easycat docs --audience learners --json` when automation
-needs that smaller route map, or `uv run easycat docs --json` when a script or
-coding agent needs the full route map with command hints and audience labels;
-replace uppercase or angle-bracket placeholders such as `PATH` or
-`<session_id>` before running those hints. Use
-`uv run easycat explain json-schema` for the JSON envelope and field contract.
-Use `uv run easycat doctor --json` when a script or coding agent needs
-parseable first-run environment checks; use
-`uv run easycat doctor --env-file .env --json` when those checks should load
-your `.env`.
+routes, or `uv run easycat docs --audience learners --json` when automation
+needs that smaller route map.
+Coding agent? Start at [llms.txt](../../llms.txt) or run
+`uv run easycat explain json-schema` (`uv run easycat doctor --json` emits
+first-run environment checks as parseable rows).
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 
@@ -46,9 +41,6 @@ uv run easycat validate quick --json
 uv run easycat validate report .easycat/validation/latest.json
 uv run easycat validate report .easycat/validation/latest.json --json
 ```
-
-Use the JSON forms when a script or coding agent needs validation run/report
-payloads inside the standard CLI envelope.
 
 ## Choose a starting point
 
@@ -125,10 +117,10 @@ payloads inside the standard CLI envelope.
   from the repo root. It catches missing keys, local audio problems,
   journal path issues, and provider reachability before you debug
   chapter code. If the keys live in a project `.env`, run
-  `uv run easycat doctor --env-file .env`; use
-  `uv run easycat doctor --env-file .env --json` when a script or coding agent
-  needs the same environment/check rows. When running a chapter script from
-  `.env`, add `--env-file .env` after `uv run` in the command you run.
+  `uv run easycat doctor --env-file .env`; add `--json`
+  (`uv run easycat doctor --env-file .env --json`) for the same
+  environment/check rows as parseable output. When running a chapter script
+  from `.env`, add `--env-file .env` after `uv run` in the command you run.
 
 Each chapter's README lists its own prerequisites up front.
 

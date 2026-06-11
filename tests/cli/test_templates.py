@@ -61,6 +61,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ``agent.py`` line budget per template (counts *all* lines including blanks).
 _LINE_BUDGETS: dict[str, int] = {
     "openai-agents": 16,
+    "provider": 12,
     "pydantic-ai": 17,
     "pydantic-ai-workflow": 20,
     "text-chat": 17,
@@ -69,13 +70,22 @@ _LINE_BUDGETS: dict[str, int] = {
 }
 
 _EXTRA_TEMPLATE_FILES: dict[str, tuple[str, ...]] = {
+    "provider": ("custom_vad.py", "test_custom_vad.py"),
     "twilio-phone": ("server.py",),
+}
+
+# Per-template dev dependency groups; the provider package skeleton ships a
+# conformance test, so it also pins pytest.
+_TEMPLATE_DEV_GROUPS: dict[str, list[str]] = {
+    "provider": ["ruff>=0.9", "pytest>=8"],
 }
 
 _REQUIRED_FILES: tuple[str, ...] = (
     "agent.py",
     "pyproject.toml",
     "README.md",
+    "AGENTS.md",
+    "tests/test_agent.py",
     ".env.example",
     ".gitignore",
 )
@@ -105,6 +115,7 @@ def test_catalog_is_nonempty(templates: list[str]) -> None:
     assert len(templates) >= 5
     for required in (
         "openai-agents",
+        "provider",
         "pydantic-ai",
         "pydantic-ai-workflow",
         "text-chat",
@@ -674,7 +685,8 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
     normalized_readme = " ".join(readme.split())
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
-    assert "script or coding agent needs parseable environment/check rows" in normalized_readme
+    assert "for parseable environment/check rows" in normalized_readme
+    assert "when a script or coding agent" not in normalized_readme
     assert "uv run --env-file .env easycat doctor" not in readme
     assert "\nuv run easycat doctor\n" not in readme
     assert "Run `easycat doctor`" not in readme
@@ -739,14 +751,16 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert 'uv run easycat docs --audience "app builders"' not in next_steps
     assert "narrow the map to app-building routes" in normalized_next_steps
     assert "uv run easycat docs --audience app-builders --json" in next_steps
-    assert "automation needs that smaller route map" in normalized_next_steps
+    assert "automation needs the route map with command hints" in normalized_next_steps
     assert "uv run easycat docs --json" in next_steps
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps
     assert "uv run easycat explain json-schema" in next_steps
-    assert "script or coding agent needs the full route map with command hints" in (
+    assert "Coding agent? Start at EasyCat's" in normalized_next_steps
+    assert "[llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt)" in (
         normalized_next_steps
     )
+    assert "when a script or coding agent" not in normalized_next_steps
     assert "audience labels" in normalized_next_steps
     assert "right starter" in normalized_next_steps
     assert "automation needs the template catalog" in normalized_next_steps
@@ -832,7 +846,9 @@ def test_pyproject_pins_easycat_with_extras(name: str) -> None:
     assert "$EASYCAT_VERSION_FLOOR" in pyproject
     assert "$EASYCAT_VERSION_FLOOR" not in rendered
     assert _base_requirement(name) in rendered
-    assert parsed["dependency-groups"]["dev"] == ["ruff>=0.9"]
+    assert parsed["dependency-groups"]["dev"] == _TEMPLATE_DEV_GROUPS.get(
+        name, ["pytest>=8", "ruff>=0.9"]
+    )
     # The generated pyproject uses a normalized metadata name; README files keep
     # the display project name.
     assert "$PYPROJECT_NAME" in pyproject
@@ -981,3 +997,83 @@ def test_template_sources_skip_generated_artifacts(
     monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
 
     assert _template_sources("demo") == [kept]
+
+
+# ── pre-launch local-source wiring ───────────────────────────────────
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_pyproject_carries_sources_block_placeholder(name: str) -> None:
+    """Every template pyproject must carry the `$EASYCAT_SOURCES_BLOCK` hook.
+
+    Pre-launch, `easycat` is not on PyPI; without this placeholder a
+    scaffold generated from a repo/editable install could never `uv sync`.
+    """
+    pyproject = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+    assert "$EASYCAT_SOURCES_BLOCK" in pyproject
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_pyproject_renders_uv_sources_for_local_checkout(name: str) -> None:
+    template_text = (_template_dir(name) / "pyproject.toml").read_text(encoding="utf-8")
+
+    published = _render_text(template_text, _substitutions(InitConfig(template=name), "demo"))
+    assert "$EASYCAT_SOURCES_BLOCK" not in published
+    assert "[tool.uv.sources]" not in published
+    tomllib.loads(published)
+
+    dev = _render_text(
+        template_text,
+        _substitutions(InitConfig(template=name), "demo", easycat_source=REPO_ROOT),
+    )
+    parsed = tomllib.loads(dev)
+    assert parsed["tool"]["uv"]["sources"]["easycat"] == {
+        "path": str(REPO_ROOT),
+        "editable": True,
+    }
+
+
+@pytest.mark.parametrize("name", available_templates())
+def test_template_readme_explains_local_source_block(name: str) -> None:
+    readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
+    assert "[tool.uv.sources]" in readme
+    assert "not on PyPI yet" in readme
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_ships_offline_agent_tests(name: str) -> None:
+    """Every scaffold ships a key-free test exercising the real turn pipeline."""
+    source = (_template_dir(name) / "tests" / "test_agent.py").read_text(encoding="utf-8")
+
+    assert "from easycat.debug.testing import" in source
+    assert "run_text_turn" in source
+    assert "assert_turn_completed" in source
+    assert "assert_no_error" in source
+    assert "assert_latency" in source
+    # Key-free by construction: a stub agent, never a live LLM client.
+    assert "StubAgent" in source
+    assert "OPENAI_API_KEY" not in source
+    # No placeholders — the same file works in every rendered project.
+    assert "$" not in source
+
+
+@pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
+def test_template_ships_agents_md_guide(name: str) -> None:
+    """Every scaffold ships an AGENTS.md for coding agents in the new project."""
+    catalog = {entry["name"]: entry for entry in _available_template_catalog()}
+    agents_md = (_template_dir(name) / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "$PROJECT_NAME" in agents_md
+    assert "uv run pytest" in agents_md
+    assert "uv run easycat doctor --env-file .env" in agents_md
+    assert "uv run easycat doctor --env-file .env --json" in agents_md
+    assert "uv run easycat docs" in agents_md
+    assert "easycat.debug.testing" in agents_md
+    assert "run_text_turn" in agents_md
+    assert "assert_llm_judge" in agents_md
+    # The run/check hints must match the catalog's post-create commands.
+    entry = catalog[name]
+    assert entry["run_command"].removeprefix("uv run --env-file .env ").split()[0] in agents_md
+    assert entry["run_command"] in agents_md
+    assert entry["check_command"] in agents_md
+    assert entry["fix_command"] in agents_md

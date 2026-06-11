@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from easycat.runtime.journal import InMemoryRingBuffer, SqliteJournal
+from easycat.runtime import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.records import JournalRecordKind
 
 _DEFAULT_REGRESSION_THRESHOLD_PERCENT = 25.0

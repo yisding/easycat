@@ -116,6 +116,7 @@ if TYPE_CHECKING:
         STTProviderConfig,
         available_stt_providers,
         create_stt_provider,
+        register_stt_provider,
     )
     from easycat.supervisor import SessionAudioBroadcaster
     from easycat.telephony.session_actions import TwilioSessionActionConfig
@@ -135,6 +136,7 @@ if TYPE_CHECKING:
         TTSProviderConfig,
         available_tts_providers,
         create_tts_provider,
+        register_tts_provider,
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
     from easycat.vad import VADConfig

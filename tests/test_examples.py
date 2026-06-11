@@ -430,6 +430,35 @@ def test_examples_readme_lists_browser_and_deploy_support_files() -> None:
     assert not stale, "examples/README.md has stale support-file links for: " + ", ".join(stale)
 
 
+def test_bundled_browser_playground_page_serves_transcript_and_latency_ui() -> None:
+    """Served-page smoke: the bundled WebRTC client that ``easycat serve`` and
+    ``examples/webrtc_server.py`` serve must ship the playground widgets —
+    live transcript, interruption indicator, latency readout, the server →
+    browser events data channel, and the debugger UI link."""
+    client = (
+        REPO_ROOT / "src" / "easycat" / "transports" / "static" / "webrtc_client.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'pc.createDataChannel("events")' in client
+    assert 'id="transcript"' in client
+    assert 'id="latency"' in client
+    assert 'id="interruption"' in client
+    assert 'id="debuggerLink"' in client
+    for message_type in (
+        "stt_partial",
+        "stt_final",
+        "agent_delta",
+        "agent_final",
+        "turn_started",
+        "interruption",
+        "turn_latency",
+    ):
+        assert f'"{message_type}"' in client, f"client misses {message_type} handling"
+    # Token forwarding keeps the WS/docker security defaults working when
+    # ``easycat serve --token`` prints a tokenized Open URL.
+    assert 'new URLSearchParams(location.search).get("token")' in client
+
+
 def test_ec2_webrtc_deploy_docs_do_not_claim_to_configure_https() -> None:
     server = (REPO_ROOT / "examples" / "webrtc_server.py").read_text(encoding="utf-8")
     deploy = (REPO_ROOT / "examples" / "ec2_webrtc" / "deploy.sh").read_text(encoding="utf-8")
@@ -547,20 +576,13 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     commands = fast_path.split("```bash", 1)[1].split("```", 1)[0].strip().splitlines()
 
     assert "uv run easycat docs" in intro
-    assert "uv run easycat docs --json" in intro
     assert "maintained docs map" in intro
-    assert "script or coding agent needs the same route map with command hints" in normalized_intro
-    assert (
-        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
-        "before running those hints"
-    ) in normalized_intro
+    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized_intro
+    assert "when a script or coding agent" not in normalized_intro
     assert "uv run easycat explain json-schema" in intro
-    assert "JSON envelope and field contract" in normalized_intro
     assert "uv run easycat doctor --json" in intro
     assert "uv run easycat doctor --env-file .env --json" in intro
-    assert "script or coding agent needs parseable first-run environment checks" in (
-        normalized_intro
-    )
+    assert "same checks as parseable rows" in normalized_intro
     assert "uv run easycat init --list-templates" in intro
     assert "uv run easycat init my-agent" in intro
     assert "uv run easycat init --list-templates --json" in intro
@@ -582,12 +604,8 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
     assert "uv run easycat validate report .easycat/validation/latest.json" in fast_path
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in fast_path
     normalized_fast_path = re.sub(r"\s+", " ", fast_path)
-    current_run_phrase = (
-        "script or coding agent needs the current quick validation run inside "
-        "the standard CLI envelope"
-    )
-    assert current_run_phrase in normalized_fast_path
-    assert "re-emit the saved report in that same envelope" in normalized_fast_path
+    assert "emit the run or saved report inside the standard CLI envelope" in normalized_fast_path
+    assert "when a script or coding agent" not in normalized_fast_path
 
 
 def test_examples_readme_command_hints_are_locally_valid() -> None:
@@ -1529,6 +1547,28 @@ def test_custom_stt_provider_example_imports():
     assert callable(custom_stt_provider.main)
 
 
+def test_custom_transport_example_imports():
+    import examples.custom_transport as custom_transport
+
+    assert callable(custom_transport.main)
+
+
+def test_custom_transport_example_uses_public_transport_surface():
+    path = REPO_ROOT / "examples/custom_transport.py"
+    source = path.read_text(encoding="utf-8")
+
+    assert _visible_code_line_count(path) <= 55
+    assert "from easycat.transports import LocalTransport" in source
+    assert "EasyConfig(" in source
+    assert "transport=transport" in source
+    assert "run(" in source
+    assert "easycat.transports.AudioQueueMixin" in source  # docstring pointer
+    assert "docs/extending/transport.md" in source
+    assert "create_session" not in source
+    assert "SessionConfig" not in source
+    assert "Session(" not in source
+
+
 def test_custom_provider_examples_use_easyconfig_surface():
     for relpath in (
         "examples/custom_stt_provider.py",
@@ -1921,6 +1961,7 @@ def _python_executable() -> str:
         "examples/custom_stt_provider.py",
         "examples/custom_tts_provider.py",
         "examples/custom_vad_provider.py",
+        "examples/custom_transport.py",
         "examples/output_processors.py",
         "examples/agent_event_subscription.py",
         "examples/vad_backends.py",

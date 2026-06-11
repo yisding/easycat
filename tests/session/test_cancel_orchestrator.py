@@ -16,8 +16,8 @@ import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.events import EventBus
+from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
-from easycat.runtime.journal import InMemoryRingBuffer
 from easycat.session._cancel_orchestrator import CancelOrchestrator
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session.actions import SessionActions

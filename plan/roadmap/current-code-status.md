@@ -10,8 +10,8 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 188 tracked Python files.
-- `tests/` contains 206 tracked `test_*.py` files.
+- `src/easycat/` contains 213 tracked Python files.
+- `tests/` contains 216 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.
 - CI exists in `.github/workflows/ci.yml` with lint, typecheck, quick
@@ -86,10 +86,10 @@ with the codebase. Counts below come from tracked files and exclude
   validation now exposes a first-class optional WebRTC browser stats artifact
   path for `RTCPeerConnection.getStats()` snapshots.
 - `Session` is reduced from the older cleanup note but still large at roughly
-  1,437 lines.
+  1,440 lines.
 - `src/easycat/__init__.py` is smaller than the older cleanup note at roughly
-  159 lines, with the lazy-export registry isolated in `easycat._public_api`.
-  The public surface is still broad at 90 lazy top-level exports, but it is
+  161 lines, with the lazy-export registry isolated in `easycat._public_api`.
+  The public surface is still broad at 92 lazy top-level exports, but it is
   pinned by a golden snapshot and documented in `docs/public-api.md`.
 - A root `LICENSE` remains active release-bar work. Project metadata now
   includes author, keywords, classifiers, and project URLs, and packaging tests

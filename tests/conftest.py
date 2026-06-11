@@ -3,13 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import socket
+import sys
 
 import pytest
 import pytest_asyncio
 
 from tests._hypothesis_profiles import register_hypothesis_profiles
 from tests._marker_lint import validate_flaky_marker, validate_provider_surface_markers
+
+# Typer bakes FORCE_TERMINAL at import time when GITHUB_ACTIONS / FORCE_COLOR /
+# PY_COLORS is set, switching --help to ANSI panel rendering that the CLI help
+# assertions (and scaffold smoke subprocesses) don't expect. Pin plain-text
+# rendering before typer loads — and re-pin the baked constant if it already
+# did. Subprocess-spawned CLI calls inherit the scrubbed environment.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
+for _ci_color_var in ("GITHUB_ACTIONS", "FORCE_COLOR", "PY_COLORS"):
+    os.environ.pop(_ci_color_var, None)
+if "typer.rich_utils" in sys.modules:
+    sys.modules["typer.rich_utils"].FORCE_TERMINAL = False
 
 register_hypothesis_profiles()
 
@@ -30,6 +44,27 @@ def _format_task(task: asyncio.Task[object]) -> str:
     coroutine = task.get_coro()
     name = getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None)
     return f"{task.get_name()} ({name or coroutine!r})"
+
+
+@pytest.fixture(autouse=True)
+def _restore_easycat_logger_state():
+    """Restore the ``easycat`` logger after each test.
+
+    ``enable_console_logging`` (reached via ``run()``, ``EasyConfig`` debug
+    modes, and the console/serve CLI paths) attaches a handler and flips
+    ``propagate = False`` on the ``easycat`` logger. Left in place, that state
+    leaks across tests and blinds ``caplog`` (which relies on root-handler
+    propagation) for every later test in a serial full-suite run. Snapshot and
+    restore handlers, level, and propagate so each test sees pristine state.
+    """
+    logger = logging.getLogger("easycat")
+    handlers = list(logger.handlers)
+    level = logger.level
+    propagate = logger.propagate
+    yield
+    logger.handlers[:] = handlers
+    logger.setLevel(level)
+    logger.propagate = propagate
 
 
 @pytest_asyncio.fixture(autouse=True)

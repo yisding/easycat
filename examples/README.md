@@ -4,22 +4,19 @@ Use this directory as a runnable map after reading the top-level
 [README](../README.md) or the [teaching ladder](../docs/teaching/). Each row
 below names what the example teaches, the command to run, the extras or
 third-party packages it expects, and the environment variables that must be set.
-Run `uv run easycat docs` for the maintained docs map; use
-`uv run easycat docs --json` when a script or coding agent needs the same route
-map with command hints and audience labels. Replace uppercase or angle-bracket
-placeholders such as `PATH` or `<session_id>` before running those hints. Use
-`uv run easycat explain json-schema` for the JSON envelope and field contract.
-Use `uv run easycat doctor --json` when a script or coding agent needs
-parseable first-run environment checks; use
-`uv run easycat doctor --env-file .env --json` when those checks should load
-your `.env`.
+Run `uv run easycat docs` for the maintained docs map and
+`uv run easycat doctor` for first-run environment checks.
+Coding agent? Start at [llms.txt](../llms.txt) or run
+`uv run easycat explain json-schema` (`uv run easycat doctor --json` and
+`uv run easycat doctor --env-file .env --json` emit the same checks as
+parseable rows).
 To scaffold a fresh app instead of running an example in-place, compare
 templates with `uv run easycat init --list-templates`; the list includes
 copyable create/preflight/check/fix/docs/json-schema/run commands for local mic, browser
 WebRTC, Twilio, and text-chat starting points. Then create the default local
 voice starter with `uv run easycat init my-agent`. Use
-`uv run easycat init --list-templates --json` when a script or coding agent
-needs the same template catalog.
+`uv run easycat init --list-templates --json` when automation needs the same
+template catalog.
 
 For the fastest local mic/speaker path:
 
@@ -39,11 +36,10 @@ uv run --env-file .env python examples/openai_agents_voice.py
 
 After changing an example or using one as a starting point, run
 `uv run easycat validate quick` and inspect
-`uv run easycat validate report .easycat/validation/latest.json`. Use
-`uv run easycat validate quick --json` when a script or coding agent needs the
-current quick validation run inside the standard CLI envelope; use
-`uv run easycat validate report .easycat/validation/latest.json --json` to
-re-emit the saved report in that same envelope.
+`uv run easycat validate report .easycat/validation/latest.json`. Each also
+takes `--json` (`uv run easycat validate quick --json`,
+`uv run easycat validate report .easycat/validation/latest.json --json`) to
+emit the run or saved report inside the standard CLI envelope.
 
 `quickstart` includes local audio, OpenAI providers, the OpenAI Agents SDK,
 RNNoise, NumPy, and ONNX Runtime. It does not install every framework/provider
@@ -149,6 +145,7 @@ Support files:
 | [custom_stt_provider.py](custom_stt_provider.py) | Wrap or replace the STT provider by hand. | `uv run python examples/custom_stt_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [custom_tts_provider.py](custom_tts_provider.py) | Wrap or replace the TTS provider by hand. | `uv run python examples/custom_tts_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [custom_vad_provider.py](custom_vad_provider.py) | Wrap or replace the VAD provider by hand. | `uv run python examples/custom_vad_provider.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
+| [custom_transport.py](custom_transport.py) | Wrap or replace the audio transport by hand. | `uv run python examples/custom_transport.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [responses_api_bridge.py](responses_api_bridge.py) | Call a remote agent over the OpenAI Responses API protocol. | `uv run python examples/responses_api_bridge.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY`, `EASYCAT_REMOTE_AGENT_BASE_URL`, `EASYCAT_REMOTE_AGENT_API_KEY`, `EASYCAT_REMOTE_AGENT_MODEL` |
 
 ## Telephony Helpers

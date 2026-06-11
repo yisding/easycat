@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 
-from easycat.runtime.journal import InMemoryRingBuffer, JournalView, create_journal
+from easycat.runtime import InMemoryRingBuffer, JournalView, create_journal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
@@ -411,7 +411,7 @@ class TestCreateJournal:
         assert j._capacity == 50
 
     def test_full_returns_sqlite(self, tmp_path):
-        from easycat.runtime.journal import SqliteJournal
+        from easycat.runtime import SqliteJournal
 
         j = create_journal("test-session", debug="full", data_dir=str(tmp_path))
         assert isinstance(j, SqliteJournal)

@@ -23,24 +23,35 @@ just                             # List every task
 just check                       # Format check + lint + full serial tests
 just test-one tests/stt/test_stt_openai.py  # Run one test file
 just validate-quick              # Deterministic local validation slice
-just guard-docs                  # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes
-just guard-teaching              # Guard teaching ladder chapters and generated blocks
-just guard-examples              # Guard examples README, support files, script smoke, and route hints
-just guard-templates             # Guard scaffold templates, init flows, generated project smoke, and secret/artifact hygiene
-just guard-contributing          # Guard contributor docs, agent guide contracts, and validation state
-just guard-validation            # Guard validation workflow, reference docs, and validate CLI behavior
-just guard-contracts             # Guard provider contracts, cassettes, matrix, and bridge grammar
-just guard-ops                   # Guard operator docs, deployment, observability, journal CLI, and durability
-just guard-markdown              # Guard maintained Markdown links, anchors, and docs-route targets
-uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py  # Raw fallback for just guard-docs
+```
+
+Docs/onboarding guard recipes and their raw fallbacks below are generated
+from the `justfile` by `uv run python scripts/regen_guard_commands.py`:
+
+<!-- BEGIN auto:guard-commands format=bash -->
+```bash
+just guard-docs          # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes
+just guard-teaching      # Guard teaching ladder chapters, generated README blocks, and learner route hints
+just guard-examples      # Guard examples README, support files, script smoke checks, and docs-route hints
+just guard-templates     # Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene
+just guard-contributing  # Guard contributor guidance, agent guide contracts, validation state, and route hints
+just guard-validation    # Guard validation workflow docs, validation reference docs, and validate CLI behavior
+just guard-contracts     # Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix
+just guard-ops           # Guard operator docs, deployment guide, observability docs, journal CLI, and durability
+just guard-markdown      # Guard maintained Markdown links, anchors, and docs-route Markdown targets
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py  # Raw fallback for just guard-docs
 uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras  # Raw fallback for just guard-teaching
 uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path  # Raw fallback for just guard-examples
 uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py  # Raw fallback for just guard-templates
-uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'  # Raw fallback for just guard-contributing
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'  # Raw fallback for just guard-contributing
 uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py  # Raw fallback for just guard-validation
-uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/integration/test_provider_contract_matrix.py  # Raw fallback for just guard-contracts
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py  # Raw fallback for just guard-contracts
 uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py  # Raw fallback for just guard-ops
 uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources  # Raw fallback for just guard-markdown
+```
+<!-- END auto:guard-commands -->
+
+```bash
 uv run pytest                    # Run full test suite
 uv run pytest tests/stt/test_stt_openai.py              # Run one test file
 uv run pytest tests/validation/test_latency_percentiles.py::test_latency_percentile_stats_from_values_empty_input  # Run one test
@@ -52,6 +63,8 @@ uv run easycat docs --json       # Docs route map with audiences and command hin
 uv run easycat doctor --json     # Parseable first-run environment checks
 uv run easycat doctor --env-file .env --json  # Parseable checks with project .env loaded
 uv run easycat explain json-schema  # CLI JSON envelope and field contract
+uv run python scripts/regen_llms_txt.py  # Regenerate llms.txt / llms-full.txt from the docs route map
+uv run python scripts/regen_llms_txt.py --check  # Verify generated llms.txt / llms-full.txt are current
 uv run easycat bundles show PATH --json  # Parseable bundle/journal summary
 uv run easycat bundles export PATH --output DIR --json  # Redacted context pack metadata
 uv run easycat replay PATH --json  # Parseable replay summary
@@ -71,41 +84,22 @@ uv run python examples/ws_server.py  # Run an example
 
 **Pipeline flow:** Transport (audio in) → NoiseReducer → EchoCanceller → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). The `EchoCanceller` also consumes TTS output as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal.
 
-**Key modules:**
-- `session/` — Package containing the core orchestrator. Key files:
-  - `_session.py` — `Session` class. Owns the public lifecycle API (start/stop/cancel_turn/reset_state/send_text/etc.) and turn-pointer state. `Session.__init__` is now a short field-assignment shell that ends with a single `build_session(self, cfg)` call — a newcomer can scan the constructor in under a minute.
-  - `_builder.py` — `build_session(session, cfg) -> SessionComponents`. Owns ALL collaborator construction that used to be inlined in `__init__`: the 7 stages, the shared `RunContext`, the `no-turn` `TurnContext`, the journal sink, the outbound audio queue, and every collaborator (AudioRouter/STTCommitter/TTSScheduler/CancelOrchestrator/TurnRunner/GreetingController/OptOutPolicy), plus their deferred event-bus subscriptions and TurnManager bindings. Returns a frozen `SessionComponents` bundle the constructor unpacks onto private fields.
-  - `_wiring.py` — `SessionWiringContext`, a typed frozen dataclass of late-binding getters/setters (current_turn, is_running, enable_* flags, provider/agent getters, emit, drain_session_actions, caller_id_system_message, stop, …) built once from the live Session and passed to every collaborator constructor in place of ~40 inline lambdas. Also holds `_SessionTurnHandle` (the `TurnHandle` adapter). Imports `Session` only under `TYPE_CHECKING`.
-  - `_greeting.py` — `GreetingController`. Subscribes itself to `CallAnswered` and speaks the configured greeting once (warm-transfer re-answer ignored) via the bypass synth path.
-  - `_opt_out.py` — `OptOutPolicy`. Subscribes to `STTFinal`; on a TCPA opt-out phrase it adds the caller to the DNC list, emits `OptOutDetected`, and enqueues `EndCallAction` (or falls back to scheduling `Session.stop()`). `Session.dnc_list` delegates here.
-  - `_caller_id.py` — `CallerIdState`. Holds the caller/callee identity + exposure policy and renders the caller-ID system message. `Session.call_identity` / `caller_id_exposure` delegate here; `private_identity` is the raw value used by `config/` wiring and opt-out.
-  - `_telephony_facade.py` — `TelephonyFacade` exposed as `session.telephony`. Wraps the helper list with `.get(type)` plus typed accessors (`outbound_call_manager`, `outbound_call_state_machine`, `number_health_monitor`, `call_disposition_tracker`). `session.get_helper` delegates to it.
-  - `_streaming.py` — `consume_agent_stream()` translates agent stream events into TTS payloads on sentence boundaries.
-  - `_turn_runner.py` — Drives a single turn end-to-end (agent run → streaming → TTS scheduling), holding the logic that used to be inlined in `_session.py`.
-  - `_audio_router.py` — Routes captured audio through noise reduction / echo cancellation and feeds TTS output back as AEC reference audio.
-  - `_tts_scheduler.py` — `TTSScheduler.prepare()` builds and normalizes TTS payload text before scheduling synthesis/playback.
-  - `_stt_committer.py` — Commits finalized STT transcripts into the turn lifecycle.
-  - `interruption.py` — Audio-byte estimation for barge-in: maps TTS output back to what the user heard.
-  - `text.py` — Sentence splitting, markdown checking, speech energy detection, and spoken-text timeline normalization (`_text_for_estimation_timeline`). The audio-byte→text estimation itself (`_estimate_text_spoken`) lives in `interruption.py`.
-  - `_types.py` — `SessionConfig`, `TurnState`, `Agent` protocol.
-- `config/` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session.
-- `events.py` — `EventBus` pub/sub with sync/async handlers. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session.
-- `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces (`STTProvider`, `TTSProvider`, `VADProvider`, `Transport`, `NoiseReducer`, `EchoCanceller`). Providers use duck typing, not inheritance.
-- `turn_manager.py` — 5-state FSM (IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING) with pre-roll buffering and interruption detection. Supports VAD (automatic) and PUSH_TO_TALK turn modes.
-- `runtime/` — Journal-based debug-first runtime. `ExecutionJournal` records events, spans, and metrics. `JournalView` provides query access. The journal is the single source of truth for all observability.
-- `validation/` — Validation report models, redaction, and runner helpers behind the `easycat validate` lanes.
-- `stages/` — Pipeline stages wrapping providers with a uniform `execute` / `snapshot_state` / `handle_upstream` surface and optional journal recording. `Stage` protocol defined in `stages/base.py`.
-- `debug/` — `RunBundle` for serializing/loading complete session recordings. `load_bundle()` for test fixtures.
-- `debugger/` — aiohttp debugger UI for live journals and exported bundles.
-- `cli/` — Typer command surface for `init`, `doctor`, `docs`, `bundles`, `inspect`, `replay`, and `validate`.
-- `smart_turn.py` — Optional ONNX-based endpoint detection that classifies whether a user has finished speaking, enabling faster turn transitions without waiting for silence timeout.
-- `_turn_context.py` (package root) — `TurnContext` per-turn state (timing, playback tracking, cancel token; created fresh each turn) and the `TurnHandle` protocol. Lives at the root as a leaf (depends only on `cancel.py`) so both `session/` and the lower `stages/` layer import it downward — preserving the `Session → Stages → Providers` direction without an import cycle.
+The full architecture explanation — the `session/` collaborator map
+(`session/_builder.py`, `session/_wiring.py`, `session/_turn_runner.py`, …),
+stage and provider layers, agent bridges, and the dual-backend fallback
+chains — lives in [docs/architecture.md](docs/architecture.md). Update that
+page when moving modules; this file keeps only the orientation map below.
 
-**Provider subpackages** (`stt/`, `tts/`, `vad/`, `transports/`, `telephony/`): one provider per file, each implementing the corresponding Protocol. Base classes (`STTBase`, `TTSBase`, `_ServerTransportBase`) provide shared plumbing.
-
-**Agent bridges** (`integrations/agents/`): `ExternalAgentBridge` protocol (single contract between Session and agents) with implementations `OpenAIAgentsBridge`, `PydanticAIBridge`, `GenericWorkflowBridge`, `RemoteResponsesAPIBridge`, `LlamaAgentsBridge`, `LangChainBridge`, and `LangGraphBridge`. `AgentRunner` (in `integrations/agents/_agent_runner.py`) implements `ExternalAgentBridge` by wrapping a simple `async run(text) -> str` object — used for basic agents that need timeout/cancellation/history. `auto_adapt_agent()` in `_factory.py` detects known framework objects and returns the right bridge.
-
-**Dual-backend fallback:** VAD (`create_vad` auto: Silero → FunASR → TEN → Krisp; raises if none resolve), noise reduction (`create_noise_reducer` auto: Krisp → RNNoise → passthrough), and echo cancellation (`create_echo_canceller` from `EchoCancellationConfig`: LiveKitAEC when enabled and available, else `PassthroughAEC`; `EasyConfig` derives a transport-aware default via `enable_echo_cancellation`). VAD and noise reduction can each be forced to a single backend via `VADConfig.backend` / `NoiseReducerConfig.backend`.
+**Package map:**
+- `session/` — core orchestrator package: `Session` lifecycle plus per-concern collaborators (`session/_builder.py` constructs them, `session/_wiring.py` wires them, `session/_turn_runner.py` drives a turn).
+- `config/` — `EasyConfig` (simplified, auto-wires OpenAI providers) and `SessionConfig` (advanced, explicit providers). `create_session()` factory builds a wired Session. Field reference: [docs/reference/easyconfig.md](docs/reference/easyconfig.md).
+- `events.py` — `EventBus` pub/sub. Two event layers: provider-scoped (`STTEvent`, `TTSEvent`) emitted by providers, mapped to EasyCat-level events (`STTFinal`, `TTSAudio`, `TurnStarted`, etc.) by Session. Catalog: [docs/reference/events.md](docs/reference/events.md).
+- `providers.py` — `@runtime_checkable` Protocol definitions for all provider interfaces. Providers use duck typing, not inheritance.
+- `turn_manager.py` — 5-state turn FSM with pre-roll buffering and interruption detection; `smart_turn.py` — optional ONNX endpoint detection.
+- `runtime/` — journal-based debug-first runtime; the journal is the single source of truth for all observability. `validation/` — report models and runners behind the `easycat validate` lanes.
+- `stages/` — pipeline stages wrapping providers; `debug/` — `RunBundle` serialization; `debugger/` — aiohttp debugger UI; `cli/` — Typer command surface.
+- Provider subpackages `stt/`, `tts/`, `vad/`, `transports/`, `telephony/` — one provider per file; `AudioQueueMixin`, `ServerTransportBase`, and `TransportDegraded` are re-exported from `easycat.transports` for out-of-tree transports (see `docs/extending/`); agent bridges in `integrations/agents/` behind the `ExternalAgentBridge` protocol.
+- `_turn_context.py` (package root) — `TurnContext` per-turn state and the `TurnHandle` protocol; a leaf depending only on `cancel.py` so `session/` and `stages/` both import downward.
 
 ## Key Patterns
 
@@ -113,11 +107,13 @@ uv run python examples/ws_server.py  # Run an example
 - **Async-first** — all I/O is async; providers are async iterators
 - **Cooperative cancellation** — `CancelToken` (not exceptions) for turn/TTS cancellation
 - **Factory functions** — `create_session()`, `create_vad()`, `create_noise_reducer()`
-- **Provider registries** — `stt/factory.py` and `tts/factory.py` each have a central `_PROVIDER_TO_CONFIG` dict mapping a provider name to its `(provider class, config class)` pair. `tts/factory.py` still exposes `_PROVIDERS` as a back-compat alias. To add a new STT/TTS provider: add an entry to the registry and a corresponding config dataclass.
+- **Provider registries** — `stt/factory.py` and `tts/factory.py` each build a `ProviderCatalog` (`_provider_catalog.py`) from a central `_PROVIDER_TO_CONFIG` dict (provider name → `(provider class, config class)`) plus per-provider metadata maps: credential env var, install extra, and API domains (key-completeness enforced at import). The catalog is the single source of provider metadata — doctor's env checks, scaffold's extras/env hints, validation's pytest provider markers, and redaction's sensitive-URL regex all derive from it. To add a new STT/TTS provider: add a registry entry + catalog metadata + a config dataclass, and doctor/scaffold/redaction pick it up automatically. `tts/factory.py` still exposes `_PROVIDERS` as a back-compat alias.
 - **Event bus injection** — Deepgram and ElevenLabs providers require an `EventBus` injected at construction (they emit provider-scoped events). OpenAI providers do not.
 - **Noop stubs** (`stubs.py`) — `NoopSTT`, `NoopTTS`, `NoopVAD`, `NoopTransport` for test isolation
 
 ## Session Lifecycle
+
+Reader-facing reference: [docs/reference/session-lifecycle.md](docs/reference/session-lifecycle.md).
 
 - `await session.stop()` is the single public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` remains as a thin alias for `stop(force=True)`
 - Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the private `Session._destroy()` / `Session._close()` primitives — these are not public entry points

@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.providers import Transport
+from easycat.testing import TransportContractSuite
 from tests.contracts.provider_surface_matrix import PROVIDER_SURFACE_CONTRACTS
 
 pytestmark = [
@@ -66,27 +66,35 @@ def test_transport_contract_matrix_has_rows() -> None:
     assert all(row.contract_path == "tests/contracts/test_transport_contracts.py" for row in rows)
 
 
-async def test_transport_contract_lifecycle_and_delivery_semantics() -> None:
-    transport = _ContractTransport()
-    chunk = AudioChunk(data=b"\0" * 320, format=PCM16_MONO_16K)
+class TestTransportContractSuite(TransportContractSuite):
+    """Run the shipped provider-author kit suite against the offline fake.
 
-    assert isinstance(transport, Transport)
-    assert await transport.send_audio(chunk) is False
-    await transport.connect()
-    assert await transport.send_audio(chunk) is True
-    await transport.push_audio(chunk)
-    await transport.disconnect()
-    received = [item async for item in transport.receive_audio()]
+    The protocol-semantics assertions live in
+    :class:`easycat.testing.TransportContractSuite` so this file and the
+    installable kit cannot drift; only fake-specific delivery checks are
+    added below.
+    """
 
-    assert transport.sent == [chunk]
-    assert received == [chunk]
-    assert transport.connected is False
+    provider_factory = _ContractTransport
 
+    async def test_fake_delivers_pushed_audio_until_disconnect(
+        self, provider: _ContractTransport
+    ) -> None:
+        chunk = AudioChunk(data=b"\0" * 320, format=PCM16_MONO_16K)
 
-async def test_transport_contract_clear_audio_is_idempotent() -> None:
-    transport = _ContractTransport()
+        assert await provider.send_audio(chunk) is False
+        await provider.connect()
+        assert await provider.send_audio(chunk) is True
+        await provider.push_audio(chunk)
+        await provider.disconnect()
+        received = [item async for item in provider.receive_audio()]
 
-    await transport.clear_audio()
-    await transport.clear_audio()
+        assert provider.sent == [chunk]
+        assert received == [chunk]
+        assert provider.connected is False
 
-    assert transport.clear_calls == 2
+    async def test_fake_counts_clear_audio_calls(self, provider: _ContractTransport) -> None:
+        await provider.clear_audio()
+        await provider.clear_audio()
+
+        assert provider.clear_calls == 2

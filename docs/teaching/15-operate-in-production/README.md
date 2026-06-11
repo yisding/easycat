@@ -423,8 +423,10 @@ $ uv run easycat
 EasyCat — voice bot framework
 
   Scaffold
+    console     Try EasyCat in your terminal with no API keys
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
+    serve       Serve the browser voice playground on localhost
     explain     Look up errors and CLI schema topics
 
   Debug with the journal
@@ -445,22 +447,37 @@ Run easycat explain <code> for errors.
 Run easycat explain json-schema for CLI JSON.
 ```
 
+- **`uv run easycat console`** — tries EasyCat in your terminal with no API
+  keys (`src/easycat/cli/console.py`): a keyless interactive text loop with
+  an echo agent that climbs to a live OpenAI session when a key (and
+  microphone) is present, always ending with an exported debug bundle path
+  and a replay hint. Add `--voice-demo`
+  (`uv run easycat console --voice-demo`) to run one scripted no-key turn
+  through the full audio pipeline.
 - **`uv run easycat init my-agent`** — scaffolds a new project from a template
   (`src/easycat/cli/scaffold/`). The fastest path from empty dir
   to a running session. Run `uv run easycat init --list-templates` first when
   you need to compare transports and agent frameworks; the list includes
   base `easycat[...]` package requirements and extras, required environment
   variables, optional environment knobs, generated files, and copyable
-  create/preflight/check/fix/docs/json-schema/run commands for each template. Use
-  `uv run easycat init --list-templates --json` when a script or coding agent
-  needs the same template catalog and post-scaffold command previews.
+  create/preflight/check/fix/docs/json-schema/run commands for each template
+  (`uv run easycat init --list-templates --json` emits the
+  same template catalog and post-scaffold command previews).
 - **`uv run easycat doctor`** — checks API keys, Python version, optional
   extras, and provider reachability
   (`src/easycat/cli/diagnose/doctor.py`). Run it first when
   something's not working. If a scaffolded app stores keys in `.env`, run
-  `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --json`
-  when a script or coding agent needs parseable first-run environment checks; use
-  `uv run easycat doctor --env-file .env --json` when both apply.
+  `uv run easycat doctor --env-file .env`; add `--json`
+  (`uv run easycat doctor --json`,
+  `uv run easycat doctor --env-file .env --json`) for parseable first-run
+  environment checks.
+- **`uv run easycat serve`** — serves the browser voice playground on
+  localhost (`src/easycat/cli/serve.py`): one command that wires
+  `EasyConfig.browser()` to the bundled WebRTC client and prints an
+  `Open http://localhost:8080` URL, with live transcript, interruption
+  indicator, and per-turn latency readout in the page. Needs an OpenAI
+  key; a non-loopback `--host` requires `--token` (or
+  `EASYCAT_SERVE_TOKEN`).
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, architecture and maintenance guides, deployment, observability,
@@ -468,18 +485,17 @@ Run easycat explain json-schema for CLI JSON.
   Use `uv run easycat docs --audience operators` for the production and
   observability route set, or
   `uv run easycat docs --audience operators --json` when automation needs
-  parseable operator-facing routes.
-  Use `uv run easycat docs --json` when a coding agent or script needs the
-  same route map with command hints and audience labels; replace uppercase or
+  parseable operator-facing routes; `uv run easycat docs --json` emits the
+  same route map with command hints and audience labels. Replace uppercase or
   angle-bracket placeholders such as `PATH` or `<session_id>` before running
-  those hints.
+  those hints. Coding agent? Start at [llms.txt](../../../llms.txt) or run
+  `uv run easycat explain json-schema`.
 - **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where
-  you find out what that means. Use
-  `uv run easycat explain json-schema` when a script or coding agent
-  needs the standard `--json` envelope and command-specific success and error
-  fields.
+  you find out what that means. `uv run easycat explain json-schema`
+  documents the standard `--json` envelope and command-specific success and
+  error fields.
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and crash dumps, then summarize a debug bundle or
   SQLite journal from the shell.
@@ -492,8 +508,8 @@ Run easycat explain json-schema for CLI JSON.
   tool side effects unless you choose `--tool-policy stub` or
   `--tool-policy allow`.
 - **`uv run easycat validate quick`** — deterministic local validation
-  for normal PR work. Use `uv run easycat validate quick --json` when a
-  coding agent or script needs the current quick validation run inside the
+  for normal PR work. `uv run easycat validate quick --json` emits the
+  current quick validation run inside the
   standard CLI envelope.
 - **`uv run easycat validate socket`** — localhost socket integration
   validation.
@@ -508,14 +524,13 @@ Run easycat explain json-schema for CLI JSON.
   capability reports.
 - **`uv run easycat validate release`** — build the package, install the
   wheel into a clean temporary venv, verify it outside the source tree, and
-  run the release validation gates through the installed package. Use
-  `uv run easycat validate release --json` when release automation needs the
+  run the release validation gates through the installed package.
+  `uv run easycat validate release --json` emits the
   installed-wheel validation result inside the standard CLI envelope.
 - **`uv run easycat validate report .easycat/validation/latest.json`** —
-  render a concise summary of the latest saved validation report. Use
+  render a concise summary of the latest saved validation report;
   `uv run easycat validate report .easycat/validation/latest.json --json`
-  when a coding agent or script needs a saved report re-emitted inside that
-  same envelope; use
+  re-emits the saved report inside that same envelope. Use
   `.easycat/validation/runs/<run_id>/report.json` for a specific older run.
 
 The debugger is intentionally *not* a CLI subcommand — it's imported

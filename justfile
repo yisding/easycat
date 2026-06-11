@@ -51,9 +51,15 @@ fmt:
 fmt-check:
     uv run ruff format --check .
 
+# Packages the blocking mypy gate covers (must stay at zero errors).
+# Keep in sync with the `[[tool.mypy.overrides]]` module list in
+# pyproject.toml; CI runs `just typecheck` so this is the single source
+# of truth for the gated paths.
+mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations"
+
 # Authoritative type gate: the clean core CI gates on (must stay green).
 typecheck:
-    uv run mypy --follow-imports=silent src/easycat/debug
+    uv run mypy --follow-imports=silent {{ mypy_gated_paths }}
 
 # Advisory whole-repo mypy report (mirrors the non-blocking CI step).
 typecheck-all:
@@ -71,7 +77,7 @@ cov:
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
 guard-docs:
-    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/cli/test_app.py tests/cli/test_json_schema.py
+    uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
 
 # Guard teaching ladder chapters, generated README blocks, and learner route hints.
 guard-teaching:
@@ -87,15 +93,15 @@ guard-templates:
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
-    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+    uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
 
 # Guard validation workflow docs, validation reference docs, and validate CLI behavior.
 guard-validation:
     uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
 
-# Guard provider contract docs, offline contract suite, and provider wiring matrix.
+# Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix.
 guard-contracts:
-    uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/integration/test_provider_contract_matrix.py
+    uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
 
 # Guard operator docs, deployment guide, observability docs, journal CLI, and durability.
 guard-ops:

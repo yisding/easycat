@@ -107,32 +107,24 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "uv run easycat docs" in readme
     assert "uv run easycat docs --audience learners" in readme
     assert "uv run easycat docs --audience learners --json" in readme
-    assert "uv run easycat docs --json" in readme
     assert "maintained docs map" in normalized
     assert "narrow that map to learner-facing routes" in normalized
     assert "automation needs that smaller route map" in normalized
-    assert "script or coding agent needs the full route map with command hints" in normalized
-    assert "audience labels" in normalized
-    assert (
-        "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
-        "before running those hints"
-    ) in normalized
+    assert "Coding agent? Start at [llms.txt](../../llms.txt)" in normalized
+    assert "when a script or coding agent" not in normalized
     assert "uv run easycat explain json-schema" in readme
-    assert "JSON envelope and field contract" in normalized
     assert "uv run easycat doctor" in readme
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --json" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
     assert _has_env_file_run_hint(normalized)
-    assert "script or coding agent needs parseable first-run environment checks" in normalized
-    assert "script or coding agent needs the same environment/check rows" in normalized
+    assert "first-run environment checks as parseable rows" in normalized
+    assert "environment/check rows as parseable output" in normalized
     assert "uv run easycat validate quick" in readme
     assert "uv run easycat validate quick --json" in readme
     assert "uv run easycat validate report .easycat/validation/latest.json" in readme
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in readme
     assert "repository validation lane from the root" in normalized
-    assert "script or coding agent needs validation run/report payloads" in normalized
-    assert "standard CLI envelope" in normalized
 
 
 def test_teaching_ladder_starting_point_table_tracks_chapter_prerequisites() -> None:
@@ -421,14 +413,14 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     assert "parseable operator-facing routes" in normalized_cli_section
     assert "architecture and maintenance guides" in normalized_cli_section
     assert (
-        "replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
+        "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
         "before running those hints"
     ) in normalized_cli_section
+    assert "Coding agent? Start at [llms.txt](../../../llms.txt)" in normalized_cli_section
+    assert "when a script or coding agent" not in normalized_cli_section
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat doctor --json`" in cli_section
-    assert "script or coding agent needs parseable first-run environment checks" in (
-        normalized_cli_section
-    )
+    assert "parseable first-run environment checks" in normalized_cli_section
     assert "`uv run easycat explain json-schema`" in cli_section
     assert "standard `--json` envelope" in cli_section
     assert "command-specific success and error fields" in normalized_cli_section
@@ -444,7 +436,7 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
     )
     assert "validate report .easycat/validation/latest.json" in cli_section
     assert "validate report .easycat/validation/latest.json --json" in cli_section
-    assert "saved report re-emitted inside that same envelope" in normalized_cli_section
+    assert "re-emits the saved report inside that same envelope" in normalized_cli_section
     assert ".easycat/validation/runs/<run_id>/report.json" in cli_section
     assert "validate report <path>" not in cli_section
     assert "Add `--json` when a coding agent or script" not in normalized_cli_section

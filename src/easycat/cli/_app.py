@@ -16,6 +16,12 @@ import typer
 from rich.markup import escape
 
 from easycat.cli._errors import handle_easycat_error
+from easycat.cli._guard_commands import (
+    DOCS_ONBOARDING_GUARD_COMMANDS as _DOCS_ONBOARDING_GUARD_COMMANDS,
+)
+from easycat.cli._guard_commands import (
+    DOCS_ONBOARDING_RAW_GUARD_COMMANDS as _DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
+)
 from easycat.cli._output import (
     emit_command_error,
     emit_json,
@@ -69,6 +75,10 @@ class _CommandText(NamedTuple):
 
 
 _COMMAND_TEXT: dict[str, _CommandText] = {
+    "console": _CommandText(
+        help="Try EasyCat in your terminal — no API keys required.",
+        journey="Try EasyCat in your terminal with no API keys",
+    ),
     "init": _CommandText(
         help="Scaffold a new project from a template.",
         journey="Scaffold a new project from a template",
@@ -76,6 +86,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
     "doctor": _CommandText(
         help="Check API keys, optional extras, and provider reachability.",
         journey="Check API keys, optional extras, and provider reachability",
+    ),
+    "serve": _CommandText(
+        help="Serve the browser voice playground on localhost.",
+        journey="Serve the browser voice playground on localhost",
     ),
     "explain": _CommandText(
         help="Look up errors and CLI schema topics.",
@@ -104,105 +118,13 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("init", "doctor", "explain")),
+    ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
     ("Debug with the journal", ("bundles", "inspect", "replay")),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
 )
 
 _JOURNEY_FOOTER = tuple(_rich_cli_hint(command, purpose) for command, purpose in _CLI_HINTS)
-
-_DOCS_ONBOARDING_GUARD_COMMANDS: tuple[str, ...] = (
-    "just guard-docs",
-    "just guard-teaching",
-    "just guard-examples",
-    "just guard-templates",
-    "just guard-contributing",
-    "just guard-validation",
-    "just guard-contracts",
-    "just guard-ops",
-    "just guard-markdown",
-)
-
-_DOCS_ONBOARDING_RAW_GUARD_COMMANDS: tuple[str, ...] = (
-    (
-        "uv run pytest "
-        "tests/test_quickstart_e2e.py "
-        "tests/test_command_hints.py "
-        "tests/test_install_guidance.py "
-        "tests/test_docs_index.py "
-        "tests/test_public_api.py "
-        "tests/cli/test_app.py "
-        "tests/cli/test_json_schema.py"
-    ),
-    (
-        "uv run pytest "
-        "tests/teaching "
-        "tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands "
-        "tests/test_install_guidance.py::"
-        "test_teaching_ladder_prerequisites_run_doctor_after_setup "
-        "tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor "
-        "tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_examples.py "
-        "tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path"
-    ),
-    (
-        "uv run pytest "
-        "tests/cli/test_templates.py "
-        "tests/cli/test_init.py "
-        "tests/cli/e2e/test_scaffold_smoke.py"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_contributing.py "
-        "tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands "
-        "tests/test_validation_plan.py && "
-        "uv run pytest tests/test_install_guidance.py -k "
-        "'agent_guide or agent_guides or claude_'"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_docs_index.py::test_validation_docs_route_matches_"
-        "validation_workflow_commands "
-        "tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid "
-        "tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands "
-        "tests/test_validation_plan.py "
-        "tests/cli/test_validate.py "
-        "tests/cli/test_latency_validation.py"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands "
-        "tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map "
-        "tests/contracts "
-        "tests/integration/test_provider_contract_matrix.py"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands "
-        "tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points "
-        "tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands "
-        "tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token "
-        "tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost "
-        "tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed "
-        "tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras "
-        "tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path "
-        "tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_"
-        "extras_and_easyconfig "
-        "tests/test_observability.py "
-        "tests/cli/test_bundles.py "
-        "tests/runtime/test_sqlite_journal.py"
-    ),
-    (
-        "uv run pytest "
-        "tests/test_markdown_links.py "
-        "tests/test_docs_index.py::test_cli_docs_routes_resolve_locally "
-        "tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources"
-    ),
-)
 
 
 def _format_journey_menu() -> str:
@@ -227,6 +149,7 @@ class _DocsLink(TypedDict):
     label: str
     path: str
     audience: str
+    diataxis: str
     description: str
     commands: NotRequired[tuple[str, ...]]
 
@@ -240,6 +163,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Start here",
         "path": "README.md#choose-your-path",
         "audience": "all readers",
+        "diataxis": "how-to",
         "description": (
             "Choose the right first route for quickstart, learning, examples, "
             "maintenance, or operations."
@@ -251,12 +175,13 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --env-file .env",
             "uv run easycat doctor --env-file .env --json",
             "uv run --env-file .env python examples/openai_agents_voice.py",
+            "uv run easycat console",
+            "uv run python examples/journal_demo.py",
             "uv run easycat init --list-templates",
             "uv run easycat init my-agent",
             "uv run easycat docs --audience maintainers",
             "uv run easycat docs --audience coding-agents",
             "uv run easycat validate quick",
-            "uv run pytest tests/test_install_guidance.py",
             "easycat bundles list",
             "uv sync --extra debugger --group dev",
         ),
@@ -265,6 +190,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Quickstart",
         "path": "README.md#install",
         "audience": "new users",
+        "diataxis": "tutorial",
         "description": "Install EasyCat and run your first voice agent.",
         "commands": (
             "uv sync --extra quickstart --group dev",
@@ -280,6 +206,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "CLI and scaffolds",
         "path": "README.md#cli",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": (
             "Scaffold projects, compare templates with base package requirements, "
             "extras, env requirements, optional env knobs, generated files, and "
@@ -287,6 +214,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "and learn CLI JSON envelopes."
         ),
         "commands": (
+            "easycat console",
+            "easycat console --voice-demo",
             "easycat init --list-templates",
             "easycat init --list-templates --json",
             "easycat init my-agent",
@@ -309,17 +238,14 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Docs map",
         "path": "docs/README.md",
         "audience": "all readers",
+        "diataxis": "reference",
         "description": "Choose the maintained guide for your current task.",
         "commands": (
             "easycat docs",
             "easycat docs --audience learners",
-            "easycat docs --audience learners --json",
             "easycat docs --audience app-builders",
-            "easycat docs --audience app-builders --json",
             "easycat docs --audience operators",
-            "easycat docs --audience operators --json",
             "easycat docs --audience maintainers",
-            "easycat docs --audience maintainers --json",
             "easycat docs --json",
         ),
     },
@@ -327,6 +253,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Teaching ladder",
         "path": "docs/teaching/",
         "audience": "learners",
+        "diataxis": "tutorial",
         "description": "Learn voice pipelines chapter by chapter.",
         "commands": (
             "uv sync --extra local --group dev",
@@ -348,6 +275,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "First lesson",
         "path": "docs/teaching/00-hello-audio/",
         "audience": "learners",
+        "diataxis": "tutorial",
         "description": "Start with audio chunks before agents or providers.",
         "commands": (
             "uv sync --extra local --group dev",
@@ -358,6 +286,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",
+        "diataxis": "how-to",
         "description": "Find runnable local, browser, WebSocket, and telephony apps.",
         "commands": (
             "uv run easycat init --list-templates",
@@ -379,8 +308,22 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
     {
         "label": "Architecture",
+        "path": "docs/architecture.md",
+        "audience": "maintainers",
+        "diataxis": "explanation",
+        "description": (
+            "Understand the pipeline, session collaborators, stages, providers, and agent bridges."
+        ),
+        "commands": (
+            "uv run easycat docs --audience maintainers",
+            "uv run easycat docs --audience maintainers --json",
+        ),
+    },
+    {
+        "label": "Maintainer guide",
         "path": "CLAUDE.md",
         "audience": "maintainers",
+        "diataxis": "how-to",
         "description": (
             "Orient to the pipeline, packages, provider registries, lifecycle, "
             "and docs/onboarding guards."
@@ -411,6 +354,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Coding agents",
         "path": "AGENTS.md",
         "audience": "coding agents",
+        "diataxis": "how-to",
         "description": (
             "Follow repo structure, development commands, docs/onboarding guards, "
             "and PR expectations."
@@ -437,9 +381,92 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Session graduation",
+        "path": "docs/from-easyconfig-to-session.md",
+        "audience": "app builders",
+        "diataxis": "how-to",
+        "description": (
+            "Graduate from the EasyConfig quickstart to the production Session "
+            "API: lifecycle, events, text turns, session actions, and replayable "
+            "debug bundles."
+        ),
+        "commands": (
+            "uv run easycat docs --audience app-builders",
+            "uv run easycat docs --audience app-builders --json",
+            "uv run easycat replay PATH",
+            "uv run easycat replay PATH --json",
+            "uv run easycat inspect .easycat/journals/<session_id>.sqlite",
+        ),
+    },
+    {
+        "label": "Testing and evals",
+        "path": "docs/testing-and-evals.md",
+        "audience": "app builders",
+        "diataxis": "how-to",
+        "description": (
+            "Climb the eval ladder: bundle fixtures, offline text turns, "
+            "latency budgets and LLM-as-judge, then live audio validation."
+        ),
+        "commands": (
+            "uv run pytest tests/debug/test_testing_helpers.py",
+            "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
+            "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
+            "uv run easycat validate latency --smoke",
+            "uv run easycat validate live --provider openai",
+        ),
+    },
+    {
+        "label": "Events reference",
+        "path": "docs/reference/events.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": ("Look up every public session event type and when it is emitted."),
+        "commands": (
+            "uv run easycat explain events",
+            "uv run easycat docs --audience app-builders",
+        ),
+    },
+    {
+        "label": "EasyConfig reference",
+        "path": "docs/reference/easyconfig.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": (
+            "Look up every EasyConfig field, grouped config object, and legacy alias."
+        ),
+        "commands": ("uv run easycat docs --audience app-builders",),
+    },
+    {
+        "label": "Session lifecycle",
+        "path": "docs/reference/session-lifecycle.md",
+        "audience": "app builders",
+        "diataxis": "reference",
+        "description": ("Start, stop, force-stop, and read the journal after teardown."),
+        "commands": ("uv run easycat explain journal",),
+    },
+    {
+        "label": "Browser playground",
+        "path": "docs/browser-playground.md",
+        "audience": "app builders",
+        "diataxis": "how-to",
+        "description": (
+            "Talk to a bot in the browser with one command, and read the "
+            "WebSocket/WebRTC wire protocol behind the playground page."
+        ),
+        "commands": (
+            "uv sync --extra quickstart --extra webrtc --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat serve",
+            "uv run python examples/webrtc_server.py",
+            "uv run pytest tests/transports/test_webrtc.py",
+        ),
+    },
+    {
         "label": "Public API",
         "path": "docs/public-api.md",
         "audience": "maintainers",
+        "diataxis": "reference",
         "description": "Review the stable import surface before changing exports.",
         "commands": (
             "uv run easycat docs",
@@ -456,6 +483,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Provider contracts",
         "path": "tests/contracts/README.md",
         "audience": "provider maintainers",
+        "diataxis": "how-to",
         "description": (
             "Maintain offline provider, protocol, cassette, and bridge contract coverage."
         ),
@@ -469,9 +497,28 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Extending providers",
+        "path": "docs/extending/",
+        "audience": "provider maintainers",
+        "diataxis": "how-to",
+        "description": (
+            "Build custom STT, TTS, VAD, transport, and agent-bridge providers "
+            "out of tree and verify conformance."
+        ),
+        "commands": (
+            "uv run easycat docs --audience provider-maintainers",
+            "uv run easycat docs --audience provider-maintainers --json",
+            "uv run easycat init my-provider --template provider",
+            "uv run python examples/custom_transport.py",
+            "uv run pytest tests/test_public_api.py",
+            "uv run pytest tests/contracts",
+        ),
+    },
+    {
         "label": "Contributing",
         "path": "CONTRIBUTING.md",
         "audience": "contributors",
+        "diataxis": "how-to",
         "description": (
             "Follow the development loop, docs/onboarding guards, and validation slices."
         ),
@@ -500,6 +547,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Deployment",
         "path": "docs/deployment/docker.md",
         "audience": "operators",
+        "diataxis": "how-to",
         "description": "Package the WebSocket example for container deployment.",
         "commands": (
             "uv run easycat docs --audience operators",
@@ -514,6 +562,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Observability",
         "path": "docs/observability.md",
         "audience": "operators",
+        "diataxis": "how-to",
         "description": "Inspect journals, debug bundles, the debugger UI, metrics, and traces.",
         "commands": (
             "uv run easycat docs --audience operators",
@@ -532,9 +581,26 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Latency",
+        "path": "docs/latency.md",
+        "audience": "operators",
+        "diataxis": "how-to",
+        "description": (
+            'Answer "why was that turn slow?" with per-turn CLI waterfalls and the '
+            "table of latency-adding defaults."
+        ),
+        "commands": (
+            "uv run easycat docs --audience operators",
+            "easycat bundles show PATH --json",
+            "easycat inspect PATH --json",
+            "uv run easycat validate latency --smoke",
+        ),
+    },
+    {
         "label": "Journal durability",
         "path": "src/easycat/runtime/DURABILITY.md",
         "audience": "operators and maintainers",
+        "diataxis": "explanation",
         "description": "Understand SQLite journal persistence, recovery, and storage layout.",
         "commands": (
             "uv run easycat docs --audience operators-and-maintainers",
@@ -547,8 +613,9 @@ _DOCS_LINKS: list[_DocsLink] = [
     },
     {
         "label": "Validation",
-        "path": "README.md#validation-workflow",
+        "path": "docs/validation.md",
         "audience": "contributors",
+        "diataxis": "how-to",
         "description": (
             "Run docs/onboarding guards, the right validation lane, and inspect "
             ".easycat/validation/latest.json."
@@ -574,6 +641,7 @@ _DOCS_LINKS: list[_DocsLink] = [
         "label": "Validation reference",
         "path": "plan/validation/reference.md",
         "audience": "release maintainers",
+        "diataxis": "reference",
         "description": "Read provider and report vocabulary used by validation.",
         "commands": (
             "easycat docs --audience release-maintainers --json",
@@ -798,14 +866,18 @@ def _register_commands() -> None:
     if _COMMANDS_REGISTERED:
         return
 
+    from easycat.cli.console import console as console_cmd
     from easycat.cli.debug.bundles import bundles_app, inspect_bundle, replay_bundle
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
+    from easycat.cli.serve import serve as serve_cmd
     from easycat.cli.validate import validate_app
 
+    app.command(name="console", help=_COMMAND_TEXT["console"].help)(console_cmd)
     app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
     app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
+    app.command(name="serve", help=_COMMAND_TEXT["serve"].help)(serve_cmd)
     app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)
     app.command(name="explain", help=_COMMAND_TEXT["explain"].help)(explain_cmd)
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)

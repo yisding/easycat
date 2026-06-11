@@ -9,7 +9,7 @@ implementation rationale or follow-up cleanup context.
 Status from the 2026-06-07 current-code snapshot: substantial decomposition
 has landed. The current code has `AudioRouter`, `STTCommitter`,
 `TTSScheduler`, `CancelOrchestrator`, `TurnRunner`, and `SessionJournalSink`;
-`Session` remains the public lifecycle owner at roughly 1,437 lines, so this
+`Session` remains the public lifecycle owner at roughly 1,440 lines, so this
 folder is still useful for cleanup work that shrinks or clarifies residual
 ownership.
 

@@ -127,6 +127,58 @@ jobs:
           path: flaky-quarantine.txt
           retention-days: 14
 
+  # Install-test every optional extra nightly. The matrix is generated from
+  # [project.optional-dependencies] by scripts/extras_matrix.py, so a new
+  # extra is covered automatically with no workflow edit.
+  #
+  # Known cells, handled deliberately:
+  # - cartesia is an empty marker extra (the provider speaks WebSocket via the
+  #   core dependency); its cell still proves the Cartesia adapters import.
+  # - funasr-vad only installs on Python < 3.13, so the matrix pins 3.12 to
+  #   keep that cell meaningful instead of silently installing nothing.
+  # - pydantic-ai and pydantic-ai-v2-beta are mutually exclusive pins; they
+  #   never co-install because each cell syncs exactly one extra into a fresh
+  #   environment (uv sync is exact and removes anything not requested).
+  # - ten-vad is deliberately excluded: its non-permissive license is an
+  #   end-user opt-in, and installing it here would have project CI accept
+  #   those terms nightly. See EXCLUDED_EXTRAS in scripts/extras_matrix.py.
+  extras-plan:
+    name: Extras Matrix Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      extras: ${{ steps.plan.outputs.extras }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: python3 scripts/extras_matrix.py | tee -a "$GITHUB_OUTPUT"
+
+  extras-install:
+    name: Extras Install (${{ matrix.extra }})
+    needs: extras-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: ${{ fromJSON(needs.extras-plan.outputs.extras) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra "${{ matrix.extra }}" --group dev --python 3.12
+      # --no-sync everywhere below: a bare `uv run` would re-sync the
+      # environment to dev defaults and silently remove the extra under test.
+      - name: Import-smoke the synced extra
+        run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}"
+      # The unused requires_extra pytest marker was dropped (it marked zero
+      # tests). Extras coverage relies on the import smoke above plus the
+      # offline contract tests below, whose importorskip gates now run for
+      # real with this cell's SDK installed.
+      - name: Offline contract tests with the real SDK present
+        run: uv run --no-sync --python 3.12 pytest tests/contracts -q -m "not integration_live"
+
   live-canaries:
     name: Live Provider Canaries
     if: github.event_name != 'pull_request' && github.ref_protected == true
@@ -152,9 +204,17 @@ jobs:
               echo "::add-mask::$value"
             fi
           done
-      - run: uv sync --group dev --python 3.12
+      # Deepgram/ElevenLabs live probes need their SDK extras installed;
+      # OpenAI and Cartesia adapters run on core dependencies alone.
+      - run: uv sync --group dev --extra deepgram --extra elevenlabs --python 3.12
+      # Non-strict: a provider whose secret is absent records an expected skip
+      # instead of failing the canary run.
+      #
+      # TODO: cassette recording needs live credentials and is intentionally
+      # skipped here; the checked-in cassette corpus (tests/cassettes/**) is
+      # still all-OpenAI and should diversify to deepgram/elevenlabs/cartesia.
       - name: Run non-strict live provider canaries
-        run: uv run --python 3.12 easycat validate live --provider openai --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+        run: uv run --no-sync --python 3.12 easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
       - name: Upload redacted live validation artifacts
         if: always()
         uses: actions/upload-artifact@v4

@@ -1,0 +1,611 @@
+# EasyCat
+
+> EasyCat is a Python voice bot framework: noise reduction -> VAD -> STT ->
+> agent -> TTS, with pluggable providers at each stage and idiomatic bridges
+> for OpenAI Agents SDK, PydanticAI, LangChain, LangGraph, LlamaAgents, the
+> remote Responses API, or your own async workflow.
+
+Machine-readable surfaces: `easycat docs --json` emits this route map with
+command hints and audience labels; `easycat explain json-schema` documents the
+standard `--json` envelope every CLI command shares. Bare `easycat` commands
+use the installed CLI form; from this repository, prefix them with `uv run`.
+
+Source: https://github.com/yisding/easycat
+
+Command note: Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. Commands already starting with uv run are repo-local and should run from the repository root. just commands are repo-local shortcuts; install just or use the raw command table in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, and <session_id> before running.
+
+## Start here
+
+- Path: README.md#choose-your-path
+- URL: https://github.com/yisding/easycat/blob/main/README.md#choose-your-path
+- Audience: all readers
+- Choose the right first route for quickstart, learning, examples, maintenance, or operations.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run --env-file .env python examples/openai_agents_voice.py
+uv run easycat console
+uv run python examples/journal_demo.py
+uv run easycat init --list-templates
+uv run easycat init my-agent
+uv run easycat docs --audience maintainers
+uv run easycat docs --audience coding-agents
+uv run easycat validate quick
+easycat bundles list
+uv sync --extra debugger --group dev
+```
+
+## Quickstart
+
+- Path: README.md#install
+- URL: https://github.com/yisding/easycat/blob/main/README.md#install
+- Audience: new users
+- Install EasyCat and run your first voice agent.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python examples/openai_agents_voice.py
+uv run --env-file .env python examples/openai_agents_voice.py
+```
+
+## CLI and scaffolds
+
+- Path: README.md#cli
+- URL: https://github.com/yisding/easycat/blob/main/README.md#cli
+- Audience: app builders
+- Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
+
+Commands:
+
+```bash
+easycat console
+easycat console --voice-demo
+easycat init --list-templates
+easycat init --list-templates --json
+easycat init my-agent
+easycat doctor --json
+easycat doctor --env-file .env --json
+easycat docs
+easycat docs --audience learners
+easycat docs --audience learners --json
+easycat docs --audience app-builders
+easycat docs --audience app-builders --json
+easycat docs --audience operators
+easycat docs --audience operators --json
+easycat docs --audience maintainers
+easycat docs --audience maintainers --json
+easycat docs --json
+easycat explain json-schema
+```
+
+## Docs map
+
+- Path: docs/README.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/README.md
+- Audience: all readers
+- Choose the maintained guide for your current task.
+
+Commands:
+
+```bash
+easycat docs
+easycat docs --audience learners
+easycat docs --audience app-builders
+easycat docs --audience operators
+easycat docs --audience maintainers
+easycat docs --json
+```
+
+## Teaching ladder
+
+- Path: docs/teaching/
+- URL: https://github.com/yisding/easycat/tree/main/docs/teaching
+- Audience: learners
+- Learn voice pipelines chapter by chapter.
+
+Commands:
+
+```bash
+uv sync --extra local --group dev
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run easycat docs --audience learners
+uv run easycat docs --audience learners --json
+uv run python docs/teaching/00-hello-audio/main.py
+uv run easycat validate quick
+uv run easycat validate quick --json
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## First lesson
+
+- Path: docs/teaching/00-hello-audio/
+- URL: https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio
+- Audience: learners
+- Start with audio chunks before agents or providers.
+
+Commands:
+
+```bash
+uv sync --extra local --group dev
+uv run python docs/teaching/00-hello-audio/main.py
+```
+
+## Examples
+
+- Path: examples/README.md
+- URL: https://github.com/yisding/easycat/blob/main/examples/README.md
+- Audience: app builders
+- Find runnable local, browser, WebSocket, and telephony apps.
+
+Commands:
+
+```bash
+uv run easycat init --list-templates
+uv run easycat init my-agent
+uv run easycat init --list-templates --json
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python examples/journal_demo.py
+uv run python examples/telephony_helpers.py
+uv run python examples/openai_agents_voice.py
+uv run --env-file .env python examples/openai_agents_voice.py
+uv run easycat validate quick
+uv run easycat validate quick --json
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Architecture
+
+- Path: docs/architecture.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/architecture.md
+- Audience: maintainers
+- Understand the pipeline, session collaborators, stages, providers, and agent bridges.
+
+Commands:
+
+```bash
+uv run easycat docs --audience maintainers
+uv run easycat docs --audience maintainers --json
+```
+
+## Maintainer guide
+
+- Path: CLAUDE.md
+- URL: https://github.com/yisding/easycat/blob/main/CLAUDE.md
+- Audience: maintainers
+- Orient to the pipeline, packages, provider registries, lifecycle, and docs/onboarding guards.
+
+Commands:
+
+```bash
+uv run easycat docs
+uv run easycat docs --audience maintainers
+uv run easycat docs --audience maintainers --json
+uv run easycat docs --json
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env --json
+uv run easycat explain json-schema
+uv run easycat bundles show PATH --json
+uv run easycat bundles export PATH --output DIR --json
+uv run easycat replay PATH --json
+uv run pytest tests/test_install_guidance.py
+just guard-docs
+just guard-teaching
+just guard-examples
+just guard-templates
+just guard-contributing
+just guard-validation
+just guard-contracts
+just guard-ops
+just guard-markdown
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
+uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
+uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
+uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
+uv run easycat validate quick
+uv run easycat validate quick --json
+uv run easycat validate contracts --json
+uv run easycat validate release --json
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Coding agents
+
+- Path: AGENTS.md
+- URL: https://github.com/yisding/easycat/blob/main/AGENTS.md
+- Audience: coding agents
+- Follow repo structure, development commands, docs/onboarding guards, and PR expectations.
+
+Commands:
+
+```bash
+uv run easycat docs
+uv run easycat docs --audience coding-agents
+uv run easycat docs --audience coding-agents --json
+uv run easycat docs --json
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env --json
+uv run easycat explain json-schema
+uv run easycat bundles show PATH --json
+uv run easycat bundles export PATH --output DIR --json
+uv run easycat replay PATH --json
+just guard-docs
+just guard-teaching
+just guard-examples
+just guard-templates
+just guard-contributing
+just guard-validation
+just guard-contracts
+just guard-ops
+just guard-markdown
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
+uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
+uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
+uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
+uv run easycat validate quick
+uv run easycat validate quick --json
+uv run easycat validate contracts --json
+uv run easycat validate release --json
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Session graduation
+
+- Path: docs/from-easyconfig-to-session.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/from-easyconfig-to-session.md
+- Audience: app builders
+- Graduate from the EasyConfig quickstart to the production Session API: lifecycle, events, text turns, session actions, and replayable debug bundles.
+
+Commands:
+
+```bash
+uv run easycat docs --audience app-builders
+uv run easycat docs --audience app-builders --json
+uv run easycat replay PATH
+uv run easycat replay PATH --json
+uv run easycat inspect .easycat/journals/<session_id>.sqlite
+```
+
+## Testing and evals
+
+- Path: docs/testing-and-evals.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/testing-and-evals.md
+- Audience: app builders
+- Climb the eval ladder: bundle fixtures, offline text turns, latency budgets and LLM-as-judge, then live audio validation.
+
+Commands:
+
+```bash
+uv run pytest tests/debug/test_testing_helpers.py
+uv run python docs/teaching/12-evals-and-latency/llm_judge.py docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
+uv run easycat validate latency --smoke
+uv run easycat validate live --provider openai
+```
+
+## Events reference
+
+- Path: docs/reference/events.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/events.md
+- Audience: app builders
+- Look up every public session event type and when it is emitted.
+
+Commands:
+
+```bash
+uv run easycat explain events
+uv run easycat docs --audience app-builders
+```
+
+## EasyConfig reference
+
+- Path: docs/reference/easyconfig.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/easyconfig.md
+- Audience: app builders
+- Look up every EasyConfig field, grouped config object, and legacy alias.
+
+Commands:
+
+```bash
+uv run easycat docs --audience app-builders
+```
+
+## Session lifecycle
+
+- Path: docs/reference/session-lifecycle.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/reference/session-lifecycle.md
+- Audience: app builders
+- Start, stop, force-stop, and read the journal after teardown.
+
+Commands:
+
+```bash
+uv run easycat explain journal
+```
+
+## Browser playground
+
+- Path: docs/browser-playground.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/browser-playground.md
+- Audience: app builders
+- Talk to a bot in the browser with one command, and read the WebSocket/WebRTC wire protocol behind the playground page.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --extra webrtc --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat serve
+uv run python examples/webrtc_server.py
+uv run pytest tests/transports/test_webrtc.py
+```
+
+## Public API
+
+- Path: docs/public-api.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/public-api.md
+- Audience: maintainers
+- Review the stable import surface before changing exports.
+
+Commands:
+
+```bash
+uv run easycat docs
+uv run easycat docs --audience maintainers
+uv run easycat docs --json
+uv run easycat docs --audience maintainers --json
+uv run easycat explain json-schema
+uv run pytest tests/test_public_api.py
+just guard-docs
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+```
+
+## Provider contracts
+
+- Path: tests/contracts/README.md
+- URL: https://github.com/yisding/easycat/blob/main/tests/contracts/README.md
+- Audience: provider maintainers
+- Maintain offline provider, protocol, cassette, and bridge contract coverage.
+
+Commands:
+
+```bash
+uv run easycat docs --audience provider-maintainers
+uv run easycat docs --audience provider-maintainers --json
+uv run easycat validate contracts
+uv run easycat validate contracts --json
+uv run pytest tests/contracts
+uv run pytest tests/integration/test_provider_contract_matrix.py
+```
+
+## Extending providers
+
+- Path: docs/extending/
+- URL: https://github.com/yisding/easycat/tree/main/docs/extending
+- Audience: provider maintainers
+- Build custom STT, TTS, VAD, transport, and agent-bridge providers out of tree and verify conformance.
+
+Commands:
+
+```bash
+uv run easycat docs --audience provider-maintainers
+uv run easycat docs --audience provider-maintainers --json
+uv run easycat init my-provider --template provider
+uv run python examples/custom_transport.py
+uv run pytest tests/test_public_api.py
+uv run pytest tests/contracts
+```
+
+## Contributing
+
+- Path: CONTRIBUTING.md
+- URL: https://github.com/yisding/easycat/blob/main/CONTRIBUTING.md
+- Audience: contributors
+- Follow the development loop, docs/onboarding guards, and validation slices.
+
+Commands:
+
+```bash
+just guard-docs
+just guard-teaching
+just guard-examples
+just guard-templates
+just guard-contributing
+just guard-validation
+just guard-contracts
+just guard-ops
+just guard-markdown
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
+uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
+uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
+uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
+uv run easycat docs --audience contributors
+uv run easycat docs --audience contributors --json
+uv run pytest
+uv run ruff check .
+uv run easycat validate quick
+uv run easycat validate socket
+uv run easycat validate stress
+uv run easycat validate contracts
+uv run easycat validate latency --smoke
+uv run easycat validate live --provider openai
+uv run easycat validate release
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate quick --json
+uv run easycat validate contracts --json
+uv run easycat validate release --json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Deployment
+
+- Path: docs/deployment/docker.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/deployment/docker.md
+- Audience: operators
+- Package the WebSocket example for container deployment.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators
+uv run easycat docs --audience operators --json
+docker compose -f docker/compose.yaml up --build
+python -m http.server 8080 --directory examples
+docker compose --env-file docker/.env -f docker/compose.yaml up --build
+docker compose -f docker/compose.yaml down
+```
+
+## Observability
+
+- Path: docs/observability.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/observability.md
+- Audience: operators
+- Inspect journals, debug bundles, the debugger UI, metrics, and traces.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators
+uv run easycat docs --audience operators --json
+easycat bundles list
+easycat bundles list --json
+easycat bundles show PATH
+easycat bundles show PATH --json
+easycat inspect PATH
+easycat inspect PATH --json
+easycat replay PATH
+easycat replay PATH --json
+easycat bundles export PATH
+easycat bundles export PATH --output DIR --json
+uv sync --extra debugger --group dev
+```
+
+## Latency
+
+- Path: docs/latency.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/latency.md
+- Audience: operators
+- Answer "why was that turn slow?" with per-turn CLI waterfalls and the table of latency-adding defaults.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators
+easycat bundles show PATH --json
+easycat inspect PATH --json
+uv run easycat validate latency --smoke
+```
+
+## Journal durability
+
+- Path: src/easycat/runtime/DURABILITY.md
+- URL: https://github.com/yisding/easycat/blob/main/src/easycat/runtime/DURABILITY.md
+- Audience: operators and maintainers
+- Understand SQLite journal persistence, recovery, and storage layout.
+
+Commands:
+
+```bash
+uv run easycat docs --audience operators-and-maintainers
+uv run easycat docs --audience operators-and-maintainers --json
+uv run pytest tests/runtime/test_sqlite_journal.py
+uv run easycat inspect .easycat/journals/<session_id>.sqlite
+uv run easycat inspect .easycat/journals/<session_id>.sqlite --json
+uv run easycat inspect .easycat/crash-dumps/<session_id>.sqlite --json
+```
+
+## Validation
+
+- Path: docs/validation.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/validation.md
+- Audience: contributors
+- Run docs/onboarding guards, the right validation lane, and inspect .easycat/validation/latest.json.
+
+Commands:
+
+```bash
+just guard-docs
+just guard-teaching
+just guard-examples
+just guard-templates
+just guard-contributing
+just guard-validation
+just guard-contracts
+just guard-ops
+just guard-markdown
+uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py
+uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras
+uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path
+uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
+uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'
+uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py
+uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
+uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py
+uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources
+uv run easycat validate quick
+uv run easycat validate socket
+uv run easycat validate stress
+uv run easycat validate contracts
+uv run easycat validate latency --smoke
+uv run easycat validate live
+uv run easycat validate release
+uv run easycat validate report .easycat/validation/latest.json
+uv run easycat validate quick --json
+uv run easycat validate contracts --json
+uv run easycat validate release --json
+uv run easycat validate report .easycat/validation/latest.json --json
+```
+
+## Validation reference
+
+- Path: plan/validation/reference.md
+- URL: https://github.com/yisding/easycat/blob/main/plan/validation/reference.md
+- Audience: release maintainers
+- Read provider and report vocabulary used by validation.
+
+Commands:
+
+```bash
+easycat docs --audience release-maintainers --json
+easycat validate quick --json
+easycat validate contracts --json
+easycat validate release --json
+easycat validate report .easycat/validation/latest.json --json
+```

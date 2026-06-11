@@ -3,9 +3,43 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from typing import Any
 
 from easycat.integrations.agents.base import BridgeInputError, ExternalAgentBridge
+
+# Registered (predicate, bridge_factory) pairs consulted by
+# ``auto_adapt_agent`` — after the AgentRunner unwrap and the bridge
+# passthrough, before the built-in framework branches.
+_AGENT_DETECTORS: list[tuple[Callable[[Any], bool], Callable[[Any], Any]]] = []
+
+
+def register_agent_detector(
+    predicate: Callable[[Any], bool],
+    bridge_factory: Callable[[Any], Any],
+) -> None:
+    """Register a custom detector for :func:`auto_adapt_agent`.
+
+    ``predicate(agent)`` returning ``True`` routes ``agent`` to
+    ``bridge_factory(agent)``, which must return an
+    :class:`~easycat.integrations.agents.base.ExternalAgentBridge`
+    (e.g. a :class:`~easycat.integrations.agents.template.BridgeTemplate`
+    subclass).  Detectors are consulted in registration order, *after*
+    the ``AgentRunner`` unwrap and the bridge passthrough but *before*
+    the built-in framework branches — so a custom detector can claim an
+    object a built-in branch would otherwise match.
+
+    Registration is programmatic only (call this from your application
+    or plugin setup code); there is no entry-point or config-file
+    mechanism.  Predicate exceptions propagate — keep predicates cheap
+    and defensive (``isinstance`` / duck-type checks).
+    """
+    _AGENT_DETECTORS.append((predicate, bridge_factory))
+
+
+def clear_agent_detectors() -> None:
+    """Remove all detectors registered via :func:`register_agent_detector`."""
+    _AGENT_DETECTORS.clear()
 
 
 def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
@@ -15,6 +49,8 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     - URL string -> :class:`RemoteResponsesAPIBridge`
     - ``ExternalAgentBridge`` -> pass-through
+    - any object matched by a :func:`register_agent_detector` predicate
+      -> that detector's ``bridge_factory(agent)``
     - ``workflows.Workflow`` / LlamaIndex workflow -> :class:`LlamaAgentsBridge`
     - workflow objects with ``on_user_turn(...)`` -> :class:`GenericWorkflowBridge`
     - ``pydantic_graph.Graph`` -> raises :class:`BridgeInputError`
@@ -66,6 +102,12 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     # 2. Already a bridge -- pass through.
     if isinstance(agent, ExternalAgentBridge):
         return agent
+
+    # 2b. Custom detectors (register_agent_detector) — consulted before
+    # the built-in framework branches so user detectors win.
+    for predicate, bridge_factory in _AGENT_DETECTORS:
+        if predicate(agent):
+            return bridge_factory(agent)
 
     # 3. LlamaAgents / LlamaIndex Workflow -> LlamaAgentsBridge.
     from easycat.integrations.agents.llama_agents import is_llama_workflow_instance
@@ -120,7 +162,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 5. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
     try:
-        from pydantic_graph import Graph as PydanticGraph  # type: ignore[import-untyped]
+        from pydantic_graph import Graph as PydanticGraph
 
         if isinstance(agent, PydanticGraph):
             raise BridgeInputError(
@@ -144,7 +186,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 7. OpenAI Agents SDK -> OpenAIAgentsBridge.
     try:
-        from agents import Agent as OpenAIAgent  # type: ignore[import-untyped]
+        from agents import Agent as OpenAIAgent
 
         if isinstance(agent, OpenAIAgent):
             from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
@@ -177,7 +219,7 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     # 7c. LangChain Runnable -> LangChainBridge.
     try:
-        from langchain_core.runnables import Runnable  # type: ignore[import-untyped]
+        from langchain_core.runnables import Runnable
 
         if isinstance(agent, Runnable):
             from easycat.integrations.agents.langchain import LangChainBridge
@@ -271,19 +313,19 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
     Runnable branch) when ``langgraph`` is unavailable.
     """
     try:
-        from langgraph.graph.state import (  # type: ignore[import-untyped]
+        from langgraph.graph.state import (
             CompiledStateGraph,
         )
     except ImportError:
         return None
     try:
-        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+        from langchain_core.runnables.base import (
             RunnableBinding,
             RunnableBindingBase,
         )
     except ImportError:
-        RunnableBinding = ()  # type: ignore[assignment]
-        RunnableBindingBase = ()  # type: ignore[assignment]
+        RunnableBinding = ()
+        RunnableBindingBase = ()
     # Walk outer→inner collecting wrapper layers (``seen`` guards a
     # pathological self-referential ``.bound``) until the real graph.
     seen: set[int] = set()
@@ -381,20 +423,20 @@ def _is_language_model(agent: Any) -> bool:
     back to the default dict payload.
     """
     try:
-        from langchain_core.language_models import (  # type: ignore[import-untyped]
+        from langchain_core.language_models import (
             BaseChatModel,
             BaseLLM,
         )
     except ImportError:
         return False
     try:
-        from langchain_core.runnables.base import (  # type: ignore[import-untyped]
+        from langchain_core.runnables.base import (
             RunnableBindingBase,
             RunnableSequence,
         )
     except ImportError:
-        RunnableBindingBase = ()  # type: ignore[assignment]
-        RunnableSequence = ()  # type: ignore[assignment]
+        RunnableBindingBase = ()
+        RunnableSequence = ()
     # ``RunnableBindingBase`` may nest (e.g.
     # ``.bind_tools(...).with_config(...).with_retry()``) and a
     # model-first sequence may itself sit under a binding or nest another
