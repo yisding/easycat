@@ -37,6 +37,7 @@ from easycat.cli.validate import validate_app
 from tests._markdown import github_markdown_heading_anchors
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _render_rich_markup(markup: str) -> str:
@@ -65,7 +66,19 @@ def _registered_top_level_command_help() -> dict[str, str]:
 
 
 def _journey_menu_command_names(output: str) -> set[str]:
-    return set(re.findall(r"\[green\]([a-z][a-z0-9-]*)\[/\]", output))
+    plain_output = ANSI_ESCAPE_RE.sub("", output)
+    return set(re.findall(r"^    ([a-z][a-z0-9-]*)(?=\s{2,})", plain_output, re.M))
+
+
+def test_journey_menu_command_names_parse_rendered_rich_markup() -> None:
+    rendered = _render_rich_markup(
+        "    [green]init[/]        Scaffold a new project from a template\n"
+        "    [green]demo-command[/]  Example command not registered in the app\n"
+        "Run [cyan]easycat docs[/] for learning routes\n"
+    )
+
+    assert "[green]" not in rendered
+    assert _journey_menu_command_names(rendered) == {"demo-command", "init"}
 
 
 def test_version(cli: CliRunner) -> None:
