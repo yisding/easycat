@@ -134,11 +134,12 @@ class SessionJournalSink:
     session_id: str
     current_turn_id: TurnIdResolver
     max_session_cost_usd: float | None = None
-    on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], None] | None = None
+    on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], bool | None] | None = None
     _subscribed: bool = field(default=False, init=False)
     _cost_total_usd: float = field(default=0.0, init=False)
     _cost_budget_warning_emitted: bool = field(default=False, init=False)
     _cost_budget_exceeded_emitted: bool = field(default=False, init=False)
+    _cost_budget_enforcement_pending: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
@@ -292,29 +293,41 @@ class SessionJournalSink:
                 turn_id=turn_id,
             )
             self._cost_budget_warning_emitted = True
-        if budget["exceeded"] and not self._cost_budget_exceeded_emitted:
-            alert_data = self._append_cost_budget_alert(
-                alert="exceeded",
-                budget=budget,
-                trigger_record_name=name,
-                turn_id=turn_id,
+        if budget["exceeded"]:
+            should_notify = (
+                not self._cost_budget_exceeded_emitted or self._cost_budget_enforcement_pending
             )
-            self._cost_budget_exceeded_emitted = True
-            if self.on_cost_budget_exceeded is not None:
+            if not self._cost_budget_exceeded_emitted:
+                alert_data = self._append_cost_budget_alert(
+                    alert="exceeded",
+                    budget=budget,
+                    trigger_record_name=name,
+                    turn_id=turn_id,
+                )
+                self._cost_budget_exceeded_emitted = True
+            else:
+                alert_data = self._cost_budget_alert_data(
+                    alert="exceeded",
+                    budget=budget,
+                    trigger_record_name=name,
+                )
+            if should_notify and self.on_cost_budget_exceeded is not None:
                 try:
-                    self.on_cost_budget_exceeded(alert_data, turn_id)
+                    accepted = self.on_cost_budget_exceeded(alert_data, turn_id)
                 except Exception:
+                    self._cost_budget_enforcement_pending = True
                     logger.exception("Cost budget enforcement callback failed")
+                else:
+                    self._cost_budget_enforcement_pending = accepted is False
 
-    def _append_cost_budget_alert(
+    def _cost_budget_alert_data(
         self,
         *,
         alert: str,
         budget: dict[str, Any],
         trigger_record_name: str,
-        turn_id: str | None,
     ) -> dict[str, Any]:
-        data = {
+        return {
             "alert": alert,
             "budget_status": budget["status"],
             "total_usd": self._cost_total_usd,
@@ -325,6 +338,20 @@ class SessionJournalSink:
             "overage_usd": budget["overage_usd"],
             "trigger_record_name": trigger_record_name,
         }
+
+    def _append_cost_budget_alert(
+        self,
+        *,
+        alert: str,
+        budget: dict[str, Any],
+        trigger_record_name: str,
+        turn_id: str | None,
+    ) -> dict[str, Any]:
+        data = self._cost_budget_alert_data(
+            alert=alert,
+            budget=budget,
+            trigger_record_name=trigger_record_name,
+        )
         if self.journal is None:
             return data
         self.journal.append(

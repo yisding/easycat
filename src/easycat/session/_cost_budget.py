@@ -47,10 +47,20 @@ class CostBudgetEnforcer:
     is_stopping: Callable[[], bool]
     _stop_requested: bool = field(default=False, init=False)
 
-    def on_exceeded(self, alert: dict[str, Any], turn_id: str | None) -> None:
+    def on_exceeded(self, alert: dict[str, Any], turn_id: str | None) -> bool:
         """Record and schedule the one-shot budget stop request."""
         if self.is_closed() or self.is_stopping() or self._stop_requested:
-            return
+            return True
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "Cost budget exceeded for session %s outside a running event loop; "
+                "stop(force=True) could not be scheduled; enforcement will retry on the next "
+                "cost record.",
+                self.session_id,
+            )
+            return False
         self._stop_requested = True
         self.journal_sink.append_record(
             kind=JournalRecordKind.CONTROL,
@@ -65,22 +75,20 @@ class CostBudgetEnforcer:
                 "trigger_record_name": alert.get("trigger_record_name"),
             },
         )
+        stop_coro = self._stop_for_cost_budget(alert)
         try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning(
-                "Cost budget exceeded for session %s outside a running event loop; "
-                "stop(force=True) could not be scheduled.",
-                self.session_id,
+            task = self.runtime_scope.create_journaled_task(
+                stop_coro,
+                name="cost_budget_stop",
+                journal_sink=self.journal_sink,
+                turn_id=turn_id,
             )
-            return
-        task = self.runtime_scope.create_journaled_task(
-            self._stop_for_cost_budget(alert),
-            name="cost_budget_stop",
-            journal_sink=self.journal_sink,
-            turn_id=turn_id,
-        )
+        except Exception:
+            self._stop_requested = False
+            stop_coro.close()
+            raise
         task.add_done_callback(self.runtime_scope.log_task_exception)
+        return True
 
     async def _stop_for_cost_budget(self, alert: dict[str, Any]) -> None:
         """Force-stop the session from a runtime-scope task after budget breach."""
