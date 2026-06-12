@@ -30,6 +30,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from hmac import compare_digest
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -228,6 +229,12 @@ class WebRTCTransportConfig:
         parameter (the bundled client forwards ``?token=`` from the page URL
         automatically).  Mirrors the WebSocket/docker ``EASYCAT_WS_TOKEN``
         security default — pair it with a non-loopback ``host``.
+    stats_max_records:
+        Maximum JSONL records written to ``stats_path`` by this process.
+    stats_max_file_bytes:
+        Maximum size of the stats artifact before new snapshots are rejected.
+    stats_max_requests_per_minute:
+        In-memory rate limit for accepted ``/stats`` snapshots.
     """
 
     _BUNDLED_STATIC_DIR: ClassVar[str] = str(Path(__file__).parent / "static")
@@ -245,10 +252,23 @@ class WebRTCTransportConfig:
     cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
     auth_token: str | None = None
+    stats_max_records: int = 1_000
+    stats_max_file_bytes: int = 1_048_576
+    stats_max_requests_per_minute: int = 120
 
 
 def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = host.strip().strip("[]").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def webrtc_ice_servers_from_env(
@@ -545,6 +565,7 @@ class WebRTCTransport(AudioQueueMixin):
         self._consume_task: asyncio.Task[None] | None = None
         self._peer_generation = 0
         self._offer_lock = asyncio.Lock()
+        self._stats_request_times: deque[float] = deque()
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -630,6 +651,78 @@ class WebRTCTransport(AudioQueueMixin):
             content_type="application/json",
             headers=self._cors_headers(request),
         )
+
+    def _stats_write_permitted(self, request: Any) -> bool:
+        """Return whether an unauthenticated stats write is validation-local.
+
+        A configured ``auth_token`` always authorizes through ``_request_authorized``.
+        Without a token, stats artifacts are only writable for loopback-bound
+        validation/demo servers and same-origin browser requests. This keeps a
+        non-loopback signaling server from exposing an unauthenticated append sink.
+        """
+        if self._config.auth_token is not None:
+            return self._request_authorized(request)
+
+        if not _is_loopback_host(self._config.host):
+            return False
+
+        origin = getattr(request, "headers", {}).get("Origin")
+        return bool(origin and self._origin_matches_request(origin, request))
+
+    def _stats_forbidden_response(self, request: Any) -> Any:
+        web = self._web
+        return web.Response(
+            status=403,
+            text=json.dumps(
+                {
+                    "error": (
+                        "WebRTC stats collection requires a bearer token for non-loopback "
+                        "servers or a same-origin loopback validation request"
+                    )
+                }
+            ),
+            content_type="application/json",
+            headers=self._cors_headers(request),
+        )
+
+    def _stats_quota_response(self, request: Any, message: str) -> Any:
+        web = self._web
+        return web.Response(
+            status=429,
+            text=json.dumps({"error": message}),
+            content_type="application/json",
+            headers=self._cors_headers(request),
+        )
+
+    def _stats_quota_error(self, stats_path: Path, snapshot: dict[str, object]) -> str | None:
+        now = time.monotonic()
+        window_start = now - 60.0
+        while self._stats_request_times and self._stats_request_times[0] < window_start:
+            self._stats_request_times.popleft()
+
+        max_requests = self._config.stats_max_requests_per_minute
+        if max_requests >= 0 and len(self._stats_request_times) >= max_requests:
+            return "WebRTC stats rate limit exceeded"
+
+        encoded = json.dumps(snapshot, sort_keys=True) + "\n"
+        current_size = stats_path.stat().st_size if stats_path.exists() else 0
+        max_bytes = self._config.stats_max_file_bytes
+        if max_bytes >= 0 and current_size + len(encoded.encode("utf-8")) > max_bytes:
+            return "WebRTC stats artifact size limit exceeded"
+
+        max_records = self._config.stats_max_records
+        if max_records >= 0:
+            current_records = 0
+            if stats_path.exists():
+                with stats_path.open("r", encoding="utf-8") as handle:
+                    current_records = sum(1 for _ in handle)
+            if current_records >= max_records:
+                return "WebRTC stats artifact record limit exceeded"
+
+        return None
+
+    def _record_stats_write(self) -> None:
+        self._stats_request_times.append(time.monotonic())
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -1048,10 +1141,16 @@ class WebRTCTransport(AudioQueueMixin):
             )
 
         if self._config.stats_path:
+            if not self._stats_write_permitted(request):
+                return self._stats_forbidden_response(request)
             stats_path = Path(self._config.stats_path)
+            quota_error = self._stats_quota_error(stats_path, snapshot)
+            if quota_error is not None:
+                return self._stats_quota_response(request, quota_error)
             stats_path.parent.mkdir(parents=True, exist_ok=True)
             with stats_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+            self._record_stats_write()
 
         return web.Response(
             content_type="application/json",
