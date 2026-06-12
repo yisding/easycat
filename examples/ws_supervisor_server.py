@@ -6,7 +6,9 @@ supervisors that subscribe by ``session_id``.
 
 The supervisor endpoint streams live caller and assistant audio, so the example
 requires ``EASYCAT_SUPERVISOR_TOKEN`` and checks it on every supervisor
-subscribe request.
+subscribe request. WebSocket listeners default to loopback; set
+``EASYCAT_WS_CALLER_HOST`` or ``EASYCAT_WS_SUPERVISOR_HOST`` explicitly only
+when you intentionally expose them beyond the local machine.
 
 Setup:
     export OPENAI_API_KEY="..."
@@ -29,7 +31,9 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import threading
+from dataclasses import dataclass
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
@@ -56,7 +60,21 @@ logger = logging.getLogger(__name__)
 HTTP_PORT = 8080
 CALLER_WS_PORT = 8765
 SUPERVISOR_WS_PORT = 8766
+DEFAULT_WS_HOST = "127.0.0.1"
 _STATIC_DIR = str(Path(__file__).parent)
+
+
+@dataclass(frozen=True)
+class SupervisorSettings:
+    caller_host: str
+    supervisor_host: str
+
+
+def _load_settings() -> SupervisorSettings:
+    return SupervisorSettings(
+        caller_host=os.environ.get("EASYCAT_WS_CALLER_HOST", DEFAULT_WS_HOST),
+        supervisor_host=os.environ.get("EASYCAT_WS_SUPERVISOR_HOST", DEFAULT_WS_HOST),
+    )
 
 
 def _run_http_server() -> None:
@@ -67,6 +85,7 @@ def _run_http_server() -> None:
 
 async def main() -> None:
     require_env("OPENAI_API_KEY")
+    settings = _load_settings()
     from agents import Agent  # type: ignore[import-untyped]
 
     manager: SessionManager[str] = SessionManager()
@@ -102,7 +121,9 @@ async def main() -> None:
                         {
                             "type": "session",
                             "session_id": session_id,
-                            "supervisor_ws_url": f"ws://localhost:{SUPERVISOR_WS_PORT}",
+                            "supervisor_ws_url": (
+                                f"ws://{settings.supervisor_host}:{SUPERVISOR_WS_PORT}"
+                            ),
                         }
                     )
                 )
@@ -119,17 +140,17 @@ async def main() -> None:
             expected_token=supervisor_token,
         )
 
-    caller_server = await websockets.serve(handle_caller, "0.0.0.0", CALLER_WS_PORT)
+    caller_server = await websockets.serve(handle_caller, settings.caller_host, CALLER_WS_PORT)
     supervisor_server = await websockets.serve(
         handle_supervisor,
-        "0.0.0.0",
+        settings.supervisor_host,
         SUPERVISOR_WS_PORT,
     )
 
     print(f"Caller UI:     http://localhost:{HTTP_PORT}/ws_browser_client.html")
     print(f"Supervisor UI: http://localhost:{HTTP_PORT}/ws_supervisor_client.html")
-    print(f"Caller WS:     ws://localhost:{CALLER_WS_PORT}")
-    print(f"Supervisor WS: ws://localhost:{SUPERVISOR_WS_PORT}")
+    print(f"Caller WS:     ws://{settings.caller_host}:{CALLER_WS_PORT}")
+    print(f"Supervisor WS: ws://{settings.supervisor_host}:{SUPERVISOR_WS_PORT}")
     print("Press Ctrl+C to stop.")
 
     stop_event = create_shutdown_event()

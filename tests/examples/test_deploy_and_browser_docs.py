@@ -344,16 +344,42 @@ def test_ws_supervisor_server_example_imports():
     assert callable(ws_supervisor_server.main)
 
 
+def test_ws_supervisor_server_defaults_to_loopback(monkeypatch: pytest.MonkeyPatch):
+    import examples.ws_supervisor_server as ws_supervisor_server
+
+    monkeypatch.delenv("EASYCAT_WS_CALLER_HOST", raising=False)
+    monkeypatch.delenv("EASYCAT_WS_SUPERVISOR_HOST", raising=False)
+
+    settings = ws_supervisor_server._load_settings()
+
+    assert settings.caller_host == "127.0.0.1"
+    assert settings.supervisor_host == "127.0.0.1"
+
+
+def test_ws_supervisor_server_uses_configured_hosts(monkeypatch: pytest.MonkeyPatch):
+    import examples.ws_supervisor_server as ws_supervisor_server
+
+    monkeypatch.setenv("EASYCAT_WS_CALLER_HOST", "0.0.0.0")
+    monkeypatch.setenv("EASYCAT_WS_SUPERVISOR_HOST", "127.0.0.1")
+
+    settings = ws_supervisor_server._load_settings()
+
+    assert settings.caller_host == "0.0.0.0"
+    assert settings.supervisor_host == "127.0.0.1"
+
+
 def test_ws_supervisor_server_uses_manager_feedback_lifecycle() -> None:
     path = REPO_ROOT / "examples" / "ws_supervisor_server.py"
     source = path.read_text(encoding="utf-8")
 
-    assert _visible_code_line_count(path) <= 140
+    assert _visible_code_line_count(path) <= 155
     assert "manager.connection(session_id, session, runtime_feedback=True)" in source
     assert "SessionAudioBroadcaster(session)" in source
     assert "serve_supervisor_websocket(" in source
     assert "supervisor_auth_token_from_env()" in source
     assert "create_shutdown_event()" in source
+    assert "secrets.token_urlsafe" not in source
+    assert "print(supervisor_token)" not in source
     assert "add_signal_handler" not in source
     assert "json.loads(raw)" not in source
     assert "hmac.compare_digest" not in source
