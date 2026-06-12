@@ -215,24 +215,30 @@ _CONTEXT_TOP_LEVEL_KEYS = _CONTEXT_DATA_KEYS | frozenset(
         "bridge_latency_ms",
     }
 )
+_CONTEXT_ERROR_KEYS = frozenset(("type", "code", "status"))
 
 
 def _default_export_path(bundle_path: Path) -> Path:
     return bundle_path.with_name(f"{bundle_path.stem}-pack")
 
 
-def _redacted_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        str(key): redact_value(item, str(key))
-        for key, item in sorted(value.items(), key=lambda item: str(item[0]))
-    }
-
-
 def _context_error(error: Any) -> dict[str, Any] | None:
     if not isinstance(error, Mapping):
         return None
-    redacted = _redacted_mapping(error)
-    return {key: value for key, value in redacted.items() if value not in (None, "", [], {})}
+
+    context = {
+        str(key): redact_value(error[key], str(key))
+        for key in sorted(error, key=str)
+        if str(key) in _CONTEXT_ERROR_KEYS and error[key] not in (None, "", [], {})
+    }
+    omitted = sum(
+        1
+        for key, value in error.items()
+        if str(key) not in _CONTEXT_ERROR_KEYS and value not in (None, "", [], {})
+    )
+    if omitted > 0:
+        context["omitted_error_fields"] = omitted
+    return context or None
 
 
 def _context_record(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -314,11 +320,11 @@ def _record_detail(record: Mapping[str, Any]) -> str:
     error = record.get("error")
     if isinstance(error, Mapping):
         error_type = error.get("type")
-        message = error.get("message")
+        omitted = error.get("omitted_error_fields")
         if error_type:
             parts.append(f"error_type={redact_text(str(error_type))}")
-        if message:
-            parts.append(f"error={redact_text(str(message))}")
+        if omitted:
+            parts.append(f"omitted_error_fields={redact_text(str(omitted))}")
     return "; ".join(parts)
 
 

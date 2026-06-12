@@ -434,6 +434,7 @@ def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
                     "type": "ProviderError",
                     "message": "Authorization: Bearer tok-secretvalue123456 failed",
                     "traceback": 'File "/home/yi/project/app.py", line 7, in run',
+                    "notes": "prompt: customer said my SSN is 123-45-6789",
                 },
             },
         ],
@@ -462,14 +463,20 @@ def test_bundles_export_context_pack(cli: CliRunner, tmp_path: Path) -> None:
     ]
     assert timeline_records[0]["data"] == {"stage": "stt"}
     assert timeline_records[0]["omitted_data_fields"] == 3
-    assert timeline_records[1]["error"]["message"] == "Authorization: [REDACTED_SECRET] failed"
-    assert "~" in timeline_records[1]["error"]["traceback"]
+    assert timeline_records[1]["error"] == {
+        "type": "ProviderError",
+        "omitted_error_fields": 3,
+    }
 
     pack_text = "\n".join(path.read_text() for path in output.iterdir() if path.is_file())
     assert "tok-secretvalue123456" not in pack_text
     assert "sk-secretvalue123456" not in pack_text
     assert "customer said" not in pack_text
     assert "raw caller text" not in pack_text
+    assert "Authorization:" not in pack_text
+    assert "SSN" not in pack_text
+    assert "123-45-6789" not in pack_text
+    assert "/home/yi/project/app.py" not in pack_text
 
 
 def test_bundles_export_renders_output_path_literally(cli: CliRunner, tmp_path: Path) -> None:
