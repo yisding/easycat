@@ -213,9 +213,11 @@ class TTSScheduler:
             actions = self._session_actions()
             if actions is not None:
                 actions.clear_no_interrupt()
-        if self._current_turn() is turn and (
+        turn_still_current = self._current_turn() is turn and (
             turn_generation is None or (turn is not None and turn.generation == turn_generation)
-        ):
+        )
+        if turn_still_current:
+            await self._audio_router.flush_trailing_playback_mark(turn)
             self._clear_turn()
         return should_stop
 

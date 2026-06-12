@@ -237,6 +237,86 @@ async def test_trailing_playback_mark_emitted_while_session_running():
 
 
 @pytest.mark.asyncio
+async def test_trailing_playback_mark_flushed_after_speaking_turn_already_drained():
+    transport = FakePlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._audio_router._playback_mark_bytes_interval = 10_000
+
+    await session.start()
+    try:
+        turn = TurnContext("test-turn", CancelToken())
+        session._turn = turn
+        await session._turn_manager.bot_started_speaking()
+        await session._outbound_queue.put(_make_chunk())
+
+        def drained_without_mark() -> bool:
+            return (
+                turn.bytes_since_last_mark > 0
+                and session._outbound_queue.empty()
+                and session._audio_router._outbound_in_flight == 0
+            )
+
+        for _ in range(100):
+            if drained_without_mark():
+                break
+            await asyncio.sleep(0.01)
+
+        assert drained_without_mark()
+        assert transport.playback_marks == []
+
+        await session._tts_scheduler.finalize_speaking_turn(turn)
+
+        assert len(transport.playback_marks) == 1
+        assert turn.bytes_since_last_mark == 0
+        assert list(turn.playback_mark_to_bytes.values()) == [320]
+    finally:
+        await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
+    transport = FakePlaybackAckTransport()
+    session = Session(_full_config(transport=transport))
+    session._audio_router._playback_mark_bytes_interval = 10_000
+
+    await session.start()
+    try:
+        old_turn = TurnContext("old-turn", CancelToken())
+        session._turn = old_turn
+        await session._turn_manager.bot_started_speaking()
+        await session._outbound_queue.put(_make_chunk())
+
+        def old_turn_drained_without_mark() -> bool:
+            return (
+                old_turn.bytes_since_last_mark > 0
+                and session._outbound_queue.empty()
+                and session._audio_router._outbound_in_flight == 0
+            )
+
+        for _ in range(100):
+            if old_turn_drained_without_mark():
+                break
+            await asyncio.sleep(0.01)
+
+        assert old_turn_drained_without_mark()
+        assert transport.playback_marks == []
+
+        new_turn = TurnContext("new-turn", CancelToken())
+        session._turn = new_turn
+
+        await session._tts_scheduler.finalize_speaking_turn(
+            old_turn,
+            turn_generation=old_turn.generation,
+        )
+
+        assert transport.playback_marks == []
+        assert old_turn.bytes_since_last_mark == 320
+        assert session._turn is new_turn
+    finally:
+        await session.stop()
+
+
+@pytest.mark.asyncio
 async def test_buffered_transport_delivery_is_counted_only_after_report() -> None:
     transport = ReportingTransport()
     session = Session(_full_config(transport=transport))
