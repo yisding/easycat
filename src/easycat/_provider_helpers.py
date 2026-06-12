@@ -128,6 +128,11 @@ def word_timestamps_from_words(words: Any) -> list[WordTimestamp] | None:
         end = item.get("end")
         if not isinstance(word, str) or start is None or end is None:
             continue
-        timestamps.append(WordTimestamp(word=word, start=float(start), end=float(end)))
+        try:
+            start_float = float(start)
+            end_float = float(end)
+        except (TypeError, ValueError):
+            continue
+        timestamps.append(WordTimestamp(word=word, start=start_float, end=end_float))
 
     return timestamps or None
