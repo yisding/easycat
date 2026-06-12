@@ -15,26 +15,57 @@ from easycat.vad import funasr as vad_funasr_module
 from tests.vad._helpers import _assert_extra_hint, _make_chunk
 
 
-def test_funasr_vad_fails_without_sdk(monkeypatch: pytest.MonkeyPatch):
-    """FunASROnnxVAD should raise RuntimeError if funasr_onnx is missing."""
+def test_funasr_vad_fails_without_runtime_dependency(monkeypatch: pytest.MonkeyPatch):
+    """FunASROnnxVAD should raise RuntimeError if runtime deps are missing."""
 
     def _require_module(module_name: str, **_: object) -> object:
         if module_name == "numpy":
-            return object()
+            raise ImportError(
+                "FunASR VAD requires the numpy package. Install with: "
+                "uv add 'easycat[funasr-vad]'. From the EasyCat repo, use: "
+                "uv sync --extra funasr-vad --group dev."
+            )
         raise AssertionError(f"unexpected module load: {module_name}")
 
     monkeypatch.setattr(vad_funasr_module, "require_module", _require_module)
-    monkeypatch.setattr(
-        vad_funasr_module,
-        "find_spec",
-        lambda name: None if name == "funasr_onnx" else None,
-    )
 
     with pytest.raises(RuntimeError) as exc_info:
         FunASROnnxVAD()
     message = str(exc_info.value)
     assert "FunASR" in message
     _assert_extra_hint(message, "funasr-vad")
+
+
+def test_funasr_vad_initializes_in_tree_runtime(monkeypatch: pytest.MonkeyPatch):
+    """FunASROnnxVAD should use EasyCat's in-tree runtime, not funasr_onnx."""
+    import easycat.vad._funasr_runtime as runtime_pkg
+
+    seen: dict[str, object] = {}
+
+    class _FakeRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+            self.max_end_sil = kwargs.get("max_end_sil")
+
+    monkeypatch.setattr(vad_funasr_module, "require_module", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(runtime_pkg, "FunASROnlineRuntime", _FakeRuntime)
+
+    vad = FunASROnnxVAD(device_id=0, quantize=True, intra_op_num_threads=2)
+
+    assert vad._model is not None
+    assert seen == {
+        "model_dir": str(vad_funasr_module._FUNASR_BUNDLED_MODEL_DIR),
+        "device_id": 0,
+        "quantize": True,
+        "intra_op_num_threads": 2,
+        "max_end_sil": 150,
+    }
+
+
+def test_funasr_vad_rejects_unsupported_cache_dir():
+    """The in-tree runtime only supports local model dirs, not download caches."""
+    with pytest.raises(ValueError, match="cache_dir is not supported"):
+        FunASROnnxVAD(cache_dir="/tmp/funasr-cache")
 
 
 @pytest.mark.asyncio
@@ -102,6 +133,44 @@ async def test_funasr_vad_process_streaming_segments(monkeypatch: pytest.MonkeyP
 
     assert any(isinstance(e, VADStartSpeaking) for e in events)
     assert any(isinstance(e, VADStopSpeaking) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_funasr_vad_inference_errors_are_not_silenced(monkeypatch: pytest.MonkeyPatch):
+    """Runtime failures should not make FunASR behave like permanent silence."""
+
+    class _FakeWaveform:
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(_data: bytes, dtype: object) -> _FakeWaveform:
+            assert dtype == "int16"
+            return _FakeWaveform()
+
+    class _BrokenModel:
+        def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+            raise RuntimeError("ORT shape mismatch")
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _BrokenModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD(chunk_size_ms=32)
+
+    with pytest.raises(RuntimeError, match="FunASR ONNX VAD inference failed"):
+        async for _ in vad.process(_make_chunk(1000)):
+            pass
 
 
 @pytest.mark.asyncio

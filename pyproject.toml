@@ -81,12 +81,9 @@ rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.26.0", "ten-vad>=1.0.6.8"]
 silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.26.0"]
 funasr-vad = [
-    "numpy>=1.24.0; python_version < '3.13'",
-    "onnxruntime>=1.26.0; python_version < '3.13'",
-    "onnx>=1.21.0; python_version < '3.13'",
-    "funasr-onnx>=0.4.1; python_version < '3.13'",
-    "jieba>=0.42.1; python_version < '3.13'",
-    "modelscope>=1.37.1; python_version < '3.13'",
+    "kaldi-native-fbank>=1.22.3",
+    "numpy>=1.24.0",
+    "onnxruntime>=1.26.0",
 ]
 smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.26.0"]
 # Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
@@ -120,6 +117,7 @@ all = [
     "requests>=2.33.0",
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
+    "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
     "onnxruntime>=1.26.0",
 ]

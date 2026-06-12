@@ -127,9 +127,8 @@ frameworks, and debugging/audio-processing features:
 - numpy + onnxruntime (Smart Turn ONNX endpoint detector): `uv sync --extra smart-turn --group dev`
 - ten-vad + numpy + onnxruntime (optional TEN VAD; review its non-permissive license): `uv sync --extra ten-vad --group dev`
 - numpy + onnxruntime (Silero VAD): `uv sync --extra silero-vad --group dev` — runs the bundled ONNX model (no torch required)
-- funasr-onnx + onnxruntime (FunASR VAD): `uv sync --extra funasr-vad --group dev`
-  on Python 3.11-3.12. The current upstream SDK pins NumPy below the
-  range needed by the fixed ONNX package on Python 3.13+.
+- numpy + onnxruntime + kaldi-native-fbank (FunASR VAD): `uv sync --extra funasr-vad --group dev`
+  runs the bundled FunASR FSMN-VAD model through EasyCat's in-tree runtime.
 - pyrnnoise + requests (RNNoise noise reduction backend): `uv sync --extra rnnoise --group dev`
 - Krisp SDK (krisp_audio): `uv pip install krisp_audio`
 - Provider extras/keys:

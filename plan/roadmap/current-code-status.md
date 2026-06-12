@@ -2,7 +2,7 @@
 
 Status: current snapshot.
 
-Snapshot date: 2026-06-08.
+Snapshot date: 2026-06-12.
 
 This is a static inspection snapshot used to keep the planning folder aligned
 with the codebase. Counts below come from tracked files and exclude
@@ -10,7 +10,7 @@ with the codebase. Counts below come from tracked files and exclude
 
 ## Inventory
 
-- `src/easycat/` contains 213 tracked Python files.
+- `src/easycat/` contains 217 tracked Python files.
 - `tests/` contains 216 tracked `test_*.py` files.
 - `docs/README.md` is the maintained reader-facing docs map, and
   `docs/teaching/` contains shipped chapters `00` through `15`.

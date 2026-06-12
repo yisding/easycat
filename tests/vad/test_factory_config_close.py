@@ -161,7 +161,6 @@ def test_vad_factory_explicit_funasr(monkeypatch: pytest.MonkeyPatch):
             funasr_device_id=0,
             funasr_quantize=True,
             funasr_intra_op_num_threads=2,
-            funasr_cache_dir="/tmp/funasr-cache",
         )
     )
     assert isinstance(vad, _FakeFunASR)
@@ -171,8 +170,14 @@ def test_vad_factory_explicit_funasr(monkeypatch: pytest.MonkeyPatch):
         "device_id": 0,
         "quantize": True,
         "intra_op_num_threads": 2,
-        "cache_dir": "/tmp/funasr-cache",
+        "cache_dir": None,
     }
+
+
+def test_vad_factory_explicit_funasr_rejects_cache_dir():
+    """funasr_cache_dir is obsolete with the in-tree runtime."""
+    with pytest.raises(ValueError, match="cache_dir is not supported"):
+        create_vad(VADConfig(backend="funasr", funasr_cache_dir="/tmp/funasr-cache"))
 
 
 def test_vad_factory_silero_preferred(monkeypatch: pytest.MonkeyPatch):

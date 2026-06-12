@@ -604,7 +604,7 @@ def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
         "each cell must re-run the offline contract tests with the real SDK installed"
     )
 
-    # funasr-vad installs nothing on Python >= 3.13, so the matrix pins 3.12.
+    # The extras matrix currently runs on the project's canonical CI Python.
     setup_steps = [
         step
         for step in install.get("steps", [])
@@ -615,7 +615,7 @@ def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
     # Known cells must be deliberately documented in the workflow file.
     for phrase in (
         "cartesia is an empty marker extra",
-        "funasr-vad only installs on Python < 3.13",
+        "funasr-vad uses EasyCat's bundled model plus in-tree runtime",
         "pydantic-ai and pydantic-ai-v2-beta are mutually exclusive",
         "ten-vad is deliberately excluded",
     ):
