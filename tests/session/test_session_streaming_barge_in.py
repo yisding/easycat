@@ -224,6 +224,41 @@ async def test_session_barge_in_after_agent_done_calls_notify_interruption():
 
 
 @pytest.mark.asyncio
+async def test_session_barge_in_streaming_task_cancel_records_interruption():
+    agent = FastDoneAgent()
+    tts = SlowStartTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="test"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+        )
+    )
+    token = CancelToken()
+    turn = TurnContext("turn-cancelled-streaming", token)
+    session._turn = turn
+
+    run_task = asyncio.create_task(session._turn_runner.run_streaming_agent("test", token=token))
+    try:
+        await agent.finished.wait()
+        await tts.started.wait()
+        turn.record_barge_in()
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+    finally:
+        await session.stop()
+
+    assert agent.interruption_notified
+    assert agent.interruption_text_spoken == ""
+    assert agent.interruption_mode == "truncate"
+
+
+@pytest.mark.asyncio
 async def test_session_barge_in_writes_interruption_journal_record():
     agent = FastDoneAgent()
     tts = SlowStartTTS()
