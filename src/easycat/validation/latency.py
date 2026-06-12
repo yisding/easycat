@@ -66,15 +66,25 @@ class LatencyPercentileStats:
         if count == 1:
             only = cleaned[0]
             return cls(count=1, p50=only, p90=only, p95=only, p99=only)
-        # exclusive: (N+1)*p formula matches operator-intuition for tail samples
+        # Use exclusive (N+1)*p interpolation so one tail sample can move
+        # high percentiles, but keep reported values within the observed range.
+        # Unbounded exclusive quantiles extrapolate for small samples (for
+        # example, p95 for two values can exceed the max) which would make
+        # budget enforcement fail even when every observation is under budget.
         cuts = statistics.quantiles(cleaned, n=100, method="exclusive")
+        lower = min(cleaned)
+        upper = max(cleaned)
         return cls(
             count=count,
-            p50=cuts[49],
-            p90=cuts[89],
-            p95=cuts[94],
-            p99=cuts[98],
+            p50=_clamp_percentile(cuts[49], lower, upper),
+            p90=_clamp_percentile(cuts[89], lower, upper),
+            p95=_clamp_percentile(cuts[94], lower, upper),
+            p99=_clamp_percentile(cuts[98], lower, upper),
         )
+
+
+def _clamp_percentile(value: float, lower: float, upper: float) -> float:
+    return min(max(value, lower), upper)
 
 
 @dataclass(frozen=True)

@@ -73,35 +73,38 @@ def test_latency_percentile_stats_from_values_skips_none() -> None:
     assert stats.count == 10
     cleaned = [v for v in values if v is not None]
     expected = statistics.quantiles(cleaned, n=100, method="exclusive")
-    assert stats.p50 == pytest.approx(expected[49])
-    assert stats.p90 == pytest.approx(expected[89])
-    assert stats.p95 == pytest.approx(expected[94])
-    assert stats.p99 == pytest.approx(expected[98])
+    lower = min(cleaned)
+    upper = max(cleaned)
+    assert stats.p50 == pytest.approx(min(max(expected[49], lower), upper))
+    assert stats.p90 == pytest.approx(min(max(expected[89], lower), upper))
+    assert stats.p95 == pytest.approx(min(max(expected[94], lower), upper))
+    assert stats.p99 == pytest.approx(min(max(expected[98], lower), upper))
 
 
-def test_latency_percentile_stats_uses_linear_interpolation() -> None:
+def test_latency_percentile_stats_uses_linear_interpolation_with_observed_bounds() -> None:
     # Ten samples, evenly spaced. With exclusive (N+1)*p method these
-    # percentiles are interpolated, not nearest-rank.
+    # percentiles are interpolated, then clamped to the observed range so
+    # small samples cannot report impossible values beyond the max.
     values = [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0]
 
     stats = LatencyPercentileStats.from_values(values)
 
-    # Expected per `statistics.quantiles(..., method="exclusive")` semantics
     assert stats.p50 == pytest.approx(550.0)
     assert stats.p90 == pytest.approx(990.0)
-    assert stats.p95 == pytest.approx(1045.0)
-    assert stats.p99 == pytest.approx(1089.0)
+    assert stats.p95 == pytest.approx(1000.0)
+    assert stats.p99 == pytest.approx(1000.0)
     assert stats.count == 10
 
 
-def test_latency_percentile_stats_two_value_input_still_interpolates() -> None:
+def test_latency_percentile_stats_two_value_input_interpolates_with_observed_bounds() -> None:
     stats = LatencyPercentileStats.from_values([100.0, 200.0])
 
     assert stats.count == 2
     # statistics.quantiles with n=100, method="exclusive" on [100, 200]
-    # gives a linearly-interpolated p50 == 150.0 (not nearest-rank == 100/200)
+    # gives a linearly-interpolated p50 == 150.0 (not nearest-rank == 100/200),
+    # while high-tail extrapolation is clamped to the max observed value.
     assert stats.p50 == pytest.approx(150.0)
-    assert stats.p95 == pytest.approx(285.0)
+    assert stats.p95 == pytest.approx(200.0)
 
 
 def test_latency_percentile_stats_single_value_short_circuits() -> None:
@@ -166,12 +169,11 @@ def test_build_latency_artifact_emits_percentiles_block_per_stage() -> None:
     assert "llm_ttft_ms" in overall
 
     total_overall = overall["total_ms"]
-    expected_total = statistics.quantiles(
-        [100.0 + i * 100 for i in range(10)], n=100, method="exclusive"
-    )
+    total_values = [100.0 + i * 100 for i in range(10)]
+    expected_total = statistics.quantiles(total_values, n=100, method="exclusive")
     assert total_overall["count"] == 10
     assert total_overall["p50"] == pytest.approx(expected_total[49])
-    assert total_overall["p95"] == pytest.approx(expected_total[94])
+    assert total_overall["p95"] == pytest.approx(max(total_values))
 
     by_condition = percentiles["by_condition"]
     assert "baseline" in by_condition
@@ -195,11 +197,9 @@ def test_build_latency_artifact_percentiles_skip_warmup_and_failed_samples() -> 
 
     overall = artifact["percentiles"]["overall"]["total_ms"]
     assert overall["count"] == 3
-    # The warmup/failed values (10_000, 99_999) must not show up in p95.
-    # Exclusive method can extrapolate above the max sample (300) on small
-    # n, so the leak-detection bound is set well below the warmup/fail values.
-    assert overall["p95"] is not None
-    assert overall["p95"] < 1000.0
+    # The warmup/failed values (10_000, 99_999) must not show up in p95,
+    # and small-sample extrapolation must stay within the observed max.
+    assert overall["p95"] == pytest.approx(300.0)
 
 
 def test_build_latency_artifact_percentiles_split_by_condition() -> None:
@@ -400,6 +400,23 @@ def test_build_latency_artifact_emits_empty_budget_violations_when_passing() -> 
     )
 
     assert "budget_violations" in artifact
+    assert artifact["budget_violations"] == []
+
+
+def test_build_latency_artifact_clamps_small_sample_p95_before_default_budget_evaluation() -> None:
+    samples = [
+        _make_sample(sample_id="s-1", tts_ttfb_ms=1400.0),
+        _make_sample(sample_id="s-2", tts_ttfb_ms=1499.0),
+    ]
+
+    artifact = build_latency_artifact(
+        mode=LatencyMode.SWEEP,
+        samples=samples,
+        generated_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    overall_tts = artifact["percentiles"]["overall"]["tts_ttfb_ms"]
+    assert overall_tts["p95"] == pytest.approx(1499.0)
     assert artifact["budget_violations"] == []
 
 
