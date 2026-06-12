@@ -236,7 +236,7 @@ context. Several bullets are known stale; use the current-state list above and
   `examples/agents/`, and `examples/advanced/`.
 - Add `examples/README.md` with purpose, required extras, env vars, and
   expected command for every example.
-- Expand `tests/test_examples.py` beyond import checks for the golden examples
+- Expand `tests/examples/` beyond import checks for the golden examples
   using fake providers/transports.
 - Keep `docs/teaching/` prominent in README; it is a real asset.
 - Keep planning docs separate from teaching docs. The teaching chapters now

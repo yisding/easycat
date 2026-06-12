@@ -50,9 +50,9 @@ def test_quick_validation_ci_runs_declared_python_versions_without_fail_fast() -
 
 def test_socket_validation_ci_runs_once_on_python_312() -> None:
     text = _workflow_text()
-    socket_job = text.split("integration-socket:", maxsplit=1)[1].split(
-        "integration-live:", maxsplit=1
-    )[0]
+    socket_job = text.split("integration-socket:", maxsplit=1)[1].split("contracts:", maxsplit=1)[
+        0
+    ]
 
     assert 'python-version: "3.12"' in socket_job
     assert "matrix:" not in socket_job
@@ -61,11 +61,28 @@ def test_socket_validation_ci_runs_once_on_python_312() -> None:
 
 def test_socket_validation_ci_uploads_webrtc_stats_artifact_when_produced() -> None:
     text = _workflow_text()
-    socket_job = text.split("integration-socket:", maxsplit=1)[1].split(
-        "integration-live:", maxsplit=1
-    )[0]
+    socket_job = text.split("integration-socket:", maxsplit=1)[1].split("contracts:", maxsplit=1)[
+        0
+    ]
 
     assert "runs/**/webrtc/stats.jsonl" in socket_job
+
+
+def test_contract_validation_ci_runs_once_on_python_312() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+    contracts_job = workflow["jobs"]["contracts"]
+    run_bodies = [step.get("run", "") for step in contracts_job["steps"] if isinstance(step, dict)]
+
+    assert contracts_job["name"] == "Validate Contracts"
+    assert contracts_job["timeout-minutes"] == 20
+    assert any("uv sync --group dev --python 3.12" in body for body in run_bodies)
+    assert any(
+        "uv run --python 3.12 easycat validate contracts" in body
+        and "--show-output" in body
+        and '--artifacts-dir "$VALIDATION_ARTIFACTS_DIR"' in body
+        for body in run_bodies
+    )
+    assert "matrix" not in contracts_job
 
 
 def test_validation_ci_uploads_reports_junit_and_logs_even_on_failure() -> None:
@@ -84,6 +101,7 @@ def test_validation_ci_shows_pytest_output_in_github_logs() -> None:
     workflow = yaml.safe_load(_workflow_text())
     quick_steps = workflow["jobs"]["test"]["steps"]
     socket_steps = workflow["jobs"]["integration-socket"]["steps"]
+    contracts_steps = workflow["jobs"]["contracts"]["steps"]
 
     quick_run = next(
         step for step in quick_steps if "easycat validate quick" in str(step.get("run", ""))
@@ -91,9 +109,15 @@ def test_validation_ci_shows_pytest_output_in_github_logs() -> None:
     socket_run = next(
         step for step in socket_steps if "easycat validate socket" in str(step.get("run", ""))
     )
+    contracts_run = next(
+        step
+        for step in contracts_steps
+        if "easycat validate contracts" in str(step.get("run", ""))
+    )
 
     assert "--show-output" in quick_run["run"]
     assert "--show-output" in socket_run["run"]
+    assert "--show-output" in contracts_run["run"]
 
 
 def test_ci_has_package_build_smoke() -> None:
@@ -116,6 +140,7 @@ def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
     assert "Current verified state:" in section
     assert "`easycat validate quick`" in section
     assert "`easycat validate socket`" in section
+    assert "`easycat validate contracts`" in section
     assert "`if: always()`" in section
     assert "`--junit-prefix`" in section
     assert "package build smoke" in section
@@ -166,7 +191,10 @@ def test_nightly_validation_workflow_skeleton_exists() -> None:
     assert "workflow_dispatch:" in text
     assert "pull_request:" not in text
     assert "full-local:" in text
-    assert "not integration_socket and not integration_live and not stress and not flaky" in text
+    assert (
+        "not integration_socket and not integration_live and not integration_external "
+        "and not stress and not flaky"
+    ) in text
     assert "validate quick" in text
     assert "validate socket" in text
     assert "validate stress" in text
@@ -223,7 +251,12 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
     workflow = yaml.safe_load(workflow_text)
     runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
     cli_source = (REPO_ROOT / "src/easycat/cli/validate.py").read_text(encoding="utf-8")
-    validate_tests_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
+    validate_tests_source = "\n".join(
+        (
+            (REPO_ROOT / "tests/cli/test_validate_runner.py").read_text(encoding="utf-8"),
+            (REPO_ROOT / "tests/cli/test_validate_cli.py").read_text(encoding="utf-8"),
+        )
+    )
     section = _validation_tasks_section(
         "### V5.3 Add Release Validation Workflow",
         "## V6: Optional Observability API",
@@ -365,7 +398,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "release.latency.<mode>",
         "EASYCAT_VALIDATION_PYTEST_COMMAND",
         "tests/test_ci_workflow.py",
-        "tests/cli/test_validate.py",
+        "tests/cli/test_validate_runner.py",
     ):
         assert f"`{token}`" in section
 

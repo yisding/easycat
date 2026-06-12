@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 import easycat.cli.serve as serve_mod
+import easycat.config as config_mod
+import easycat.integrations.agents.responses_api as responses_mod
 from easycat.cli.serve import _playground_url
 
 
@@ -99,6 +102,75 @@ def test_serve_passes_agent_options_through(
     assert result.exit_code == 0
     assert stub_runtime["build"]["agent_model"] == "gpt-4.1-mini"
     assert stub_runtime["build"]["instructions"] == "Be terse."
+
+
+def test_build_serve_session_wires_browser_transport_and_playground_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    sentinel_session = object()
+
+    class StubRemoteResponsesAPIBridge:
+        def __init__(self, base_url: str, model: str, *, api_key: str | None = None) -> None:
+            self.base_url = base_url
+            self.model = model
+            self.api_key = api_key
+
+        def _build_request_body(self, turn_input: Any) -> dict[str, Any]:
+            return {
+                "model": self.model,
+                "input": [{"role": "user", "content": turn_input.text}],
+                "stream": True,
+                "metadata": {"parent": "kept"},
+            }
+
+    def fake_browser(**kwargs: Any) -> Any:
+        captured["browser_kwargs"] = kwargs
+        return SimpleNamespace(kind="browser-config", kwargs=kwargs)
+
+    def fake_create_session(config: Any) -> object:
+        captured["created_config"] = config
+        return sentinel_session
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        responses_mod,
+        "RemoteResponsesAPIBridge",
+        StubRemoteResponsesAPIBridge,
+    )
+    monkeypatch.setattr(config_mod.EasyConfig, "browser", staticmethod(fake_browser))
+    monkeypatch.setattr(config_mod, "create_session", fake_create_session)
+
+    session = serve_mod._build_serve_session(
+        host="0.0.0.0",
+        port=9123,
+        token="sekrit",
+        agent_model="gpt-test",
+        instructions="Speak plainly.",
+    )
+
+    assert session is sentinel_session
+    assert captured["created_config"].kind == "browser-config"
+
+    transport = captured["browser_kwargs"]["transport"]
+    assert transport.host == "0.0.0.0"
+    assert transport.port == 9123
+    assert transport.auth_token == "sekrit"
+
+    agent = captured["browser_kwargs"]["agent"]
+    assert isinstance(agent, StubRemoteResponsesAPIBridge)
+    assert agent.base_url == "https://api.openai.com"
+    assert agent.model == "gpt-test"
+    assert agent.api_key == "sk-test"
+
+    body = agent._build_request_body(SimpleNamespace(text="hello"))
+    assert body == {
+        "model": "gpt-test",
+        "input": [{"role": "user", "content": "hello"}],
+        "stream": True,
+        "metadata": {"parent": "kept"},
+        "instructions": "Speak plainly.",
+    }
 
 
 def test_playground_url_shapes() -> None:

@@ -117,6 +117,7 @@ def test_scaffold_python_files_pass_ruff(cli: CliRunner, tmp_path: Path, templat
 
 
 @pytest.mark.parametrize("template", sorted(available_templates()))
+@pytest.mark.integration_external
 def test_scaffold_dependencies_resolve_with_uv_lock(
     cli: CliRunner, tmp_path: Path, template: str
 ) -> None:

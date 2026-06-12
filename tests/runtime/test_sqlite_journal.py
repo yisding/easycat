@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import textwrap
 from unittest import mock
 
@@ -718,6 +719,32 @@ class TestRetention:
         j = SqliteJournal(session_id, data_dir=tmp_path)
         j.append(kind=JournalRecordKind.EVENT, name="ev", session_id=session_id)
         j.close()
+        return tmp_path / "journals" / f"{session_id}.sqlite"
+
+    def _make_session_with_sidecars_and_artifact(self, tmp_path, session_id, *, mtime):
+        db_path = self._make_journal(tmp_path, session_id)
+        wal_path = db_path.with_suffix(".sqlite-wal")
+        shm_path = db_path.with_suffix(".sqlite-shm")
+        wal_path.write_bytes(b"wal-sidecar" * 8)
+        shm_path.write_bytes(b"shm-sidecar" * 8)
+
+        artifact_path = tmp_path / "artifacts" / session_id / "audio" / "chunk.raw"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_bytes(f"artifact for {session_id}".encode())
+
+        for path in (db_path, wal_path, shm_path, artifact_path):
+            os.utime(path, (mtime, mtime))
+
+        return {
+            "db": db_path,
+            "wal": wal_path,
+            "shm": shm_path,
+            "artifact": artifact_path,
+            "artifact_dir": tmp_path / "artifacts" / session_id,
+        }
+
+    def _retained_size(self, paths):
+        return sum(paths[name].stat().st_size for name in ("db", "wal", "shm", "artifact"))
 
     def test_retention_by_count(self, tmp_path):
         for i in range(5):
@@ -736,6 +763,26 @@ class TestRetention:
         archives = list((tmp_path / "archive").glob("*.tar.gz"))
         assert len(archives) == 2
 
+    def test_retention_max_bytes_archives_and_cleans_sidecars_and_artifacts(self, tmp_path):
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+        max_bytes = self._retained_size(old) + self._retained_size(new) - 1
+
+        removed = run_retention(tmp_path, max_sessions=10, max_bytes=max_bytes, mode="archive")
+
+        assert removed == 1
+        for path in (old["db"], old["wal"], old["shm"], old["artifact_dir"]):
+            assert not path.exists()
+        for path in (new["db"], new["wal"], new["shm"], new["artifact"]):
+            assert path.exists()
+
+        archive_path = tmp_path / "archive" / "old-sess.tar.gz"
+        assert archive_path.exists()
+        with tarfile.open(archive_path, "r:gz") as tar:
+            names = set(tar.getnames())
+        assert "old-sess.sqlite" in names
+        assert "artifacts/old-sess/audio/chunk.raw" in names
+
     def test_retention_delete_mode(self, tmp_path):
         for i in range(3):
             self._make_journal(tmp_path, f"sess-{i}")
@@ -744,6 +791,19 @@ class TestRetention:
         assert not (tmp_path / "archive").exists()
         remaining = list((tmp_path / "journals").glob("*.sqlite"))
         assert len(remaining) == 1
+
+    def test_retention_delete_mode_cleans_sidecars_and_artifacts(self, tmp_path):
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+
+        removed = run_retention(tmp_path, max_sessions=1, mode="delete")
+
+        assert removed == 1
+        assert not (tmp_path / "archive").exists()
+        for path in (old["db"], old["wal"], old["shm"], old["artifact_dir"]):
+            assert not path.exists()
+        for path in (new["db"], new["wal"], new["shm"], new["artifact"]):
+            assert path.exists()
 
     def test_retention_no_journals_dir(self, tmp_path):
         # Should not crash if the directory doesn't exist.
@@ -924,7 +984,7 @@ class TestLitestreamSqliteJournal:
         assert isinstance(j, LitestreamSqliteJournal)
         j.close()
 
-    @pytest.mark.integration_live
+    @pytest.mark.integration_external
     @pytest.mark.skipif(
         shutil.which("litestream") is None,
         reason="litestream binary not on PATH",
@@ -992,7 +1052,7 @@ class TestLibsqlJournal:
         assert isinstance(j, SqliteJournal)
         j.close()
 
-    @pytest.mark.integration_live
+    @pytest.mark.integration_external
     @pytest.mark.skipif(
         not _libsql_available(),
         reason="libsql_experimental SDK not installed",
@@ -1015,6 +1075,7 @@ class TestLibsqlJournal:
         assert records[4].data == {"i": 4}
         j.close()
 
+    @pytest.mark.integration_external
     @pytest.mark.skipif(
         not _libsql_available(),
         reason="libsql_experimental SDK not installed",
@@ -1057,6 +1118,7 @@ class TestLibsqlJournal:
         degraded_records = ro.slice(kind=JournalRecordKind.DEGRADED)
         assert [r.name for r in degraded_records] == ["journal_degraded"]
 
+    @pytest.mark.integration_external
     @pytest.mark.skipif(
         not _libsql_available(),
         reason="libsql_experimental SDK not installed",

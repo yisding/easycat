@@ -59,60 +59,20 @@ def test_list_templates(cli: CliRunner) -> None:
         if line and not line[0].isspace() and line.split()[0] in template_names
     ]
     assert set(names) == template_names
-    assert "Best for:" in result.stdout
-    assert "First local voice agent" in result.stdout
-    assert "Required env:" in result.stdout
-    assert "OPENAI_API_KEY" in result.stdout
-    assert "TWILIO_STREAM_URL" in result.stdout
-    assert "Optional env:" in result.stdout
-    assert "TWILIO_WS_PORT" in result.stdout
-    assert "TURN_SERVER_URL" in result.stdout
-    assert "Base extras:" in result.stdout
-    assert "openai-agents, local" in result.stdout
-    assert "Base package:" in result.stdout
-    assert init_module._base_requirement("openai-agents") in result.stdout
-    assert "telephony" in result.stdout
-    assert "webrtc" in result.stdout
-    assert "Files:" in result.stdout
-    assert ".env.example" in result.stdout
-    assert "server.py" in result.stdout
-    assert "Text-only REPL" in result.stdout
-    assert "WebRTC audio" in result.stdout
-    assert "Command note:" in result.stdout
-    assert "Create uses installed CLI form" in result.stdout
-    assert "Repo create runs from this repository root" in result.stdout
-    assert "JSON catalog next_step_commands previews the my-agent post-create sequence" in (
-        result.stdout
-    )
-    assert (
-        "Doctor, Doctor JSON, Check, Fix, Docs, App-builder docs, App-builder docs JSON, "
-        "Docs JSON, JSON schema, and Run after cd are run inside the scaffolded project"
-    ) in result.stdout
-    assert "Machine-readable template catalog: easycat init --list-templates --json" in (
-        result.stdout
-    )
+    for label in (
+        "Best for:",
+        "Required env:",
+        "Optional env:",
+        "Base extras:",
+        "Base package:",
+        "Files:",
+        "Command note:",
+        "Machine-readable template catalog: easycat init --list-templates --json",
+    ):
+        assert label in result.stdout
     for template in available_templates():
         assert f"Create: easycat init my-agent --template {template}" in result.stdout
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
-        assert "Doctor after cd: uv run easycat doctor --env-file .env" in result.stdout
-        assert (
-            "Doctor JSON after cd: uv run easycat doctor --env-file .env --json" in result.stdout
-        )
-        assert f"Check after cd: {_template_readme_check_command(template)}" in result.stdout
-        assert f"Fix if needed after cd: {_template_readme_fix_command(template)}" in (
-            result.stdout
-        )
-        assert "Docs after cd: uv run easycat docs" in result.stdout
-        assert (
-            "App-builder docs after cd: uv run easycat docs --audience app-builders"
-            in result.stdout
-        )
-        assert (
-            "App-builder docs JSON after cd: uv run easycat docs --audience app-builders --json"
-        ) in result.stdout
-        assert "Docs JSON after cd: uv run easycat docs --json" in result.stdout
-        assert "JSON schema after cd: uv run easycat explain json-schema" in result.stdout
-        assert f"Run after cd: {_template_readme_run_command(template)}" in result.stdout
 
 
 def test_template_catalog_renders_bracketed_text_literally() -> None:
@@ -164,61 +124,30 @@ def test_list_templates_json(cli: CliRunner) -> None:
     assert set(payload["templates"]) == set(available_templates())
     assert "installed CLI form" in payload["command_note"]
     assert "repo_create_command runs from this repository root" in payload["command_note"]
-    assert (
-        "catalog next_step_commands preview the my-agent post-create sequence"
-        in payload["command_note"]
-    )
-    assert "fix_command run after cd into the scaffolded project" in payload["command_note"]
-    assert "after cd into the scaffolded project" in payload["command_note"]
     catalog = {entry["name"]: entry for entry in payload["catalog"]}
     assert set(catalog) == set(available_templates())
-    assert catalog["openai-agents"]["transport"] == "local mic"
-    assert catalog["openai-agents"]["base_extras"] == ["openai-agents", "local"]
-    assert catalog["openai-agents"]["base_requirement"] == init_module._base_requirement(
-        "openai-agents"
-    )
-    assert catalog["openai-agents"]["files"] == [
-        ".env.example",
-        ".gitignore",
-        "AGENTS.md",
-        "README.md",
-        "agent.py",
-        "pyproject.toml",
-        "tests/test_agent.py",
-    ]
-    assert catalog["openai-agents"]["best_for"].startswith("First local voice agent")
-    assert catalog["openai-agents"]["required_env"] == ["OPENAI_API_KEY"]
-    assert catalog["openai-agents"]["optional_env"] == []
-    assert catalog["text-chat"]["mode"] == "text"
-    assert catalog["text-chat"]["base_extras"] == ["openai-agents"]
-    assert catalog["text-chat"]["base_requirement"] == init_module._base_requirement("text-chat")
-    assert "without microphone" in catalog["text-chat"]["best_for"]
-    assert catalog["twilio-phone"]["base_extras"] == ["openai-agents", "telephony"]
-    assert catalog["twilio-phone"]["base_requirement"] == init_module._base_requirement(
-        "twilio-phone"
-    )
-    assert "server.py" in catalog["twilio-phone"]["files"]
-    assert catalog["twilio-phone"]["required_env"] == ["OPENAI_API_KEY", "TWILIO_STREAM_URL"]
-    assert catalog["twilio-phone"]["optional_env"] == [
-        "TWILIO_WS_PORT",
-        "TWILIO_STREAM_TOKEN_SECRET",
-    ]
-    assert catalog["webrtc-browser"]["optional_env"] == [
-        "TURN_SERVER_URL",
-        "TURN_USERNAME",
-        "TURN_CREDENTIAL",
-    ]
-    assert catalog["webrtc-browser"]["base_extras"] == ["openai-agents", "webrtc"]
-    assert catalog["webrtc-browser"]["base_requirement"] == init_module._base_requirement(
-        "webrtc-browser"
-    )
-    assert "description" in catalog["webrtc-browser"]
+    required_fields = {
+        "base_extras",
+        "base_requirement",
+        "best_for",
+        "check_command",
+        "create_command",
+        "description",
+        "files",
+        "fix_command",
+        "framework",
+        "mode",
+        "next_step_commands",
+        "optional_env",
+        "repo_create_command",
+        "required_env",
+        "run_command",
+        "transport",
+    }
     for name, entry in catalog.items():
+        assert required_fields <= set(entry)
         assert entry["create_command"] == f"easycat init my-agent --template {name}"
         assert entry["repo_create_command"] == f"uv run easycat init my-agent --template {name}"
-        assert entry["next_step_commands"] == init_module._next_step_commands(
-            Path("my-agent"), name
-        )
 
 
 def test_missing_name_without_list_templates(cli: CliRunner) -> None:

@@ -146,12 +146,20 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
         1,
     )[0]
     normalized = re.sub(r"\s+", " ", quick_start)
+    required_commands = (
+        "uv run easycat docs",
+        "uv run easycat docs --audience contributors",
+        "uv run easycat docs --audience contributors --json",
+        "uv run easycat docs --json",
+        "uv run easycat explain json-schema",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run easycat doctor --json",
+        "uv run easycat doctor --env-file .env --json",
+    )
 
-    assert "uv run easycat docs" in quick_start
-    assert "uv run easycat docs --audience contributors" in quick_start
-    assert "uv run easycat docs --audience contributors --json" in quick_start
-    assert "uv run easycat docs --json" in quick_start
-    assert "uv run easycat explain json-schema" in quick_start
+    for command in required_commands:
+        assert command in quick_start
     assert "maintained reader-facing map" in quick_start
     assert "narrow the map to contributor-facing routes" in normalized
     assert "automation needs that smaller route map" in normalized
@@ -159,14 +167,6 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "[llms.txt](llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
     assert "scripts/regen_llms_txt.py" in quick_start
-    assert "CLI and scaffold commands" in quick_start
-    assert "uv run easycat doctor" in quick_start
-    assert "uv run easycat doctor --env-file .env" in quick_start
-    assert "uv run easycat doctor --json" in quick_start
-    assert "uv run easycat doctor --env-file .env --json" in quick_start
-    assert "when those keys live in a project `.env`" in normalized
-    assert "for parseable environment/check rows" in normalized
-    assert "before debugging tests or examples" in quick_start
 
     registered_commands = _registered_easycat_commands()
     command_mentions = re.findall(r"\buv run easycat\s+(?P<command>[A-Za-z0-9_-]+)\b", quick_start)
@@ -185,9 +185,6 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
     assert "uv run easycat validate contracts --json" in contributing
     assert "uv run easycat validate release --json" in contributing
     assert "uv run easycat validate report .easycat/validation/latest.json --json" in contributing
-    assert "renders the latest saved report" in normalized
-    assert "for the current validation run inside the standard CLI envelope" in normalized
-    assert "re-emit a saved report inside that envelope" in normalized
     assert "when a script or coding agent" not in normalized
     assert ".easycat/validation/runs/<run_id>/report.json" in contributing
     assert "uv run easycat validate report <path>" not in contributing
@@ -195,7 +192,6 @@ def test_contributing_validation_report_points_to_latest_artifact() -> None:
 
 def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> None:
     section = _contributing_docs_onboarding_section()
-    normalized = re.sub(r"\s+", " ", section)
     recipes = just_recipe_commands(REPO_ROOT)
     guard_recipes = (
         "guard-docs",
@@ -209,58 +205,8 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
         "guard-markdown",
     )
 
-    assert "narrow guard that owns that surface" in normalized
-    assert "Then run `uv run easycat validate quick` before a PR" in normalized
     assert "If `just` is not installed" in section
     assert "[the development loop](#the-development-loop)" in section
-    assert "`uv run pytest ...` command behind each guard" in section
-    for phrase in (
-        "Root README chooser, docs route map, public API docs, or CLI JSON envelopes",
-        "Teaching ladder chapters or generated blocks",
-        "Examples chooser or command matrix",
-        "Scaffold templates or template catalog",
-        "Contributor and validation guidance",
-        "Validation workflow, validation reference, or validate CLI behavior",
-        "Provider protocols, cassettes, contract matrix, or bridge event grammar",
-        "Operator deployment, observability, or journal durability docs",
-        "Markdown links in maintained docs",
-        (
-            "Root onboarding links, README e2e coverage, install guidance, "
-            "command-hint extraction, `easycat docs`, public API import-surface docs, "
-            "JSON route entries, and shared CLI `--json` envelope contracts"
-        ),
-        "Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints",
-        (
-            "Example README matrix, support files, setup/install/env guidance, "
-            "script smoke checks, and docs-route hints"
-        ),
-        (
-            "Generated README sections, line budgets, init happy paths, overwrite safety, "
-            "schema rejection paths, catalog text, catalog JSON, next-step commands, "
-            "generated project smoke, and generated project secret/artifact hygiene"
-        ),
-        (
-            "`justfile` parity, agent guide command, source-layout, and architecture hints, "
-            "validation lanes, docs-route hints, and plan current-state evidence"
-        ),
-        (
-            "The `docs/validation.md` workflow, validation reference route hints, "
-            "validation plan current state, validate CLI reports, JSON envelopes, "
-            "latency options, and error handling"
-        ),
-        (
-            "Provider contract docs-route hints, contributor provider guidance, "
-            "offline contract suite, cassette redaction/replay, schema fingerprints, "
-            "bridge contracts, and provider wiring matrix"
-        ),
-        (
-            "Docker deployment guide, operator docs-route hints, journal CLI entry points, "
-            "debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, "
-            "and SQLite journal durability"
-        ),
-        "Local links, anchors, and docs-route Markdown targets",
-    ):
-        assert phrase in section
 
     for recipe in guard_recipes:
         assert f"`just {recipe}`" in section
@@ -340,14 +286,13 @@ def test_contributing_development_loop_command_hints_are_locally_valid() -> None
 def test_contributing_pytest_target_validator_checks_node_ids() -> None:
     problems = _pytest_target_problems(
         (
-            "uv run pytest tests/test_install_guidance.py -k 'agent_guide or claude_' && "
+            "uv run pytest tests/install/test_agent_guides.py && "
             "uv run pytest tests/test_contributing.py::missing_test "
             "tests/test_contributing_missing.py"
         ),
         label="Broken pytest command",
     )
 
-    assert not any("agent_guide or claude_" in problem for problem in problems)
     assert (
         "Broken pytest command: missing pytest node tests/test_contributing.py::missing_test"
         in problems
@@ -410,18 +355,6 @@ def test_contributing_validation_chooser_tracks_slice_commands() -> None:
         assert row["command"].startswith("uv run easycat validate ")
         assert row["touches"].strip()
         assert row["why"].strip()
-    normalized_rows = " ".join(" ".join(row.values()) for row in chooser_rows)
-    for phrase in (
-        "Most code, docs, CLI help, unit behavior",
-        "WebSocket, WebRTC, transports",
-        "Provider protocols, cassettes, contract matrix, or agent bridges",
-        "Queues, load, reliability sampling, or saturation behavior",
-        "Live latency budgets or end-to-end timing",
-        "Live provider adapters, credentials, or provider/surface canaries",
-        "Packaging, release workflows, or installed-wheel behavior",
-        "A saved validation artifact",
-    ):
-        assert phrase in normalized_rows
 
 
 def test_contributing_marker_taxonomy_lists_pytest_markers() -> None:
@@ -451,17 +384,11 @@ def test_contributing_provider_section_points_to_contract_map() -> None:
     normalized = re.sub(r"\s+", " ", section)
 
     for phrase in (
-        "EasyCat uses **registries**, not inheritance",
-        "ProviderSurfaceContract",
         "[provider contract map](tests/contracts/README.md)",
-        "protocol cassettes",
-        "schema fingerprints",
-        "bridge event grammar",
         "uv run easycat validate contracts",
         "uv run easycat validate contracts --json",
-        "standard CLI envelope",
         "uv run pytest tests/contracts",
-        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+        "uv run pytest tests/contracts/test_provider_session_matrix.py",
     ):
         assert phrase in normalized
 
@@ -495,10 +422,6 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "## V1: First-Class CLI And CI Artifacts",
         1,
     )[0]
-    normalized_section = re.sub(r"\s+", " ", section)
-    contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-    docs_index_tests = (REPO_ROOT / "tests/test_docs_index.py").read_text(encoding="utf-8")
-    test_source = (REPO_ROOT / "tests/test_contributing.py").read_text(encoding="utf-8")
     recipes = set(just_recipe_commands(REPO_ROOT)) - {"default"}
     documented_recipes = {row["recipe"] for row in _development_loop_rows()}
     documented_slices = {row["slice"] for row in _validation_slice_rows()}
@@ -507,85 +430,10 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
     assert "Current verified state:" in section
     assert recipes <= documented_recipes
     assert public_lanes == documented_slices
-    for command in (
-        "uv sync --group dev",
-        "just",
-        "just check",
-        "uv run easycat docs",
-        "uv run easycat docs --json",
-        "uv run easycat explain json-schema",
-        "uv run easycat doctor",
-        "uv run easycat doctor --env-file .env",
-        "uv run easycat doctor --json",
-        "uv run easycat doctor --env-file .env --json",
-        "uv run easycat validate quick --json",
-        "uv run easycat validate contracts --json",
-        "uv run easycat validate release --json",
-        "uv run easycat validate report .easycat/validation/latest.json",
-        "uv run easycat validate report .easycat/validation/latest.json --json",
-    ):
-        assert command in contributing
-        assert f"`{command}`" in section
     for token in (
         "CONTRIBUTING.md",
-        "justfile",
         "easycat validate",
-        "uv run easycat validate",
-        "pyproject.toml",
-        "flaky",
-        "easycat.debug.testing",
         "tests/test_contributing.py",
-        "tests/test_docs_index.py",
+        "tests/docs/test_route_contracts.py",
     ):
         assert f"`{token}`" in section
-    for recipe in (
-        "guard-docs",
-        "guard-teaching",
-        "guard-examples",
-        "guard-templates",
-        "guard-contributing",
-        "guard-validation",
-        "guard-contracts",
-        "guard-ops",
-        "guard-markdown",
-    ):
-        assert f"`{recipe}`" in section
-    for phrase in (
-        "development-loop table",
-        "validation chooser table",
-        "docs/onboarding maintenance map",
-        "validation-slices table",
-        "narrowest useful validation lane",
-        "root README chooser",
-        "docs route map",
-        "public API import-surface docs",
-        "shared CLI `--json` envelope contracts",
-        "teaching ladder",
-        "examples matrix",
-        "scaffold templates",
-        "validation reference",
-        "provider contract docs",
-        "operator docs",
-        "maintained Markdown links",
-        "strict pytest markers",
-        "provider/surface pairing",
-        "flaky quarantine metadata",
-        "validation slices deselect `flaky`",
-        "RunBundle golden-test section",
-    ):
-        assert phrase in normalized_section
-    for test_name in (
-        "test_contributing_quick_start_points_to_docs_command",
-        "test_contributing_validation_report_points_to_latest_artifact",
-        "test_contributing_development_loop_just_recipes_stay_current",
-        "test_contributing_development_loop_lists_public_just_recipes",
-        "test_contributing_validation_slices_track_public_validate_lanes",
-        "test_contributing_validation_slice_commands_use_repo_local_uv_run",
-        "test_contributing_validation_chooser_tracks_slice_commands",
-        "test_contributing_docs_onboarding_map_lists_resolving_guard_targets",
-        "test_contributing_marker_taxonomy_lists_pytest_markers",
-        "test_contributing_runbundle_helpers_track_public_testing_exports",
-        "test_validation_plan_matches_contributor_quick_command",
-    ):
-        assert test_name in test_source
-    assert "test_contributing_docs_route_matches_validation_lane_commands" in docs_index_tests

@@ -2,7 +2,7 @@
 
 This page is the handwritten reference for every `EasyConfig` field, the
 grouped config objects, and the legacy top-level aliases. It is kept honest
-by `tests/test_docs_index.py::test_easyconfig_reference_tracks_config_fields`,
+by `tests/docs/test_route_contracts.py::test_easyconfig_reference_tracks_config_fields`,
 which compares each section against the live dataclass fields — the same
 pattern that keeps [public-api.md](../public-api.md) in sync with
 `easycat.__all__`.

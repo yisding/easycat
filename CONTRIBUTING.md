@@ -42,8 +42,8 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Install dev deps | `just sync` | `uv sync --group dev` |
 | Install an extra | `just sync-extra openai` | `uv sync --group dev --extra openai` |
 | Full test suite | `just test` | `uv run pytest` |
-| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
-| One file / node | `just test-one tests/test_cancel.py` | `uv run pytest tests/test_cancel.py` |
+| Fast parallel run | `just test-fast` | `uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
+| One file / node | `just test-one tests/core/test_cancel_token.py` | `uv run pytest tests/core/test_cancel_token.py` |
 | Lint | `just lint` | `uv run ruff check .` |
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
@@ -51,7 +51,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations` |
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
-| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"` |
+| Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
 | Validate (socket) | `just validate-socket` | `uv run easycat validate socket` |
 | Validate (stress) | `just validate-stress` | `uv run easycat validate stress` |
@@ -70,15 +70,15 @@ in the `justfile`, then re-run the script.
 <!-- BEGIN auto:guard-commands format=table -->
 | Docs guard | `just` recipe | Raw command |
 | --- | --- | --- |
-| Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/test_install_guidance.py tests/test_docs_index.py tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
-| Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/test_docs_index.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/test_install_guidance.py::test_teaching_ladder_prerequisites_run_doctor_after_setup tests/test_install_guidance.py::test_teaching_chapter_key_prerequisites_run_doctor tests/test_install_guidance.py::test_teaching_provider_key_setup_names_required_extras` |
-| Guard examples README, support files, script smoke checks, and docs-route hints | `just guard-examples` | `uv run pytest tests/test_examples.py tests/test_docs_index.py::test_examples_docs_route_matches_examples_fast_path` |
-| Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py` |
-| Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/test_docs_index.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py && uv run pytest tests/test_install_guidance.py -k 'agent_guide or agent_guides or claude_'` |
-| Guard validation workflow docs, validation reference docs, and validate CLI behavior | `just guard-validation` | `uv run pytest tests/test_docs_index.py::test_validation_docs_route_matches_validation_workflow_commands tests/test_docs_index.py::test_validation_workflow_command_hints_are_locally_valid tests/test_docs_index.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate.py tests/cli/test_latency_validation.py` |
-| Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix | `just guard-contracts` | `uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py` |
-| Guard operator docs, deployment guide, observability docs, journal CLI, and durability | `just guard-ops` | `uv run pytest tests/test_docs_index.py::test_deployment_docs_route_matches_docker_commands tests/test_docs_index.py::test_observability_docs_route_matches_journal_cli_entry_points tests/test_docs_index.py::test_journal_durability_docs_route_matches_inspection_commands tests/test_examples.py::test_docker_compose_binds_ws_port_to_loopback_and_requires_token tests/test_examples.py::test_docker_guide_serves_browser_client_from_localhost tests/test_examples.py::test_docker_env_secret_file_is_ignored_but_templates_are_allowed tests/test_examples.py::test_docker_guide_tracks_default_dockerfile_extras tests/test_examples.py::test_dockerfile_default_extras_cover_ws_server_golden_path tests/test_examples.py::test_docker_provider_swap_guidance_uses_known_extras_and_easyconfig tests/test_observability.py tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py` |
-| Guard maintained Markdown links, anchors, and docs-route Markdown targets | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/test_docs_index.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
+| Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes | `just guard-docs` | `uv run pytest tests/test_quickstart_e2e.py tests/test_command_hints.py tests/install/test_install_guidance.py tests/docs tests/test_public_api.py tests/test_llms_txt.py tests/test_regen_guard_commands.py tests/cli/test_app.py tests/cli/test_json_schema.py` |
+| Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py` |
+| Guard examples README, support files, script smoke checks, and docs-route hints | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path` |
+| Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
+| Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py tests/install/test_agent_guides.py` |
+| Guard validation workflow docs, validation reference docs, and validate CLI behavior | `just guard-validation` | `uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py` |
+| Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix | `just guard-contracts` | `uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing` |
+| Guard operator docs, deployment guide, observability docs, journal CLI, and durability | `just guard-ops` | `uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py` |
+| Guard maintained Markdown links, anchors, and docs-route Markdown targets | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 <!-- END auto:guard-commands -->
 
 > `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`
@@ -153,7 +153,7 @@ managed virtualenv. Each slice writes a JSON + JUnit report under
 
 | Slice | Command | Marker selection |
 | --- | --- | --- |
-| `quick` | `uv run easycat validate quick` | not integration_socket / live / slow / stress / flaky |
+| `quick` | `uv run easycat validate quick` | not integration_socket / live / external / contract / slow / stress / flaky |
 | `socket` | `uv run easycat validate socket` | integration_socket, not live, not flaky |
 | `stress` | `uv run easycat validate stress` | stress, not live, not flaky |
 | `contracts` | `uv run easycat validate contracts` | contract, not live, not flaky |
@@ -182,7 +182,10 @@ collection. The full list lives in `pyproject.toml` under
   fake providers, subprocesses, or filesystem state.
 - `integration_socket` — needs localhost socket bind/connect (auto-skipped
   where the sandbox forbids binding; see `tests/conftest.py`).
-- `integration_live` — needs live API keys and optional provider extras.
+- `integration_live` — needs live provider/API endpoints, API keys, and
+  optional provider extras.
+- `integration_external` — needs external local binaries, SDKs, or services
+  without live provider API credentials.
 - `slow` — long end-to-end tests; opt in with `-m slow`.
 - `contract` — provider / protocol / bridge contract tests.
 - `latency` — latency measurement or SLO tests.
@@ -204,11 +207,13 @@ offline contract tests with each extra's real SDK installed.
 
 ### Provider / surface pairing (enforced)
 
-`tests/_marker_lint.py` requires that any test marked `contract`,
-`integration_live`, or `latency` declares **both** a provider marker
+`tests/_marker_lint.py` requires that provider/surface-scoped tests marked
+`contract`, `integration_live`, or `latency` declare **both** a provider marker
 (`provider_*` or `provider("name")`) **and** a surface marker (`surface_*`).
-Declaring one without the other fails collection with a pointer to the
-missing side. This keeps the validation matrix honest.
+Bare `integration_live` also fails collection; use `integration_external` for
+local binaries/SDKs/services that do not call live provider APIs. Declaring one
+side without the other fails collection with a pointer to the missing side.
+This keeps the validation matrix honest.
 
 ## Flaky-quarantine policy
 
@@ -323,7 +328,7 @@ EasyCat uses **registries**, not inheritance. To add a provider:
    (add `--json` for the same run inside the standard CLI envelope:
    `uv run easycat validate contracts --json`),
    `uv run pytest tests/contracts`, and
-   `uv run pytest tests/integration/test_provider_contract_matrix.py`.
+   `uv run pytest tests/contracts/test_provider_session_matrix.py`.
 
 ## What's expected on a PR
 

@@ -804,7 +804,7 @@ units they care to expose.
 
 ### T2A.9: Test Migration (Bridge-Side)
 
-- [x] All `tests/agents/` pass unmodified (bridge construction,
+- [x] All `tests/integrations/agents/` pass unmodified (bridge construction,
   turn execution without interruption)
 - [x] Bridge-specific tests added in this workstream (see
   Verification) cover: construction, `invoke()` end-to-end
@@ -933,7 +933,7 @@ units they care to expose.
 > **MCP pass-through ACs (`EasyCatConfig(mcp_servers=[...])`,
 > per-bridge forwarding, mock + filesystem integration tests)
 > live in Workstream 2B AC2B.9.**
-- [x] **AC2.12** All existing `tests/agents/` and `tests/session/`
+- [x] **AC2.12** All existing `tests/integrations/agents/` and `tests/session/`
   tests pass without modification.
 - [x] **AC2.13** `FrameworkStateSnapshot` values are JSON-safe,
   secret-safe, and contain no raw framework handles or credentials.
@@ -1031,7 +1031,7 @@ units they care to expose.
 | AC2.8 | New test `test_pydantic_ai_committable_flag_during_stream` — observes the execution cursor at four points in a turn (idle, model streaming, between tool calls, after final output) and asserts `committable` flips correctly. |
 | AC2.10 | Grep-based test `test_no_easycat_native_tool_code` — asserts zero matches in `src/easycat/` for `@tool`, `@easycat_tool`, `@register_*`, `class .*Registry`, `class .*Router`, `class ToolRegistry`, `class MCPClient`, or `def register_tool`. |
 | AC2.11 | New test `test_auto_adapt_agent_bridge_selection` — passes in synthetic duck-typed objects and asserts the correct bridge is constructed: `openai_agents.Agent` → `OpenAIAgentsBridge`; `pydantic_ai.Agent` → `PydanticAIBridge` Agent mode; object with `on_user_turn(text)` → `GenericWorkflowBridge`; object with `on_user_turn(text, *, recorder)` → `GenericWorkflowBridge` (signature inspection routes to deep mode internally). Separate sub-tests: `pydantic_graph.Graph` raises `BridgeInputError` naming the explicit `PydanticAIBridge(graph=..., state_factory=..., initial_node_factory=...)` constructor; realtime-API-shaped object raises `BridgeInputError` pointing the user at the provider SDK. |
-| AC2.12 | `uv run pytest tests/agents/ tests/session/` exits 0. |
+| AC2.12 | `uv run pytest tests/integrations/agents/ tests/session/` exits 0. |
 | AC2.13 | New test `test_framework_state_snapshot_is_safe_and_serializable` — exports a snapshot from each bridge, asserts JSON serialization succeeds and no banned secret-bearing fields or raw framework objects are present. |
 | AC2.14 | Migration note include before/after examples covering bridge construction, `auto_adapt_agent()`, and any config-field changes introduced by this workstream. |
 | AC2.15 | Grep-based test `test_no_realtime_bridge_surface` — asserts zero matches in `src/easycat/integrations/`, `src/easycat/stages/`, `src/easycat/session/`, and `src/easycat/runtime/` for `RealtimeBridge`, `realtime_session`, or `RealtimeStage`. The existing `src/easycat/stt/openai_realtime_provider.py` is allowed (it is a chained STT provider that happens to use the Realtime API's websocket transport) but must not be imported from outside the STT layer. |

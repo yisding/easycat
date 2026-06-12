@@ -51,7 +51,7 @@ no VAD endpoint, and a turn that errored before synthesis has no TTS byte.
 
 These are the defaults that *add waiting time* on the response path. Each
 value below is asserted against the code by a guard test
-(`tests/test_observability.py`), so this table cannot silently drift.
+(`tests/observability/test_docs.py`), so this table cannot silently drift.
 
 | Default | Value | Where it waits | Tuning guidance |
 | --- | --- | --- | --- |

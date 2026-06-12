@@ -132,7 +132,7 @@ a codebase with one debugging model: the journal.
     everything from `src/easycat/integrations/agents/` plus a
     module-level `DeprecationWarning`.
 - [x] Verify the shims behave identically to the pre-conversion
-  files by running the pre-existing `tests/agents/` suite
+  files by running the migrated `tests/integrations/agents/` suite
   unmodified against them. Any test failure blocks the
   conversion and points at a missing re-export.
 - [x] Add `DeprecationWarning` to every public symbol in

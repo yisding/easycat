@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from http import HTTPStatus
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
     WebSocketTransportConfig,
+    run_websocket_config_server,
     serve_websocket_config_sessions,
     serve_websocket_sessions,
 )
@@ -75,6 +77,7 @@ async def test_serve_websocket_sessions_disables_compression(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration_socket
 async def test_serve_websocket_sessions_manages_session_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
     unused_tcp_port_factory: Callable[[], int],
@@ -110,6 +113,163 @@ async def test_serve_websocket_sessions_manages_session_lifecycle(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration_socket
+async def test_serve_websocket_sessions_rejects_unauthorized_before_session_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, auth_token="secret-token"),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
+            async with websockets.connect(f"ws://127.0.0.1:{port}"):
+                pass
+
+        assert exc_info.value.response.status_code == HTTPStatus.UNAUTHORIZED
+        assert sessions == []
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
+async def test_serve_websocket_sessions_accepts_bearer_token(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, auth_token="secret-token"),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(
+            f"ws://127.0.0.1:{port}",
+            additional_headers={"Authorization": "Bearer secret-token"},
+        ):
+            assert sessions
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
+async def test_serve_websocket_sessions_accepts_query_token(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, auth_token="secret-token"),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(f"ws://127.0.0.1:{port}/voice?token=secret-token"):
+            assert sessions
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
+async def test_serve_websocket_sessions_closes_extra_client_at_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, max_sessions=1),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(f"ws://127.0.0.1:{port}"):
+            assert sessions
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+
+            async with websockets.connect(f"ws://127.0.0.1:{port}") as extra_client:
+                await asyncio.wait_for(extra_client.wait_closed(), timeout=1)
+                assert extra_client.close_code == 1013
+                assert extra_client.close_reason == "Server is at the configured session limit"
+
+            assert len(sessions) == 1
+        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
 async def test_serve_websocket_config_sessions_builds_connection_transport(
     monkeypatch: pytest.MonkeyPatch,
     unused_tcp_port_factory: Callable[[], int],
@@ -158,3 +318,63 @@ async def test_serve_websocket_config_sessions_builds_connection_transport(
     finally:
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
+
+
+def test_run_websocket_config_server_delegates_with_env_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    transport_config = WebSocketTransportConfig(max_pending_chunks=7)
+
+    def config_factory(_transport: WebSocketConnectionTransport) -> dict[str, object]:
+        return {"agent": object()}
+
+    async def fake_serve_websocket_config_sessions(
+        config_factory_arg: Callable[[WebSocketConnectionTransport], object],
+        config_arg: WebSocketSessionServerConfig,
+        *,
+        transport_config: WebSocketTransportConfig | None = None,
+        runtime_feedback: bool = True,
+        announce: bool = True,
+    ) -> None:
+        calls.append(
+            {
+                "config_factory": config_factory_arg,
+                "config": config_arg,
+                "transport_config": transport_config,
+                "runtime_feedback": runtime_feedback,
+                "announce": announce,
+            }
+        )
+
+    monkeypatch.setenv("EASYCAT_WS_HOST", "0.0.0.0")
+    monkeypatch.setenv("EASYCAT_WS_PORT", "9876")
+    monkeypatch.setenv("EASYCAT_WS_TOKEN", "env-token")
+    monkeypatch.setenv("EASYCAT_WS_MAX_SESSIONS", "4")
+    monkeypatch.setattr(
+        websocket_module,
+        "serve_websocket_config_sessions",
+        fake_serve_websocket_config_sessions,
+    )
+
+    run_websocket_config_server(
+        config_factory,
+        transport_config=transport_config,
+        runtime_feedback=False,
+        announce=False,
+    )
+
+    assert calls == [
+        {
+            "config_factory": config_factory,
+            "config": WebSocketSessionServerConfig(
+                host="0.0.0.0",
+                port=9876,
+                auth_token="env-token",
+                max_sessions=4,
+            ),
+            "transport_config": transport_config,
+            "runtime_feedback": False,
+            "announce": False,
+        }
+    ]
