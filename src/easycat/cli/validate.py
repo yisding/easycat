@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, TextIO
 
 import typer
 from rich.markup import escape
 
-from easycat.cli._output import emit_command_error, emit_json, json_envelope, stdout_console
+from easycat.cli._output import (
+    emit_command_error,
+    emit_json,
+    json_envelope,
+    stderr_console,
+    stdout_console,
+)
 from easycat.validation.latency import LatencyMode
 from easycat.validation.runner import (
+    ValidationRunResult,
     run_latency_validation,
     run_live_validation,
     run_release_validation,
@@ -27,6 +34,7 @@ validate_app = typer.Typer(
 _ARTIFACTS_DIR_HELP = (
     "Validation artifact root directory; writes runs/<id>/report.json and latest.json."
 )
+_SHOW_OUTPUT_HELP = "Also print captured validation stdout/stderr while keeping artifacts."
 
 
 def _print_literal(line: str) -> None:
@@ -41,6 +49,7 @@ def _run_slice(
     junit: Path | None,
     artifacts_dir: Path,
     junit_prefix: str | None,
+    show_output: bool,
 ) -> None:
     result = run_validation_slice(
         slice_name,
@@ -49,6 +58,9 @@ def _run_slice(
         junit_path=junit,
         junit_prefix=junit_prefix,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -67,6 +79,159 @@ def _run_slice(
         )
 
     raise typer.Exit(result.exit_code)
+
+
+def _stream_validation_output(
+    result: ValidationRunResult,
+    *,
+    json_output: bool,
+    include_child_reports: bool = False,
+) -> None:
+    streamed_paths: set[Path] = set()
+    stdout_log = _artifact_path(result, "stdout")
+    stderr_log = _artifact_path(result, "stderr")
+    _stream_artifact_logs(
+        stdout_log,
+        stderr_log,
+        json_output=json_output,
+        streamed_paths=streamed_paths,
+    )
+
+    if not include_child_reports:
+        return
+
+    for report_path in _child_report_paths(result):
+        payload = _read_validation_report(report_path)
+        if payload is None:
+            continue
+        _stream_artifact_logs(
+            _payload_artifact_path(payload, "stdout"),
+            _payload_artifact_path(payload, "stderr"),
+            json_output=json_output,
+            streamed_paths=streamed_paths,
+        )
+
+
+def _stream_artifact_logs(
+    stdout_log: Path | None,
+    stderr_log: Path | None,
+    *,
+    json_output: bool,
+    streamed_paths: set[Path],
+) -> None:
+    if stdout_log is not None and stdout_log.exists():
+        target = stderr_console.file if json_output else stdout_console.file
+        _write_log_once(target, stdout_log, streamed_paths=streamed_paths)
+    if stderr_log is not None and stderr_log.exists():
+        _write_log_once(stderr_console.file, stderr_log, streamed_paths=streamed_paths)
+
+
+def _artifact_path(result: ValidationRunResult, name: str) -> Path | None:
+    artifact = result.run.artifacts.get(name)
+    if artifact is None:
+        for check in result.run.checks:
+            artifact = check.artifacts.get(name)
+            if artifact is not None:
+                break
+    if artifact is None:
+        return None
+    return Path(artifact.path)
+
+
+def _child_report_paths(result: ValidationRunResult) -> list[Path]:
+    parent_reports = {
+        _path_key(path)
+        for path in (
+            result.report_path,
+            _artifact_path(result, "report"),
+            _artifact_path(result, "requested_report"),
+        )
+        if path is not None
+    }
+    paths: list[Path] = []
+    seen: set[Path] = set(parent_reports)
+
+    def append_report(path: Path) -> None:
+        key = _path_key(path)
+        if key in seen:
+            return
+        seen.add(key)
+        paths.append(path)
+
+    for check in result.run.checks:
+        for artifact in check.artifacts.values():
+            if artifact.kind == "validation_report":
+                append_report(Path(artifact.path))
+
+    for name, artifact in result.run.artifacts.items():
+        if name in {"report", "requested_report"}:
+            continue
+        if artifact.kind == "validation_report":
+            append_report(Path(artifact.path))
+
+    return paths
+
+
+def _read_validation_report(path: Path) -> dict[str, object] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _payload_artifact_path(payload: dict[str, object], name: str) -> Path | None:
+    path = _named_payload_artifact_path(payload.get("artifacts"), name)
+    if path is not None:
+        return path
+
+    checks = payload.get("checks")
+    if not isinstance(checks, list):
+        return None
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        path = _named_payload_artifact_path(check.get("artifacts"), name)
+        if path is not None:
+            return path
+    return None
+
+
+def _named_payload_artifact_path(artifacts: object, name: str) -> Path | None:
+    if not isinstance(artifacts, dict):
+        return None
+    artifact = artifacts.get(name)
+    if not isinstance(artifact, dict):
+        return None
+    path = artifact.get("path")
+    return Path(str(path)) if path else None
+
+
+def _write_log_once(target: TextIO, path: Path, *, streamed_paths: set[Path]) -> None:
+    key = _path_key(path)
+    if key in streamed_paths:
+        return
+    streamed_paths.add(key)
+    _write_log(target, path.read_text(encoding="utf-8"))
+
+
+def _path_key(path: Path) -> Path:
+    return path.resolve(strict=False)
+
+
+def _write_log(target: TextIO, text: str) -> None:
+    if not text:
+        return
+    target.write(text)
+    if not text.endswith("\n"):
+        target.write("\n")
+    target.flush()
 
 
 @validate_app.command()
@@ -91,6 +256,13 @@ def quick(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run deterministic local validation for normal PR work."""
     _run_slice(
@@ -100,6 +272,7 @@ def quick(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -125,6 +298,13 @@ def socket(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run localhost socket integration validation."""
     _run_slice(
@@ -134,6 +314,7 @@ def socket(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -159,6 +340,13 @@ def stress(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run local stress validation and saturation-signal capture."""
     _run_slice(
@@ -168,6 +356,7 @@ def stress(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -193,6 +382,13 @@ def contracts(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run offline provider, protocol, and bridge contract validation."""
     _run_slice(
@@ -202,6 +398,7 @@ def contracts(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -241,6 +438,10 @@ def latency(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run live latency validation and write structured latency artifacts."""
     if smoke and sweep:
@@ -262,6 +463,9 @@ def latency(
         require_samples=True if require_samples else None,
         baseline_path=baseline,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -312,6 +516,10 @@ def live(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run live provider canaries and emit capability reports."""
     result = run_live_validation(
@@ -322,6 +530,9 @@ def live(
         artifacts_dir=artifacts_dir,
         report_path=report,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -378,6 +589,10 @@ def release(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Build, install, and run the strict release validation gate."""
     if latency_smoke and latency_sweep:
@@ -399,6 +614,13 @@ def release(
         surfaces=surface,
         latency_mode=mode,
     )
+
+    if show_output:
+        _stream_validation_output(
+            result,
+            json_output=json_output,
+            include_child_reports=True,
+        )
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"

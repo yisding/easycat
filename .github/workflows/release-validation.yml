@@ -98,7 +98,7 @@ jobs:
           EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
           EASYCAT_VALIDATION_TEST_PATHS: ${{ github.workspace }}/tests
         run: |
-          "$RELEASE_VENV/bin/easycat" validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-quick"
+          "$RELEASE_VENV/bin/easycat" validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-quick" --show-output
       - name: Run installed wheel stress validation
         working-directory: ${{ runner.temp }}
         env:
@@ -106,7 +106,7 @@ jobs:
           EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
           EASYCAT_VALIDATION_TEST_PATHS: ${{ github.workspace }}/tests
         run: |
-          "$RELEASE_VENV/bin/easycat" validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-stress"
+          "$RELEASE_VENV/bin/easycat" validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "release-stress" --show-output
       - name: Release flaky quarantine collection
         working-directory: ${{ runner.temp }}
         env:
@@ -120,7 +120,7 @@ jobs:
           EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
           EASYCAT_VALIDATION_TEST_ROOT: ${{ github.workspace }}/tests
         run: |
-          "$RELEASE_VENV/bin/easycat" validate live --release --provider openai --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+          "$RELEASE_VENV/bin/easycat" validate live --release --provider openai --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Release latency sweep
         if: env.OPENAI_API_KEY != ''
         working-directory: ${{ runner.temp }}
@@ -129,7 +129,7 @@ jobs:
           EASYCAT_VALIDATION_PYTEST_COMMAND: ${{ env.RELEASE_VENV }}/bin/python -m pytest
           EASYCAT_VALIDATION_TEST_ROOT: ${{ github.workspace }}/tests
         run: |
-          "$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+          "$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Verify release validation reports
         run: |
           uv run --python 3.12 python - <<'PY'

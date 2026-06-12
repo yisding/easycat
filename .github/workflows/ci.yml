@@ -61,7 +61,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev --python ${{ matrix.python-version }}
-      - run: uv run --python ${{ matrix.python-version }} easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "quick-py${{ matrix.python-version }}"
+      - run: uv run --python ${{ matrix.python-version }} easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "quick-py${{ matrix.python-version }}" --show-output
       - name: Upload quick validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -122,7 +122,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
-      - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "socket-py3.12"
+      - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "socket-py3.12" --show-output
       - name: Upload socket validation artifacts
         if: always()
         uses: actions/upload-artifact@v4

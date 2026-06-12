@@ -73,10 +73,27 @@ def test_validation_ci_uploads_reports_junit_and_logs_even_on_failure() -> None:
 
     assert text.count("if: always()") >= 2
     assert "actions/upload-artifact@v4" in text
+    assert "--show-output" in text
     assert "validation-report" in text
     assert "junit.xml" in text
     assert "stdout.log" in text
     assert "stderr.log" in text
+
+
+def test_validation_ci_shows_pytest_output_in_github_logs() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+    quick_steps = workflow["jobs"]["test"]["steps"]
+    socket_steps = workflow["jobs"]["integration-socket"]["steps"]
+
+    quick_run = next(
+        step for step in quick_steps if "easycat validate quick" in str(step.get("run", ""))
+    )
+    socket_run = next(
+        step for step in socket_steps if "easycat validate socket" in str(step.get("run", ""))
+    )
+
+    assert "--show-output" in quick_run["run"]
+    assert "--show-output" in socket_run["run"]
 
 
 def test_ci_has_package_build_smoke() -> None:
@@ -153,6 +170,7 @@ def test_nightly_validation_workflow_skeleton_exists() -> None:
     assert "validate quick" in text
     assert "validate socket" in text
     assert "validate stress" in text
+    assert "--show-output" in text
     assert "flaky-quarantine:" in text
     assert "latency:" in text
     assert "live-canaries:" in text
@@ -191,6 +209,7 @@ def test_release_validation_workflow_skeleton_exists() -> None:
     assert '"$RELEASE_VENV/bin/easycat" validate stress' in text
     assert '"$RELEASE_VENV/bin/easycat" validate live --release' in text
     assert '"$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples' in text
+    assert "--show-output" in text
     assert 'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky' in text
     assert "unexpected release validation skips" in text
     assert "environment: release-validation" in text
