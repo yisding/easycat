@@ -31,7 +31,8 @@ class EnergyVAD:
         self._speaking = False
 
     async def process(self, chunk: AudioChunk) -> AsyncIterator[Event]:
-        samples = array("h", chunk.data)
+        pcm16 = chunk.data[: len(chunk.data) - (len(chunk.data) % 2)]
+        samples = array("h", pcm16)
         rms = math.sqrt(sum(s * s for s in samples) / len(samples)) if samples else 0.0
         loud = rms >= self._config.threshold
         if loud and not self._speaking:
