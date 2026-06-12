@@ -39,6 +39,10 @@ class TestCallingHoursEnforcement:
         # Area code 999 is not in the mapping — should block conservatively.
         assert not check_calling_hours("+19995551234")
 
+    def test_malformed_timezone_override_blocks_call(self) -> None:
+        assert not check_calling_hours("+12125551234", timezone_override="/etc/passwd")
+        assert not check_calling_hours("+12125551234", timezone_override="../UTC")
+
     def test_non_nanp_number_does_not_resolve_timezone(self) -> None:
         # A non-US E.164 number (UK) must not be misrouted to a US timezone.
         assert lookup_timezone("+442012345678") is None

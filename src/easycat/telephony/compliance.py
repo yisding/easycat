@@ -121,8 +121,8 @@ def check_calling_hours(
         tz = ZoneInfo(tz_name)
         now = datetime.now(tz)
         return start_hour <= now.hour < end_hour
-    except KeyError:
-        logger.warning("Unknown timezone %r for %s, blocking call", tz_name, phone)
+    except (KeyError, ValueError):
+        logger.warning("Invalid or unknown timezone %r for %s, blocking call", tz_name, phone)
         return False
 
 
