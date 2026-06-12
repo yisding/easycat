@@ -233,6 +233,51 @@ async def test_session_start_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_session_concurrent_start_calls_share_single_startup():
+    class BlockingConnectTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+            self.connect_entered = asyncio.Event()
+            self.allow_connect = asyncio.Event()
+            self.receive_started = asyncio.Event()
+            self.allow_receive_exit = asyncio.Event()
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            self.connect_entered.set()
+            await self.allow_connect.wait()
+            await super().connect()
+
+        async def receive_audio(self):
+            self.receive_started.set()
+            await self.allow_receive_exit.wait()
+            if False:
+                yield _make_chunk()
+
+    transport = BlockingConnectTransport()
+    session = Session(_full_config(transport=transport))
+
+    first_start = asyncio.create_task(session.start())
+    second_start = asyncio.create_task(session.start())
+
+    await transport.connect_entered.wait()
+    await asyncio.sleep(0)
+    assert transport.connect_calls == 1
+
+    transport.allow_connect.set()
+    await asyncio.gather(first_start, second_start)
+
+    assert session.is_running
+    assert transport.connect_calls == 1
+    assert session._audio_router.pipeline_task is not None
+    assert session._audio_router.outbound_task is not None
+
+    transport.allow_receive_exit.set()
+    await session.stop(force=True)
+
+
+@pytest.mark.asyncio
 async def test_session_start_rolls_back_after_connect_failure():
     class FlakyTransport(FakeTransport):
         def __init__(self) -> None:

@@ -239,6 +239,7 @@ class Session:
 
         # ── Lifecycle / turn-pointer state ───────────────────────
         self._is_running = False
+        self._start_lock = asyncio.Lock()
         self._closed = False
         self._stopping = False
         self._observability_active = False
@@ -936,6 +937,11 @@ class Session:
 
     async def start(self) -> None:
         """Initialize providers and begin the audio receive loop."""
+        async with self._start_lock:
+            await self._start_locked()
+
+    async def _start_locked(self) -> None:
+        """Start the session while the startup lock is held."""
         if self._runtime_mode == "text_session":
             raise RuntimeError(
                 "start() is not supported for text sessions. Use send_text() instead."
