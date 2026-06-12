@@ -342,6 +342,48 @@ async def test_buffered_transport_delivery_unscoped_falls_back_to_active_turn() 
 
 
 @pytest.mark.asyncio
+async def test_buffered_transport_delivery_unscoped_is_dropped_on_shared_bus() -> None:
+    bus = EventBus()
+    victim = Session(
+        _full_config(
+            transport=ReportingTransport(),
+            event_bus=bus,
+            session_id="victim-session",
+        )
+    )
+    other = Session(
+        _full_config(
+            transport=ReportingTransport(),
+            event_bus=bus,
+            session_id="other-session",
+        )
+    )
+    victim._turn = TurnContext("victim-turn", CancelToken())
+    other._turn = TurnContext("other-turn", CancelToken())
+
+    seen: list[AudioOut] = []
+    bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    await bus.emit(TransportAudioDelivered(chunk=_make_chunk(16)))
+
+    assert victim._turn.audio_bytes_sent == 0
+    assert other._turn.audio_bytes_sent == 0
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_buffered_transport_delivery_unscoped_idle_session_is_dropped() -> None:
+    session = Session(_full_config(transport=ReportingTransport()))
+
+    seen: list[AudioOut] = []
+    session.event_bus.subscribe(AudioOut, lambda event: seen.append(event))
+
+    await session.event_bus.emit(TransportAudioDelivered(chunk=_make_chunk(16)))
+
+    assert seen == []
+
+
+@pytest.mark.asyncio
 async def test_failed_send_does_not_emit_audio_out_or_count_bytes() -> None:
     class RejectingTransport(FakePlaybackAckTransport):
         async def send_audio(self, chunk: AudioChunk) -> bool:

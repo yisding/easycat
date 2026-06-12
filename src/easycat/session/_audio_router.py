@@ -385,16 +385,20 @@ class AudioRouter:
                 turn = active
         elif active is not None and event.turn_id is not None and active.id == event.turn_id:
             turn = active
-        elif event.session_id is None and event.turn_id is None and event.turn_ref is None:
+        elif (
+            active is not None
+            and event.session_id is None
+            and event.turn_id is None
+            and event.turn_ref is None
+            and self._accept_unscoped_audio_delivery()
+        ):
             # Fully-unscoped callback: a custom reporting transport that
             # declares ``reports_audio_delivery = True`` and emits a bare
             # ``TransportAudioDelivered(chunk=...)`` with no ownership
-            # metadata.  Fall back to the active turn so single-session /
-            # private-bus apps keep counting bytes and emitting AudioOut.
-            # The shared-bus protections above still hold: a stamped foreign
-            # ``session_id`` returns via the foreign-session guard, and an
-            # unscoped foreign ``TurnContext`` returns because its ``turn_ref``
-            # would be set.
+            # metadata.  Only a private single-router bus can safely attribute
+            # that callback to this session; shared buses must require stamped
+            # session/turn metadata so one delivery cannot be relabeled by every
+            # session router subscribed to the bus.
             turn = active
         else:
             return
@@ -402,6 +406,26 @@ class AudioRouter:
         turn_id = event.turn_id or (turn.id if turn is not None else None)
         await self._handle_audio_delivery(event.chunk, turn)
         await self._emit(AudioOut(chunk=event.chunk, turn_id=turn_id))
+
+    def _accept_unscoped_audio_delivery(self) -> bool:
+        """Return whether a bare delivery callback is attributable to this router.
+
+        ``TransportAudioDelivered`` is an internal bus event, and every Session
+        installs one ``AudioRouter.on_audio_delivered`` handler.  A delivery
+        event with no session id, turn id, or turn reference has no ownership
+        proof, so it is safe to accept only when this router is the sole audio
+        delivery router on the bus.  App-level observers do not affect this
+        check; a second router means the bus is shared across sessions and bare
+        delivery callbacks must be dropped instead of relabeled.
+        """
+        handlers = getattr(self._event_bus, "_handlers", {}).get(TransportAudioDelivered, ())
+        routers = [
+            handler
+            for handler in handlers
+            if getattr(handler, "__func__", None) is AudioRouter.on_audio_delivered
+            and isinstance(getattr(handler, "__self__", None), AudioRouter)
+        ]
+        return len(routers) == 1 and routers[0] == self.on_audio_delivered
 
     # ── Internal: ingress loop ─────────────────────────────────
 
