@@ -458,6 +458,26 @@ def test_check_journal_writable_ok(
     assert str(tmp_path) in result.detail
 
 
+def test_check_journal_writable_does_not_follow_predictable_probe_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, empty_env: None
+) -> None:
+    """A malicious CWD probe symlink must not clobber its target."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("EASYCAT_DATA_DIR", raising=False)
+    journal_dir = tmp_path / ".easycat" / "journals"
+    journal_dir.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me\n", encoding="utf-8")
+    probe = journal_dir / ".doctor-write-probe"
+    probe.symlink_to(victim)
+
+    result = doctor_module.check_journal_writable()
+
+    assert result.status == "ok", result.detail
+    assert victim.read_text(encoding="utf-8") == "keep me\n"
+    assert probe.is_symlink()
+
+
 def test_journal_dir_matches_runtime_data_dir_contract(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
