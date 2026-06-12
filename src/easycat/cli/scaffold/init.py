@@ -161,8 +161,13 @@ _TEMPLATE_CATALOG: dict[str, _TemplateCatalogMetadata] = {
         "transport": "Twilio",
         "framework": "OpenAI Agents",
         "best_for": "Phone-call prototypes and Twilio Media Streams servers.",
-        "required_env": ("OPENAI_API_KEY", "TWILIO_STREAM_URL"),
-        "optional_env": ("TWILIO_WS_PORT", "TWILIO_STREAM_TOKEN_SECRET"),
+        "required_env": ("OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"),
+        "optional_env": (
+            "TWILIO_WS_PORT",
+            "TWILIO_STREAM_TOKEN_SECRET",
+            "TWILIO_MAX_SESSIONS",
+            "TRUST_PROXY_HEADERS",
+        ),
         "description": "Phone-call voice agent with a Twilio WebSocket server.",
     },
     "webrtc-browser": {
