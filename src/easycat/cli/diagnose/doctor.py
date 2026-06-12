@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -381,9 +382,14 @@ def check_journal_writable() -> CheckResult:
             code="EASYCAT_E207",
             fix=f"mkdir -p {path} && chmod u+w {path}",
         )
-    probe = path / ".doctor-write-probe"
+    probe: Path | None = None
     try:
-        probe.write_bytes(b"ok")
+        fd, probe_name = tempfile.mkstemp(prefix=".doctor-write-probe-", dir=path)
+        probe = Path(probe_name)
+        try:
+            os.write(fd, b"ok")
+        finally:
+            os.close(fd)
     except OSError as exc:
         return CheckResult(
             name="journal_writable",
@@ -393,10 +399,11 @@ def check_journal_writable() -> CheckResult:
             fix=f"chmod u+w {path}",
         )
     finally:
-        try:
-            probe.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                pass
     return CheckResult(name="journal_writable", status="ok", detail=str(path))
 
 
