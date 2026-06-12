@@ -16,6 +16,30 @@ from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 logger = logging.getLogger(__name__)
 
 
+def _scalar_identifier(value: Any) -> str:
+    """Return a safe string identifier for untrusted SSE IDs.
+
+    Remote Responses API-compatible endpoints provide these values as JSON.
+    Only JSON scalars can be safely normalized for use as dictionary keys and
+    bridge event IDs; arrays/objects are malformed and are treated as missing.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, int | float | bool):
+        return str(value)
+    return ""
+
+
+def _response_identifier(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = _scalar_identifier(data.get(key))
+        if value:
+            return value
+    return ""
+
+
 def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
     """Parse a single SSE ``data:`` line into ``(event_type, data_dict)``.
 
@@ -74,7 +98,7 @@ def translate_sse_event(
         item = data.get("item", {})
         if item.get("type") == "function_call":
             name = item.get("name", "")
-            call_id = item.get("call_id", "") or item.get("id", "") or ""
+            call_id = _response_identifier(item, "call_id", "id")
             if pending is not None and call_id:
                 pending[call_id] = name
             recorder.record_tool_call(phase="start", name=name, call_id=call_id)
@@ -83,7 +107,7 @@ def translate_sse_event(
 
     if event_type == "response.function_call_arguments.delta":
         delta = data.get("delta", "")
-        call_id = data.get("call_id", "") or data.get("item_id", "") or ""
+        call_id = _response_identifier(data, "call_id", "item_id")
         if delta:
             name = pending.get(call_id, "") if pending is not None else ""
             recorder.record_tool_call(phase="delta", name=name, call_id=call_id)
@@ -99,7 +123,7 @@ def translate_sse_event(
             return None
 
         if item_type == "function_call_output":
-            call_id = item.get("call_id", "") or item.get("id", "") or ""
+            call_id = _response_identifier(item, "call_id", "id")
             result_str = str(item.get("output", ""))
             name = pending.pop(call_id, "") if pending is not None else ""
             recorder.record_tool_call(phase="result", name=name, call_id=call_id)

@@ -776,6 +776,25 @@ class TestSSETranslator:
         assert ev.kind == "tool_delta"
         assert ev.call_id == "c1"
 
+    def test_tool_delta_ignores_non_scalar_call_id_for_pending_lookup(self):
+        journal = InMemoryRingBuffer(capacity=1000)
+        rec = _recorder(journal)
+        pending = {"safe": "get_weather"}
+
+        ev = translate_sse_event(
+            "response.function_call_arguments.delta",
+            {"delta": '{"x":', "call_id": ["malformed"]},
+            rec,
+            pending,
+        )
+
+        assert ev is not None
+        assert ev.kind == "tool_delta"
+        assert ev.call_id == ""
+        assert pending == {"safe": "get_weather"}
+        tool_records = [r for r in journal.read() if r.name == "tool_phase_changed"]
+        assert tool_records[-1].data["call_id"] == ""
+
     def test_function_call_added(self):
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
@@ -798,6 +817,28 @@ class TestSSETranslator:
         tool_records = [r for r in records if r.name == "tool_phase_changed"]
         assert len(tool_records) == 1
         assert tool_records[0].data["phase"] == "start"
+
+    def test_function_call_added_ignores_non_scalar_pending_key(self):
+        rec = _recorder()
+        pending = {}
+
+        ev = translate_sse_event(
+            "response.output_item.added",
+            {
+                "item": {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "call_id": {"malformed": "object"},
+                }
+            },
+            rec,
+            pending,
+        )
+
+        assert ev is not None
+        assert ev.kind == "tool_started"
+        assert ev.call_id == ""
+        assert pending == {}
 
     def test_function_call_done_returns_none(self):
         rec = _recorder()
@@ -825,6 +866,29 @@ class TestSSETranslator:
         assert ev is not None
         assert ev.kind == "tool_result"
         assert ev.result == "result"
+
+    def test_function_call_output_ignores_non_scalar_pending_key(self):
+        rec = _recorder()
+        pending = {"safe": "get_weather"}
+
+        ev = translate_sse_event(
+            "response.output_item.done",
+            {
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": ["malformed"],
+                    "output": "result",
+                }
+            },
+            rec,
+            pending,
+        )
+
+        assert ev is not None
+        assert ev.kind == "tool_result"
+        assert ev.call_id == ""
+        assert ev.result == "result"
+        assert pending == {"safe": "get_weather"}
 
     def test_response_completed_returns_none(self):
         rec = _recorder()
