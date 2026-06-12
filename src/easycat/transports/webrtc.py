@@ -224,11 +224,12 @@ class WebRTCTransportConfig:
         ``EASYCAT_WEBRTC_STATS_PATH`` when set so validation runs can advertise
         the artifact path without custom app wiring.
     auth_token:
-        Optional shared secret required by ``/offer`` and ``/stats``.  Clients
-        present it as ``Authorization: Bearer <token>`` or a ``?token=`` query
-        parameter (the bundled client forwards ``?token=`` from the page URL
-        automatically).  Mirrors the WebSocket/docker ``EASYCAT_WS_TOKEN``
-        security default — pair it with a non-loopback ``host``.
+        Optional shared secret required by ``/config``, ``/offer``, and
+        ``/stats``.  Clients present it as ``Authorization: Bearer <token>``
+        or a ``?token=`` query parameter (the bundled client forwards
+        ``?token=`` from the page URL automatically).  Mirrors the
+        WebSocket/docker ``EASYCAT_WS_TOKEN`` security default — pair it with
+        a non-loopback ``host``.
     stats_max_records:
         Maximum JSONL records written to ``stats_path`` by this process.
     stats_max_file_bytes:
@@ -745,6 +746,7 @@ class WebRTCTransport(AudioQueueMixin):
         app.router.add_get("/", self._handle_root)
         app.router.add_options("/offer", self._handle_cors_preflight)
         app.router.add_options("/stats", self._handle_cors_preflight)
+        app.router.add_options("/config", self._handle_cors_preflight)
 
         # Serve static files — resolve the bundled-client sentinel first.
         static_dir = self._config.static_dir
@@ -1098,14 +1100,15 @@ class WebRTCTransport(AudioQueueMixin):
     async def _handle_config(self, request: Any) -> Any:
         """Return ICE server configuration for browser clients.
 
-        This endpoint is intentionally unauthenticated so the bundled demo
-        client can bootstrap easily.  TURN usernames and credentials stay
-        hidden unless ``expose_ice_credentials`` is enabled; deployments often
-        configure long-lived TURN secrets, and returning them from an
-        explicitly cross-origin endpoint would allow arbitrary browser clients
-        to reuse the relay.
+        When ``auth_token`` is configured, this endpoint requires the same
+        shared-token authorization as ``/offer`` and ``/stats`` so TURN
+        credentials are not exposed outside the signaling auth boundary.
+        TURN usernames and credentials stay hidden unless
+        ``expose_ice_credentials`` is enabled.
         """
         web = self._web
+        if not self._request_authorized(request):
+            return self._unauthorized_response(request)
         return web.Response(
             content_type="application/json",
             text=json.dumps(
