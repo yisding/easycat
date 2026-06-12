@@ -57,7 +57,7 @@ from easycat.cli._output import (
     success,
     warn,
 )
-from easycat.debug._turn_timeline import record_wall_ns, turn_waterfall
+from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
 from easycat.debug.bundle import (
     BundleError,
     BundleInUseError,
@@ -122,9 +122,9 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         record_count += 1
         if not session_id and record.get("session_id"):
             session_id = str(record["session_id"])
-        turn_id = record.get("turn_id")
-        if turn_id:
-            turn_ids.add(str(turn_id))
+        turn_id = safe_turn_id(record.get("turn_id"))
+        if turn_id is not None:
+            turn_ids.add(turn_id)
         wall_ns = record_wall_ns(record)
         if wall_ns is not None:
             if first_wall_ns is None:

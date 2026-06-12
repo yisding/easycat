@@ -52,12 +52,26 @@ def record_wall_ns(record: Mapping[str, Any]) -> int | None:
     return wall if isinstance(wall, int) else None
 
 
+def safe_turn_id(value: Any) -> str | None:
+    """Return a valid journal turn id or ``None`` for malformed input.
+
+    Debug bundles can come from untrusted sources and are decoded from raw
+    JSON.  JSON arrays and objects are unhashable in Python, so never use a
+    raw ``turn_id`` value as a dictionary key before validating its shape.
+    Runtime-generated turn ids are non-empty strings; malformed or missing
+    values are ignored by timeline rollups.
+    """
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Roll up per-turn timing for the waterfall view."""
-    by_turn: dict[str | None, dict[str, Any]] = {}
-    order: list[str | None] = []
+    by_turn: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
     for r in records:
-        turn_id = r.get("turn_id")
+        turn_id = safe_turn_id(r.get("turn_id"))
         if turn_id is None:
             continue
         bucket = by_turn.get(turn_id)
@@ -139,8 +153,8 @@ def build_timeline(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     by_turn: dict[str, dict[str, Any]] = {}
     for r in records:
-        turn_id = r.get("turn_id")
-        if not turn_id:
+        turn_id = safe_turn_id(r.get("turn_id"))
+        if turn_id is None:
             continue
         bucket = by_turn.setdefault(
             turn_id,
@@ -247,8 +261,8 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
     """
     state: dict[str, dict[str, int | None]] = {}
     for r in records:
-        turn_id = r.get("turn_id")
-        if not turn_id:
+        turn_id = safe_turn_id(r.get("turn_id"))
+        if turn_id is None:
             continue
         wall = record_wall_ns(r)
         if wall is None:
@@ -308,6 +322,7 @@ __all__ = [
     "STAGE_ORDER",
     "build_timeline",
     "record_wall_ns",
+    "safe_turn_id",
     "summarise_turns",
     "turn_milestones",
     "turn_waterfall",
