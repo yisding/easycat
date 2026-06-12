@@ -87,6 +87,21 @@ def _sounddevice_available() -> bool:
     return True
 
 
+async def _connect_or_skip(transport: LocalTransport) -> None:
+    """Connect, skipping when sounddevice is installed but no device exists.
+
+    ``sounddevice.PortAudioError`` does not subclass ``OSError``, so catch it
+    explicitly (it is importable here because callers gate on
+    ``_sounddevice_available()`` first).
+    """
+    import sounddevice
+
+    try:
+        await transport.connect()
+    except (OSError, sounddevice.PortAudioError):
+        pytest.skip("No audio device available (CI/container environment)")
+
+
 # ── LocalTransport tests ─────────────────────────────────────────
 
 
@@ -102,10 +117,7 @@ class TestLocalTransport:
                 await transport.connect()
             assert not transport.is_connected
         else:
-            try:
-                await transport.connect()
-            except OSError:
-                pytest.skip("No audio device available (CI/container environment)")
+            await _connect_or_skip(transport)
             assert transport.is_connected
             await transport.disconnect()
             assert not transport.is_connected
@@ -152,7 +164,7 @@ class TestLocalTransport:
         # Tight queue so even a single split chunk overflows.
         config = LocalTransportConfig(max_pending_out_chunks=1)
         transport = LocalTransport(config)
-        await transport.connect()
+        await _connect_or_skip(transport)
         try:
             # A 4800-byte chunk splits into ~8 frames; after the first one
             # the output queue is full and the remainder is dropped.
@@ -176,7 +188,7 @@ class TestLocalTransport:
         if not _sounddevice_available():
             pytest.skip("sounddevice not available")
         transport = LocalTransport()
-        await transport.connect()
+        await _connect_or_skip(transport)
 
         chunks: list[AudioChunk] = []
 
@@ -196,7 +208,7 @@ class TestLocalTransport:
         if not _sounddevice_available():
             pytest.skip("sounddevice not available")
         transport = LocalTransport()
-        await transport.connect()
+        await _connect_or_skip(transport)
 
         # Default: 16kHz, 20ms frames → 320 samples → 640 bytes per frame.
         # Send a 4800-byte chunk (typical TTS size) — should produce 8 pieces.
