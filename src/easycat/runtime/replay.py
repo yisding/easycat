@@ -329,7 +329,12 @@ def check_provider_versions(
         bundle_version = _stringify_version(bundle_version_raw)
         # A ``None`` installed version means the provider could not report
         # one — fold it into the explicit ``UNKNOWN`` sentinel policy.
-        installed_str = _stringify_version(installed_version) or _UNKNOWN_VERSION
+        # Preserve explicit empty-string versions so captured and installed
+        # custom providers that report ``""`` still compare equal.
+        installed_version_str = _stringify_version(installed_version)
+        installed_str = (
+            _UNKNOWN_VERSION if installed_version_str is None else installed_version_str
+        )
         if bundle_version is None:
             # Installed provider not captured in bundle.  Determinism
             # can't be guaranteed against a version we never recorded, so
