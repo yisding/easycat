@@ -268,11 +268,12 @@ class TestReconnectingWebSocket:
 
     async def test_recv_iter_reconnects_on_connection_closed(self):
         """recv_iter should reconnect and keep yielding after a transient drop."""
+        callback = AsyncMock()
         config = ReconnectConfig(base_delay=0.01, max_retries=2, jitter_factor=0.0)
         ws = ReconnectingWebSocket(
             url="wss://test.com",
             config=config,
-            on_reconnect=AsyncMock(),  # Required for recv_iter to attempt reconnection
+            on_reconnect=callback,  # Required for recv_iter to attempt reconnection
         )
 
         close_frame = websockets.frames.Close(1006, "abnormal")
@@ -306,6 +307,46 @@ class TestReconnectingWebSocket:
                 messages.append(msg)
 
         assert messages == ["msg1", "msg2", "msg3", "msg4"]
+        callback.assert_awaited_once()
+
+    async def test_recv_iter_limits_successful_reconnect_cycles(self):
+        """Successful reconnects are capped to prevent accept/drop churn."""
+        callback = AsyncMock()
+        config = ReconnectConfig(base_delay=0.01, max_retries=1, jitter_factor=0.0)
+        ws = ReconnectingWebSocket(
+            url="wss://test.com",
+            config=config,
+            on_reconnect=callback,
+        )
+
+        close_frame = websockets.frames.Close(1006, "abnormal")
+
+        class DroppingConnection:
+            close_code = None
+            close = AsyncMock()
+
+            def __aiter__(self):
+                return self._iter()
+
+            async def _iter(self):
+                yield "msg"
+                raise websockets.exceptions.ConnectionClosed(close_frame, None)
+
+        ws._ws = DroppingConnection()
+
+        with patch(
+            "easycat.reconnecting_ws.websockets.connect",
+            new_callable=AsyncMock,
+            return_value=DroppingConnection(),
+        ) as connect_mock:
+            messages = []
+            async for msg in ws.recv_iter():
+                messages.append(msg)
+
+        assert messages == ["msg", "msg"]
+        connect_mock.assert_awaited_once()
+        callback.assert_awaited_once()
+        assert ws._ws is None
 
     async def test_send_waits_for_in_progress_reconnect(self):
         """A send during a recv_iter-driven reconnect blocks for the new socket.
