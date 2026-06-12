@@ -60,7 +60,7 @@ from easycat.providers import (
 )
 from easycat.testing.recorder import RecordingAgentRecorder
 from easycat.tts.input import coerce_tts_input
-from easycat.validation.redaction import contains_unredacted_sensitive_text
+from easycat.validation.redaction import contains_unredacted_sensitive_text, redact_text
 
 __all__ = [
     "AgentBridgeContractSuite",
@@ -142,6 +142,16 @@ class ContractSuite:
         return items
 
 
+def _version_info_key_label(key: str) -> str:
+    """Return a safe key label for contract failure messages."""
+    return redact_text(key)
+
+
+def _fail_version_info_contract(message: str) -> None:
+    """Fail without pytest assertion introspection rendering provider metadata."""
+    pytest.fail(message, pytrace=False)
+
+
 class ProviderContractSuite(ContractSuite):
     """Adds the cross-surface ``version_info()`` contract shared by all providers."""
 
@@ -149,15 +159,29 @@ class ProviderContractSuite(ContractSuite):
         """``version_info()`` returns str→str metadata free of secrets."""
         assert isinstance(provider, VersionedProvider)
         info = provider.version_info()
-        assert isinstance(info, dict), "version_info() must return a dict"
-        assert info.get("provider"), "version_info() must carry a stable 'provider' name"
+        if not isinstance(info, dict):
+            del info
+            _fail_version_info_contract("version_info() must return a dict")
+
+        has_provider_name = bool(info.get("provider"))
+        if not has_provider_name:
+            del info
+            _fail_version_info_contract("version_info() must carry a stable 'provider' name")
+
         for key, value in info.items():
-            assert isinstance(key, str), f"version_info() key {key!r} is not a str"
-            assert isinstance(value, str), f"version_info()[{key!r}] is not a str"
-            assert not contains_unredacted_sensitive_text(value), (
-                f"version_info()[{key!r}] leaks sensitive text; providers must never "
-                "report credentials, signed URLs, or request ids through version_info()"
-            )
+            if not isinstance(key, str):
+                del info, key, value
+                _fail_version_info_contract("version_info() contains a non-string key")
+            key_label = _version_info_key_label(key)
+            if not isinstance(value, str):
+                del info, key, value
+                _fail_version_info_contract(f"version_info()[{key_label!r}] is not a str")
+            if contains_unredacted_sensitive_text(value):
+                del info, key, value
+                _fail_version_info_contract(
+                    f"version_info()[{key_label!r}] leaks sensitive text; providers must never "
+                    "report credentials, signed URLs, or request ids through version_info()"
+                )
 
 
 class STTProviderContractSuite(ProviderContractSuite):

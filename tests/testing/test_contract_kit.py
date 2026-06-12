@@ -287,13 +287,32 @@ async def test_stt_suite_rejects_stream_without_final_transcript() -> None:
 
 
 async def test_version_info_test_rejects_leaked_secret_values() -> None:
+    leaked_secret = "sk-" + "a" * 20
+
     class _LeakySTT(_KitSTT):
         def version_info(self) -> dict[str, str]:
-            return {"provider": "kit-stt", "session": "sk-" + "a" * 20}
+            return {"provider": "kit-stt", "session": leaked_secret}
 
     suite = _KitSTTSuite()
-    with pytest.raises(AssertionError, match="sensitive"):
+    with pytest.raises(pytest.fail.Exception, match="sensitive") as exc_info:
         await suite.test_version_info_is_a_redacted_string_mapping(_LeakySTT())
+
+    assert leaked_secret not in str(exc_info.value)
+
+
+async def test_version_info_test_rejects_missing_provider_without_echoing_mapping() -> None:
+    leaked_secret = "sk-" + "b" * 20
+
+    class _MissingProviderSTT(_KitSTT):
+        def version_info(self) -> dict[str, str]:
+            return {"api_key": leaked_secret}
+
+    suite = _KitSTTSuite()
+    with pytest.raises(pytest.fail.Exception, match="stable 'provider' name") as exc_info:
+        await suite.test_version_info_is_a_redacted_string_mapping(_MissingProviderSTT())
+
+    assert leaked_secret not in str(exc_info.value)
+    assert "api_key" not in str(exc_info.value)
 
 
 async def test_tts_suite_rejects_stream_without_audio() -> None:
