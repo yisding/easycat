@@ -75,6 +75,15 @@ def test_list_templates(cli: CliRunner) -> None:
         assert f"Repo create: uv run easycat init my-agent --template {template}" in result.stdout
 
 
+def test_easycat_version_floor_strips_local_version_for_ordered_specifiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(init_module.importlib.metadata, "version", lambda name: "0.1.0+local")
+
+    assert init_module._easycat_version_floor() == "0.1.0"
+    assert init_module._base_requirement("openai-agents") == "easycat[openai-agents,local]>=0.1.0"
+
+
 def test_template_catalog_renders_bracketed_text_literally() -> None:
     base_requirement = f"easycat[sdk[beta]]>={init_module._easycat_version_floor()}"
     catalog = [
