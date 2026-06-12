@@ -709,14 +709,23 @@ def _extra_env_vars(cfg: InitConfig) -> str:
     return "\n" + "\n".join(extra) + "\n"
 
 
+def _escape_surrogates(value: str) -> str:
+    """Escape surrogate code points so rendered files stay UTF-8 encodable."""
+    return "".join(
+        f"\\u{ord(char):04x}" if 0xD800 <= ord(char) <= 0xDFFF else char for char in value
+    )
+
+
 def _python_string_literal_contents(value: str) -> str:
     """Render escaped contents for a double-quoted Python string literal.
 
     ``ensure_ascii=False`` keeps non-ASCII characters (em-dashes, accents,
     CJK, …) intact in the generated ``agent.py`` instead of emitting
     ``\\uXXXX`` escapes, while still escaping ``\\``, ``"``, and newlines.
+    JSON also accepts lone surrogate escapes, which cannot be written raw as
+    UTF-8, so escape only those surrogate code points after rendering.
     """
-    return json.dumps(value, ensure_ascii=False)[1:-1]
+    return _escape_surrogates(json.dumps(value, ensure_ascii=False))[1:-1]
 
 
 def _substitutions(
