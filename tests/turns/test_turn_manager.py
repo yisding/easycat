@@ -108,6 +108,46 @@ async def test_silence_timeout_transitions_to_processing():
 
 
 @pytest.mark.asyncio
+async def test_bot_started_from_turn_ended_handler_does_not_cancel_dispatch():
+    """bot_started_speaking must not cancel its own silence-timeout dispatch."""
+    bus = EventBus()
+    config = TurnManagerConfig(end_of_turn_silence_ms=10)
+    tm = TurnManager(bus, config=config)
+    lifecycle: list[str] = []
+    second_turn_ended_ran = asyncio.Event()
+
+    async def start_bot_from_turn_ended(event: TurnEnded) -> None:
+        assert asyncio.current_task() is tm._silence_timer_task
+        lifecycle.append("turn_ended_first_start")
+        await tm.bot_started_speaking()
+        lifecycle.append("turn_ended_first_done")
+
+    async def later_turn_ended_handler(event: TurnEnded) -> None:
+        lifecycle.append("turn_ended_second")
+        second_turn_ended_ran.set()
+
+    async def bot_started_handler(event: BotStartedSpeaking) -> None:
+        lifecycle.append("bot_started")
+
+    bus.subscribe(TurnEnded, start_bot_from_turn_ended)
+    bus.subscribe(TurnEnded, later_turn_ended_handler)
+    bus.subscribe(BotStartedSpeaking, bot_started_handler)
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+
+    await asyncio.wait_for(second_turn_ended_ran.wait(), timeout=1.0)
+
+    assert lifecycle == [
+        "turn_ended_first_start",
+        "bot_started",
+        "turn_ended_first_done",
+        "turn_ended_second",
+    ]
+    assert tm.state == TurnManagerState.BOT_SPEAKING
+
+
+@pytest.mark.asyncio
 async def test_speech_resumes_cancels_timeout():
     """Speech resuming during UserPaused should cancel the silence timer."""
     bus = EventBus()
