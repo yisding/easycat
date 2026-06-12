@@ -22,21 +22,9 @@
 > pipeline shape exposed to users. `EasyConfig` + `create_session` +
 > `session.on(EventType, …)` remain identical to today.
 >
-> **Phase docs:**
->
-> - `session-decomp-phase-0-turn-context.md` — TurnContext extension,
->   method-signature migration, `_journaled_task` promotion, attribute
->   ownership ledger
-> - `session-decomp-phase-1-stt-committer.md` — STT segment commit
->   scheduling
-> - `session-decomp-phase-2-audio-router.md` — transport ingress,
->   outbound drain, playback-mark accounting
-> - `session-decomp-phase-3-tts-scheduler.md` — TTS payload prep,
->   synthesis, sentence-pipelining hook
-> - `session-decomp-phase-4-cancel-orchestrator.md` — control-signal
->   propagation, barge-in policy, interruption notification
-> - `session-decomp-phase-5-turn-runner.md` — end-of-speech, streaming
->   agent loop, text-mode turn
+> **Historical note:** the old per-phase checklists were removed because the
+> collaborators have landed and the unchecked task lists had drifted. This
+> overview is the retained decomposition record.
 
 ## Why this is not the same as Workstream 3
 

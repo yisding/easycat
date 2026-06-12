@@ -3,7 +3,7 @@
 Uses duck-typed mock objects so the real ``langchain-core`` package is
 not required at test time.  The translator module and bridge both rely
 only on attribute access, so tests mirror the event shapes described in
-``plan/peripheral-langchain-langgraph-bridge.md`` and the real
+``plan/peripherals/peripheral-langchain-langgraph-bridge.md`` and the real
 LangChain ``astream_events(version="v2")`` contract.
 """
 

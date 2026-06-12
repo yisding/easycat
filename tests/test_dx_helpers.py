@@ -388,7 +388,9 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
     from easycat.errors import EasyCatError, register
     from easycat.helpers import _wired_summary, run
 
-    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
+        encoding="utf-8"
+    )
     line_refs = re.findall(r"`?[\w./-]+\.(?:py|md):\d+(?:-\d+)?`?", plan)
 
     assert not line_refs, "DX onramp plan uses brittle file-line refs: " + ", ".join(line_refs)
@@ -438,7 +440,9 @@ def test_dx_onramp_plan_uses_stable_current_symbols() -> None:
 
 
 def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence() -> None:
-    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
+        encoding="utf-8"
+    )
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     example = (REPO_ROOT / "examples" / "openai_agents_voice.py").read_text(encoding="utf-8")
     scaffold = (
@@ -493,7 +497,9 @@ def test_dx_onramp_plan_marks_canonical_hello_world_landed_with_current_evidence
 def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> None:
     from easycat.session._session import Session
 
-    plan = (REPO_ROOT / "plan" / "dx" / "onramp-zen-dx-plan.md").read_text(encoding="utf-8")
+    plan = (REPO_ROOT / "plan" / "peripherals" / "onramp-zen-dx-plan.md").read_text(
+        encoding="utf-8"
+    )
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     agents = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     claude = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
