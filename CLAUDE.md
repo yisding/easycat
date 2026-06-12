@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+For coding work, use this file and [AGENTS.md](AGENTS.md) as the repository
+guides. The root [llms.txt](llms.txt) file is a generated machine-readable docs
+route map, and [llms-full.txt](llms-full.txt) is the same map expanded with
+command hints for automation; they are not the primary coding instructions.
+
 ## Project Overview
 
 EasyCat is a Python voice bot framework that runs idiomatic agents and

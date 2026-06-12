@@ -15,9 +15,10 @@ docs map that links back to this ladder. Use
 `uv run easycat docs --audience learners` to narrow that map to learner-facing
 routes, or `uv run easycat docs --audience learners --json` when automation
 needs that smaller route map.
-Coding agent? Start at [llms.txt](../../llms.txt) or run
-`uv run easycat explain json-schema` (`uv run easycat doctor --json` emits
-first-run environment checks as parseable rows).
+Coding agent? Use the root [AGENTS.md](../../AGENTS.md) for repository coding
+rules; use [llms.txt](../../llms.txt) for machine-readable docs route discovery
+or run `uv run easycat explain json-schema` (`uv run easycat doctor --json`
+emits first-run environment checks as parseable rows).
 
 > **Start here:** [`00-hello-audio/`](./00-hello-audio/).
 

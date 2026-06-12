@@ -205,7 +205,8 @@ or `easycat docs --audience maintainers` for architecture and maintenance
 routes; the `maintainers` and `operators` filters also include compound labels
 such as `provider maintainers`, `release maintainers`, and
 `operators and maintainers`.
-Coding agent? Start at [llms.txt](llms.txt) or run
+Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
+[llms.txt](llms.txt) for machine-readable docs route discovery or run
 `easycat explain json-schema`.
 `easycat explain json-schema` documents the standard `--json` envelope. It covers
 the docs route map,

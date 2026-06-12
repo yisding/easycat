@@ -577,7 +577,12 @@ def test_examples_readme_fastest_path_verifies_environment_before_running() -> N
 
     assert "uv run easycat docs" in intro
     assert "maintained docs map" in intro
-    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized_intro
+    assert (
+        "Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding rules"
+    ) in normalized_intro
+    assert "[llms.txt](../llms.txt) for machine-readable docs route discovery" in (
+        normalized_intro
+    )
     assert "when a script or coding agent" not in normalized_intro
     assert "uv run easycat explain json-schema" in intro
     assert "uv run easycat doctor --json" in intro

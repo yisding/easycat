@@ -110,7 +110,10 @@ def test_teaching_ladder_index_points_to_docs_and_preflight() -> None:
     assert "maintained docs map" in normalized
     assert "narrow that map to learner-facing routes" in normalized
     assert "automation needs that smaller route map" in normalized
-    assert "Coding agent? Start at [llms.txt](../../llms.txt)" in normalized
+    assert (
+        "Coding agent? Use the root [AGENTS.md](../../AGENTS.md) for repository coding rules"
+    ) in normalized
+    assert "[llms.txt](../../llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
     assert "uv run easycat explain json-schema" in readme
     assert "uv run easycat doctor" in readme
@@ -416,7 +419,12 @@ def test_chapter_15_cli_section_lists_registered_commands() -> None:
         "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
         "before running those hints"
     ) in normalized_cli_section
-    assert "Coding agent? Start at [llms.txt](../../../llms.txt)" in normalized_cli_section
+    assert (
+        "Coding agent? Use the root [AGENTS.md](../../../AGENTS.md) for repository coding rules"
+    ) in normalized_cli_section
+    assert "[llms.txt](../../../llms.txt) for machine-readable docs route discovery" in (
+        normalized_cli_section
+    )
     assert "when a script or coding agent" not in normalized_cli_section
     assert "`uv run easycat doctor --env-file .env`" in cli_section
     assert "`uv run easycat doctor --json`" in cli_section

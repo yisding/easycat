@@ -144,7 +144,10 @@ def test_docs_index_points_to_docs_command() -> None:
     assert "uv run easycat docs --audience app-builders" in text
     assert "uv run easycat docs --audience operators" in text
     assert "uv run easycat docs --audience maintainers" in text
-    assert "Coding agent? Start at [llms.txt](../llms.txt)" in normalized
+    assert (
+        "Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding rules"
+    ) in normalized
+    assert "[llms.txt](../llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
     assert "repository path chooser" in normalized
     assert "installed app environment" in text

@@ -57,7 +57,17 @@ Effort: S/M/L. Impact: H/M/L. Ordered within each pillar by impact-per-effort.
 
 #### L1. Split human docs from machine docs: one-line pointer + generated `llms.txt` — *M / H*
 **Why.** Near-identical "--json when a script or coding agent…" paragraphs open every human-facing doc — README, `docs/README.md`, teaching READMEs, examples README, CONTRIBUTING, `tests/contracts/README.md`, DURABILITY.md, and all six scaffold template READMEs — diluting the few commands a human needs. The machine audience is better served by a dedicated generated index.
-**What.** Replace the boilerplate everywhere with one line ("Coding agent? Start at `llms.txt` or `uv run easycat explain json-schema`."). **In the same change**, flip the guard tests that pin the old phrases verbatim (`test_docs_index.py`, `test_contributing.py`, `test_examples.py`, `test_templates.py`, `test_ladder_index.py`) so five guard lanes stay green and now enforce the slimmer convention. Add `scripts/regen_llms_txt.py` (mirroring `regen_teaching_chapters.py`, with `--check`) generating `llms.txt` and `llms-full.txt` from the same source as `easycat docs --json`; add a `--check` guard test wired into `just guard-docs` plus the raw-fallback lists in CLAUDE.md/CONTRIBUTING.
+**What.** Replace the boilerplate everywhere with one line that points coding
+agents to `AGENTS.md` / `CLAUDE.md` for coding rules and to `llms.txt` for
+machine-readable docs route discovery. **In the same change**, flip the guard
+tests that pin the old phrases verbatim (`test_docs_index.py`,
+`test_contributing.py`, `test_examples.py`, `test_templates.py`,
+`test_ladder_index.py`) so five guard lanes stay green and now enforce the
+slimmer convention. Add `scripts/regen_llms_txt.py` (mirroring
+`regen_teaching_chapters.py`, with `--check`) generating `llms.txt` and
+`llms-full.txt` from the same source as `easycat docs --json`; add a `--check`
+guard test wired into `just guard-docs` plus the raw-fallback lists in
+CLAUDE.md/CONTRIBUTING.
 
 #### L2. Per-turn latency waterfall in the CLI plus a "latency defaults" docs page — *M / H*
 **Why.** Latency attribution is the #1 cited production pain, and Pipecat lost reputation to a single hidden default. EasyCat's journal already records the spans and the debugger already renders a waterfall — but the CLI doesn't expose it, and `TurnManagerConfig.end_of_turn_silence_ms = 1000` is exactly the kind of undocumented default that bites.

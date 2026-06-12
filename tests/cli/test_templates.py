@@ -756,7 +756,8 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     assert "uv run easycat init --list-templates" in next_steps
     assert "uv run easycat init --list-templates --json" in next_steps
     assert "uv run easycat explain json-schema" in next_steps
-    assert "Coding agent? Start at EasyCat's" in normalized_next_steps
+    assert "Coding agent? Use this generated project's `AGENTS.md`" in (normalized_next_steps)
+    assert "machine-readable docs route discovery" in normalized_next_steps
     assert "[llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt)" in (
         normalized_next_steps
     )

@@ -155,7 +155,8 @@ def test_contributing_quick_start_points_to_docs_command() -> None:
     assert "maintained reader-facing map" in quick_start
     assert "narrow the map to contributor-facing routes" in normalized
     assert "automation needs that smaller route map" in normalized
-    assert "Coding agent? Start at [llms.txt](llms.txt)" in normalized
+    assert "Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules" in normalized
+    assert "[llms.txt](llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
     assert "scripts/regen_llms_txt.py" in quick_start
     assert "CLI and scaffold commands" in quick_start

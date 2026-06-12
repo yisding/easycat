@@ -488,8 +488,10 @@ Run easycat explain json-schema for CLI JSON.
   parseable operator-facing routes; `uv run easycat docs --json` emits the
   same route map with command hints and audience labels. Replace uppercase or
   angle-bracket placeholders such as `PATH` or `<session_id>` before running
-  those hints. Coding agent? Start at [llms.txt](../../../llms.txt) or run
-  `uv run easycat explain json-schema`.
+  those hints. Coding agent? Use the root
+  [AGENTS.md](../../../AGENTS.md) for repository coding rules; use
+  [llms.txt](../../../llms.txt) for machine-readable docs route discovery or
+  run `uv run easycat explain json-schema`.
 - **`uv run easycat explain <code>`** — looks up an error code in the
   registry (`src/easycat/cli/diagnose/explain.py`). When
   `EasyCatError` raises with `code="EASYCAT_E203"`, this is where

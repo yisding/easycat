@@ -108,7 +108,9 @@ uv run pytest
   `uv run easycat init --list-templates --json` when automation needs the
   template catalog. Replace uppercase or angle-bracket placeholders such as
   `PATH` or `<session_id>` before running those hints.
-  Coding agent? Start at EasyCat's
-  [llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt) or run
+  Coding agent? Use this generated project's `AGENTS.md` for local coding
+  rules; use EasyCat's
+  [llms.txt](https://github.com/yisding/easycat/blob/main/llms.txt) for
+  machine-readable docs route discovery or run
   `uv run easycat explain json-schema` for the JSON envelope and field
   contract.
