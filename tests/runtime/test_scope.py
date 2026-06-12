@@ -162,3 +162,61 @@ async def test_runtime_scope_drain_observes_completed_task_exceptions() -> None:
         await scope.drain("worker")
 
     assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_cancel_and_drain_preserves_caller_cancellation() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleanup_started = asyncio.Event()
+
+    async def stubborn_cancel_cleanup() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+
+    task = scope.create_task("worker", stubborn_cancel_cleanup())
+    await started.wait()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(scope.cancel_and_drain("worker"), timeout=0.01)
+
+    assert cleanup_started.is_set()
+    assert not scope.empty
+
+    release_cleanup.set()
+    await scope.cancel_and_drain("worker")
+
+    assert task.cancelled()
+    assert scope.empty
+
+
+@pytest.mark.asyncio
+async def test_runtime_scope_drain_preserves_caller_cancellation_without_cancelling_task() -> None:
+    scope = RuntimeScope()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait_for_release() -> str:
+        started.set()
+        await release.wait()
+        return "done"
+
+    task = scope.create_task("worker", wait_for_release())
+    await started.wait()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(scope.drain("worker"), timeout=0.01)
+
+    assert not task.cancelled()
+    assert not scope.empty
+
+    release.set()
+    await scope.drain("worker")
+
+    assert task.result() == "done"
+    assert scope.empty
