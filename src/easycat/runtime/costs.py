@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import ast
 import math
 from typing import Any
 
 COST_WARNING_FRACTION = 0.8
+_MAX_SESSION_COST_STRING_LENGTH = 64
 
 
 def finite_number(value: Any) -> float | None:
@@ -25,13 +25,15 @@ def max_session_cost_usd_from_snapshot(config_snapshot: dict[str, Any] | None) -
     if raw is None:
         return None
     if isinstance(raw, str):
+        if len(raw) > _MAX_SESSION_COST_STRING_LENGTH:
+            return None
+        raw = raw.strip()
+        if not raw:
+            return None
         try:
-            raw = ast.literal_eval(raw)
-        except (SyntaxError, ValueError):
-            try:
-                raw = float(raw)
-            except ValueError:
-                return None
+            raw = float(raw)
+        except ValueError:
+            return None
     limit = finite_number(raw)
     if limit is None or limit <= 0:
         return None
