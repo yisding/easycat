@@ -578,6 +578,7 @@ class CallScreeningDetector:
         self._screening_turns = 0
         self._started = False
         self._agent_timeout_task: asyncio.Task[None] | None = None
+        self._agent_timeout_fallback_started = False
 
     @property
     def state(self) -> ScreeningState:
@@ -635,6 +636,7 @@ class CallScreeningDetector:
         self._pending_screening = None
         self._accumulated_text = ""
         self._screening_turns = 0
+        self._agent_timeout_fallback_started = False
 
     def _cancel_agent_timeout(self) -> None:
         if self._agent_timeout_task and not self._agent_timeout_task.done():
@@ -652,6 +654,9 @@ class CallScreeningDetector:
             ``False`` if the fallback already executed (caller should skip
             synthesis to avoid a duplicate response).
         """
+        if self._agent_timeout_fallback_started:
+            return False
+
         cancelled_in_time = (
             self._agent_timeout_task is not None and not self._agent_timeout_task.done()
         )
@@ -722,6 +727,7 @@ class CallScreeningDetector:
             self._state = ScreeningState.RESPONDING
             # Start agent timeout BEFORE emitting so the fallback can fire
             # while EventBus.emit() awaits the (potentially slow) agent handler.
+            self._agent_timeout_fallback_started = False
             self._agent_timeout_task = asyncio.create_task(self._agent_timeout_fallback())
             await self._event_bus.emit(ScreeningResponse(text="", mode="agent"))
         elif self._screening_response:
@@ -736,6 +742,7 @@ class CallScreeningDetector:
             await asyncio.sleep(self._agent_timeout_s)
             # Only emit fallback if still in a state that expects a response.
             if self._state == ScreeningState.RESPONDING and self._screening_response:
+                self._agent_timeout_fallback_started = True
                 await self._event_bus.emit(
                     ScreeningResponse(text=self._screening_response, mode="static")
                 )
