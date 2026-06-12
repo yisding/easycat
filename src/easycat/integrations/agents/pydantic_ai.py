@@ -39,6 +39,8 @@ from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_HISTORY_KEY = "__default__"
+
 
 class PydanticAIBridge:
     """Bridge for ``pydantic_ai.Agent`` and ``pydantic_graph.Graph``.
@@ -75,6 +77,14 @@ class PydanticAIBridge:
         if agent is None and graph is None:
             raise BridgeInputError("Must pass either agent= or graph= to PydanticAIBridge")
 
+        self._agent: Any | None
+        self._graph: Any | None
+        self._state_factory: Callable[[], Any] | None
+        self._initial_node_factory: Callable[[str, Any], Any] | None
+        self._agents: list[Any] | None
+        self._state: Any
+        self._active_node: str | None
+
         if graph is not None:
             if state_factory is None or initial_node_factory is None:
                 raise BridgeInputError(
@@ -94,12 +104,12 @@ class PydanticAIBridge:
                 )
             self._mode = "graph"
             self._graph = graph
-            self._state_factory: Callable[[], Any] | None = state_factory
-            self._initial_node_factory: Callable[[str, Any], Any] | None = initial_node_factory
+            self._state_factory = state_factory
+            self._initial_node_factory = initial_node_factory
             self._agents = agents
-            self._agent: Any | None = None
-            self._state: Any = None
-            self._active_node: str | None = None
+            self._agent = None
+            self._state = None
+            self._active_node = None
         else:
             self._mode = "agent"
             self._agent = agent
@@ -114,8 +124,52 @@ class PydanticAIBridge:
         self._model_settings = model_settings
         self._mcp_servers = mcp_servers
         self._toolsets = toolsets
-        self._message_history: list[Any] = []
+        self._message_histories: dict[str, list[Any]] = {_DEFAULT_HISTORY_KEY: []}
+        self._graph_states: dict[str, Any] = {}
+        self._last_history_key = _DEFAULT_HISTORY_KEY
         self._last_output: Any = None
+
+    @property
+    def _message_history(self) -> list[Any]:
+        """Backward-compatible default-session message history view."""
+        return self._history_for_key(_DEFAULT_HISTORY_KEY)
+
+    @_message_history.setter
+    def _message_history(self, value: list[Any]) -> None:
+        self._set_history_for_key(_DEFAULT_HISTORY_KEY, value)
+        self._last_history_key = _DEFAULT_HISTORY_KEY
+
+    def _history_key_for_recorder(self, recorder: AgentRecorder | None) -> str:
+        if recorder is None:
+            return _DEFAULT_HISTORY_KEY
+        session_id = getattr(getattr(recorder, "context", None), "session_id", "")
+        if isinstance(session_id, str) and session_id.strip():
+            return session_id
+        return _DEFAULT_HISTORY_KEY
+
+    def _history_for_key(self, history_key: str) -> list[Any]:
+        return self._message_histories.setdefault(history_key, [])
+
+    def _set_history_for_key(self, history_key: str, history: list[Any]) -> None:
+        self._message_histories[history_key] = list(history)
+        self._last_history_key = history_key
+
+    def _graph_state_for_key(self, history_key: str) -> Any:
+        state = self._graph_states.get(history_key)
+        if state is None:
+            state_factory = self._state_factory
+            if state_factory is None:
+                raise BridgeConfigurationError("PydanticAIBridge is in agent mode (no graph set)")
+            state = state_factory()
+            self._graph_states[history_key] = state
+        self._state = state
+        return state
+
+    def _graph_state_for_key_if_present(self, history_key: str | None) -> Any | None:
+        state = self._graph_states.get(history_key or self._last_history_key)
+        if state is not None:
+            self._state = state
+        return state
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 
@@ -138,6 +192,7 @@ class PydanticAIBridge:
                 "mode": "graph",
                 "graph": type(self._graph).__name__ if self._graph else "",
                 "active_node": self._active_node,
+                "session_count": len(self._graph_states),
             }
             # State may be large — use artifact ref if needed.
             state_ref = None
@@ -160,7 +215,8 @@ class PydanticAIBridge:
             fields={
                 "mode": "agent",
                 "agent": _agent_name(self._agent),
-                "turn_count": len(self._message_history),
+                "turn_count": len(self._history_for_key(self._last_history_key)),
+                "session_count": len(self._message_histories),
             },
             kind="pydantic_ai_agent",
         )
@@ -173,30 +229,39 @@ class PydanticAIBridge:
         caused_by_signal_id: str | None = None,
     ) -> None:
         # Step 1: plan the mutation.
-        plan = self._plan_interruption(delivered_text, mode)
+        history_key = self._history_key_for_recorder(recorder)
+        self._last_history_key = history_key
+        plan = self._plan_interruption(delivered_text, mode, history_key)
         run_interruption_journal_protocol(
             plan,
             mode,
             recorder,
             caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
+            serialize_state=lambda: self._serialize_framework_state(history_key),
+            apply_mutation=lambda mutation_plan: self._apply_planned_mutation(
+                mutation_plan, history_key
+            ),
         )
 
-    def _serialize_framework_state(self) -> bytes:
+    def _serialize_framework_state(self, history_key: str | None = None) -> bytes:
         """Serialize message history for artifact storage."""
+        history = self._history_for_key(history_key or self._last_history_key)
         try:
-            return json.dumps(self._message_history, default=str).encode()
+            return json.dumps(history, default=str).encode()
         except (TypeError, ValueError):
             return b"[]"
 
-    def _plan_interruption(self, delivered_text: str, mode: CancellationMode) -> InterruptionPlan:
+    def _plan_interruption(
+        self, delivered_text: str, mode: CancellationMode, history_key: str | None = None
+    ) -> InterruptionPlan:
         replacement = delivered_text + "..." if delivered_text else ""
         mutation_kind = "interrupt_truncate"
         if self._mode == "graph":
             mutation_kind = "interrupt_truncate_graph"
-        pre_ref = f"pydantic-pre-{id(self._message_history):x}"
-        post_ref = f"pydantic-post-{id(self._message_history):x}"
+        history = self._history_for_key(history_key or self._last_history_key)
+        state = self._graph_state_for_key_if_present(history_key)
+        pre_ref = f"pydantic-pre-{id(history):x}"
+        post_ref = f"pydantic-post-{id(history):x}"
         return InterruptionPlan(
             mutation_kind=mutation_kind,
             pre_state_ref=pre_ref,
@@ -206,19 +271,23 @@ class PydanticAIBridge:
                 "mode": self._mode,
                 "use_custom_truncation": (
                     self._mode == "graph"
-                    and self._state is not None
-                    and hasattr(self._state, "truncate_last_assistant")
+                    and state is not None
+                    and hasattr(state, "truncate_last_assistant")
                 ),
                 "delivered_text": delivered_text,
             },
         )
 
-    def _apply_planned_mutation(self, plan: InterruptionPlan) -> None:
+    def _apply_planned_mutation(
+        self, plan: InterruptionPlan, history_key: str | None = None
+    ) -> None:
         instructions = plan.framework_instructions
         replacement = instructions["replacement"]
 
         if instructions.get("use_custom_truncation"):
-            self._state.truncate_last_assistant(instructions["delivered_text"])
+            state = self._graph_state_for_key_if_present(history_key)
+            if state is not None:
+                state.truncate_last_assistant(instructions["delivered_text"])
             return
 
         try:
@@ -226,7 +295,7 @@ class PydanticAIBridge:
         except ImportError:
             return
 
-        history = self._message_history
+        history = self._history_for_key(history_key or self._last_history_key)
         for i in range(len(history) - 1, -1, -1):
             msg = history[i]
             if isinstance(msg, ModelResponse):
@@ -240,7 +309,11 @@ class PydanticAIBridge:
                 break
 
     def reset(self) -> None:
-        self._message_history.clear()
+        for history in self._message_histories.values():
+            history.clear()
+        self._message_histories = {_DEFAULT_HISTORY_KEY: []}
+        self._graph_states.clear()
+        self._last_history_key = _DEFAULT_HISTORY_KEY
         self._last_output = None
         self._state = None
         self._active_node = None
@@ -269,7 +342,7 @@ class PydanticAIBridge:
             from pydantic_ai.messages import ModelResponse
         except ImportError:
             return
-        for msg in reversed(self._message_history):
+        for msg in reversed(self._history_for_key(self._last_history_key)):
             if not isinstance(msg, ModelResponse):
                 continue
             text_parts = [p for p in msg.parts if type(p).__name__ == "TextPart"]
@@ -296,7 +369,9 @@ class PydanticAIBridge:
         except ImportError:
             return
         try:
-            self._message_history.append(ModelRequest(parts=[SystemPromptPart(content=note)]))
+            self._history_for_key(self._last_history_key).append(
+                ModelRequest(parts=[SystemPromptPart(content=note)])
+            )
         except Exception:
             logger.debug("Failed to append interruption note to PydanticAI history", exc_info=True)
 
@@ -315,7 +390,10 @@ class PydanticAIBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
+        history_key = self._history_key_for_recorder(recorder)
+        self._last_history_key = history_key
         agent = self._require_agent()
+
         agent_cursor = ExecutionCursor(
             unit_id=f"agent-{uuid4().hex[:8]}",
             unit_kind=UnitKind.AGENT,
@@ -335,7 +413,9 @@ class PydanticAIBridge:
                 saved_mcp_servers = getattr(agent, "mcp_servers", None)
                 agent.mcp_servers = list(self._mcp_servers)
             if hasattr(agent, "iter"):
-                async for ev in self._stream_via_iter(turn_input, recorder, cancel_token):
+                async for ev in self._stream_via_iter(
+                    turn_input, recorder, cancel_token, history_key
+                ):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
                     elif ev.kind == "done":
@@ -343,7 +423,7 @@ class PydanticAIBridge:
                     yield ev
                 raw_output = self._last_output
             else:
-                async for ev in self._stream_via_run_stream(turn_input, cancel_token):
+                async for ev in self._stream_via_run_stream(turn_input, cancel_token, history_key):
                     if ev.kind == "text_delta":
                         accumulated += ev.text
                     yield ev
@@ -382,12 +462,13 @@ class PydanticAIBridge:
         turn_input: AgentTurnInput,
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
+        history_key: str,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Stream using ``agent.iter()`` with full event capture."""
         agent = self._require_agent()
         async with agent.iter(
             turn_input.text,
-            **self._agent_run_kwargs(agent.iter, turn_input),
+            **self._agent_run_kwargs(agent.iter, turn_input, history_key),
         ) as agent_run:
             interrupted = False
             async for node in agent_run:
@@ -414,19 +495,20 @@ class PydanticAIBridge:
                                 continue
                             yield mapped
 
-            self._message_history = await _run_new_messages(agent_run)
+            self._set_history_for_key(history_key, await _run_new_messages(agent_run))
             self._last_output = await _run_output(agent_run)
 
     async def _stream_via_run_stream(
         self,
         turn_input: AgentTurnInput,
         cancel_token: CancelToken | None,
+        history_key: str,
     ) -> AsyncIterator[AgentBridgeEvent]:
         """Fallback: stream text-only via ``agent.run_stream()``."""
         agent = self._require_agent()
         async with agent.run_stream(
             turn_input.text,
-            **self._agent_run_kwargs(agent.run_stream, turn_input),
+            **self._agent_run_kwargs(agent.run_stream, turn_input, history_key),
         ) as result:
             accumulated = ""
             async for full_text in result.stream_text():
@@ -437,7 +519,7 @@ class PydanticAIBridge:
                     yield AgentBridgeEvent(kind="text_delta", text=delta)
                 accumulated = full_text
 
-            self._message_history = await _run_new_messages(result)
+            self._set_history_for_key(history_key, await _run_new_messages(result))
             self._last_output = await _run_output(result)
 
     def _runtime_toolsets(self) -> list[Any] | None:
@@ -448,10 +530,10 @@ class PydanticAIBridge:
         return None
 
     def _agent_run_kwargs(
-        self, call: Callable[..., Any], turn_input: AgentTurnInput
+        self, call: Callable[..., Any], turn_input: AgentTurnInput, history_key: str | None = None
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
-            "message_history": self._message_history_for_turn(turn_input.context),
+            "message_history": self._message_history_for_turn(turn_input.context, history_key),
             "deps": self._deps,
             "model_settings": self._model_settings,
         }
@@ -461,8 +543,10 @@ class PydanticAIBridge:
                 kwargs["toolsets"] = list(runtime_toolsets)
         return kwargs
 
-    def _message_history_for_turn(self, context: list[dict[str, str]]) -> list[Any] | None:
-        history = list(self._message_history)
+    def _message_history_for_turn(
+        self, context: list[dict[str, str]], history_key: str | None = None
+    ) -> list[Any] | None:
+        history = list(self._history_for_key(history_key or self._last_history_key))
         context_messages = normalize_context_messages(context, own_history=bool(history))
         if not context_messages:
             return history or None
@@ -474,7 +558,10 @@ class PydanticAIBridge:
         return [*converted, *history]
 
     def _graph_iter(self, initial_input: Any, state: Any) -> Any:
-        graph_iter = self._graph.iter
+        graph = self._graph
+        if graph is None:
+            raise BridgeConfigurationError("PydanticAIBridge is in agent mode (no graph set)")
+        graph_iter = graph.iter
         kwargs: dict[str, Any] = {"state": state}
         if self._deps is not None and _supports_kwarg(graph_iter, "deps"):
             kwargs["deps"] = self._deps
@@ -500,15 +587,13 @@ class PydanticAIBridge:
         recorder: AgentRecorder,
         cancel_token: CancelToken | None,
     ) -> AsyncIterator[AgentBridgeEvent]:
-        state_factory = self._state_factory
+        history_key = self._history_key_for_recorder(recorder)
+        self._last_history_key = history_key
+
         initial_node_factory = self._initial_node_factory
-        if state_factory is None or initial_node_factory is None:
+        if initial_node_factory is None:
             raise BridgeConfigurationError("PydanticAIBridge is in agent mode (no graph set)")
-        if self._state is None:
-            state = state_factory()
-            self._state = state
-        else:
-            state = self._state
+        state = self._graph_state_for_key(history_key)
         initial_node = initial_node_factory(turn_input.text, state)
 
         # Install event handler on state for per-agent capture.
@@ -634,7 +719,9 @@ class PydanticAIBridge:
                 try:
                     from pydantic_ai.messages import ModelResponse, TextPart
 
-                    self._message_history = [ModelResponse(parts=[TextPart(content=accumulated)])]
+                    self._set_history_for_key(
+                        history_key, [ModelResponse(parts=[TextPart(content=accumulated)])]
+                    )
                 except ImportError:
                     pass
 

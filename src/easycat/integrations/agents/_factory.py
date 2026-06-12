@@ -324,8 +324,11 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
             RunnableBindingBase,
         )
     except ImportError:
-        RunnableBinding = ()
-        RunnableBindingBase = ()
+        runnable_binding_types: tuple[type[Any], ...] = ()
+        runnable_binding_base_types: tuple[type[Any], ...] = ()
+    else:
+        runnable_binding_types = (RunnableBinding,)
+        runnable_binding_base_types = (RunnableBindingBase,)
     # Walk outer→inner collecting wrapper layers (``seen`` guards a
     # pathological self-referential ``.bound``) until the real graph.
     seen: set[int] = set()
@@ -337,8 +340,8 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
         if isinstance(node, CompiledStateGraph):
             graph = node
             break
-        if isinstance(node, RunnableBindingBase):
-            layers.append((node, isinstance(node, RunnableBinding)))
+        if isinstance(node, runnable_binding_base_types):
+            layers.append((node, isinstance(node, runnable_binding_types)))
             node = getattr(node, "bound", None)
             continue
         break
@@ -435,8 +438,11 @@ def _is_language_model(agent: Any) -> bool:
             RunnableSequence,
         )
     except ImportError:
-        RunnableBindingBase = ()
-        RunnableSequence = ()
+        runnable_binding_base_types: tuple[type[Any], ...] = ()
+        runnable_sequence_types: tuple[type[Any], ...] = ()
+    else:
+        runnable_binding_base_types = (RunnableBindingBase,)
+        runnable_sequence_types = (RunnableSequence,)
     # ``RunnableBindingBase`` may nest (e.g.
     # ``.bind_tools(...).with_config(...).with_retry()``) and a
     # model-first sequence may itself sit under a binding or nest another
@@ -445,10 +451,10 @@ def _is_language_model(agent: Any) -> bool:
     seen: set[int] = set()
     while agent is not None and id(agent) not in seen:
         seen.add(id(agent))
-        if isinstance(agent, RunnableBindingBase):
+        if isinstance(agent, runnable_binding_base_types):
             agent = getattr(agent, "bound", None)
             continue
-        if isinstance(agent, RunnableSequence):
+        if isinstance(agent, runnable_sequence_types):
             first = getattr(agent, "first", None)
             if first is None:
                 steps = getattr(agent, "steps", None)
