@@ -173,7 +173,7 @@ class ReconnectingWebSocket:
             return None  # unlimited
         return self._config.max_retries + 1
 
-    async def _connect_with_retry(self) -> None:
+    async def _connect_with_retry(self, *, notify_reconnect: bool = False) -> None:
         """Connect with exponential backoff and jitter retry."""
         delay = self._config.base_delay
         last_error: Exception | None = None
@@ -194,7 +194,7 @@ class ReconnectingWebSocket:
                 self._connected.set()
                 self._ever_connected = True
                 await self._emit_reconnect_success()
-                if attempt > 0 and self._on_reconnect:
+                if (notify_reconnect or attempt > 0) and self._on_reconnect:
                     await self._invoke_callback(self._on_reconnect)
                 return
             except Exception as exc:
@@ -297,6 +297,14 @@ class ReconnectingWebSocket:
                 return
             raise RuntimeError("WebSocket is not connected")
 
+        # Bound successful reconnect cycles within a single receive stream.
+        # ``_connect_with_retry`` caps failed connection *attempts* for one
+        # reconnect, but a peer that accepts and immediately drops can otherwise
+        # cause unbounded successful reconnect churn. Reuse ``max_retries`` as
+        # the per-stream reconnect budget: 0 means fail fast after the first
+        # drop, -1 keeps the explicit unlimited behaviour.
+        remaining_reconnects = self._config.max_retries
+
         while True:
             try:
                 async for message in self._ws:
@@ -304,34 +312,60 @@ class ReconnectingWebSocket:
                 # Clean end-of-stream (server closed normally) — done.
                 return
             except websockets.exceptions.ConnectionClosed as exc:
-                # The socket is gone; block concurrent sends until reconnect.
-                self._connected.clear()
-                if self._closed:
+                if not await self._recover_recv_iter_drop(exc, remaining_reconnects):
                     return
-                rcvd = getattr(exc, "rcvd", None)
-                close_code = rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
-                if self._on_reconnect is None:
-                    logger.warning(
-                        "WebSocket connection lost (code=%s). No on_reconnect callback "
-                        "configured; propagating ConnectionClosed for a clean restart.",
-                        close_code,
-                    )
-                    raise
-                logger.warning(
-                    "WebSocket connection lost (code=%s). Attempting reconnect…",
-                    close_code,
-                )
-                try:
-                    async with self._connect_lock:
-                        await self._connect_with_retry()
-                except ConnectionError:
-                    # Reconnect is exhausted and the socket is terminally dead.
-                    # Null ``_ws`` (it still references the closed connection)
-                    # so a later send()/recv() fast-fails in ``_await_connected``
-                    # instead of waiting out the full reconnect timeout.
-                    logger.error("Reconnection failed; ending recv_iter")
-                    self._ws = None
-                    return
+                if remaining_reconnects > 0:
+                    remaining_reconnects -= 1
+
+    async def _recover_recv_iter_drop(
+        self,
+        exc: websockets.exceptions.ConnectionClosed,
+        remaining_reconnects: int,
+    ) -> bool:
+        """Recover ``recv_iter`` after a dropped socket, if policy allows it."""
+        # The socket is gone; block concurrent sends until reconnect.
+        self._connected.clear()
+        if self._closed:
+            return False
+
+        close_code = self._connection_closed_code(exc)
+        if self._on_reconnect is None:
+            logger.warning(
+                "WebSocket connection lost (code=%s). No on_reconnect callback "
+                "configured; propagating ConnectionClosed for a clean restart.",
+                close_code,
+            )
+            raise exc
+        if remaining_reconnects == 0:
+            logger.error(
+                "WebSocket connection lost (code=%s). Reconnect budget exhausted; "
+                "ending recv_iter",
+                close_code,
+            )
+            self._ws = None
+            return False
+
+        logger.warning(
+            "WebSocket connection lost (code=%s). Attempting reconnect…",
+            close_code,
+        )
+        try:
+            async with self._connect_lock:
+                await self._connect_with_retry(notify_reconnect=True)
+        except ConnectionError:
+            # Reconnect is exhausted and the socket is terminally dead.
+            # Null ``_ws`` (it still references the closed connection)
+            # so a later send()/recv() fast-fails in ``_await_connected``
+            # instead of waiting out the full reconnect timeout.
+            logger.error("Reconnection failed; ending recv_iter")
+            self._ws = None
+            return False
+        return True
+
+    @staticmethod
+    def _connection_closed_code(exc: websockets.exceptions.ConnectionClosed) -> int | None:
+        rcvd = getattr(exc, "rcvd", None)
+        return rcvd.code if rcvd is not None else getattr(exc, "close_code", None)
 
     async def close(self) -> None:
         """Close the WebSocket connection permanently.
