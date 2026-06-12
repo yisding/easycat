@@ -27,11 +27,17 @@ from easycat.integrations.agents.base import (
 from easycat.runtime import InMemoryRingBuffer
 
 
-def _make_recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder:
+def _make_recorder(
+    journal: InMemoryRingBuffer | None = None,
+    *,
+    run_id: str = "r1",
+    session_id: str = "s1",
+    turn_id: str = "t1",
+) -> JournalAgentRecorder:
     return JournalAgentRecorder(
         journal=journal or InMemoryRingBuffer(capacity=1000),
         artifact_store=None,
-        context=RecorderContext(run_id="r1", session_id="s1", turn_id="t1"),
+        context=RecorderContext(run_id=run_id, session_id=session_id, turn_id=turn_id),
     )
 
 
@@ -730,6 +736,43 @@ class TestPydanticAIAgentModeTransitions:
         history = agent.last_kwargs["message_history"]
         assert history == [{"converted": {"role": "system", "content": "Caller ID: +15551234567"}}]
 
+    @pytest.mark.asyncio
+    async def test_message_history_is_isolated_by_recorder_session(self):
+        from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
+
+        victim_messages = [
+            {"role": "user", "content": "victim secret: SSN=123-45-6789"},
+            {"role": "assistant", "content": "stored"},
+        ]
+        agent = _MockPydanticAgent("TestAgent", [_MockNode("ModelRequestNode")])
+        agent._run._messages = victim_messages
+        bridge = PydanticAIBridge(agent=agent)
+
+        victim_recorder = _make_recorder()
+        async for _ in bridge.invoke(
+            AgentTurnInput.from_text("store victim context"), victim_recorder
+        ):
+            pass
+
+        attacker_recorder = JournalAgentRecorder(
+            journal=InMemoryRingBuffer(capacity=1000),
+            artifact_store=None,
+            context=RecorderContext(run_id="r2", session_id="s2", turn_id="t2"),
+        )
+        async for _ in bridge.invoke(
+            AgentTurnInput.from_text("repeat prior context"), attacker_recorder
+        ):
+            pass
+
+        assert agent.last_kwargs["message_history"] is None
+
+        async for _ in bridge.invoke(
+            AgentTurnInput.from_text("same session follow-up"), victim_recorder
+        ):
+            pass
+
+        assert agent.last_kwargs["message_history"] == victim_messages
+
 
 # ════════════════════════════════════════════════════════════════════
 #  AC2.6a-b: PydanticAI Graph mode transitions + history artifact
@@ -918,6 +961,56 @@ class TestPydanticAIGraphModeTransitions:
 
         snap = bridge.snapshot_state()
         assert snap.fields["active_node"] == "LastNode"
+
+    @pytest.mark.asyncio
+    async def test_graph_state_is_isolated_by_recorder_session(self):
+        from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
+
+        node = _MockGraphNode("StatefulNode")
+        graph = _MockGraph([node])
+        states: list[_GraphState] = []
+
+        def state_factory() -> _GraphState:
+            state = _GraphState()
+            states.append(state)
+            return state
+
+        def initial_node_factory(text: str, state: _GraphState) -> _MockGraphNode:
+            state.value = f"{state.value}|{text}" if state.value else text
+            return node
+
+        bridge = PydanticAIBridge(
+            graph=graph,
+            state_factory=state_factory,
+            initial_node_factory=initial_node_factory,
+        )
+
+        _original_iter = graph.iter
+
+        def _patched_iter(initial_node: Any, *, state: Any = None) -> _MockGraphRun:
+            handler = getattr(state, "_easycat_event_handler", None)
+            if handler is not None:
+                handler._was_called = True
+            return _original_iter(initial_node, state=state)
+
+        graph.iter = _patched_iter
+
+        rec_s1 = _make_recorder(session_id="s1")
+        rec_s2 = _make_recorder(run_id="r2", session_id="s2", turn_id="t2")
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("victim-secret"), rec_s1):
+            pass
+        async for _ in bridge.invoke(AgentTurnInput.from_text("attacker-turn"), rec_s2):
+            pass
+        async for _ in bridge.invoke(AgentTurnInput.from_text("victim-follow-up"), rec_s1):
+            pass
+
+        runtime_states = [state for state in states if state.value]
+        assert len(runtime_states) == 2
+        assert runtime_states[0] is not runtime_states[1]
+        assert runtime_states[0].value == "victim-secret|victim-follow-up"
+        assert runtime_states[1].value == "attacker-turn"
+        assert bridge.snapshot_state().fields["session_count"] == 2
 
 
 # ════════════════════════════════════════════════════════════════════
