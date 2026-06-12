@@ -534,8 +534,14 @@ class TurnManager:
 
     def _cancel_silence_timer(self) -> None:
         """Cancel the pending silence timeout task."""
-        if self._silence_timer_task and not self._silence_timer_task.done():
-            self._silence_timer_task.cancel()
+        task = self._silence_timer_task
+        if task and not task.done():
+            try:
+                current_task = asyncio.current_task()
+            except RuntimeError:
+                current_task = None
+            if task is not current_task:
+                task.cancel()
         self._silence_timer_task = None
         self._silence_start_time = None
 
