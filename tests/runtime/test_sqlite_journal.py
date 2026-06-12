@@ -32,6 +32,10 @@ from easycat.runtime.safe_defaults import safe_env_snapshot
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
 
 
+def _mode(path):
+    return path.stat().st_mode & 0o777
+
+
 def _libsql_available() -> bool:
     """Check if the libsql_experimental SDK is importable."""
     try:
@@ -475,6 +479,44 @@ class TestCrashRecovery:
         crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
         assert crash_dump.exists()
 
+    def test_sqlite_journal_files_are_private_under_permissive_umask(self, tmp_path):
+        old_umask = os.umask(0o022)
+        j = None
+        try:
+            j = SqliteJournal("sess", data_dir=tmp_path)
+            j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
+
+            assert _mode(tmp_path / "journals") == 0o700
+            assert _mode(tmp_path / "journals" / "sess.sqlite") == 0o600
+            for suffix in ("-wal", "-shm"):
+                sidecar = tmp_path / "journals" / f"sess.sqlite{suffix}"
+                if sidecar.exists():
+                    assert _mode(sidecar) == 0o600
+        finally:
+            os.umask(old_umask)
+            if j is not None:
+                j.close()
+
+    def test_crash_dump_files_are_private_under_permissive_umask(self, tmp_path):
+        old_umask = os.umask(0o022)
+        try:
+            j1 = SqliteJournal("sess", data_dir=tmp_path)
+            j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
+            j1._conn.close()
+            j1._closed = True
+
+            j2 = SqliteJournal("sess", data_dir=tmp_path)
+            j2.close()
+
+            assert _mode(tmp_path / "crash-dumps") == 0o700
+            assert _mode(tmp_path / "crash-dumps" / "sess.sqlite") == 0o600
+            for suffix in ("-wal", "-shm"):
+                sidecar = tmp_path / "crash-dumps" / f"sess.sqlite{suffix}"
+                if sidecar.exists():
+                    assert _mode(sidecar) == 0o600
+        finally:
+            os.umask(old_umask)
+
     def test_crash_dump_copy_failure_leaves_consistent_state(self, tmp_path):
         # If the crash-dump copy raises after the connection was closed (and
         # before the DELETE/reopen), recovery must not leave the journal in a
@@ -762,6 +804,26 @@ class TestRetention:
         run_retention(tmp_path, max_sessions=1, mode="archive")
         archives = list((tmp_path / "archive").glob("*.tar.gz"))
         assert len(archives) == 2
+
+    def test_retention_archive_files_are_private_under_permissive_umask(self, tmp_path):
+        old_umask = os.umask(0o022)
+        try:
+            for i in range(3):
+                self._make_journal(tmp_path, f"sess-{i}")
+
+            run_retention(tmp_path, max_sessions=1, mode="archive")
+
+            archive_dir = tmp_path / "archive"
+            archives = list(archive_dir.glob("*.tar.gz"))
+            assert _mode(archive_dir) == 0o700
+            assert archives
+            for archive in archives:
+                assert _mode(archive) == 0o600
+                with tarfile.open(archive, "r:gz") as tar:
+                    for member in tar.getmembers():
+                        assert (member.mode & 0o777) in {0o600, 0o700}
+        finally:
+            os.umask(old_umask)
 
     def test_retention_max_bytes_archives_and_cleans_sidecars_and_artifacts(self, tmp_path):
         old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)

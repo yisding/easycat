@@ -9,6 +9,8 @@ import tarfile
 from pathlib import Path
 from typing import Literal
 
+from easycat.runtime._private_files import mkdir_private, private_tar_filter, touch_private_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,8 +71,9 @@ def _session_bytes(root: Path, db_path: Path) -> int:
 def _archive_session(root: Path, oldest: Path) -> bool:
     """Tar the journal (plus artifacts) into ``archive/``; False on failure."""
     archive_dir = root / "archive"
-    archive_dir.mkdir(parents=True, exist_ok=True)
+    mkdir_private(archive_dir)
     archive_path = archive_dir / f"{oldest.stem}.tar.gz"
+    touch_private_file(archive_path)
     try:
         # Checkpoint WAL so all data is in the main database file
         # before archiving — otherwise uncheckpointed pages are lost.
@@ -85,14 +88,22 @@ def _archive_session(root: Path, oldest: Path) -> bool:
         session_id = oldest.stem
         artifact_dir = root / "artifacts" / session_id
         with tarfile.open(str(archive_path), "w:gz") as tar:
-            tar.add(str(oldest), arcname=oldest.name)
+            tar.add(str(oldest), arcname=oldest.name, filter=private_tar_filter)
             if checkpoint_incomplete:
                 for suffix in ("-wal", "-shm"):
                     sidecar = Path(str(oldest) + suffix)
                     if sidecar.exists():
-                        tar.add(str(sidecar), arcname=oldest.name + suffix)
+                        tar.add(
+                            str(sidecar),
+                            arcname=oldest.name + suffix,
+                            filter=private_tar_filter,
+                        )
             if artifact_dir.is_dir():
-                tar.add(str(artifact_dir), arcname=f"artifacts/{session_id}")
+                tar.add(
+                    str(artifact_dir),
+                    arcname=f"artifacts/{session_id}",
+                    filter=private_tar_filter,
+                )
     except OSError:
         logger.warning("Failed to archive %s", oldest, exc_info=True)
         return False
