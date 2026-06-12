@@ -273,7 +273,11 @@ class _OutboundPipelineWiring:
                 self._hold_audio_task.cancel()
                 try:
                     await self._hold_audio_task
-                except (asyncio.CancelledError, Exception):
+                except asyncio.CancelledError:
+                    current_task = asyncio.current_task()
+                    if current_task is not None and current_task.cancelling():
+                        raise
+                except Exception:
                     pass
                 self._hold_audio_task = None
         await self._session.replay_gated_audio(events)

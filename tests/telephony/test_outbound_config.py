@@ -302,3 +302,59 @@ class TestTelephonyConfigExtension:
 
         manager = next(helper for helper in helpers if isinstance(helper, _Manager))
         assert manager.dnc_list is dnc
+
+
+class TestOutboundPipelineWiring:
+    @pytest.mark.asyncio
+    async def test_flush_gated_audio_propagates_caller_cancellation(self) -> None:
+        """A discarded classification timeout must not replay opener audio.
+
+        ``flush_gated_audio`` cancels and awaits the hold-audio task before
+        replaying gated opener audio.  If the timeout task itself is cancelled
+        while waiting for hold-audio cleanup, that cancellation must propagate
+        instead of being mistaken for the child task's expected cancellation.
+        """
+        import asyncio
+
+        from easycat.audio_format import AudioChunk, AudioFormat
+        from easycat.config._telephony_wiring import _OutboundPipelineWiring
+        from easycat.events import TTSAudio
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.hold_started = asyncio.Event()
+                self.hold_cleanup_entered = asyncio.Event()
+                self.hold_cleanup_continue = asyncio.Event()
+                self.replayed: list[list[TTSAudio]] = []
+
+            async def synthesize_bypass(self, _text: str) -> None:
+                self.hold_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.hold_cleanup_entered.set()
+                    await self.hold_cleanup_continue.wait()
+
+            async def replay_gated_audio(self, events: list[TTSAudio]) -> None:
+                self.replayed.append(events)
+
+        session = FakeSession()
+        wiring = _OutboundPipelineWiring(session)  # type: ignore[arg-type]
+        wiring.play_hold_audio("please hold")
+        await session.hold_started.wait()
+
+        event = TTSAudio(
+            chunk=AudioChunk(
+                data=b"\x00" * 100,
+                format=AudioFormat(sample_rate=16000, channels=1, sample_width=2),
+            )
+        )
+        flush_task = asyncio.create_task(wiring.flush_gated_audio([event]))
+        await session.hold_cleanup_entered.wait()
+
+        flush_task.cancel()
+        session.hold_cleanup_continue.set()
+        with pytest.raises(asyncio.CancelledError):
+            await flush_task
+
+        assert session.replayed == []
