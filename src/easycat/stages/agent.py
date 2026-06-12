@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.integrations.agents._agent_runner import AgentRunner, close_stream_after_done
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
@@ -216,7 +216,8 @@ class AgentStage:
                 "easycat.agent.invoke",
                 {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
             ):
-                async for event in bridge.invoke(turn_input, recorder, cancel_token):
+                stream = bridge.invoke(turn_input, recorder, cancel_token)
+                async for event in stream:
                     kind = getattr(event, "kind", None)
                     text = getattr(event, "text", "")
                     if kind == "text_delta" and text:
@@ -262,6 +263,10 @@ class AgentStage:
                                 "result": getattr(event, "result", ""),
                             },
                         )
+                    if kind == "done":
+                        await close_stream_after_done(stream)
+                        yield event
+                        return
                     yield event
         except Exception as exc:
             errored = True

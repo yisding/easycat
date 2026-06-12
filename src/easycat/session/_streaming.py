@@ -307,13 +307,17 @@ class _AgentStreamConsumer:
     async def _consume(self, stream: AsyncIterator[Any]) -> None:
         async for event in stream:
             kind = getattr(event, "kind", None)
-            if kind is None or self._done_received:
+            if kind is None:
                 continue
+            if self._done_received:
+                break
             if self._cancel_token and self._cancel_token.is_cancelled:
                 if not await self._consume_cancelled(event, kind):
                     break
                 continue
             await self._consume_event(event, kind)
+            if self._done_received:
+                break
 
     async def _consume_cancelled(self, event: Any, kind: str) -> bool:
         """Drain in-flight tool calls after cancellation.

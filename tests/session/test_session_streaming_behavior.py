@@ -318,6 +318,60 @@ async def test_streaming_done_terminates_session_consumption() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_done_stops_unbounded_session_consumption() -> None:
+    class PostDoneHangingAgent(_TestBridgeBase):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        async def run(self, text: str) -> str:
+            return "Alpha."
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            try:
+                yield AgentBridgeEvent(kind="text_delta", text="Alpha.")
+                yield AgentBridgeEvent(kind="done", text="Alpha.")
+                await asyncio.Event().wait()
+                yield AgentBridgeEvent(kind="text_delta", text=" Beta.")  # pragma: no cover
+            finally:
+                self.closed = True
+
+    agent = PostDoneHangingAgent()
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=agent,
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=None,
+        )
+    )
+
+    finals: list[AgentFinal] = []
+    session.event_bus.subscribe(AgentFinal, lambda e: finals.append(e))
+
+    session._turn = TurnContext("test-turn", CancelToken())
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None), timeout=0.2
+    )
+
+    assert len(finals) == 1
+    assert finals[0].text == "Alpha."
+    assert tts.synthesized_texts == ["Alpha."]
+    assert agent.closed
+
+
+@pytest.mark.asyncio
 async def test_streaming_structured_only_done_emits_final_without_tts() -> None:
     """Structured-only DONE events should still surface AgentFinal."""
 
