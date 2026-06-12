@@ -409,6 +409,14 @@ class CallDispositionTracker:
         if event.new in _TERMINAL_DISPOSITIONS:
             call_sid = event.call_sid
             disposition = _TERMINAL_DISPOSITIONS[event.new]
+
+            # A missing SID cannot identify a call. Record the terminal event,
+            # but do not use the shared empty string as a de-duplication key or
+            # later SID-less calls would be suppressed.
+            if not call_sid:
+                self.record_disposition(disposition)
+                return
+
             # Preserve the specific failure reason (busy, no-answer, etc.)
             # instead of collapsing everything to generic "ended".
             if event.new == OutboundCallState.ENDED and call_sid in self._failure_reasons:
