@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
-from easycat.events import STTEventType
+from easycat.events import STTEvent, STTEventType
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -157,6 +157,95 @@ async def test_openai_stt_finalizes_utterance_when_buffer_cap_hit():
     # chunk now occupies a fresh buffer.
     mock_client.stream.assert_called_once()
     assert len(stt._buffer) == 6
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_end_stream_waits_for_cap_flush_before_closing_queue():
+    """A cap-triggered flush must complete before the stream queue closes.
+
+    Regression coverage for a lifecycle race where ``end_stream`` could close
+    the old turn queue while ``send_audio`` was awaiting the provider request,
+    allowing the late FINAL event to be emitted into a later stream.
+    """
+
+    class PausingOpenAISTT(OpenAISTT):
+        def __init__(self, config: OpenAISTTConfig) -> None:
+            super().__init__(config)
+            self.transcription_started = asyncio.Event()
+            self.release_transcription = asyncio.Event()
+
+        async def _transcribe_streaming(self, wav_data: bytes) -> None:
+            self.transcription_started.set()
+            await self.release_transcription.wait()
+            self._emit_event(
+                STTEvent(
+                    type=STTEventType.FINAL,
+                    text="old turn final",
+                    language=self._config.language,
+                )
+            )
+
+    config = OpenAISTTConfig(
+        api_key="test-key",
+        max_audio_chunk_bytes=10,
+        max_audio_buffer_bytes=8,
+        http_client=_make_mock_client(),
+    )
+    stt = PausingOpenAISTT(config)
+
+    await stt.start_stream()
+    first_queue = stt._event_queue
+    await stt.send_audio(AudioChunk(data=b"\x00" * 4, format=PCM16_MONO_16K))
+
+    cap_flush_task = asyncio.create_task(
+        stt.send_audio(AudioChunk(data=b"\x00" * 6, format=PCM16_MONO_16K))
+    )
+    await asyncio.wait_for(stt.transcription_started.wait(), timeout=1)
+
+    end_task = asyncio.create_task(stt.end_stream())
+    start_task = asyncio.create_task(stt.start_stream())
+    await asyncio.sleep(0)
+
+    assert not end_task.done()
+    assert not start_task.done()
+    assert stt._event_queue is first_queue
+    assert first_queue.empty()
+
+    stt.release_transcription.set()
+    await asyncio.wait_for(cap_flush_task, timeout=1)
+    await asyncio.wait_for(end_task, timeout=1)
+
+    queued_events = []
+    while True:
+        item = await asyncio.wait_for(first_queue.get(), timeout=1)
+        queued_events.append(item)
+        if item is None:
+            break
+
+    assert queued_events[-1] is None
+    assert queued_events[0] is not None
+    assert queued_events[0].type == STTEventType.FINAL
+    assert queued_events[0].text == "old turn final"
+
+    await asyncio.wait_for(start_task, timeout=1)
+    assert stt._event_queue is not first_queue
+
+
+@pytest.mark.asyncio
+async def test_openai_stt_start_stream_preserves_queue_while_already_running():
+    config = OpenAISTTConfig(api_key="test-key", http_client=_make_mock_client())
+    stt = OpenAISTT(config)
+
+    await stt.start_stream()
+    first_queue = stt._event_queue
+
+    with pytest.raises(RuntimeError, match="already started"):
+        await stt.start_stream()
+
+    assert stt._event_queue is first_queue
+    assert stt._running is True
+
+    await stt.end_stream()
 
 
 @pytest.mark.asyncio

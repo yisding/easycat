@@ -50,23 +50,34 @@ class STTBase:
         self._event_queue: asyncio.Queue[STTEvent | None] = asyncio.Queue()
         self._running = False
         self._expected_sample_rate = expected_sample_rate
+        # Serialize queue replacement/closure with provider hooks. Batch providers
+        # may emit events after awaiting a cap-triggered transcription in
+        # ``send_audio``; without this lock, ``end_stream``/``start_stream`` could
+        # close or replace the queue underneath that in-flight emit.
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start_stream(self) -> None:
         """Begin a new STT stream session."""
-        self._event_queue = asyncio.Queue()
-        self._running = True
-        try:
-            await self._on_start()
-        except Exception:
-            self._running = False
-            raise
+        async with self._lifecycle_lock:
+            if self._running:
+                raise RuntimeError(
+                    "Stream already started; call end_stream() before start_stream()"
+                )
+            self._event_queue = asyncio.Queue()
+            self._running = True
+            try:
+                await self._on_start()
+            except Exception:
+                self._running = False
+                raise
 
     async def send_audio(self, chunk: AudioChunk) -> None:
         """Send an audio chunk to the active STT stream."""
-        if not self._running:
-            raise RuntimeError("Stream not started; call start_stream() first")
-        self._validate_audio(chunk)
-        await self._on_audio(chunk)
+        async with self._lifecycle_lock:
+            if not self._running:
+                raise RuntimeError("Stream not started; call start_stream() first")
+            self._validate_audio(chunk)
+            await self._on_audio(chunk)
 
     async def commit_segment(self) -> bool:
         """Finalize the current segment without closing the stream.
@@ -75,19 +86,21 @@ class STTBase:
         The default implementation returns ``False`` for providers that only
         support whole-stream finalization.
         """
-        if not self._running:
-            return False
-        return await self._on_commit_segment()
+        async with self._lifecycle_lock:
+            if not self._running:
+                return False
+            return await self._on_commit_segment()
 
     async def end_stream(self) -> None:
         """Signal that no more audio will be sent for the current stream."""
-        if not self._running:
-            return
-        self._running = False
-        try:
-            await self._on_end()
-        finally:
-            await self._event_queue.put(None)
+        async with self._lifecycle_lock:
+            if not self._running:
+                return
+            self._running = False
+            try:
+                await self._on_end()
+            finally:
+                await self._event_queue.put(None)
 
     async def events(self) -> AsyncIterator[STTEvent]:
         """Return an async iterator of provider-scoped STT events."""
