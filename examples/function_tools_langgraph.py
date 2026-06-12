@@ -46,7 +46,7 @@ def get_time(timezone_name: str = "UTC") -> str:
     """Return the current wall-clock time in the named IANA timezone."""
     try:
         tz = ZoneInfo(timezone_name)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         return f"Unknown timezone: {timezone_name}."
     return f"It is {datetime.now(tz).strftime('%H:%M')} {timezone_name}."
 
