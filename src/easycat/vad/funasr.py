@@ -170,16 +170,30 @@ class FunASROnnxVAD(_VADBase):
             except Exception as exc:
                 raise RuntimeError(f"FunASR ONNX VAD inference failed: {exc}") from exc
 
-            for beg_ms, end_ms in _iter_funasr_segment_pairs(segments):
-                if beg_ms >= 0:
-                    self._funasr_active = True
-                if end_ms >= 0:
-                    self._funasr_active = False
-
-            now = time.monotonic()
-            speech_prob = 1.0 if self._funasr_active else 0.0
-            for event in self._evaluate_speech(speech_prob, now):
+            yield_events = self._evaluate_funasr_segments(segments, time.monotonic())
+            for event in yield_events:
                 yield event
+
+    def _evaluate_funasr_segments(self, segments: Any, now: float) -> Iterator[Event]:
+        """Route FunASR boundary pairs through the shared VAD state machine."""
+        saw_boundary = False
+        for beg_ms, end_ms in _iter_funasr_segment_pairs(segments):
+            saw_boundary = True
+            boundary_now = now
+            if beg_ms >= 0:
+                self._funasr_active = True
+                yield from self._evaluate_speech(1.0, boundary_now)
+            if end_ms >= 0:
+                if beg_ms >= 0 and end_ms >= beg_ms:
+                    boundary_now = now + (end_ms - beg_ms) / 1000
+                if self._funasr_active:
+                    yield from self._evaluate_speech(1.0, boundary_now)
+                self._funasr_active = False
+                yield from self._evaluate_speech(0.0, boundary_now)
+
+        if not saw_boundary:
+            speech_prob = 1.0 if self._funasr_active else 0.0
+            yield from self._evaluate_speech(speech_prob, now)
 
     def reset(self) -> None:
         """Reset adapter state and FunASR streaming caches."""
