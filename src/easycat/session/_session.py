@@ -1184,6 +1184,20 @@ class Session:
         """
         await self.stop(force=True)
 
+    def close(self) -> None:
+        """Finalize the session journal without tearing down backends.
+
+        Compatibility alias for the former public low-level lifecycle API.
+        Prefer :meth:`stop` or ``async with session:`` for normal teardown.
+        Only valid after the session has stopped. Safe to call multiple times.
+        """
+        if self._is_running:
+            raise RuntimeError(
+                "Session.close() is a low-level compatibility alias and cannot stop "
+                "a running session; call await session.stop() instead"
+            )
+        self._close()
+
     def _close(self) -> None:
         """Finalize the session journal without tearing down backends.
 
@@ -1199,6 +1213,20 @@ class Session:
         state = self._debug_backends.close()
         self._journal = state.journal
         self._artifact_store = state.artifact_store
+
+    def destroy(self) -> None:
+        """Release live debug backends while keeping post-stop inspection working.
+
+        Compatibility alias for the former public low-level lifecycle API.
+        Prefer :meth:`stop` or ``async with session:`` for normal teardown.
+        Only valid after the session has stopped. Safe to call multiple times.
+        """
+        if self._is_running:
+            raise RuntimeError(
+                "Session.destroy() is a low-level compatibility alias and cannot stop "
+                "a running session; call await session.stop() instead"
+            )
+        self._destroy()
 
     def _destroy(self) -> None:
         """Release live debug backends while keeping post-stop inspection working.
