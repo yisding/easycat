@@ -53,7 +53,9 @@ class TransportStage:
 
         Returns ``True`` when the transport accepted the chunk for
         delivery and ``False`` when it was silently dropped (for
-        example because the peer is disconnected).
+        example because the peer is disconnected). Legacy transports
+        that return ``None`` after a successful send are treated as
+        delivered for backward compatibility.
         """
         ctx = self._journal_ctx(ctx)
         started = time.perf_counter()
@@ -89,10 +91,12 @@ class TransportStage:
                         attributes={"easycat.surface": "tts"},
                     )
                 delivered = await self._provider.send_audio(input)
-                if not delivered:
+                result = True if delivered is None else bool(delivered)
+                if not result:
                     # A falsy return is a silent drop, not a successful send;
                     # tag the latency sample so drops are distinguishable from
-                    # deliveries in easycat.stage.latency.
+                    # deliveries in easycat.stage.latency. Legacy implicit
+                    # ``None`` returns still mean delivered.
                     result_attr = "drop"
         except Exception as exc:
             result_attr = "fail"
@@ -131,7 +135,6 @@ class TransportStage:
                 time.perf_counter() - started,
                 {"easycat.stage": self.name, "easycat.result": result_attr},
             )
-        result = bool(delivered)
         state_after = self.snapshot_state()
         complete_extra = {
             **extra,
