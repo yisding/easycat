@@ -182,16 +182,23 @@ class BridgeTemplate:
     def _serialize_framework_state(self) -> bytes:
         """Serialize framework state for artifact storage, scrubbed.
 
-        Default: JSON-encode :meth:`snapshot_state` fields, dropping
-        keys that look like credentials — artifacts end up in debug
-        bundles that can be shared, so secrets must never be dumped.
-        Override when richer (still scrubbed!) state is available.
+        Default: JSON-encode :meth:`snapshot_state` fields after
+        recursively redacting secret-looking nested keys and sensitive
+        string values. Top-level keys that look like credentials are
+        still dropped entirely. Artifacts end up in debug bundles that
+        can be shared, so secrets must never be dumped. Override when
+        richer (still scrubbed!) state is available.
         """
         from easycat.runtime.safe_defaults import _is_secret_name
+        from easycat.validation.redaction import redact_value
 
         try:
             fields = self.snapshot_state().fields
-            scrubbed = {k: v for k, v in fields.items() if not _is_secret_name(str(k))}
+            scrubbed = {
+                k: redact_value(v, str(k))
+                for k, v in fields.items()
+                if not _is_secret_name(str(k))
+            }
             return json.dumps(scrubbed, default=str).encode()
         except Exception:
             return b"{}"
