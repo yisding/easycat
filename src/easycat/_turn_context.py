@@ -29,6 +29,8 @@ from typing import Protocol, runtime_checkable
 
 from easycat.cancel import CancelToken
 
+TURN_AUDIO_LOG_MAXLEN = 10_000
+
 
 @runtime_checkable
 class TurnHandle(Protocol):
@@ -69,6 +71,9 @@ class TurnContext:
         "first_tts_audio_time",
         "audio_bytes_sent",
         "audio_send_log",
+        "audio_send_log_base_bytes",
+        "audio_send_log_base_playout_start",
+        "audio_send_log_base_playout_cursor",
         "playback_mark_to_bytes",
         "playback_ack_log",
         "bytes_since_last_mark",
@@ -94,11 +99,14 @@ class TurnContext:
         # Audio bytes sent to the transport during this turn.
         # Used to estimate what the user heard before a barge-in.
         self.audio_bytes_sent: int = 0
-        self.audio_send_log: deque[tuple[float, int, float]] = deque(maxlen=10_000)
+        self.audio_send_log: deque[tuple[float, int, float]] = deque(maxlen=TURN_AUDIO_LOG_MAXLEN)
+        self.audio_send_log_base_bytes: int = 0
+        self.audio_send_log_base_playout_start: float | None = None
+        self.audio_send_log_base_playout_cursor: float | None = None
 
         # Playback mark tracking (maps mark names to cumulative byte positions)
         self.playback_mark_to_bytes: dict[str, int] = {}
-        self.playback_ack_log: deque[tuple[float, int]] = deque(maxlen=10_000)
+        self.playback_ack_log: deque[tuple[float, int]] = deque(maxlen=TURN_AUDIO_LOG_MAXLEN)
         self.bytes_since_last_mark: int = 0
 
         self.last_barge_in_time: float | None = None
@@ -124,5 +132,24 @@ class TurnContext:
     def record_audio_sent(self, size: int, duration_ms: float) -> None:
         """Record that audio was sent to the transport."""
         self.audio_bytes_sent += size
-        self.audio_send_log.append((time.monotonic(), size, duration_ms))
+        send_time = time.monotonic()
+        if self.audio_send_log.maxlen and len(self.audio_send_log) == self.audio_send_log.maxlen:
+            self._record_audio_send_log_eviction(self.audio_send_log[0])
+        self.audio_send_log.append((send_time, size, duration_ms))
         self.bytes_since_last_mark += size
+
+    def _record_audio_send_log_eviction(self, entry: tuple[float, int, float]) -> None:
+        """Fold an evicted send-log entry into cumulative playback accounting."""
+        send_time, size, duration_ms = entry
+        self.audio_send_log_base_bytes += max(size, 0)
+        if duration_ms <= 0:
+            return
+        start_time = send_time
+        if (
+            self.audio_send_log_base_playout_cursor is not None
+            and self.audio_send_log_base_playout_cursor > start_time
+        ):
+            start_time = self.audio_send_log_base_playout_cursor
+        if self.audio_send_log_base_playout_start is None:
+            self.audio_send_log_base_playout_start = start_time
+        self.audio_send_log_base_playout_cursor = start_time + (duration_ms / 1000.0)

@@ -141,9 +141,39 @@ def _all_tts_audio_delivered(
     return audio_bytes_delivered >= total_audio
 
 
+def _send_log_base_heard_bytes(
+    cutoff_time: float | None,
+    *,
+    send_log_base_bytes: int,
+    send_log_base_playout_start: float | None,
+    send_log_base_playout_cursor: float | None,
+) -> int:
+    """Return evicted send-log bytes known to be heard by ``cutoff_time``."""
+    base_bytes = max(send_log_base_bytes, 0)
+    if cutoff_time is None:
+        return base_bytes
+    if (
+        send_log_base_playout_start is None
+        or send_log_base_playout_cursor is None
+        or cutoff_time >= send_log_base_playout_cursor
+    ):
+        return base_bytes
+    if cutoff_time <= send_log_base_playout_start:
+        return 0
+    duration_s = send_log_base_playout_cursor - send_log_base_playout_start
+    if duration_s <= 0:
+        return base_bytes
+    elapsed_s = cutoff_time - send_log_base_playout_start
+    return int(base_bytes * (elapsed_s / duration_s))
+
+
 def _audio_bytes_likely_heard(
     send_log: list[tuple[float, int, float]],
     cutoff_time: float | None,
+    *,
+    send_log_base_bytes: int = 0,
+    send_log_base_playout_start: float | None = None,
+    send_log_base_playout_cursor: float | None = None,
 ) -> int:
     """Estimate bytes likely heard by ``cutoff_time``.
 
@@ -152,13 +182,19 @@ def _audio_bytes_likely_heard(
     each chunk starts at ``max(send_time, previous_chunk_end)`` and then
     plays linearly over its own duration.
     """
+    base_heard = _send_log_base_heard_bytes(
+        cutoff_time,
+        send_log_base_bytes=send_log_base_bytes,
+        send_log_base_playout_start=send_log_base_playout_start,
+        send_log_base_playout_cursor=send_log_base_playout_cursor,
+    )
     if not send_log:
-        return 0
+        return base_heard
     if cutoff_time is None:
-        return sum(max(size, 0) for _, size, _ in send_log)
+        return base_heard + sum(max(size, 0) for _, size, _ in send_log)
 
-    heard = 0
-    playout_cursor: float | None = None
+    heard = base_heard
+    playout_cursor = send_log_base_playout_cursor
 
     for send_time, size, duration_ms in send_log:
         size = max(size, 0)
@@ -241,9 +277,18 @@ def _audio_bytes_likely_heard_hybrid(
     *,
     ack_stale_ms: int,
     ack_tail_cap_ms: int,
+    send_log_base_bytes: int = 0,
+    send_log_base_playout_start: float | None = None,
+    send_log_base_playout_cursor: float | None = None,
 ) -> int:
     """Estimate heard bytes using playback acks with heuristic stale fallback."""
-    heuristic_heard = _audio_bytes_likely_heard(send_log, cutoff_time)
+    heuristic_heard = _audio_bytes_likely_heard(
+        send_log,
+        cutoff_time,
+        send_log_base_bytes=send_log_base_bytes,
+        send_log_base_playout_start=send_log_base_playout_start,
+        send_log_base_playout_cursor=send_log_base_playout_cursor,
+    )
     if cutoff_time is None or not playback_ack_log:
         return heuristic_heard
 
@@ -324,6 +369,9 @@ def estimate_and_notify_interruption(
         cutoff_time,
         ack_stale_ms=ack_stale_ms,
         ack_tail_cap_ms=ack_tail_cap_ms,
+        send_log_base_bytes=turn.audio_send_log_base_bytes,
+        send_log_base_playout_start=turn.audio_send_log_base_playout_start,
+        send_log_base_playout_cursor=turn.audio_send_log_base_playout_cursor,
     )
 
     if not _all_tts_audio_delivered(tts_chunks, heard_bytes):
