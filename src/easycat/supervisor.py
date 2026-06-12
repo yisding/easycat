@@ -71,10 +71,18 @@ def supervisor_auth_token_from_env(name: str = SUPERVISOR_TOKEN_ENV) -> str | No
 def supervisor_message_authorized(
     message: Mapping[str, object],
     expected_token: str | None,
+    *,
+    allow_unauthenticated: bool = False,
 ) -> bool:
-    """Check an optional supervisor subscription token."""
+    """Check a supervisor subscription token.
+
+    Supervisor listen-in streams live caller and assistant audio, so helpers fail
+    closed unless a token is configured.  Tests or tightly controlled in-process
+    callers can opt into unauthenticated mode explicitly with
+    ``allow_unauthenticated=True``.
+    """
     if expected_token is None:
-        return True
+        return allow_unauthenticated
     supplied_token = message.get("token")
     return isinstance(supplied_token, str) and hmac.compare_digest(
         supplied_token,
@@ -107,23 +115,34 @@ async def serve_supervisor_websocket(
     *,
     expected_token: str | None = None,
     subscribe_timeout_s: float = 10.0,
+    allow_unauthenticated: bool = False,
 ) -> None:
     """Serve one passive supervisor WebSocket connection.
 
     The client must send ``{"type": "subscribe", "session_id": "..."}``
-    after the initial hello. When ``expected_token`` is set, the subscribe
-    message must include a matching ``token`` string. Once subscribed, the
+    after the initial hello. The subscribe message must include a ``token``
+    string matching ``expected_token`` unless the caller explicitly opts into
+    unauthenticated mode with ``allow_unauthenticated=True``. Once subscribed, the
     helper streams serialized audio frames from the requested
     :class:`SessionAudioBroadcaster` until the caller session closes or the
     supervisor disconnects.
     """
+    if expected_token is None and not allow_unauthenticated:
+        await _close_supervisor_with_error(
+            ws,
+            code=4401,
+            reason="Unauthorized",
+            message=f"Supervisor token is not configured; set {SUPERVISOR_TOKEN_ENV}.",
+        )
+        return
+
     await _send_supervisor_json(
         ws,
         {
             "type": "hello",
             "role": "supervisor",
-            "auth_required": expected_token is not None,
-            "message": 'Send {"type":"subscribe","session_id":"..."}',
+            "auth_required": not allow_unauthenticated,
+            "message": 'Send {"type":"subscribe","session_id":"...","token":"..."}',
         },
     )
 
@@ -158,7 +177,11 @@ async def serve_supervisor_websocket(
         )
         return
 
-    if not supervisor_message_authorized(message, expected_token):
+    if not supervisor_message_authorized(
+        message,
+        expected_token,
+        allow_unauthenticated=allow_unauthenticated,
+    ):
         await _close_supervisor_with_error(
             ws,
             code=4401,

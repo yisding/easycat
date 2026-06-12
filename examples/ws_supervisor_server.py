@@ -4,13 +4,13 @@ This example keeps EasyCat's existing "one session per caller connection"
 model.  A second WebSocket endpoint fans session audio out to passive
 supervisors that subscribe by ``session_id``.
 
-By default, the supervisor endpoint is unauthenticated for local demos. Set
-``EASYCAT_SUPERVISOR_TOKEN`` to require that token in supervisor subscribe
-messages before exposing this example beyond localhost.
+The supervisor endpoint streams live caller and assistant audio, so the example
+requires ``EASYCAT_SUPERVISOR_TOKEN`` and checks it on every supervisor
+subscribe request.
 
 Setup:
     export OPENAI_API_KEY="..."
-    export EASYCAT_SUPERVISOR_TOKEN="..."  # optional but recommended
+    export EASYCAT_SUPERVISOR_TOKEN="..."
     uv sync --extra openai --extra openai-agents --group dev
     uv run easycat doctor
     uv run easycat doctor --env-file .env  # if keys live in .env
@@ -71,14 +71,11 @@ async def main() -> None:
 
     manager: SessionManager[str] = SessionManager()
     broadcasters: dict[str, SessionAudioBroadcaster] = {}
+    require_env(SUPERVISOR_TOKEN_ENV)
     supervisor_token = supervisor_auth_token_from_env()
     if supervisor_token is None:
-        logger.warning(
-            "Supervisor endpoint is unauthenticated; set %s before exposing it.",
-            SUPERVISOR_TOKEN_ENV,
-        )
-    else:
-        logger.info("Supervisor token auth is enabled.")
+        raise RuntimeError(f"{SUPERVISOR_TOKEN_ENV} must not be empty")
+    logger.info("Supervisor token auth is enabled.")
 
     http_thread = threading.Thread(target=_run_http_server, daemon=True)
     http_thread.start()
