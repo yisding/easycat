@@ -213,6 +213,27 @@ def test_validate_report_cli_rejects_unknown_kind(cli: CliRunner, tmp_path: Path
     assert "unknown validation report kind: other" in result.stdout
 
 
+def test_validate_report_cli_json_rejects_malformed_exit_code_with_envelope(
+    cli: CliRunner,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "report.json"
+    payload = _validation_run().to_dict()
+    payload["exit_code"] = {"bad": 1}
+    report_path.write_text(json.dumps(payload))
+
+    result = cli.invoke(app, ["validate", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "validate report"
+    assert payload["status"] == "error"
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 2
+    assert "exit_code must be an integer" in payload["message"]
+
+
 def test_validate_report_cli_json_rejects_unknown_kind_with_envelope(
     cli: CliRunner,
     tmp_path: Path,

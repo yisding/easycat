@@ -655,7 +655,7 @@ def report_command(
     """Render a concise validation report summary."""
     payload = _load_report_payload(path, json_output=json_output)
     status = str(payload.get("status", "unknown"))
-    exit_code = int(payload.get("exit_code", 1) or 0)
+    exit_code = _report_exit_code(payload, path, json_output=json_output)
 
     if json_output:
         emit_json(
@@ -739,6 +739,25 @@ def _format_percentile_value(value: object) -> str:
             return str(int(value))
         return f"{value:.2f}"
     return str(value)
+
+
+def _report_exit_code(
+    payload: dict[str, object],
+    path: Path,
+    *,
+    json_output: bool,
+) -> int:
+    raw_exit_code = payload.get("exit_code", 1)
+    if raw_exit_code is None:
+        return 0
+    try:
+        return int(raw_exit_code)
+    except (TypeError, ValueError):
+        _report_load_error(
+            path,
+            "invalid validation report JSON: exit_code must be an integer",
+            json_output=json_output,
+        )
 
 
 def _report_load_error(path: Path, message: str, *, json_output: bool) -> NoReturn:
