@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -179,6 +180,32 @@ class TestTemplateDefaults:
         assert "history_len" in payload
         assert "sk-secret" not in payload
         assert "api_key" not in payload
+
+    def test_serialized_state_recursively_scrubs_nested_secret_fields(self):
+        class _NestedSecretBridge(_MinimalBridge):
+            def snapshot_state(self):
+                return FrameworkStateSnapshot(
+                    fields={
+                        "history_len": 2,
+                        "api_key": "TOP_LEVEL_DROPPED",
+                        "config": {"api_key": "NESTED_KEY_LEAK", "safe": "ok"},
+                        "headers": {"authorization": "Bearer NESTED_AUTH_LEAK"},
+                        "messages": [{"role": "system", "token": "NESTED_TOKEN_LEAK"}],
+                    },
+                    kind="minimal",
+                )
+
+        payload = _NestedSecretBridge()._serialize_framework_state().decode()
+        state = json.loads(payload)
+
+        assert "api_key" not in state
+        assert state["config"] == {"api_key": "[REDACTED_SECRET]", "safe": "ok"}
+        assert state["headers"] == {"authorization": "[REDACTED_SECRET]"}
+        assert state["messages"] == [{"role": "system", "token": "[REDACTED_SECRET]"}]
+        assert "TOP_LEVEL_DROPPED" not in payload
+        assert "NESTED_KEY_LEAK" not in payload
+        assert "NESTED_AUTH_LEAK" not in payload
+        assert "NESTED_TOKEN_LEAK" not in payload
 
     def test_serialized_state_degrades_to_empty_on_snapshot_failure(self):
         class _Broken(_MinimalBridge):
