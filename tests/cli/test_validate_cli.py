@@ -452,6 +452,83 @@ def test_validate_release_cli_show_output_streams_child_report_logs(
         assert "release: fail" in result.stdout
 
 
+def test_validate_release_cli_show_output_ignores_untrusted_child_report_log_paths(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_dir = tmp_path / "parent"
+    child_dir = tmp_path / "child"
+    outside_dir = tmp_path / "outside"
+    parent_dir.mkdir()
+    child_dir.mkdir()
+    outside_dir.mkdir()
+    parent_stdout = parent_dir / "stdout.log"
+    parent_stderr = parent_dir / "stderr.log"
+    parent_report = parent_dir / "report.json"
+    child_report = child_dir / "report.json"
+    outside_secret = outside_dir / "secret.txt"
+    parent_stdout.write_text("release stdout\n", encoding="utf-8")
+    parent_stderr.write_text("release stderr\n", encoding="utf-8")
+    outside_secret.write_text("EASYCAT_POC_SECRET=child_report_arbitrary_read\n", encoding="utf-8")
+
+    child_payload = {
+        "kind": "validation_run",
+        "schema_version": 1,
+        "artifacts": {
+            "stdout": {"kind": "not_stdout", "path": str(outside_secret)},
+            "stderr": {"kind": "stderr", "path": str(outside_secret)},
+        },
+    }
+    child_report.write_text(json.dumps(child_payload), encoding="utf-8")
+
+    parent_run = _validation_run(
+        run_id="20260523T120000Z-release-parent",
+        command=["easycat", "validate", "release"],
+        status="fail",
+        exit_code=1,
+        tool_exit_codes={"release.quick": 1},
+        checks=[
+            ValidationCheck(
+                name="release.quick",
+                status="fail",
+                duration_s=1.0,
+                artifacts={
+                    "report": ArtifactRef(kind="validation_report", path=str(child_report)),
+                },
+            )
+        ],
+        artifacts={
+            "report": ArtifactRef(kind="validation_report", path=str(parent_report)),
+            "stdout": ArtifactRef(kind="stdout", path=str(parent_stdout)),
+            "stderr": ArtifactRef(kind="stderr", path=str(parent_stderr)),
+            "quick_report": ArtifactRef(kind="validation_report", path=str(child_report)),
+        },
+    )
+    parent_report.write_text(parent_run.to_json(), encoding="utf-8")
+
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+        return ValidationRunResult(
+            run=parent_run,
+            run_dir=parent_dir,
+            report_path=parent_report,
+            exit_code=1,
+        )
+
+    monkeypatch.setattr(
+        "easycat.cli.validate.run_release_validation",
+        fake_run_release_validation,
+    )
+
+    result = cli.invoke(app, ["validate", "release", "--show-output"])
+
+    assert result.exit_code == 1
+    assert "release stdout" in result.stdout
+    assert "release stderr" in result.stderr
+    assert "EASYCAT_POC_SECRET" not in result.stdout
+    assert "EASYCAT_POC_SECRET" not in result.stderr
+
+
 def test_validate_release_cli_rejects_conflicting_latency_modes(cli: CliRunner) -> None:
     result = cli.invoke(
         app,

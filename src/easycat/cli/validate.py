@@ -15,6 +15,7 @@ from easycat.cli._output import (
     stdout_console,
 )
 from easycat.validation.latency import LatencyMode
+from easycat.validation.report import redact_runtime_secrets
 from easycat.validation.runner import (
     ValidationRunResult,
     run_latency_validation,
@@ -35,6 +36,7 @@ _ARTIFACTS_DIR_HELP = (
     "Validation artifact root directory; writes runs/<id>/report.json and latest.json."
 )
 _SHOW_OUTPUT_HELP = "Also print captured validation stdout/stderr while keeping artifacts."
+_MAX_STREAMED_LOG_BYTES = 10 * 1024 * 1024
 
 
 def _print_literal(line: str) -> None:
@@ -95,6 +97,7 @@ def _stream_validation_output(
         stderr_log,
         json_output=json_output,
         streamed_paths=streamed_paths,
+        allowed_dir=result.run_dir,
     )
 
     if not include_child_reports:
@@ -105,10 +108,11 @@ def _stream_validation_output(
         if payload is None:
             continue
         _stream_artifact_logs(
-            _payload_artifact_path(payload, "stdout"),
-            _payload_artifact_path(payload, "stderr"),
+            _payload_artifact_path(payload, "stdout", allowed_dir=report_path.parent),
+            _payload_artifact_path(payload, "stderr", allowed_dir=report_path.parent),
             json_output=json_output,
             streamed_paths=streamed_paths,
+            allowed_dir=report_path.parent,
         )
 
 
@@ -118,11 +122,12 @@ def _stream_artifact_logs(
     *,
     json_output: bool,
     streamed_paths: set[Path],
+    allowed_dir: Path,
 ) -> None:
-    if stdout_log is not None and stdout_log.exists():
+    if stdout_log is not None and _streamable_log_path(stdout_log, allowed_dir=allowed_dir):
         target = stderr_console.file if json_output else stdout_console.file
         _write_log_once(target, stdout_log, streamed_paths=streamed_paths)
-    if stderr_log is not None and stderr_log.exists():
+    if stderr_log is not None and _streamable_log_path(stderr_log, allowed_dir=allowed_dir):
         _write_log_once(stderr_console.file, stderr_log, streamed_paths=streamed_paths)
 
 
@@ -186,8 +191,13 @@ def _read_validation_report(path: Path) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _payload_artifact_path(payload: dict[str, object], name: str) -> Path | None:
-    path = _named_payload_artifact_path(payload.get("artifacts"), name)
+def _payload_artifact_path(
+    payload: dict[str, object],
+    name: str,
+    *,
+    allowed_dir: Path,
+) -> Path | None:
+    path = _named_payload_artifact_path(payload.get("artifacts"), name, allowed_dir=allowed_dir)
     if path is not None:
         return path
 
@@ -197,20 +207,44 @@ def _payload_artifact_path(payload: dict[str, object], name: str) -> Path | None
     for check in checks:
         if not isinstance(check, dict):
             continue
-        path = _named_payload_artifact_path(check.get("artifacts"), name)
+        path = _named_payload_artifact_path(check.get("artifacts"), name, allowed_dir=allowed_dir)
         if path is not None:
             return path
     return None
 
 
-def _named_payload_artifact_path(artifacts: object, name: str) -> Path | None:
+def _named_payload_artifact_path(
+    artifacts: object,
+    name: str,
+    *,
+    allowed_dir: Path,
+) -> Path | None:
     if not isinstance(artifacts, dict):
         return None
     artifact = artifacts.get(name)
-    if not isinstance(artifact, dict):
+    if not isinstance(artifact, dict) or artifact.get("kind") != name:
         return None
     path = artifact.get("path")
-    return Path(str(path)) if path else None
+    if not isinstance(path, str) or not path:
+        return None
+
+    candidate = Path(path)
+    return candidate if _streamable_log_path(candidate, allowed_dir=allowed_dir) else None
+
+
+def _streamable_log_path(path: Path, *, allowed_dir: Path) -> bool:
+    try:
+        resolved_path = path.resolve(strict=True)
+        resolved_dir = allowed_dir.resolve(strict=True)
+        path_stat = path.lstat()
+    except OSError:
+        return False
+
+    if path_stat.st_size > _MAX_STREAMED_LOG_BYTES:
+        return False
+    if path.is_symlink() or not path.is_file():
+        return False
+    return resolved_path.is_relative_to(resolved_dir)
 
 
 def _write_log_once(target: TextIO, path: Path, *, streamed_paths: set[Path]) -> None:
@@ -218,7 +252,7 @@ def _write_log_once(target: TextIO, path: Path, *, streamed_paths: set[Path]) ->
     if key in streamed_paths:
         return
     streamed_paths.add(key)
-    _write_log(target, path.read_text(encoding="utf-8"))
+    _write_log(target, redact_runtime_secrets(path.read_text(encoding="utf-8")))
 
 
 def _path_key(path: Path) -> Path:
