@@ -89,10 +89,13 @@ uv run pytest
   `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`.
 - **Harden production webhooks:** copy signature validation, status callbacks,
   and outbound call helpers from `examples/twilio_app.py`.
-- **Debug a session:** pass `debug="full", record_to="runs"` to
+- **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
   `EasyConfig(...)`. EasyCat writes a SQLite journal under `.easycat/journals/`
-  and a timestamped `RunBundle` under `runs/`; inspect the journal with
+  and a timestamped `RunBundle` under `.easycat/runs/`; inspect the journal with
   `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+  Debug bundles can contain raw transcripts, tool arguments, provider payloads,
+  and artifacts; keep them in the gitignored `.easycat/` tree unless you
+  redact them first.
 - **Graduate to the Session API:** when you need event subscriptions, text
   turns, or replayable debug bundles beyond `run(...)`, follow the
   from-EasyConfig-to-Session guide:
