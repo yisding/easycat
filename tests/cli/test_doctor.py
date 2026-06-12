@@ -440,6 +440,29 @@ def test_check_journal_writable_fails_on_readonly(
     assert result.code == "EASYCAT_E207"
 
 
+def test_check_journal_writable_does_not_follow_fixed_probe_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
+) -> None:
+    """A pre-existing fixed-name probe symlink must not be overwritten."""
+    data_dir = tmp_path / "data"
+    journal_dir = data_dir / "journals"
+    journal_dir.mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_bytes(b"keep me")
+    fixed_probe = journal_dir / ".doctor-write-probe"
+    try:
+        fixed_probe.symlink_to(victim)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(data_dir))
+
+    result = doctor_module.check_journal_writable()
+
+    assert result.status == "ok", result.detail
+    assert victim.read_bytes() == b"keep me"
+    assert fixed_probe.is_symlink()
+
+
 def test_check_disk_space_reports_free_megabytes(
     monkeypatch: pytest.MonkeyPatch, tmp_path, empty_env: None
 ) -> None:
