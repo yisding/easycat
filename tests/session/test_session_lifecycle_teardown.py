@@ -357,3 +357,55 @@ async def test_reset_state():
     await session.reset_state()
     assert session.turn_state == TurnState.IDLE
     assert turn.cancel_token.is_cancelled
+
+
+class BlockingClearTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.clear_started = asyncio.Event()
+        self.clear_continue = asyncio.Event()
+        self.queue_size_at_clear: int | None = None
+        self.observed_queue: BoundedAudioQueue | None = None
+
+    async def clear_audio(self) -> None:
+        assert self.observed_queue is not None
+        self.queue_size_at_clear = self.observed_queue.qsize()
+        self.clear_started.set()
+        await self.clear_continue.wait()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["cancel_turn", "cancel_tts_playback", "reset_state"])
+async def test_cancellation_flushes_outbound_audio_before_transport_clear(method_name: str):
+    transport = BlockingClearTransport()
+    session = Session(_full_config(transport=transport))
+    transport.observed_queue = session._outbound_queue
+    await session._outbound_queue.put(_make_chunk())
+
+    task = asyncio.create_task(getattr(session, method_name)())
+    await asyncio.wait_for(transport.clear_started.wait(), timeout=1)
+
+    assert transport.queue_size_at_clear == 0
+    assert session._outbound_queue.empty()
+
+    transport.clear_continue.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_cancel_tts_playback_does_not_let_drain_send_queued_audio_after_clear():
+    transport = BlockingClearTransport()
+    session = Session(_full_config(transport=transport))
+    transport.observed_queue = session._outbound_queue
+    await session._outbound_queue.put(_make_chunk())
+
+    cancel_task = asyncio.create_task(session.cancel_tts_playback())
+    await asyncio.wait_for(transport.clear_started.wait(), timeout=1)
+
+    await session._audio_router._drain_outbound_audio()
+
+    assert transport.queue_size_at_clear == 0
+    assert transport.sent == []
+
+    transport.clear_continue.set()
+    await cancel_task

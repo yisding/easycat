@@ -1236,9 +1236,9 @@ class Session:
 
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
-        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
+        await clear_audio_if_supported(self.transport)
 
         if not barge_in:
             self._reset_turn_state()
@@ -1257,9 +1257,9 @@ class Session:
         """
         self._tts_scheduler.set_playback_suppressed(True)
         await self._tts_scheduler.synthesizer.cancel()
-        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
+        await clear_audio_if_supported(self.transport)
         if self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             self._reset_turn_state()
 
@@ -1274,9 +1274,9 @@ class Session:
 
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
-        await clear_audio_if_supported(self.transport)
         self._outbound_queue.flush_for_new_turn()
         self._audio_router.reset_replay_chunks()
+        await clear_audio_if_supported(self.transport)
 
         self.agent.reset()
         self._agent_stage.reset_history()
