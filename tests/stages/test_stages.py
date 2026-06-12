@@ -740,6 +740,25 @@ class TestStageExecuteRecording:
         complete = next(r for r in records if r.name == "stage_complete")
         assert complete.data.get("delivered") is False
 
+    async def test_transport_stage_treats_legacy_none_return_as_delivered(self):
+        class _LegacyTransport:
+            async def send_audio(self, chunk):
+                self.sent = chunk
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        transport = _LegacyTransport()
+        stage = TransportStage(transport, journal=journal)
+
+        delivered = await stage.execute(b"chunk", ctx, turn)
+
+        assert delivered is True
+        assert transport.sent == b"chunk"
+        records = journal.read()
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert complete.data.get("delivered") is True
+
     def test_transport_live_replay_returns_captured_outbound_bytes(self):
         """LIVE replay reads the captured outbound bytes from the
         ``stage_complete`` ``output_ref`` (execute never writes ``input_ref``,
