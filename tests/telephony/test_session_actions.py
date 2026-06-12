@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from easycat.session.actions import (
+    MAX_DTMF_INTER_DIGIT_DELAY_MS,
     EndCallAction,
     SendDTMFAction,
     SendSMSAction,
@@ -19,6 +20,7 @@ from easycat.session.actions import (
 from easycat.telephony.session_actions import (
     TwilioSessionActionConfig,
     TwilioSessionActionExecutor,
+    _apply_inter_digit_delay,
 )
 from easycat.telephony.twiml import (
     compute_twilio_webhook_signature,
@@ -153,6 +155,12 @@ async def test_twilio_dtmf_action_inserts_delays() -> None:
 
     assert result.metadata["digits"] == "1W2W3"
     assert 'digits="1W2W3"' in client.calls.updater.updates[0]["twiml"]
+
+
+def test_apply_inter_digit_delay_clamps_large_delay() -> None:
+    digits = _apply_inter_digit_delay("12", MAX_DTMF_INTER_DIGIT_DELAY_MS * 1000)
+
+    assert digits == "1" + ("W" * 10) + "2"
 
 
 @pytest.mark.asyncio

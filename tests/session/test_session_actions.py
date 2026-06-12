@@ -22,6 +22,8 @@ from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
 from easycat.session.actions import (
+    MAX_DTMF_DIGITS,
+    MAX_DTMF_INTER_DIGIT_DELAY_MS,
     CustomAction,
     EndCallAction,
     SendDTMFAction,
@@ -163,6 +165,20 @@ class TestSessionActionsQueue:
         assert isinstance(drained[0], SendDTMFAction)
         assert drained[0].digits == "1234#"
         assert drained[0].inter_digit_delay_ms == 250
+
+    def test_send_dtmf_rejects_excessive_input(self) -> None:
+        actions = SessionActions()
+
+        with pytest.raises(ValueError, match="DTMF digits"):
+            actions.send_dtmf("1" * (MAX_DTMF_DIGITS + 1))
+        with pytest.raises(ValueError, match="inter_digit_delay_ms"):
+            actions.send_dtmf("12", inter_digit_delay_ms=MAX_DTMF_INTER_DIGIT_DELAY_MS + 1)
+        with pytest.raises(ValueError, match="inter_digit_delay_ms"):
+            actions.send_dtmf("12", inter_digit_delay_ms=-1)
+
+    def test_transfer_plan_rejects_excessive_post_dial_digits(self) -> None:
+        with pytest.raises(ValueError, match="DTMF digits"):
+            TransferPlan(post_dial_digits="w" * (MAX_DTMF_DIGITS + 1))
 
     def test_custom_action_enqueues_payload(self) -> None:
         actions = SessionActions()
