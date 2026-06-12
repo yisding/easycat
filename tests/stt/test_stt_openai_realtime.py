@@ -549,6 +549,48 @@ async def test_openai_realtime_promotes_partial_on_final_timeout(
 
 
 @pytest.mark.asyncio
+async def test_openai_realtime_allows_late_completed_when_timeout_had_no_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If no partial was available to promote on timeout, the delayed
+    ``.completed`` transcript is still the only final and must be emitted."""
+    monkeypatch.setattr(realtime_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    class _StubWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ws = _StubWS()  # type: ignore[assignment]
+    stt._audio_pending_commit = True
+    stt._bytes_since_last_commit = stt._COMMIT_MIN_BYTES
+    stt._partial_text = ""
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    result = await stt._send_commit(wait_for_final=True)
+
+    assert result is True, "commit should still report a successful send"
+    assert emitted == [], "no fallback final should be emitted without partial text"
+    assert stt._dropping_pending_final is False, (
+        "drop flag should not be armed unless a fallback FINAL was emitted"
+    )
+
+    stt._handle_json_message(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "transcript": "delayed only final transcript",
+        }
+    )
+
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["delayed only final transcript"]
+
+
+@pytest.mark.asyncio
 async def test_openai_realtime_drops_late_completed_after_timeout() -> None:
     """Once the timeout has promoted the partial to FINAL, a late
     ``.completed`` for the same commit is swallowed rather than
