@@ -252,7 +252,12 @@ def test_supervisor_auth_token_from_env_and_message_authorization(
 ) -> None:
     monkeypatch.delenv("EASYCAT_SUPERVISOR_TOKEN", raising=False)
     assert supervisor_auth_token_from_env() is None
-    assert supervisor_message_authorized({"type": "subscribe"}, None)
+    assert not supervisor_message_authorized({"type": "subscribe"}, None)
+    assert supervisor_message_authorized(
+        {"type": "subscribe"},
+        None,
+        allow_unauthenticated=True,
+    )
 
     monkeypatch.setenv("EASYCAT_SUPERVISOR_TOKEN", " secret ")
     assert supervisor_auth_token_from_env() == "secret"
@@ -316,14 +321,28 @@ async def test_serve_supervisor_websocket_subscribes_and_streams_audio() -> None
 
 @pytest.mark.asyncio
 async def test_serve_supervisor_websocket_rejects_unknown_session() -> None:
-    ws = _FakeSupervisorWebSocket([json.dumps({"type": "subscribe", "session_id": "missing"})])
+    ws = _FakeSupervisorWebSocket(
+        [json.dumps({"type": "subscribe", "session_id": "missing", "token": "secret"})]
+    )
 
-    await serve_supervisor_websocket(ws, {}, expected_token=None)
+    await serve_supervisor_websocket(ws, {}, expected_token="secret")
 
     error = await _wait_for_sent_type(ws, "error")
     assert error["message"] == "No active caller session found for missing."
     assert ws.close_code == 4404
     assert ws.close_reason == "Unknown session"
+
+
+@pytest.mark.asyncio
+async def test_serve_supervisor_websocket_fails_closed_without_token() -> None:
+    ws = _FakeSupervisorWebSocket([json.dumps({"type": "subscribe", "session_id": "session-a"})])
+
+    await serve_supervisor_websocket(ws, {}, expected_token=None)
+
+    error = await _wait_for_sent_type(ws, "error")
+    assert error["message"] == "Supervisor token is not configured; set EASYCAT_SUPERVISOR_TOKEN."
+    assert ws.close_code == 4401
+    assert ws.close_reason == "Unauthorized"
 
 
 @pytest.mark.asyncio
