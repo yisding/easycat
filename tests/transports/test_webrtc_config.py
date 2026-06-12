@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easycat.audio_format import PCM16_MONO_16K
 from easycat.transports.webrtc import (
     ICEServer,
@@ -24,6 +26,13 @@ class TestWebRTCTransportConfig:
         assert "stun:" in config.ice_servers[0].urls[0]
         assert config.cors_allowed_origins == ()
         assert config.stats_path is None
+
+    @pytest.mark.asyncio
+    async def test_non_loopback_bind_requires_auth_token(self):
+        transport = WebRTCTransport(WebRTCTransportConfig(host="0.0.0.0"))
+
+        with pytest.raises(ValueError, match="auth_token"):
+            await transport.connect()
 
     def test_stats_path_defaults_from_validation_env(self, monkeypatch):
         monkeypatch.setenv("EASYCAT_WEBRTC_STATS_PATH", "/tmp/easycat-webrtc-stats.jsonl")
@@ -65,6 +74,7 @@ class TestWebRTCTransportConfig:
             "TURN_USERNAME",
             "TURN_CREDENTIAL",
             "WEBRTC_EXPOSE_ICE_CREDENTIALS",
+            "WEBRTC_SIGNALING_TOKEN",
         ):
             monkeypatch.delenv(name, raising=False)
 
@@ -73,6 +83,7 @@ class TestWebRTCTransportConfig:
         assert config.host == "127.0.0.1"
         assert config.port == 8080
         assert config.static_dir == WebRTCTransportConfig._USE_BUNDLED
+        assert config.auth_token is None
         assert config.expose_ice_credentials is False
         assert len(config.ice_servers) == 1
         assert config.ice_servers[0].urls == ["stun:stun.l.google.com:19302"]
@@ -84,12 +95,14 @@ class TestWebRTCTransportConfig:
         monkeypatch.setenv("TURN_USERNAME", "turn-user")
         monkeypatch.setenv("TURN_CREDENTIAL", "turn-secret")
         monkeypatch.setenv("WEBRTC_EXPOSE_ICE_CREDENTIALS", "yes")
+        monkeypatch.setenv("WEBRTC_SIGNALING_TOKEN", "signaling-secret")
 
         config = webrtc_transport_config_from_env(static_dir="/tmp/web")
 
         assert config.host == "0.0.0.0"
         assert config.port == 9090
         assert config.static_dir == "/tmp/web"
+        assert config.auth_token == "signaling-secret"
         assert config.expose_ice_credentials is True
         assert [server.urls[0] for server in config.ice_servers] == [
             "stun:stun.l.google.com:19302",

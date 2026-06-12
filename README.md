@@ -789,7 +789,9 @@ providers, debug bundles, and journal inspection.
 
 If browser clients are remote (not localhost), run behind HTTPS and configure
 TURN (`TURN_SERVER_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`) for NAT traversal.
-The public `/config` endpoint hides TURN credentials by default; set
+Set `WEBRTC_SIGNALING_TOKEN` when binding `SIGNALING_HOST` to a public address;
+the bundled client forwards `?token=...` as a bearer token. The public
+`/config` endpoint hides TURN credentials by default; set
 `WEBRTC_EXPOSE_ICE_CREDENTIALS=1` only for trusted demos or short-lived TURN
 credentials when browser-side relay candidates are required. The bundled
 browser client is served same-origin, so WebRTC signaling sends no wildcard

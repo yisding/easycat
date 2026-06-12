@@ -19,6 +19,7 @@
 # Usage:
 #   export OPENAI_API_KEY="sk-..."
 #   export TURN_PASSWORD="some-secure-password"
+#   export WEBRTC_SIGNALING_TOKEN="some-secure-signaling-token"  # optional; generated if unset
 #   bash deploy.sh
 #
 set -euo pipefail
@@ -48,12 +49,14 @@ if [ -z "$EXTERNAL_IP" ]; then
 fi
 
 TURN_PASSWORD="${TURN_PASSWORD:-$(openssl rand -base64 24)}"
+WEBRTC_SIGNALING_TOKEN="${WEBRTC_SIGNALING_TOKEN:-$(openssl rand -base64 32)}"
 OPENAI_API_KEY="${OPENAI_API_KEY:?Set OPENAI_API_KEY before running this script}"
 INSTALL_DIR="/opt/easycat"
 
 echo "=== EasyCat WebRTC Deployment ==="
 echo "  EC2 public IP:   $EXTERNAL_IP"
 echo "  TURN password:   $TURN_PASSWORD"
+echo "  Signaling token: configured (stored in $INSTALL_DIR/.env)"
 echo "  Install dir:     $INSTALL_DIR"
 echo ""
 
@@ -158,6 +161,7 @@ sudo tee "$INSTALL_DIR/.env" > /dev/null <<EOF
 OPENAI_API_KEY=$OPENAI_API_KEY
 SIGNALING_HOST=0.0.0.0
 SIGNALING_PORT=8080
+WEBRTC_SIGNALING_TOKEN=$WEBRTC_SIGNALING_TOKEN
 TURN_SERVER_URL=turn:$EXTERNAL_IP:3478
 TURN_USERNAME=easycat
 TURN_CREDENTIAL=$TURN_PASSWORD
@@ -180,7 +184,7 @@ echo ""
 echo "=== Deployment complete ==="
 echo ""
 echo "  Backend HTTP URL: http://$EXTERNAL_IP:8080/webrtc_client.html"
-echo "  Browser URL:      https://<your-domain>/webrtc_client.html  (after TLS proxy)"
+echo "  Browser URL:      https://<your-domain>/webrtc_client.html?token=<WEBRTC_SIGNALING_TOKEN>"
 echo "  Signaling URL:    https://<your-domain>                     (after TLS proxy)"
 echo "  TURN server:     turn:$EXTERNAL_IP:3478"
 echo "  TURN user:       easycat"
