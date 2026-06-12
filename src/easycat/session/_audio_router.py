@@ -634,13 +634,25 @@ class AudioRouter:
             finally:
                 self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
                 self._update_outbound_idle()
+                replay_pending_finished = False
                 if replayed_chunk:
                     self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
-                    if (
-                        self._replay_chunks_pending == 0
-                        and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                    ):
-                        await self._turn_manager.bot_stopped_speaking()
+                    replay_pending_finished = self._replay_chunks_pending == 0
+                if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
+                    # ``DROP_OLDEST`` queues can evict replay chunks before
+                    # the drain loop ever sees them.  Once the real queue is
+                    # empty, no additional replay-tagged chunks can arrive
+                    # from the current batch, so reconcile the logical
+                    # counter with the retained/drained chunks.  This must run
+                    # after non-replay chunks too, because interleaved live
+                    # audio can be the final retained queue item.
+                    self._replay_chunks_pending = 0
+                    replay_pending_finished = True
+                if (
+                    replay_pending_finished
+                    and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                ):
+                    await self._turn_manager.bot_stopped_speaking()
 
         # Send a final mark for any trailing bytes
         turn = self._current_turn()

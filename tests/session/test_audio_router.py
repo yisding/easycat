@@ -373,6 +373,54 @@ async def test_gated_replay_enqueues_chunks_and_transitions_to_bot_speaking():
 
 
 @pytest.mark.asyncio
+async def test_gated_replay_overflow_reconciles_pending_count_after_drain():
+    queue = BoundedAudioQueue(max_size=3, name="test_outbound")
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport, outbound_queue=queue)
+    state["running"] = False
+    events = [TTSAudio(chunk=_make_chunk(byte_value=i + 1)) for i in range(5)]
+
+    await router.gated_replay(events)
+
+    assert state["tm"].state == TurnManagerState.BOT_SPEAKING
+    assert queue.qsize() == 3
+    assert queue.drops == 2
+    assert router._replay_chunks_pending == 5
+
+    await router._drain_outbound_audio()
+
+    assert len(transport.sent) == 3
+    assert queue.empty()
+    assert router._replay_chunks_pending == 0
+    assert state["tm"].state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_gated_replay_overflow_reconciles_when_non_replay_chunk_drains_last():
+    queue = BoundedAudioQueue(max_size=3, name="test_outbound")
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport, outbound_queue=queue)
+    state["running"] = False
+    events = [TTSAudio(chunk=_make_chunk(byte_value=i + 1)) for i in range(5)]
+
+    await router.gated_replay(events)
+    live_chunk = _make_chunk(byte_value=99)
+    await queue.put(live_chunk)
+
+    assert state["tm"].state == TurnManagerState.BOT_SPEAKING
+    assert queue.qsize() == 3
+    assert queue.drops == 3
+    assert router._replay_chunks_pending == 5
+
+    await router._drain_outbound_audio()
+
+    assert transport.sent[-1] is live_chunk
+    assert queue.empty()
+    assert router._replay_chunks_pending == 0
+    assert state["tm"].state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_on_audio_delivered_emits_audio_out():
     turn = TurnContext(turn_id="t", cancel_token=CancelToken())
     router, state = _make_router(current_turn=turn)
