@@ -42,10 +42,8 @@ from easycat.tts.input import TTSInput, strip_ssml_tags
 #
 # sentencesplit's ``segment_with_lookahead`` probes tiny suffixes to
 # detect whether the final boundary could still shift once more streaming
-# text arrives (e.g. "GPT 3." might become "GPT 3.5").  ``char_span=True``
-# asks it for TextSpan objects with start/end offsets so we can slice
-# without a second segmentation pass.
-_SENTENCE_SEGMENTER = sentencesplit.Segmenter(language="en", clean=False, char_span=True)
+# text arrives (e.g. "GPT 3." might become "GPT 3.5").
+_SENTENCE_SEGMENTER = sentencesplit.Segmenter(language="en", clean=False)
 
 
 def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
@@ -57,6 +55,11 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     streaming text arrives.  Callers must flush the buffer when the
     stream ends.
     """
+    if not text:
+        return "", ""
+    if not text.strip():
+        return "", text
+
     result = _SENTENCE_SEGMENTER.segment_with_lookahead(text)
     if not result.segments:
         return "", text
