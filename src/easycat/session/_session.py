@@ -1302,7 +1302,7 @@ class Session:
         if self._session_actions is None or not self._session_actions.has_pending:
             return should_stop
 
-        actions = self._session_actions.drain()
+        actions = self._session_actions.drain(preserve_no_interrupt=True)
         for action in actions:
             await self._emit(SessionActionRequested(action=action))
             executor = self._find_action_executor(action)

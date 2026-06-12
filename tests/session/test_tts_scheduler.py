@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
 
@@ -19,6 +19,7 @@ from easycat.runtime.scope import RuntimeScope
 from easycat.session._audio_router import AudioRouter
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._tts_scheduler import TTSScheduler
+from easycat.session.actions import SessionActions
 from easycat.stages.audio import AudioStage
 from easycat.stages.stt import STTStage
 from easycat.stages.transport import TransportStage
@@ -136,6 +137,8 @@ def _build_scheduler(
     strip_markdown_enabled: bool = False,
     is_gated: bool = False,
     drain_should_stop: bool = False,
+    session_actions: SessionActions | None = None,
+    drain_session_actions: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[TTSScheduler, dict[str, object]]:
     bus = EventBus()
     journal = InMemoryRingBuffer()
@@ -185,7 +188,8 @@ def _build_scheduler(
         current_turn=lambda: current_turn_ref["turn"],
         correlation_ids=lambda: (session_id, None),
         is_gated=lambda: is_gated,
-        drain_session_actions=_drain,
+        session_actions=lambda: session_actions,
+        drain_session_actions=drain_session_actions or _drain,
         clear_turn=_clear_turn,
     )
 
@@ -368,6 +372,47 @@ async def test_cancel_cancels_pending_current_task() -> None:
     await scheduler.cancel()
     assert cancelled.is_set()
     assert tts.cancelled == 1
+
+
+# ── Tests: turn finalization ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_finalize_speaking_turn_keeps_no_interrupt_until_outbound_drain() -> None:
+    actions = SessionActions()
+    actions.end_call(reason="done")
+    observations: list[tuple[str, bool]] = []
+
+    async def _drain() -> bool:
+        actions.drain(preserve_no_interrupt=True)
+        observations.append(("after_action_drain", actions.no_interrupt))
+        return True
+
+    tts = _RecordingTTS()
+    scheduler, ctx = _build_scheduler(
+        tts=tts,
+        session_actions=actions,
+        drain_session_actions=_drain,
+    )
+    turn = TurnContext("turn-1", CancelToken())
+    ctx["current_turn_ref"]["turn"] = turn
+    turn_manager = ctx["turn_manager"]
+    await turn_manager.bot_started_speaking()
+
+    async def _await_drain() -> None:
+        observations.append(("during_outbound_drain", actions.no_interrupt))
+
+    ctx["router"].await_drain = _await_drain
+
+    should_stop = await scheduler.finalize_speaking_turn(turn)
+
+    assert should_stop is True
+    assert observations == [
+        ("after_action_drain", True),
+        ("during_outbound_drain", True),
+    ]
+    assert actions.no_interrupt is False
+    assert turn_manager.state.value == "idle"
 
 
 # ── Tests: synthesize_sentences stub ─────────────────────────

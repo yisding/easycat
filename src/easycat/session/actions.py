@@ -197,13 +197,33 @@ class SessionActions:
     ) -> None:
         self.enqueue(CustomAction(name=name, payload=payload or {}, no_interrupt=no_interrupt))
 
-    def drain(self) -> list[SessionAction]:
-        """Remove and return all queued actions."""
+    def drain(self, *, preserve_no_interrupt: bool = False) -> list[SessionAction]:
+        """Remove and return all queued actions.
+
+        Parameters
+        ----------
+        preserve_no_interrupt:
+            Keep the interrupt guard active after removing the actions.
+            Session turn finalization uses this while it executes deferred
+            end-call/transfer actions and waits for already-queued outbound
+            audio to drain.
+        """
         with self._lock:
             actions = list(self._queue)
             self._queue.clear()
-            self._no_interrupt = False
+            if not preserve_no_interrupt:
+                self._no_interrupt = False
             return actions
+
+    def clear_no_interrupt(self) -> None:
+        """Clear any drained-action interrupt guard.
+
+        If another thread queued a new no-interrupt action while the drained
+        actions were being handled, keep the guard active for the still-pending
+        action.
+        """
+        with self._lock:
+            self._no_interrupt = any(action.no_interrupt for action in self._queue)
 
     @property
     def has_pending(self) -> bool:
