@@ -218,7 +218,12 @@ class TTSScheduler:
         )
         if turn_still_current:
             await self._audio_router.flush_trailing_playback_mark(turn)
-            self._clear_turn()
+            turn_still_current = self._current_turn() is turn and (
+                turn_generation is None
+                or (turn is not None and turn.generation == turn_generation)
+            )
+            if turn_still_current:
+                self._clear_turn()
         return should_stop
 
     async def synthesize_bypass(self, text: str) -> None:
