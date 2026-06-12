@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from easycat import (
@@ -38,6 +40,34 @@ def test_easycat_config_openai_defaults():
     # explicit override but is no longer the auto-wired default.
     assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
     assert isinstance(config.tts, OpenAITTSConfig)
+
+
+def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    config = EasyConfig(openai_api_key="programmatic-key", stt="openai-realtime", tts="openai")
+
+    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
+    assert isinstance(config.tts, OpenAITTSConfig)
+    assert config.stt.api_key == "programmatic-key"
+    assert config.tts.api_key == "programmatic-key"
+    assert os.getenv("OPENAI_API_KEY") is None
+
+
+def test_easycat_config_programmatic_openai_key_does_not_overwrite_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+
+    config = EasyConfig(openai_api_key="programmatic-key", stt="openai-realtime", tts="openai")
+
+    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
+    assert isinstance(config.tts, OpenAITTSConfig)
+    assert config.stt.api_key == "programmatic-key"
+    assert config.tts.api_key == "programmatic-key"
+    assert os.getenv("OPENAI_API_KEY") == "env-key"
 
 
 def test_easycat_config_auto_aligns_default_openai_tts_to_twilio_transport_instance():
