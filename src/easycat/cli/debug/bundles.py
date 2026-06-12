@@ -652,10 +652,10 @@ def _load_bundle_or_journal(
             command,
             f"Bundle was written by a newer easycat ({exc}); upgrade easycat to inspect it.",
             json_output=json_output,
-            exit_code=6,
+            exit_code=5,
             path=str(bundle_path),
         )
-        raise typer.Exit(6) from None
+        raise typer.Exit(5) from None
     except BundleInUseError as exc:
         emit_command_error(
             command,
