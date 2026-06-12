@@ -1076,7 +1076,11 @@ class WebRTCTransport(AudioQueueMixin):
         """
         web = self._web
         if self._has_bundled_client:
-            raise web.HTTPFound("/webrtc_client.html")
+            location = "/webrtc_client.html"
+            query_string = getattr(request, "query_string", "")
+            if query_string:
+                location = f"{location}?{query_string}"
+            raise web.HTTPFound(location)
         return web.Response(
             content_type="application/json",
             text=json.dumps(

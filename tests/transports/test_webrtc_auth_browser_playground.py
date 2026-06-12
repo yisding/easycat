@@ -25,6 +25,18 @@ from ._webrtc_fakes import (
 )
 
 
+class _FakeRootRequest:
+    def __init__(self, query_string: str = "") -> None:
+        self.query_string = query_string
+
+
+class _FakeRootWeb(_FakeWeb):
+    class HTTPFound(Exception):
+        def __init__(self, location: str) -> None:
+            super().__init__(location)
+            self.location = location
+
+
 class TestWebRTCBrowserEventChannel:
     """The browser-created "events" data channel carries session events."""
 
@@ -157,6 +169,28 @@ class TestWebRTCAuthToken:
     def test_no_token_means_open_access(self):
         transport = WebRTCTransport()
         assert transport._request_authorized(_FakeOfferRequest()) is True
+
+    @pytest.mark.asyncio
+    async def test_root_redirect_preserves_token_query_for_bundled_client(self):
+        transport = WebRTCTransport()
+        transport._web = _FakeRootWeb
+        transport._has_bundled_client = True
+
+        with pytest.raises(_FakeRootWeb.HTTPFound) as exc_info:
+            await transport._handle_root(_FakeRootRequest("token=sekrit"))
+
+        assert exc_info.value.location == "/webrtc_client.html?token=sekrit"
+
+    @pytest.mark.asyncio
+    async def test_root_redirect_without_query_keeps_existing_location(self):
+        transport = WebRTCTransport()
+        transport._web = _FakeRootWeb
+        transport._has_bundled_client = True
+
+        with pytest.raises(_FakeRootWeb.HTTPFound) as exc_info:
+            await transport._handle_root(_FakeRootRequest())
+
+        assert exc_info.value.location == "/webrtc_client.html"
 
 
 def test_bundled_client_renders_playground_ui():

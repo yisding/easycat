@@ -175,4 +175,10 @@ def test_build_serve_session_wires_browser_transport_and_playground_agent(
 
 def test_playground_url_shapes() -> None:
     assert _playground_url("127.0.0.1", 8080, None) == "http://localhost:8080"
-    assert _playground_url("0.0.0.0", 8443, "t") == "http://0.0.0.0:8443/?token=t"
+    assert (
+        _playground_url("0.0.0.0", 8443, "t") == "http://0.0.0.0:8443/webrtc_client.html?token=t"
+    )
+    assert (
+        _playground_url("0.0.0.0", 8443, "token with/slash")
+        == "http://0.0.0.0:8443/webrtc_client.html?token=token+with%2Fslash"
+    )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlencode
 
 import typer
 
@@ -39,7 +40,8 @@ def _playground_url(host: str, port: int, token: str | None) -> str:
     display_host = "localhost" if host in _LOOPBACK_HOSTS else host
     url = f"http://{display_host}:{port}"
     if token:
-        url = f"{url}/?token={token}"
+        query = urlencode({"token": token})
+        return f"{url}/webrtc_client.html?{query}"
     return url
 
 
