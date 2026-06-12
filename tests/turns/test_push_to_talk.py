@@ -32,6 +32,11 @@ class _ManagedFakeSession(_FakeSession):
         self.exited = True
 
 
+class _FeedbackManagedFakeSession(_ManagedFakeSession):
+    def subscribe_event(self, event_type: object, callback: object) -> None:
+        pass
+
+
 class _Lines:
     def __init__(self, lines: list[str]) -> None:
         self._lines = iter(lines)
@@ -82,7 +87,7 @@ async def test_run_stdin_push_to_talk_exits_on_eof_without_turns() -> None:
 def test_run_stdin_push_to_talk_session_owns_lifecycle_and_feedback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = _ManagedFakeSession()
+    session = _FeedbackManagedFakeSession()
     output: list[str] = []
     attached: list[object] = []
 
@@ -101,3 +106,26 @@ def test_run_stdin_push_to_talk_session_owns_lifecycle_and_feedback(
     assert attached == [session]
     assert "  [turn started - speak now]" in output
     assert "  [turn ended - agent is replying]" in output
+
+
+def test_run_stdin_push_to_talk_session_skips_feedback_for_minimal_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _ManagedFakeSession()
+    output: list[str] = []
+    attached: list[object] = []
+
+    monkeypatch.setattr("easycat.helpers.attach_runtime_feedback", attached.append)
+
+    run_stdin_push_to_talk_session(
+        session,
+        input_stream=_Lines(["\n", ""]),  # type: ignore[arg-type]
+        print_fn=output.append,
+        feedback="on",
+    )
+
+    assert session.entered is True
+    assert session.exited is True
+    assert session.actions == ["start"]
+    assert attached == []
+    assert "  [turn started - speak now]" in output

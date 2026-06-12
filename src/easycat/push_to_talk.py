@@ -136,7 +136,7 @@ def run_stdin_push_to_talk_session(
     )
 
     _enable_console_logging_from_env()
-    if _feedback_enabled(feedback):
+    if _feedback_enabled(feedback) and callable(getattr(session, "subscribe_event", None)):
         attach_runtime_feedback(session)  # type: ignore[arg-type]
 
     async def _run() -> None:
