@@ -188,11 +188,15 @@ def test_template_catalog_metadata_covers_available_templates(templates: list[st
 def test_template_env_var_collector_reads_twilio_server_code() -> None:
     required, referenced = _template_code_env_vars("twilio-phone")
 
-    assert required == {"OPENAI_API_KEY", "TWILIO_STREAM_URL"}
+    assert required == {"OPENAI_API_KEY", "TWILIO_STREAM_URL", "TWILIO_AUTH_TOKEN"}
     assert "TWILIO_WS_PORT" in referenced
     assert "TWILIO_STREAM_TOKEN_SECRET" in referenced
+    assert "TWILIO_MAX_SESSIONS" in referenced
+    assert "TRUST_PROXY_HEADERS" in referenced
     assert "TWILIO_WS_PORT" not in required
     assert "TWILIO_STREAM_TOKEN_SECRET" not in required
+    assert "TWILIO_MAX_SESSIONS" not in required
+    assert "TRUST_PROXY_HEADERS" not in required
 
 
 def test_scaffold_templates_keep_easyconfig_env_first_for_openai_key() -> None:
@@ -1055,3 +1059,18 @@ def test_template_ships_agents_md_guide(name: str) -> None:
     assert entry["run_command"] in agents_md
     assert entry["check_command"] in agents_md
     assert entry["fix_command"] in agents_md
+
+
+def test_twilio_phone_template_authenticates_public_entrypoints() -> None:
+    server = (_template_dir("twilio-phone") / "server.py").read_text(encoding="utf-8")
+    env_example = (_template_dir("twilio-phone") / ".env.example").read_text(encoding="utf-8")
+    readme = (_template_dir("twilio-phone") / "README.md").read_text(encoding="utf-8")
+
+    assert 'require_env("TWILIO_AUTH_TOKEN")' in server
+    assert "validate_twilio_webhook_signature" in server
+    assert "TwilioStreamTokenStore" in server
+    assert "TwilioTransportConfig(stream_token_validator=stream_tokens.consume)" in server
+    assert "TWILIO_AUTH_TOKEN" in env_example
+    assert "TWILIO_MAX_SESSIONS" in env_example
+    assert "TRUST_PROXY_HEADERS" in env_example
+    assert "one-time stream token" in readme

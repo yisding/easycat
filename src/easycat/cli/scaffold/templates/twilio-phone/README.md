@@ -25,8 +25,9 @@ block and re-run `uv sync` once you depend on the published package.
 cp .env.example .env
 ```
 
-Edit `.env`, set `OPENAI_API_KEY`, and set `TWILIO_STREAM_URL` to the public
-`wss://...` URL Twilio should connect to. Run doctor with that file loaded:
+Edit `.env`, set `OPENAI_API_KEY`, set `TWILIO_AUTH_TOKEN` to your Twilio
+auth token, and set `TWILIO_STREAM_URL` to the public `wss://...` URL Twilio
+should connect to. Run doctor with that file loaded:
 
 ```bash
 uv run easycat doctor --env-file .env
@@ -47,7 +48,12 @@ validator with shared storage. `TWILIO_STREAM_TOKEN_SECRET` optionally pins the
 signing secret for the local store.
 
 For local testing, expose the WebSocket port with a tunnel such as ngrok and
-point `TWILIO_STREAM_URL` at the public `wss://` forwarding URL.
+point `TWILIO_STREAM_URL` at the public `wss://` forwarding URL. The `/twiml`
+webhook validates `X-Twilio-Signature`, generates a one-time stream token, and
+the WebSocket listener rejects clients that do not present that token in the
+Twilio `start.customParameters` payload. Keep the TwiML webhook URL configured
+only in Twilio, and set `TRUST_PROXY_HEADERS=true` only behind a trusted proxy
+that overwrites `X-Forwarded-*` headers.
 
 ## Run
 
@@ -56,7 +62,9 @@ uv run --env-file .env uvicorn server:create_app --factory --host 0.0.0.0 --port
 ```
 
 Set your Twilio voice webhook to `https://<public-host>/twiml`. Call the number
-and ask to leave a message to see the `take_message` tool fire.
+and ask to leave a message to see the `take_message` tool fire. Use
+`TWILIO_MAX_SESSIONS` to cap concurrent provider-backed calls for your
+deployment.
 
 Ctrl-C to quit.
 
@@ -87,8 +95,8 @@ uv run pytest
 - **Swap STT providers:** add `stt="deepgram/flux"` to `EasyConfig(...)` in
   `server.py`, add `deepgram` to the `easycat[...]` dependency in
   `pyproject.toml`, run `uv sync`, and put `DEEPGRAM_API_KEY` in `.env`.
-- **Harden production webhooks:** copy signature validation, status callbacks,
-  and outbound call helpers from `examples/twilio_app.py`.
+- **Add outbound calls or status callbacks:** copy status callbacks and outbound
+  call helpers from `examples/twilio_app.py`.
 - **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
   `EasyConfig(...)`. EasyCat writes a SQLite journal under `.easycat/journals/`
   and a timestamped `RunBundle` under `.easycat/runs/`; inspect the journal with
