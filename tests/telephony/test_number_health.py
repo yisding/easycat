@@ -408,6 +408,31 @@ class TestCallDispositionTracker:
             tracker.stop()
 
     @pytest.mark.asyncio
+    async def test_records_multiple_sidless_terminal_dispositions(self) -> None:
+        """SID-less transitions are distinct events and must not share a dedupe key."""
+        bus = EventBus()
+        tracker = CallDispositionTracker(bus)
+        tracker.start()
+        try:
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.HUMAN,
+                )
+            )
+            await bus.emit(
+                CallStateChanged(
+                    old=OutboundCallState.CLASSIFYING,
+                    new=OutboundCallState.VOICEMAIL,
+                )
+            )
+
+            assert [entry[1] for entry in tracker._dispositions] == ["human", "voicemail"]
+            assert tracker._call_dispositions == {}
+        finally:
+            tracker.stop()
+
+    @pytest.mark.asyncio
     async def test_voicemail_to_human_reclassification(self) -> None:
         """VOICEMAIL → HUMAN overwrites disposition (voicemail pickup)."""
         bus = EventBus()
