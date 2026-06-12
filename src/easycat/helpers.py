@@ -89,6 +89,8 @@ def _feedback_enabled(
     stderr_isatty: bool | None = None,
 ) -> bool:
     """Resolve the ``run(..., feedback=...)`` policy to a boolean."""
+    if os.getenv("EASYCAT_QUIET"):
+        return False
     if feedback == "on":
         return True
     if feedback == "off":

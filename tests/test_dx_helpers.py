@@ -73,6 +73,12 @@ def test_run_feedback_on_off_are_explicit(monkeypatch: pytest.MonkeyPatch) -> No
     assert _feedback_enabled("off", stderr_isatty=True) is False
 
 
+def test_run_feedback_quiet_overrides_explicit_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASYCAT_QUIET", "1")
+
+    assert _feedback_enabled("on", stderr_isatty=True) is False
+
+
 def test_run_feedback_rejects_unknown_value() -> None:
     with pytest.raises(ValueError, match="Unknown feedback mode.*auto.*on.*off"):
         _feedback_enabled("loud")  # type: ignore[arg-type]
