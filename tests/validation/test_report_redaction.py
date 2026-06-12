@@ -143,3 +143,45 @@ def test_validation_artifact_paths_remain_resolvable() -> None:
     assert "[REDACTED_PHONE]" not in artifact_path
     assert "+1 (415) 555-2671" not in raw_json
     assert "/Users/alice" not in raw_json
+
+
+def test_validation_artifact_paths_redact_sensitive_substrings() -> None:
+    artifact_path = (
+        "/Users/alice/sk-aaaaaaaaaaaaaaa/+1 (415) 555-2671/https://api.openai.com/v1/output.log"
+    )
+    run = ValidationRun(
+        run_id="run-sensitive-artifact-path",
+        command=["uv", "run", "easycat", "validate", "quick"],
+        started_at=datetime(2026, 6, 6, 12, 0, tzinfo=UTC),
+        finished_at=datetime(2026, 6, 6, 12, 1, tzinfo=UTC),
+        duration_s=60.0,
+        status="fail",
+        exit_code=1,
+        checks=[
+            ValidationCheck(
+                name="pytest.quick",
+                status="fail",
+                duration_s=0.1,
+                artifacts={"stdout": ArtifactRef(kind="stdout", path=artifact_path)},
+            )
+        ],
+        artifacts={"stdout": ArtifactRef(kind="stdout", path=artifact_path)},
+    )
+
+    payload = run.to_dict()
+    raw_json = json.dumps(payload, sort_keys=True)
+
+    for leaked in (
+        "/Users/alice",
+        "sk-aaaaaaaaaaaaaaa",
+        "+1 (415) 555-2671",
+        "https://api.openai.com/v1",
+    ):
+        assert leaked not in raw_json
+
+    assert payload["checks"][0]["artifacts"]["stdout"]["path"] == (
+        "~/[REDACTED_SECRET]/[REDACTED_PHONE]/[REDACTED_URL]"
+    )
+    assert payload["artifacts"]["stdout"]["path"] == (
+        "~/[REDACTED_SECRET]/[REDACTED_PHONE]/[REDACTED_URL]"
+    )
