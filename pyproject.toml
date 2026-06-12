@@ -178,6 +178,8 @@ source-exclude = [
     "mutants/**",
     "plan",
     "plan/**",
+    "runs",
+    "runs/**",
     "site",
     "site/**",
     # Anchored: only the repo-root test suite. Scaffold templates ship a

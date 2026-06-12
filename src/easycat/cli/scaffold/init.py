@@ -269,6 +269,7 @@ _COPY_IGNORE: frozenset[str] = frozenset(
         "dist",
         "htmlcov",
         "mutants",
+        "runs",
         "site",
     }
 )

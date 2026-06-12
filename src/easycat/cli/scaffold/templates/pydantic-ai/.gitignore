@@ -28,3 +28,4 @@ site/
 mutants/
 .mutmut-cache
 .easycat/
+runs/
