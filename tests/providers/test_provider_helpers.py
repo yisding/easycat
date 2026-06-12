@@ -167,6 +167,17 @@ def test_word_timestamps_skip_missing_values():
     )
 
 
-def test_word_timestamps_preserve_non_numeric_timestamp_error():
-    with pytest.raises(ValueError):
-        word_timestamps_from_words([{"word": "bad", "start": "nope", "end": 0.3}])
+def test_word_timestamps_skip_non_numeric_timestamps():
+    timestamps = word_timestamps_from_words(
+        [
+            {"word": "bad-start", "start": "nope", "end": 0.3},
+            {"word": "bad-end", "start": 0.4, "end": object()},
+            {"word": "valid", "start": "0.5", "end": 0.8},
+        ]
+    )
+
+    assert timestamps is not None
+    assert len(timestamps) == 1
+    assert timestamps[0].word == "valid"
+    assert timestamps[0].start == 0.5
+    assert timestamps[0].end == 0.8
