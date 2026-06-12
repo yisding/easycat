@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,10 @@ from easycat.validation.redaction import (
 )
 
 ValidationStatus = Literal["pass", "fail", "skip", "error"]
+
+_GENERATED_RUN_PATH_SEGMENT_RE = re.compile(
+    r"(?<=/runs/)\d{8}T\d{6}Z-(?:quick|socket|stress|contracts|live|release|latency-[^/]+)-[^/]+"
+)
 
 
 class ProviderCheckState(StrEnum):
@@ -161,7 +166,7 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
         return value
     if is_dataclass(value):
         if isinstance(value, ArtifactRef):
-            return {"kind": redact_text(value.kind), "path": value.path}
+            return {"kind": redact_text(value.kind), "path": _redact_artifact_path(value.path)}
         if isinstance(value, ValidationEnvironment):
             return _serialize_environment(value)
         return {
@@ -181,6 +186,19 @@ def _serialize_value(value: Any, key: str | None = None) -> Any:
     if isinstance(value, Sequence):
         return [_serialize_value(item, key) for item in value]
     return value
+
+
+def _redact_artifact_path(value: str) -> str:
+    generated_segments: list[str] = []
+
+    def preserve_generated_segment(match: re.Match[str]) -> str:
+        generated_segments.append(match.group(0))
+        return f"__EASYCAT_VALIDATION_RUN_SEGMENT_{len(generated_segments) - 1}__"
+
+    redacted = redact_text(_GENERATED_RUN_PATH_SEGMENT_RE.sub(preserve_generated_segment, value))
+    for index, segment in enumerate(generated_segments):
+        redacted = redacted.replace(f"__EASYCAT_VALIDATION_RUN_SEGMENT_{index}__", segment)
+    return redacted
 
 
 def _serialize_environment(value: ValidationEnvironment) -> dict[str, Any]:
