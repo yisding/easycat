@@ -218,6 +218,27 @@ class TestCheckProviderVersions:
         assert len(mismatches) == 1
         assert mismatches[0].code == "UNKNOWN"
 
+    def test_empty_installed_version_matches_empty_bundle_version(self, tmp_path):
+        path = _write_bundle(
+            tmp_path,
+            records=[],
+            provider_versions={"custom.provider": ""},
+        )
+        bundle = RunBundle.load(path)
+        assert check_provider_versions(bundle, {"custom.provider": ""}) == []
+
+    def test_none_installed_version_is_unknown(self, tmp_path):
+        path = _write_bundle(
+            tmp_path,
+            records=[],
+            provider_versions={"custom.provider": ""},
+        )
+        bundle = RunBundle.load(path)
+        mismatches = check_provider_versions(bundle, {"custom.provider": None})
+        assert len(mismatches) == 1
+        assert mismatches[0].installed_version == "unknown"
+        assert mismatches[0].code == "UNKNOWN"
+
     def test_unknown_on_bundle_side(self, tmp_path):
         path = _write_bundle(
             tmp_path,
