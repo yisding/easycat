@@ -105,10 +105,8 @@ def test_smoke_requirements_respect_environment_markers() -> None:
     extras_smoke = _load_script("extras_smoke")
 
     names = {requirement.name for requirement in extras_smoke.extra_requirements("funasr-vad")}
-    if sys.version_info < (3, 13):
-        assert "funasr-onnx" in names
-    else:
-        assert names == set()
+    assert {"kaldi-native-fbank", "numpy", "onnxruntime"} <= names
+    assert "funasr-onnx" not in names
 
 
 def test_smoke_distribution_modules_map_installed_distributions() -> None:

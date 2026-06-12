@@ -134,8 +134,8 @@ jobs:
   # Known cells, handled deliberately:
   # - cartesia is an empty marker extra (the provider speaks WebSocket via the
   #   core dependency); its cell still proves the Cartesia adapters import.
-  # - funasr-vad only installs on Python < 3.13, so the matrix pins 3.12 to
-  #   keep that cell meaningful instead of silently installing nothing.
+  # - funasr-vad uses EasyCat's bundled model plus in-tree runtime
+  #   dependencies; its cell catches stale upstream SDK reintroductions.
   # - pydantic-ai and pydantic-ai-v2-beta are mutually exclusive pins; they
   #   never co-install because each cell syncs exactly one extra into a fresh
   #   environment (uv sync is exact and removes anything not requested).

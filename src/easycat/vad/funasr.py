@@ -1,16 +1,12 @@
-"""FunASR FSMN-VAD backend via ``funasr_onnx.Fsmn_vad_online``."""
+"""FunASR FSMN-VAD backend via the bundled ONNX model and in-tree runtime."""
 
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from collections.abc import AsyncIterator, Iterator
-from importlib import import_module
 from importlib.metadata import version
-from importlib.util import find_spec
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 from easycat._audio_utils import resample_chunk, to_mono_chunk
@@ -40,7 +36,7 @@ def _iter_funasr_segment_pairs(value: Any) -> Iterator[tuple[int, int]]:
 
 
 class FunASROnnxVAD(_VADBase):
-    """Voice activity detection via ``funasr_onnx.Fsmn_vad_online``.
+    """Voice activity detection via the bundled FunASR FSMN-VAD ONNX model.
 
     FunASR's streaming VAD emits absolute segment boundaries rather than
     frame-level speech probabilities.  This adapter translates each
@@ -67,6 +63,12 @@ class FunASROnnxVAD(_VADBase):
         cache_dir: str | None = None,
     ) -> None:
         super().__init__()
+        if cache_dir is not None:
+            raise ValueError(
+                "cache_dir is not supported by EasyCat's in-tree FunASR runtime; "
+                "pass model_dir/funasr_model_dir to an existing local model directory "
+                "or omit cache_dir to use the bundled model assets."
+            )
         _validate_positive_int("chunk_size_ms", chunk_size_ms)
         _validate_positive_int("intra_op_num_threads", intra_op_num_threads)
 
@@ -75,7 +77,6 @@ class FunASROnnxVAD(_VADBase):
         self._device_id = device_id
         self._quantize = quantize
         self._intra_op_num_threads = intra_op_num_threads
-        self._cache_dir = cache_dir
         self._chunk_samples = int(_FUNASR_SAMPLE_RATE * chunk_size_ms / 1000)
         if self._chunk_samples <= 0:
             raise ValueError("chunk_size_ms produced an empty chunk")
@@ -90,19 +91,19 @@ class FunASROnnxVAD(_VADBase):
     def _initialize(self) -> None:
         try:
             numpy = require_module("numpy", extra="funasr-vad", purpose="FunASR VAD")
-            funasr_vad_cls = _load_funasr_onnx_vad_online_class()
+            from easycat.vad._funasr_runtime import FunASROnlineRuntime
+
             model_dir = _resolve_funasr_model_dir(self._model_dir)
         except ImportError as exc:
             raise RuntimeError(str(exc)) from exc
 
         try:
-            self._model = funasr_vad_cls(
+            self._model = FunASROnlineRuntime(
                 model_dir=model_dir,
                 device_id=self._device_id,
                 quantize=self._quantize,
                 intra_op_num_threads=self._intra_op_num_threads,
                 max_end_sil=self._min_silence_duration_ms,
-                cache_dir=self._cache_dir,
             )
         except Exception as exc:
             raise RuntimeError(f"FunASR ONNX VAD initialization failed: {exc}") from exc
@@ -164,7 +165,10 @@ class FunASROnnxVAD(_VADBase):
 
             waveform = self._numpy.frombuffer(frame_data, dtype=self._numpy.int16)
             waveform = waveform.astype(self._numpy.float32) / 32768.0
-            segments = self._model(audio_in=waveform, param_dict=self._param_dict)
+            try:
+                segments = self._model(audio_in=waveform, param_dict=self._param_dict)
+            except Exception as exc:
+                raise RuntimeError(f"FunASR ONNX VAD inference failed: {exc}") from exc
 
             for beg_ms, end_ms in _iter_funasr_segment_pairs(segments):
                 if beg_ms >= 0:
@@ -183,6 +187,9 @@ class FunASROnnxVAD(_VADBase):
         self._buffer = b""
         self._funasr_active = False
         self._param_dict = {"in_cache": []}
+        reset = getattr(self._model, "reset", None)
+        if callable(reset):
+            reset()
 
     def close(self) -> None:
         """Release the FunASR ONNX model handle and streaming caches."""
@@ -196,7 +203,7 @@ class FunASROnnxVAD(_VADBase):
 
     def version_info(self) -> dict[str, str]:
         try:
-            sdk_ver = version("funasr-onnx")
+            sdk_ver = version("onnxruntime")
         except Exception:
             sdk_ver = "unknown"
         model_name = self._model_dir
@@ -206,59 +213,8 @@ class FunASROnnxVAD(_VADBase):
             "provider": "funasr",
             "model": model_name,
             "api_version": "unknown",
-            "sdk_version": sdk_ver,
+            "sdk_version": f"in-tree-runtime/onnxruntime-{sdk_ver}",
         }
-
-
-def _load_funasr_onnx_vad_online_class() -> Any:
-    """Load ``Fsmn_vad_online`` without executing ``funasr_onnx.__init__``.
-
-    ``funasr-onnx`` 0.4.1 imports unrelated modules like SenseVoice from the
-    top-level package, which in turn pull in optional dependencies such as
-    ``torch``.  The VAD runtime itself lives in ``funasr_onnx.vad_bin`` and
-    does not require those extras, so we seed a package stub, import the
-    submodule directly, then restore ``sys.modules`` so a later
-    ``import funasr_onnx`` from user code still resolves to the real
-    package rather than our shim.
-    """
-
-    spec = find_spec("funasr_onnx")
-    if spec is None or not spec.submodule_search_locations:
-        raise ImportError(
-            "FunASR VAD requires the funasr_onnx package. Install with: "
-            "uv add 'easycat[funasr-vad]'. From the EasyCat repo, use: "
-            "uv sync --extra funasr-vad --group dev."
-        )
-
-    existing_package = sys.modules.get("funasr_onnx")
-    stub_installed = False
-    if existing_package is None or not hasattr(existing_package, "__path__"):
-        stub = ModuleType("funasr_onnx")
-        stub.__path__ = list(spec.submodule_search_locations)
-        stub.__spec__ = spec
-        sys.modules["funasr_onnx"] = stub
-        stub_installed = True
-
-    try:
-        module = import_module("funasr_onnx.vad_bin")
-    except Exception as exc:
-        raise ImportError(f"Failed to import funasr_onnx.vad_bin: {exc}") from exc
-    finally:
-        if stub_installed:
-            _restore_funasr_package(existing_package)
-
-    try:
-        return getattr(module, "Fsmn_vad_online")
-    except AttributeError as exc:
-        raise ImportError("funasr_onnx.vad_bin does not export Fsmn_vad_online") from exc
-
-
-def _restore_funasr_package(previous: Any) -> None:
-    """Undo a temporary ``sys.modules['funasr_onnx']`` stub install."""
-    if previous is None:
-        sys.modules.pop("funasr_onnx", None)
-    else:
-        sys.modules["funasr_onnx"] = previous
 
 
 def _resolve_funasr_model_dir(model_dir: str) -> str:
