@@ -18,6 +18,47 @@ from tests.config._helpers import (
 )
 
 
+class _ProviderShapeSTT:
+    async def start_stream(self):
+        pass
+
+    async def send_audio(self, chunk):
+        pass
+
+    async def commit_segment(self) -> bool:
+        return False
+
+    async def end_stream(self):
+        pass
+
+    async def events(self):
+        if False:
+            yield None
+
+
+class _ProviderShapeTTS:
+    supports_ssml = False
+
+    async def synthesize(self, payload):
+        if False:
+            yield None
+
+    async def stop(self):
+        pass
+
+    async def cancel(self):
+        pass
+
+
+class _ProviderShapeVAD:
+    def configure(self, **kwargs):
+        pass
+
+    async def process(self, chunk):
+        if False:
+            yield None
+
+
 def test_create_session_binds_custom_identity_sink_capability():
     transport = _IdentitySinkTransport()
     session = create_session(
@@ -25,6 +66,7 @@ def test_create_session_binds_custom_identity_sink_capability():
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
             transport=transport,
+            agent=_DummyAgent(),
         )
     )
     identity = CallIdentity(caller_number="+15551234567")
@@ -137,6 +179,19 @@ def test_create_session_accepts_custom_provider_instances_without_sessionconfig(
     assert session._enable_aec is True
 
 
+def test_create_session_requires_real_agent_when_audio_pipeline_is_real():
+    with pytest.raises(ValueError, match="agent"):
+        create_session(
+            EasyConfig(
+                stt=_ProviderShapeSTT(),
+                tts=_ProviderShapeTTS(),
+                vad=_ProviderShapeVAD(),
+                transport=_IdentitySinkTransport(),
+                agent=None,
+            )
+        )
+
+
 def test_create_session_accepts_policy_only_custom_tts(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -181,6 +236,7 @@ def test_create_session_forwards_warmup_to_runtime_config():
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
             transport=_IdentitySinkTransport(),
+            agent=_DummyAgent(),
             warmup=False,
         )
     )
@@ -197,6 +253,7 @@ async def test_create_session_binds_twilio_connection_identity_sink():
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
             transport=transport,
+            agent=_DummyAgent(),
         )
     )
 
@@ -230,6 +287,7 @@ async def test_create_session_caller_id_off_keeps_twilio_identity_private():
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
             transport=transport,
+            agent=_DummyAgent(),
             caller_id_exposure="off",
         )
     )
@@ -262,6 +320,7 @@ async def test_create_session_twilio_identity_sink_merges_with_outbound_identity
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
             transport=transport,
+            agent=_DummyAgent(),
         )
     )
     session.call_identity = CallIdentity(

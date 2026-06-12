@@ -94,6 +94,11 @@ class AgentRunner:
         """Whether the wrapped agent is itself an ``ExternalAgentBridge``."""
         return self._is_bridge
 
+    @property
+    def is_passthrough_provider(self) -> bool:
+        """Whether the wrapped agent explicitly marks itself as passthrough."""
+        return bool(getattr(self._agent, "is_passthrough_provider", False))
+
     # ── ExternalAgentBridge interface ────────────────────────────
 
     async def invoke(

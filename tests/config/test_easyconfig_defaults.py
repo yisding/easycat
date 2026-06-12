@@ -27,6 +27,7 @@ from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.validation import LatencyBudget
 from tests.config._helpers import (
     _CapabilityTransportConfig,
+    _DummyAgent,
     _DummyWebSocket,
 )
 
@@ -74,6 +75,7 @@ def test_easyconfig_session_policy_passes_opt_out_settings_to_session_config():
         EasyConfig(
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
             tts=OpenAITTSConfig(api_key="test-key"),
+            agent=_DummyAgent(),
             session_policy=SessionPolicyConfig(
                 opt_out_detection=False,
                 opt_out_phrases=("retire me",),

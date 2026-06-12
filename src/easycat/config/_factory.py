@@ -415,7 +415,7 @@ def create_session(config: EasyConfig) -> Session:
                 runner_cfg = config.agent_runner or AgentRunnerConfig()
                 agent = AgentRunner(agent, runner_cfg)
         else:
-            agent = NoopAgent()
+            agent = None
 
         # Emit provider versions into the journal at session start.
         if journal is not None:
