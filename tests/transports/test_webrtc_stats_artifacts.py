@@ -13,6 +13,15 @@ from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
 from ._webrtc_fakes import _FakeJsonRequest, _FakeWeb
 
 
+class _FakeSameOriginJsonRequest(_FakeJsonRequest):
+    scheme = "http"
+    host = "127.0.0.1:8080"
+
+    def __init__(self, payload: object) -> None:
+        super().__init__(payload)
+        self.headers = {"Origin": "http://127.0.0.1:8080"}
+
+
 class TestWebRTCStatsArtifact:
     @pytest.mark.asyncio
     async def test_stats_endpoint_persists_sanitized_snapshots(self, tmp_path):
@@ -21,7 +30,7 @@ class TestWebRTCStatsArtifact:
         transport._web = _FakeWeb
 
         response = await transport._handle_stats(
-            _FakeJsonRequest(
+            _FakeSameOriginJsonRequest(
                 {
                     "kind": "webrtc_client_stats",
                     "schema_version": 1,
@@ -61,7 +70,9 @@ class TestWebRTCStatsArtifact:
         transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))
         transport._web = _FakeWeb
 
-        response = await transport._handle_stats(_FakeJsonRequest(["not", "an", "object"]))
+        response = await transport._handle_stats(
+            _FakeSameOriginJsonRequest(["not", "an", "object"])
+        )
 
         assert response.status == 400
         assert not stats_path.exists()
