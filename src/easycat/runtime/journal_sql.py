@@ -25,6 +25,12 @@ from easycat.runtime._journal_codec import (
     _persist_degraded_marker,
     _row_to_record,
 )
+from easycat.runtime._private_files import (
+    chmod_private_file,
+    harden_sqlite_files,
+    mkdir_private,
+    touch_private_file,
+)
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
     ErrorInfo,
@@ -199,8 +205,9 @@ class SqliteJournal(_SqlJournalBase):
         self._root = root
         self._retention_mode = retention_mode
         journals_dir = root / "journals"
-        journals_dir.mkdir(parents=True, exist_ok=True)
+        mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
+        touch_private_file(self._db_path)
         self._session_id = session_id
         self._lock = threading.Lock()
         self._seq = 0
@@ -249,6 +256,7 @@ class SqliteJournal(_SqlJournalBase):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA wal_autocheckpoint=0")
+        harden_sqlite_files(self._db_path)
         return conn
 
     def _reconcile_prior_session(self, session_id: str) -> int:
@@ -284,7 +292,7 @@ class SqliteJournal(_SqlJournalBase):
         ).fetchone()
         self._original_session_id = prior_session_row[0] if prior_session_row else session_id
         crash_dir = self._root / "crash-dumps"
-        crash_dir.mkdir(parents=True, exist_ok=True)
+        mkdir_private(crash_dir)
         crash_path = crash_dir / f"{session_id}.sqlite"
 
         # Copy rather than move so we can keep writing to the current path.
@@ -301,12 +309,15 @@ class SqliteJournal(_SqlJournalBase):
                     pass  # Best-effort; copy WAL files as fallback below.
                 self._conn.close()
                 shutil.copy2(str(self._db_path), str(crash_path))
+                chmod_private_file(crash_path)
                 # Also copy WAL/SHM if they still exist (checkpoint may
                 # have been incomplete due to concurrent readers).
                 for suffix in ("-wal", "-shm"):
                     wal_src = Path(str(self._db_path) + suffix)
                     if wal_src.exists():
-                        shutil.copy2(str(wal_src), str(crash_path) + suffix)
+                        crash_sidecar = Path(str(crash_path) + suffix)
+                        shutil.copy2(str(wal_src), str(crash_sidecar))
+                        chmod_private_file(crash_sidecar)
                 self._conn = self._open_connection()
                 # The prior session's records are now safely preserved
                 # in the crash dump.  Truncate the live journal so the
@@ -394,6 +405,7 @@ class SqliteJournal(_SqlJournalBase):
         with self._lock:
             try:
                 self._conn.execute("COMMIT")
+                harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass  # no active transaction or already closed
             try:
@@ -405,6 +417,7 @@ class SqliteJournal(_SqlJournalBase):
                 pass
             try:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 logger.debug("WAL checkpoint skipped on close", exc_info=True)
             try:
@@ -424,6 +437,7 @@ class SqliteJournal(_SqlJournalBase):
         with self._lock:
             try:
                 self._conn.execute("COMMIT")
+                harden_sqlite_files(self._db_path)
                 self._conn.execute("BEGIN")
             except sqlite3.OperationalError:
                 pass
@@ -441,6 +455,7 @@ class SqliteJournal(_SqlJournalBase):
         with self._lock:
             try:
                 self._conn.execute("COMMIT")
+                harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
             try:
@@ -453,6 +468,7 @@ class SqliteJournal(_SqlJournalBase):
                 pass
             try:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                harden_sqlite_files(self._db_path)
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 logger.debug("WAL checkpoint skipped on finalize", exc_info=True)
             # Restart a transaction so subsequent appends are batched.
@@ -541,6 +557,7 @@ class SqliteJournal(_SqlJournalBase):
                 # committed here: it must stay rolled-back-able so a crash after
                 # ``finalize()`` leaves the durable DB looking cleanly closed.
                 self._conn.execute("COMMIT")
+                harden_sqlite_files(self._db_path)
                 self._conn.execute("BEGIN")
         return seq
 
@@ -784,8 +801,9 @@ class LibsqlJournal(_SqlJournalBase):
 
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         journals_dir = root / "journals"
-        journals_dir.mkdir(parents=True, exist_ok=True)
+        mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
+        touch_private_file(self._db_path)
 
         url = sync_url or os.environ.get("EASYCAT_LIBSQL_URL", "")
         token = auth_token or os.environ.get("EASYCAT_LIBSQL_AUTH_TOKEN", "")
@@ -797,6 +815,7 @@ class LibsqlJournal(_SqlJournalBase):
             connect_kwargs["auth_token"] = token
 
         self._conn = libsql.connect(**connect_kwargs)
+        harden_sqlite_files(self._db_path)
         self._conn.executescript(_SQLITE_SCHEMA)
         _ensure_journal_schema(self._conn)
 
@@ -880,6 +899,7 @@ class LibsqlJournal(_SqlJournalBase):
                 "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
             )
             self._conn.commit()
+            harden_sqlite_files(self._db_path)
         except Exception:
             logger.debug("libsql clean_close marker write failed", exc_info=True)
         try:
@@ -960,6 +980,7 @@ class LibsqlJournal(_SqlJournalBase):
                 ),
             )
             self._conn.commit()
+            harden_sqlite_files(self._db_path)
         return seq
 
     def _sync_loop(self) -> None:
