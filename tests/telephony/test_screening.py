@@ -470,6 +470,40 @@ class TestScreeningResponseAgent:
             detector.stop()
 
     @pytest.mark.asyncio
+    async def test_agent_response_does_not_cancel_fallback_after_timeout_started(self) -> None:
+        bus = EventBus()
+        detector = CallScreeningDetector(
+            bus,
+            screening_use_agent=True,
+            screening_response="Fallback: Hi, this is Sarah",
+            agent_timeout_s=0.02,
+            track_filter=None,
+        )
+        spoken: list[str] = []
+
+        async def on_screening_response(event: ScreeningResponse) -> None:
+            if event.mode == "agent":
+                await asyncio.sleep(0.06)
+                in_time = detector.notify_agent_responded()
+                fallback_spoken = not in_time and detector.screening_response
+                if not fallback_spoken:
+                    spoken.append("agent")
+            else:
+                spoken.append("static_started")
+                await asyncio.sleep(0.10)
+                spoken.append("static_done")
+
+        bus.subscribe(ScreeningResponse, on_screening_response)
+        detector.start()
+        try:
+            await bus.emit(CallAnswered(call_sid=""))
+            await bus.emit(STTPartial(text="please record your name and reason for calling"))
+            await asyncio.sleep(0.15)
+            assert spoken == ["static_started", "static_done"]
+        finally:
+            detector.stop()
+
+    @pytest.mark.asyncio
     async def test_agent_response_includes_callee_context(self) -> None:
         # Agent mode emits with mode="agent"; context is provided at the
         # application layer, not by the detector itself.
