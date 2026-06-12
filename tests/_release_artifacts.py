@@ -27,6 +27,7 @@ FORBIDDEN_RELEASE_ARTIFACT_PARTS = frozenset(
         "htmlcov",
         "mutants",
         "plan",
+        "runs",
         "site",
         "tests",
     }
@@ -53,6 +54,7 @@ SCAFFOLD_COPY_IGNORED_DIRECTORIES = frozenset(
         "dist",
         "htmlcov",
         "mutants",
+        "runs",
         "site",
     }
 )
@@ -91,6 +93,7 @@ GENERATED_PROJECT_GITIGNORE_PATTERNS = (
     "mutants/",
     ".mutmut-cache",
     ".easycat/",
+    "runs/",
 )
 REQUIRED_BUILD_SOURCE_EXCLUDES = frozenset(
     {
@@ -144,6 +147,8 @@ REQUIRED_BUILD_SOURCE_EXCLUDES = frozenset(
         "mutants/**",
         "plan",
         "plan/**",
+        "runs",
+        "runs/**",
         "site",
         "site/**",
         "/tests",
