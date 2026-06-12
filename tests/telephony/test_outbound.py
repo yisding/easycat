@@ -168,6 +168,76 @@ class TestEmitCallStatus:
         assert received[0].call_sid == "CA1"
 
     @pytest.mark.asyncio
+    async def test_initiated_callback_for_sid_evicted_call_does_not_repin_capacity(self) -> None:
+        """A replayed Twilio initiated callback for a tombstoned SID is ignored."""
+        from easycat.telephony.number_health import NumberHealthMonitor
+
+        bus = EventBus()
+        monitor = NumberHealthMonitor(
+            bus,
+            max_concurrent_per_number=3,
+            max_calls_per_minute=100,
+            min_inter_call_delay_s=0.0,
+        )
+        monitor._max_sid_tracking = 4
+        from_number = "+1999"
+        to_number = "+1555"
+        monitor.start()
+        try:
+            for i in range(5):
+                await emit_call_status(
+                    {
+                        "CallStatus": "initiated",
+                        "CallSid": f"CA{i}",
+                        "To": to_number,
+                        "From": from_number,
+                    },
+                    bus,
+                )
+            assert monitor._concurrent[from_number] == 3
+            assert not monitor.can_place_call(from_number)
+
+            await emit_call_status(
+                {
+                    "CallStatus": "initiated",
+                    "CallSid": "CA0",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            assert monitor._concurrent[from_number] == 3
+            assert "CA0" not in monitor._call_sid_to_number
+
+            await emit_call_status(
+                {
+                    "CallStatus": "completed",
+                    "CallSid": "CA0",
+                    "Duration": "5",
+                    "To": to_number,
+                    "From": from_number,
+                },
+                bus,
+            )
+            assert monitor._concurrent[from_number] == 3
+
+            for i in range(2, 5):
+                await emit_call_status(
+                    {
+                        "CallStatus": "completed",
+                        "CallSid": f"CA{i}",
+                        "Duration": "5",
+                        "To": to_number,
+                        "From": from_number,
+                    },
+                    bus,
+                )
+            assert monitor._concurrent.get(from_number, 0) == 0
+            assert monitor.can_place_call(from_number)
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
     async def test_terminal_callback_for_sid_evicted_call_does_not_double_release(self) -> None:
         """An outbound terminal callback for an SID-evicted call must not double-release.
 
