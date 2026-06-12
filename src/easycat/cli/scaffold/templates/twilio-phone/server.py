@@ -41,7 +41,7 @@ def create_app() -> FastAPI:
             agent=make_agent(),
             **__EASYCAT_CONFIG_EXTRA__,  # noqa: F821
         )
-        async with manager.connection(id(ws), create_session(config), runtime_feedback=True):
+        async with manager.connection(id(ws), create_session(config)):
             await ws.wait_closed()
 
     @asynccontextmanager
