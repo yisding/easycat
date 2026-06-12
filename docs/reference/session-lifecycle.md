@@ -27,7 +27,7 @@ for tests and scripts — it calls `stop(force=True)` on exit.
 
 ## Stopping: `stop()` and `force`
 
-`await session.stop()` is the single public teardown verb:
+`await session.stop()` is the preferred public teardown verb:
 
 - `stop()` / `stop(force=False)` — graceful: drains in-flight work (the
   current agent turn, queued TTS, transport playback) before tearing down.
@@ -39,7 +39,9 @@ for tests and scripts — it calls `stop(force=True)` on exit.
 
 Backend teardown (SQLite/Litestream/libSQL journal backends and artifact
 stores) and the journal clean-close marker are handled internally by
-`stop()`; there are no public destroy/close entry points to call.
+`stop()`. Legacy compatibility aliases for close/destroy still exist for
+old low-level callers after a session has stopped, but new code should
+call `stop()` or use `async with session:`.
 
 `stop()` is idempotent — calling it again after teardown is a no-op.
 

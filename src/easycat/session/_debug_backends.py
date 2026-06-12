@@ -35,6 +35,7 @@ class SessionDebugBackends:
         self._artifact_store = artifact_store
         self._journal_sink = journal_sink
         self._flushed = False
+        self._destroyed = False
 
     @property
     def state(self) -> DebugBackendState:
@@ -47,13 +48,15 @@ class SessionDebugBackends:
         """Write the clean-close marker without tearing down live backends."""
         if self._flushed:
             return self.state
-        self._flushed = True
         if self._journal is not None:
             self._journal.finalize()
+        self._flushed = True
         return self.state
 
     def destroy(self) -> DebugBackendState:
         """Close live debug backends while preserving read-only inspection."""
+        if self._destroyed:
+            return self.state
         self.close()
 
         if self._journal is not None:
@@ -76,6 +79,7 @@ class SessionDebugBackends:
             journal=self._journal,
             artifact_store=self._artifact_store,
         )
+        self._destroyed = True
         return self.state
 
 

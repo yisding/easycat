@@ -114,6 +114,93 @@ async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
     assert journal.close_calls == 1
 
 
+def test_session_close_compatibility_alias_finalizes_journal_only():
+    journal = TrackingJournal()
+    session = Session(_full_config(journal=journal, session_id="sess"))
+
+    session.close()
+    session.close()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 0
+
+
+def test_session_destroy_compatibility_alias_closes_debug_backends():
+    journal = TrackingJournal()
+    session = Session(_full_config(journal=journal, session_id="sess"))
+
+    session.destroy()
+    session.destroy()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["close", "destroy"])
+async def test_session_low_level_compatibility_aliases_reject_running_session(
+    method_name: str,
+):
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+
+    await session.start()
+    try:
+        with pytest.raises(RuntimeError, match="await session.stop"):
+            getattr(session, method_name)()
+        assert transport.connected
+    finally:
+        await session.stop(force=True)
+
+
+def test_session_close_compatibility_alias_retries_after_finalize_failure():
+    class FailingOnceJournal(TrackingJournal):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_finalize = True
+
+        def finalize(self) -> None:
+            self.finalize_calls += 1
+            if self.fail_next_finalize:
+                self.fail_next_finalize = False
+                raise RuntimeError("finalize failed")
+
+    journal = FailingOnceJournal()
+    session = Session(_full_config(journal=journal, session_id="sess"))
+
+    with pytest.raises(RuntimeError, match="finalize failed"):
+        session.close()
+
+    session.close()
+
+    assert journal.finalize_calls == 2
+    assert journal.close_calls == 0
+
+
+def test_session_destroy_compatibility_alias_retries_after_close_failure():
+    class FailingOnceJournal(TrackingJournal):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_close = True
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.fail_next_close:
+                self.fail_next_close = False
+                raise RuntimeError("close failed")
+
+    journal = FailingOnceJournal()
+    session = Session(_full_config(journal=journal, session_id="sess"))
+
+    with pytest.raises(RuntimeError, match="close failed"):
+        session.destroy()
+
+    session.destroy()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 2
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["stop", "shutdown"])
 async def test_session_teardown_closes_audio_providers(method_name: str):

@@ -523,8 +523,10 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     assert inspect.iscoroutinefunction(Session.shutdown)
     assert stop_signature.parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
     assert stop_signature.parameters["force"].default is False
-    assert not hasattr(Session, "close")
-    assert not hasattr(Session, "destroy")
+    assert callable(Session.close)
+    assert callable(Session.destroy)
+    assert not inspect.iscoroutinefunction(Session.close)
+    assert not inspect.iscoroutinefunction(Session.destroy)
     assert callable(Session._close)
     assert callable(Session._destroy)
 
@@ -533,21 +535,24 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     assert "stop(force=True)" in run_doc
     assert "await session.shutdown()" not in run_doc
 
-    assert "`async with session:` is the one public teardown idiom" in lifecycle
-    assert "`await session.stop()` is the single public teardown verb" in lifecycle
+    assert "`async with session:` is the preferred public teardown idiom" in lifecycle
+    assert "`await session.stop()` is the preferred public teardown verb" in lifecycle
     assert "`await session.wait_closed()`" in lifecycle
     assert "await session.shutdown()" not in lifecycle
+    assert "Legacy compatibility aliases" in lifecycle
+    assert "new code should call `stop()`" in lifecycle
     for stale in ("session.close()", "session.destroy()"):
-        assert stale not in readme
         assert stale not in chapter_15
 
     for guide in (agents, claude):
-        assert "`await session.stop()` is the single public teardown verb" in guide
+        assert "`await session.stop()` is the preferred public teardown verb" in guide
         assert "`async with session:` is the preferred idiom" in guide
         assert "session.shutdown()" in guide
         assert "thin alias for `stop(force=True)`" in guide
         assert "Session._destroy()" in guide and "Session._close()" in guide
-        assert "not public entry points" in guide
+        assert "Session.close()" in guide and "Session.destroy()" in guide
+        assert "legacy compatibility aliases" in guide
+        assert "new code should call `stop()` or use `async with session:`" in guide
 
     assert "Compatibility alias for `stop(force=True)`" in chapter_15
     assert "new docs should usually show `stop(...)` or `async with session:`" in chapter_15
