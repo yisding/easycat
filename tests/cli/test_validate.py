@@ -1236,6 +1236,83 @@ def test_validate_contracts_cli_json_uses_standard_stdout_envelope(
     assert payload["validation"]["checks"][0]["name"] == "pytest.contracts"
 
 
+def test_validate_quick_cli_show_output_streams_captured_logs(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout_path = tmp_path / "run" / "stdout.log"
+    stderr_path = tmp_path / "run" / "stderr.log"
+    report_path = tmp_path / "run" / "report.json"
+    stdout_path.parent.mkdir()
+    stdout_path.write_text("pytest stdout\n", encoding="utf-8")
+    stderr_path.write_text("pytest stderr\n", encoding="utf-8")
+
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+        run = _validation_run(
+            artifacts={
+                "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
+                "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
+                "report": ArtifactRef(kind="validation_report", path=str(report_path)),
+            }
+        )
+        report_path.write_text(run.to_json(), encoding="utf-8")
+        return ValidationRunResult(
+            run=run,
+            run_dir=stdout_path.parent,
+            report_path=report_path,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("easycat.cli.validate.run_validation_slice", fake_run_validation_slice)
+
+    result = cli.invoke(app, ["validate", "quick", "--show-output"])
+
+    assert result.exit_code == 0
+    assert "pytest stdout" in result.stdout
+    assert "quick: pass" in result.stdout
+    assert "pytest stderr" in result.stderr
+
+
+def test_validate_quick_cli_json_show_output_keeps_stdout_parseable(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout_path = tmp_path / "run" / "stdout.log"
+    stderr_path = tmp_path / "run" / "stderr.log"
+    report_path = tmp_path / "run" / "report.json"
+    stdout_path.parent.mkdir()
+    stdout_path.write_text("pytest stdout\n", encoding="utf-8")
+    stderr_path.write_text("pytest stderr\n", encoding="utf-8")
+
+    def fake_run_validation_slice(slice_name: str, **kwargs) -> ValidationRunResult:  # noqa: ANN003
+        run = _validation_run(
+            artifacts={
+                "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
+                "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
+                "report": ArtifactRef(kind="validation_report", path=str(report_path)),
+            }
+        )
+        report_path.write_text(run.to_json(), encoding="utf-8")
+        return ValidationRunResult(
+            run=run,
+            run_dir=stdout_path.parent,
+            report_path=report_path,
+            exit_code=0,
+        )
+
+    monkeypatch.setattr("easycat.cli.validate.run_validation_slice", fake_run_validation_slice)
+
+    result = cli.invoke(app, ["validate", "quick", "--json", "--show-output"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "validate quick"
+    assert "pytest stdout" in result.stderr
+    assert "pytest stderr" in result.stderr
+
+
 def test_validate_socket_cli_returns_validation_exit_code(
     cli: CliRunner,
     tmp_path: Path,

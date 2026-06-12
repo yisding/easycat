@@ -98,6 +98,11 @@ re-emits the latest saved validation report inside the same envelope for
 coding-agent consumers. For the lower-level marker/direct entry points, see
 [`plan/validation/README.md`](../plan/validation/README.md).
 
+In GitHub Actions, pass `--show-output` to validation lanes. Validation still
+writes `report.json`, `latest.json`, JUnit XML, and stdout/stderr logs, but
+also prints the captured validation stdout/stderr to the job log so failures
+are visible on github.com without downloading artifacts.
+
 Flaky quarantine is explicit debt. Use
 `@pytest.mark.flaky(issue="...", owner="...", review_by="YYYY-MM-DD")`; missing
 metadata, stale `review_by` dates, or release-scoped flaky tests fail

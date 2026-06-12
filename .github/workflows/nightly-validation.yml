@@ -50,7 +50,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
-      - run: uv run --python 3.12 easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-quick"
+      - run: uv run --python 3.12 easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-quick" --show-output
       - name: Upload quick validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
-      - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-socket"
+      - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-socket" --show-output
       - name: Upload socket validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,7 +92,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
-      - run: uv run --python 3.12 easycat validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-stress"
+      - run: uv run --python 3.12 easycat validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-stress" --show-output
       - name: Upload stress validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -214,7 +214,7 @@ jobs:
       # skipped here; the checked-in cassette corpus (tests/cassettes/**) is
       # still all-OpenAI and should diversify to deepgram/elevenlabs/cartesia.
       - name: Run non-strict live provider canaries
-        run: uv run --no-sync --python 3.12 easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+        run: uv run --no-sync --python 3.12 easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload redacted live validation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -245,7 +245,7 @@ jobs:
           if [ -n "${OPENAI_API_KEY:-}" ]; then
             echo "::add-mask::$OPENAI_API_KEY"
           fi
-          uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR"
+          uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload latency validation artifacts
         if: always()
         uses: actions/upload-artifact@v4

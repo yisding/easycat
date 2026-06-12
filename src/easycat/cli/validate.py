@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, TextIO
 
 import typer
 from rich.markup import escape
 
-from easycat.cli._output import emit_command_error, emit_json, json_envelope, stdout_console
+from easycat.cli._output import (
+    emit_command_error,
+    emit_json,
+    json_envelope,
+    stderr_console,
+    stdout_console,
+)
 from easycat.validation.latency import LatencyMode
 from easycat.validation.runner import (
+    ValidationRunResult,
     run_latency_validation,
     run_live_validation,
     run_release_validation,
@@ -27,6 +34,7 @@ validate_app = typer.Typer(
 _ARTIFACTS_DIR_HELP = (
     "Validation artifact root directory; writes runs/<id>/report.json and latest.json."
 )
+_SHOW_OUTPUT_HELP = "Also print captured validation stdout/stderr while keeping artifacts."
 
 
 def _print_literal(line: str) -> None:
@@ -41,6 +49,7 @@ def _run_slice(
     junit: Path | None,
     artifacts_dir: Path,
     junit_prefix: str | None,
+    show_output: bool,
 ) -> None:
     result = run_validation_slice(
         slice_name,
@@ -49,6 +58,9 @@ def _run_slice(
         junit_path=junit,
         junit_prefix=junit_prefix,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -67,6 +79,41 @@ def _run_slice(
         )
 
     raise typer.Exit(result.exit_code)
+
+
+def _stream_validation_output(
+    result: ValidationRunResult,
+    *,
+    json_output: bool,
+) -> None:
+    stdout_log = _artifact_path(result, "stdout")
+    stderr_log = _artifact_path(result, "stderr")
+    if stdout_log is not None and stdout_log.exists():
+        target = stderr_console.file if json_output else stdout_console.file
+        _write_log(target, stdout_log.read_text(encoding="utf-8"))
+    if stderr_log is not None and stderr_log.exists():
+        _write_log(stderr_console.file, stderr_log.read_text(encoding="utf-8"))
+
+
+def _artifact_path(result: ValidationRunResult, name: str) -> Path | None:
+    artifact = result.run.artifacts.get(name)
+    if artifact is None:
+        for check in result.run.checks:
+            artifact = check.artifacts.get(name)
+            if artifact is not None:
+                break
+    if artifact is None:
+        return None
+    return Path(artifact.path)
+
+
+def _write_log(target: TextIO, text: str) -> None:
+    if not text:
+        return
+    target.write(text)
+    if not text.endswith("\n"):
+        target.write("\n")
+    target.flush()
 
 
 @validate_app.command()
@@ -91,6 +138,13 @@ def quick(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run deterministic local validation for normal PR work."""
     _run_slice(
@@ -100,6 +154,7 @@ def quick(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -125,6 +180,13 @@ def socket(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run localhost socket integration validation."""
     _run_slice(
@@ -134,6 +196,7 @@ def socket(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -159,6 +222,13 @@ def stress(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run local stress validation and saturation-signal capture."""
     _run_slice(
@@ -168,6 +238,7 @@ def stress(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -193,6 +264,13 @@ def contracts(
         str | None,
         typer.Option("--junit-prefix", help="Optional pytest JUnit prefix."),
     ] = None,
+    show_output: Annotated[
+        bool,
+        typer.Option(
+            "--show-output",
+            help=_SHOW_OUTPUT_HELP,
+        ),
+    ] = False,
 ) -> None:
     """Run offline provider, protocol, and bridge contract validation."""
     _run_slice(
@@ -202,6 +280,7 @@ def contracts(
         junit=junit,
         artifacts_dir=artifacts_dir,
         junit_prefix=junit_prefix,
+        show_output=show_output,
     )
 
 
@@ -241,6 +320,10 @@ def latency(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run live latency validation and write structured latency artifacts."""
     if smoke and sweep:
@@ -262,6 +345,9 @@ def latency(
         require_samples=True if require_samples else None,
         baseline_path=baseline,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -312,6 +398,10 @@ def live(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run live provider canaries and emit capability reports."""
     result = run_live_validation(
@@ -322,6 +412,9 @@ def live(
         artifacts_dir=artifacts_dir,
         report_path=report,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
@@ -378,6 +471,10 @@ def release(
         Path,
         typer.Option("--artifacts-dir", help=_ARTIFACTS_DIR_HELP),
     ] = Path(".easycat/validation"),
+    show_output: Annotated[
+        bool,
+        typer.Option("--show-output", help=_SHOW_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Build, install, and run the strict release validation gate."""
     if latency_smoke and latency_sweep:
@@ -399,6 +496,9 @@ def release(
         surfaces=surface,
         latency_mode=mode,
     )
+
+    if show_output:
+        _stream_validation_output(result, json_output=json_output)
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"
