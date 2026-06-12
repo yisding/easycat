@@ -8,8 +8,9 @@ to confirm it remains discoverable. Maintainers can use
 `uv run easycat docs --audience maintainers` for the focused route set
 (`uv run easycat docs --json` and
 `uv run easycat docs --audience maintainers --json` emit route entries and
-command hints). Coding agent? Start at [llms.txt](../llms.txt) or run
-`uv run easycat explain json-schema`.
+command hints). Coding agent? Use the root [AGENTS.md](../AGENTS.md) for
+repository coding rules; use [llms.txt](../llms.txt) for machine-readable docs
+route discovery or run `uv run easycat explain json-schema`.
 
 ## Rules
 

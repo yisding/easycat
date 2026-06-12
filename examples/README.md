@@ -6,8 +6,9 @@ below names what the example teaches, the command to run, the extras or
 third-party packages it expects, and the environment variables that must be set.
 Run `uv run easycat docs` for the maintained docs map and
 `uv run easycat doctor` for first-run environment checks.
-Coding agent? Start at [llms.txt](../llms.txt) or run
-`uv run easycat explain json-schema` (`uv run easycat doctor --json` and
+Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding
+rules; use [llms.txt](../llms.txt) for machine-readable docs route discovery or
+run `uv run easycat explain json-schema` (`uv run easycat doctor --json` and
 `uv run easycat doctor --env-file .env --json` emit the same checks as
 parseable rows).
 To scaffold a fresh app instead of running an example in-place, compare

@@ -14,10 +14,11 @@ uv run easycat docs --audience maintainers   # architecture/maintenance routes
 uv run easycat docs --json                   # route map with command hints and audience labels
 ```
 
-Coding agent? Start at [llms.txt](../llms.txt) or run
-`uv run easycat explain json-schema`. Replace uppercase or angle-bracket
-placeholders in command hints, such as `PATH` or `<session_id>`, before
-running them. Multi-word audience filters accept hyphens or underscores, so
+Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding
+rules; use [llms.txt](../llms.txt) for machine-readable docs route discovery or
+run `uv run easycat explain json-schema`. Replace uppercase or angle-bracket
+placeholders in command hints, such as `PATH` or `<session_id>`, before running
+them. Multi-word audience filters accept hyphens or underscores, so
 `uv run easycat docs --audience app-builders` is equivalent to
 `uv run easycat docs --audience "app builders"`. The `maintainers` and
 `operators` filters also include compound labels such as `provider maintainers`,
@@ -54,7 +55,8 @@ running them. Multi-word audience filters accept hyphens or underscores, so
   `assert_latency`, `assert_llm_judge`), teaching chapter 12 metrics, then
   live audio with `uv run easycat validate latency --smoke`. Scaffolded
   projects ship an offline `tests/test_agent.py` to start from.
-- Automating the CLI: start at [llms.txt](../llms.txt), use
+- Automating the CLI: use [llms.txt](../llms.txt) for machine-readable docs
+  route discovery, use
   `uv run easycat docs --json` to inspect the docs
   route map with command hints and audience labels, then use
   `uv run easycat explain json-schema` for the standard `--json` envelope,

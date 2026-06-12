@@ -1,9 +1,11 @@
 # Repository Guidelines
 
-Coding agent? Start at [llms.txt](llms.txt) — the generated machine-readable
-docs route map ([llms-full.txt](llms-full.txt) adds every command hint). Both
-are generated from the `easycat docs --json` route table; regenerate with
-`uv run python scripts/regen_llms_txt.py` after editing the docs route map.
+For coding work, this file is the primary repository guide. Use
+[llms.txt](llms.txt) only when you need the generated machine-readable docs
+route map, and [llms-full.txt](llms-full.txt) when automation needs every docs
+route command hint. Both are generated from the `easycat docs --json` route
+table; regenerate with `uv run python scripts/regen_llms_txt.py` after editing
+the docs route map.
 
 ## Project Structure & Module Organization
 - `src/easycat/`: core library code.

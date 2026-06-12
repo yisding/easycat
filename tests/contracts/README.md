@@ -41,8 +41,10 @@ same run inside the standard CLI envelope:
 `uv run easycat docs --audience provider-maintainers` to narrow the maintained
 docs map to provider-facing routes, or
 `uv run easycat docs --audience provider-maintainers --json` when automation
-needs that smaller route map. Coding agent? Start at
-[llms.txt](../../llms.txt) or run `uv run easycat explain json-schema`. Use
+needs that smaller route map. Coding agent? Use the root
+[AGENTS.md](../../AGENTS.md) for repository coding rules; use
+[llms.txt](../../llms.txt) for machine-readable docs route discovery or run
+`uv run easycat explain json-schema`. Use
 `uv run pytest tests/contracts` for the focused contract suite, and
 `uv run pytest tests/integration/test_provider_contract_matrix.py` when you
 need to verify the separate factory/session wiring matrix.

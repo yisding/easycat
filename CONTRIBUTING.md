@@ -18,7 +18,8 @@ validation, and operations. Use `uv run easycat docs --audience contributors`
 to narrow the map to contributor-facing routes, or
 `uv run easycat docs --audience contributors --json` when automation needs
 that smaller route map.
-Coding agent? Start at [llms.txt](llms.txt) or run
+Coding agent? Use [AGENTS.md](AGENTS.md) for repository coding rules; use
+[llms.txt](llms.txt) for machine-readable docs route discovery, or run
 `uv run easycat explain json-schema`; `uv run easycat docs --json` emits the
 full route map. After editing the docs route map, regenerate the machine docs
 with `uv run python scripts/regen_llms_txt.py` (`--check` verifies them in

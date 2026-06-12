@@ -8,8 +8,10 @@ Route discovery: use
 `uv run easycat docs --audience operators-and-maintainers` for the focused
 operator/maintainer route set
 (`uv run easycat docs --audience operators-and-maintainers --json` emits the
-same route entries and command hints). Coding agent? Start at
-[llms.txt](../../../llms.txt) or run `uv run easycat explain json-schema`.
+same route entries and command hints). Coding agent? Use the root
+[AGENTS.md](../../../AGENTS.md) for repository coding rules; use
+[llms.txt](../../../llms.txt) for machine-readable docs route discovery or run
+`uv run easycat explain json-schema`.
 
 Operator inspection: after a run, inspect a live SQLite journal with
 `uv run easycat inspect .easycat/journals/<session_id>.sqlite`; add `--json`

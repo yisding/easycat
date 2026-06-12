@@ -8,10 +8,10 @@ Both files are generated from the same source of truth as
 * ``llms-full.txt`` — the same routes expanded with every copyable
   command hint plus the shared command note.
 
-Human docs carry a single pointer line ("Coding agent? Start at
-llms.txt …"); these files are where machine readers land. Run after
-editing the docs route map; ``--check`` exits non-zero if either file
-would change, which is what CI should call.
+Human docs carry a short pointer explaining that coding rules live in
+AGENTS.md/CLAUDE.md while these files are for machine-readable docs route
+discovery. Run after editing the docs route map; ``--check`` exits non-zero if
+either file would change, which is what CI should call.
 """
 
 from __future__ import annotations

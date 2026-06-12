@@ -2,9 +2,9 @@
 
 Status: active backlog with historical audit notes.
 
-This plan combines `archive/cleanup-ideas-1.txt`,
-`archive/cleanup-ideas-2.txt`, and `archive/cleanup-ideas-3.txt` after
-checking the repository state on 2026-04-25.
+This plan was distilled from three raw cleanup audits after checking the
+repository state on 2026-04-25. The raw notes have been removed; this file is
+the retained triage record.
 
 Status note: the canonical current snapshot lives in
 `current-code-status.md`. Treat this file as a triaged backlog plus preserved
