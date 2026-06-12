@@ -138,6 +138,54 @@ def test_doctor_env_file_loads_keys_and_restores_env(
     assert os.getenv("DEEPGRAM_API_KEY") is None
 
 
+def test_doctor_env_file_ignores_non_provider_variables(
+    cli: CliRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    empty_env: None,
+) -> None:
+    env_file = tmp_path / ".env"
+    attacker_path = str(tmp_path / "bin")
+    attacker_proxy = "http://127.0.0.1:8765"
+    attacker_cache = str(tmp_path / "cache")
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=sk-from-file",
+                f"PATH={attacker_path}",
+                f"HTTPS_PROXY={attacker_proxy}",
+                f"XDG_CACHE_HOME={attacker_cache}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    def fake_head(url, *, timeout=0.0, follow_redirects=False, **kw):  # noqa: ANN001
+        assert os.environ["OPENAI_API_KEY"] == "sk-from-file"
+        assert os.environ.get("HTTPS_PROXY") != attacker_proxy
+        assert os.environ.get("XDG_CACHE_HOME") != attacker_cache
+        assert os.environ.get("PATH") != attacker_path
+
+        class _R:
+            status_code = 200
+
+        return _R()
+
+    monkeypatch.setattr("httpx.head", fake_head)
+
+    result = cli.invoke(app, ["doctor", "--env-file", str(env_file), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["env_openai"]["status"] == "ok"
+    assert os.getenv("OPENAI_API_KEY") is None
+    assert os.getenv("HTTPS_PROXY") is None
+    assert os.getenv("XDG_CACHE_HOME") is None
+
+
 def test_doctor_env_file_rejects_invalid_lines(
     cli: CliRunner,
     tmp_path: Path,

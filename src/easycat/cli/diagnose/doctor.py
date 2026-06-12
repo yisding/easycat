@@ -130,7 +130,13 @@ def _provider_env() -> dict[str, str]:
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _parse_env_file(path: Path) -> dict[str, str]:
+def _parse_env_file(path: Path, *, allowed_names: set[str]) -> dict[str, str]:
+    """Parse provider credentials from a dotenv file.
+
+    Doctor imports optional integrations and probes local file/network resources,
+    so project dotenv files must not be allowed to rewrite process-wide knobs such
+    as PATH, HOME, proxy, SSL, or cache variables before those checks run.
+    """
     if not path.is_file():
         raise ValueError(f"{path} is not a file")
 
@@ -152,7 +158,8 @@ def _parse_env_file(path: Path) -> dict[str, str]:
         key, value = parts[0].split("=", 1)
         if not _ENV_NAME_RE.match(key):
             raise ValueError(f"{path}:{line_number}: invalid env var name {key!r}")
-        values[key] = value
+        if key in allowed_names:
+            values[key] = value
     return values
 
 
@@ -599,7 +606,12 @@ def doctor(
         )
 
     try:
-        env_values = _parse_env_file(env_file) if env_file is not None else {}
+        allowed_env_names = set(provider_env.values())
+        env_values = (
+            _parse_env_file(env_file, allowed_names=allowed_env_names)
+            if env_file is not None
+            else {}
+        )
     except ValueError as exc:
         _doctor_usage_error(f"Invalid --env-file: {exc}", json_output=json_output)
 
