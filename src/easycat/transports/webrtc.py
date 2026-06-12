@@ -300,6 +300,7 @@ def webrtc_transport_config_from_env(
     *,
     host_env: str = "SIGNALING_HOST",
     port_env: str = "SIGNALING_PORT",
+    auth_token_env: str = "WEBRTC_SIGNALING_TOKEN",
     expose_ice_credentials_env: str = "WEBRTC_EXPOSE_ICE_CREDENTIALS",
     static_dir: str | None = WebRTCTransportConfig._USE_BUNDLED,
 ) -> WebRTCTransportConfig:
@@ -309,6 +310,7 @@ def webrtc_transport_config_from_env(
         port=int(os.getenv(port_env, "8080")),
         ice_servers=webrtc_ice_servers_from_env(),
         static_dir=static_dir,
+        auth_token=os.getenv(auth_token_env) or None,
         expose_ice_credentials=_env_flag(expose_ice_credentials_env),
     )
 
@@ -731,6 +733,12 @@ class WebRTCTransport(AudioQueueMixin):
         """Start the HTTP signaling server."""
         if self._connected:
             return
+
+        if not _is_loopback_host(self._config.host) and self._config.auth_token is None:
+            raise ValueError(
+                "WebRTCTransportConfig.auth_token is required when binding WebRTC "
+                "signaling to a non-loopback host"
+            )
 
         self._web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
         web = self._web

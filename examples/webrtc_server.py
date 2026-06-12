@@ -28,6 +28,7 @@ Environment variables:
                                     trusted demos or short-lived credentials.
     SIGNALING_HOST        — Optional.  Bind address (default 127.0.0.1).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
+    WEBRTC_SIGNALING_TOKEN — Optional on localhost; required for public binds.
 
 Then open http://localhost:8080 in your browser.
 The bundled client is same-origin with the signaling server. If you host a
@@ -58,7 +59,8 @@ def main() -> None:
     config = EasyConfig.browser(transport=transport, agent=agent)
     session = create_session(config)
 
-    print(f"Open http://localhost:{transport.port} in your browser")
+    token_hint = "?token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
+    print(f"Open http://localhost:{transport.port}/webrtc_client.html{token_hint} in your browser")
     if any(any("turn:" in u for u in s.urls) for s in transport.ice_servers):
         print("TURN server:  configured")
         if transport.expose_ice_credentials:

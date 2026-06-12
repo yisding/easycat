@@ -88,12 +88,17 @@ def main() -> None:
         allow_remote=debugger_host not in ("127.0.0.1", "localhost"),
     )
 
+    token_query = "&token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
     combined_url = (
         f"http://localhost:{transport.port}/webrtc_observability.html"
-        f"?debugger_port={debugger_port}"
+        f"?debugger_port={debugger_port}{token_query}"
     )
+    client_token_query = "?token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
     print(f"WebRTC + debugger: {combined_url}")
-    print(f"WebRTC client only: http://localhost:{transport.port}/webrtc_client.html")
+    print(
+        f"WebRTC client only: "
+        f"http://localhost:{transport.port}/webrtc_client.html{client_token_query}"
+    )
     print(f"Debugger only:     http://{debugger_host}:{debugger_port}")
 
     run_session(session)
