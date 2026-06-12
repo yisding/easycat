@@ -35,6 +35,35 @@ SCHEMA_V1_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Directory names that can appear as local tooling, cache, build, or secret-bearing
+# artifacts next to bundled templates, but must never be treated as scaffold
+# templates or copied into generated projects.
+TEMPLATE_ARTIFACT_DIRECTORY_NAMES: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".agents",
+        ".claude",
+        ".codex",
+        ".easycat",
+        ".git",
+        ".github",
+        ".hypothesis",
+        ".mypy_cache",
+        ".mutmut-cache",
+        ".pipecat-bench",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".uv-cache",
+        ".venv",
+        "build",
+        "dist",
+        "htmlcov",
+        "mutants",
+        "runs",
+        "site",
+    }
+)
+
 
 @dataclass
 class InitConfig:
@@ -57,7 +86,13 @@ def available_templates() -> list[str]:
     root = Path(__file__).parent / "templates"
     if not root.is_dir():
         return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith("_"))
+    return sorted(
+        p.name
+        for p in root.iterdir()
+        if p.is_dir()
+        and not p.name.startswith("_")
+        and p.name not in TEMPLATE_ARTIFACT_DIRECTORY_NAMES
+    )
 
 
 def _reject(problem: str) -> None:
