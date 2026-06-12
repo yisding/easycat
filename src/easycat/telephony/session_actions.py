@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.session.actions import (
+    MAX_DTMF_INTER_DIGIT_DELAY_MS,
     EndCallAction,
     SendDTMFAction,
     SendSMSAction,
@@ -122,6 +123,7 @@ class TwilioSessionActionExecutor(SessionActionExecutor):
 def _apply_inter_digit_delay(digits: str, inter_digit_delay_ms: int) -> str:
     if inter_digit_delay_ms <= 0 or len(digits) <= 1:
         return digits
-    pauses = max(1, round(inter_digit_delay_ms / 1000))
+    bounded_delay_ms = min(inter_digit_delay_ms, MAX_DTMF_INTER_DIGIT_DELAY_MS)
+    pauses = max(1, round(bounded_delay_ms / 1000))
     separator = "W" * pauses
     return separator.join(digits)

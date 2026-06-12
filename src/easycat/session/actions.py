@@ -19,6 +19,14 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
+MAX_DTMF_DIGITS = 128
+MAX_DTMF_INTER_DIGIT_DELAY_MS = 10_000
+
+
+def _validate_dtmf_digits(digits: str) -> None:
+    if len(digits) > MAX_DTMF_DIGITS:
+        raise ValueError(f"DTMF digits must be {MAX_DTMF_DIGITS} characters or fewer")
+
 
 class SessionActionType(enum.StrEnum):
     """Types of session-level actions that tools can request."""
@@ -61,6 +69,9 @@ class TransferPlan:
     post_dial_digits: str = ""
     caller_id: str | None = None
 
+    def __post_init__(self) -> None:
+        _validate_dtmf_digits(self.post_dial_digits)
+
 
 @dataclass(frozen=True, slots=True)
 class TransferCallAction(SessionAction):
@@ -81,6 +92,13 @@ class SendDTMFAction(SessionAction):
 
     digits: str = ""
     inter_digit_delay_ms: int = 1000
+
+    def __post_init__(self) -> None:
+        _validate_dtmf_digits(self.digits)
+        if not 0 <= self.inter_digit_delay_ms <= MAX_DTMF_INTER_DIGIT_DELAY_MS:
+            raise ValueError(
+                f"DTMF inter_digit_delay_ms must be between 0 and {MAX_DTMF_INTER_DIGIT_DELAY_MS}"
+            )
 
 
 @dataclass(frozen=True, slots=True)
