@@ -184,7 +184,9 @@ def test_validation_tasks_v51_current_state_tracks_journal_benchmark_artifact() 
     )[0]
     normalized_section = " ".join(section.split())
     source = (REPO_ROOT / "perf/bench_journal.py").read_text(encoding="utf-8")
-    tests = (REPO_ROOT / "tests/perf/test_bench_journal.py").read_text(encoding="utf-8")
+    tests = (REPO_ROOT / "tests/validation/test_journal_benchmark_artifact.py").read_text(
+        encoding="utf-8"
+    )
     validate_source = (REPO_ROOT / "src/easycat/cli/validate.py").read_text(encoding="utf-8")
 
     for symbol in (
@@ -238,7 +240,7 @@ def test_validation_tasks_v51_current_state_tracks_journal_benchmark_artifact() 
         "--artifact",
         "--baseline",
         "--max-regression-percent",
-        "tests/perf/test_bench_journal.py",
+        "tests/validation/test_journal_benchmark_artifact.py",
         "run_benchmarks",
         "easycat validate stress",
     ):

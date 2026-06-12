@@ -305,7 +305,7 @@ verify with a regression test.
 | `tests/tts/test_tts_deepgram.py` | Add a parametrized case: `output_format=PCM16_MONO_8K` ⇒ URL carries `sample_rate=8000`, `_source_format` matches, no resample in `_normalize_audio`. Same with `MULAW_8K` ⇒ `encoding=mulaw`. |
 | `tests/tts/test_tts_elevenlabs.py` | Parametrize over `pcm_8000` and `ulaw_8000` output formats. Confirm `__post_init__` no longer rejects `ulaw_8000`. |
 | `tests/tts/test_tts_cartesia.py` (from the Cartesia plan) | Parametrize over PCM16 24k, PCM16 8k, and μ-law 8k targets; confirm the JSON request matches. |
-| `tests/test_config.py` | With Twilio transport/config + default TTS configs, assert EasyConfig aligns TTS output to `PCM16_MONO_8K`; with explicit output or `auto_align_tts_output_to_transport=False`, assert the config is respected. |
+| `tests/config/test_config.py` | With Twilio transport/config + default TTS configs, assert EasyConfig aligns TTS output to `PCM16_MONO_8K`; with explicit output or `auto_align_tts_output_to_transport=False`, assert the config is respected. |
 | `tests/transports/test_transports.py` / `tests/transports/test_connection_transports.py` | Extend Twilio send-path coverage for μ-law 8 kHz `AudioChunk` → base64 of raw bytes (no re-encoding), and PCM16 8 kHz `AudioChunk` → `_mulaw_encode` only, no resample. |
 | `tests/session/test_session_streaming.py` / `tests/session/test_interruption_property.py` | Regression case: interruption estimation with μ-law 8 kHz chunks produces the same spoken-text output as the PCM16 24 kHz baseline, given equivalent send-log durations. |
 

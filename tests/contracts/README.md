@@ -1,6 +1,6 @@
 # Provider And Protocol Contracts
 
-[`tests/integration/test_provider_contract_matrix.py`](../integration/test_provider_contract_matrix.py)
+[`tests/contracts/test_provider_session_matrix.py`](test_provider_session_matrix.py)
 is the factory/session wiring check. It proves every registered STT and TTS
 config can be dispatched, injected with required runtime dependencies, and
 driven through a scripted session.
@@ -31,7 +31,7 @@ When adding or changing provider behavior:
    [`test_transport_contracts.py`](test_transport_contracts.py), or
    [`test_agent_bridge_contracts.py`](test_agent_bridge_contracts.py).
 3. Refresh cassettes or schema fingerprints only when the provider protocol
-   shape changes; keep the factory/session wiring assertions in the integration
+   shape changes; keep the factory/session wiring assertions in the session
    matrix separate from protocol contract assertions.
 
 From the repository root, run `uv run easycat validate contracts` for the
@@ -46,5 +46,5 @@ needs that smaller route map. Coding agent? Use the root
 [llms.txt](../../llms.txt) for machine-readable docs route discovery or run
 `uv run easycat explain json-schema`. Use
 `uv run pytest tests/contracts` for the focused contract suite, and
-`uv run pytest tests/integration/test_provider_contract_matrix.py` when you
+`uv run pytest tests/contracts/test_provider_session_matrix.py` when you
 need to verify the separate factory/session wiring matrix.

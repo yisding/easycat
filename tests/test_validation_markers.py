@@ -11,6 +11,7 @@ REQUIRED_VALIDATION_MARKERS = {
     "agent_bridge",
     "contract",
     "flaky",
+    "integration_external",
     "integration_live",
     "integration_local",
     "integration_socket",
@@ -88,10 +89,23 @@ def test_provider_and_surface_scoped_validation_marker_passes() -> None:
     assert errors == []
 
 
-def test_unscoped_live_marker_is_allowed_until_provider_scope_is_declared() -> None:
+def test_unscoped_live_marker_requires_provider_and_surface_scope() -> None:
     errors = validate_provider_surface_markers(
         nodeid="tests/example_test.py::test_external_tool_live",
         marker_names={"integration_live"},
+    )
+
+    assert errors == [
+        "tests/example_test.py::test_external_tool_live uses bare integration_live; "
+        "live tests must declare provider and surface metadata, or use "
+        "integration_external/integration_local for non-provider dependencies"
+    ]
+
+
+def test_unscoped_external_marker_is_allowed() -> None:
+    errors = validate_provider_surface_markers(
+        nodeid="tests/example_test.py::test_external_tool",
+        marker_names={"integration_external"},
     )
 
     assert errors == []
@@ -174,7 +188,7 @@ def test_validation_marker_plan_tracks_registered_marker_state() -> None:
     assert "release-scoped flaky tests" in flaky_section
 
 
-def test_integration_local_marker_definition_covers_local_builds() -> None:
+def test_integration_local_and_external_marker_definitions_cover_local_builds() -> None:
     descriptions = _registered_marker_descriptions()
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
@@ -182,8 +196,13 @@ def test_integration_local_marker_definition_covers_local_builds() -> None:
     assert descriptions["integration_local"] == (
         "local integration tests with no live services; may use subprocesses/filesystem"
     )
+    assert descriptions["integration_external"] == (
+        "tests requiring external local binaries, SDKs, or services without live "
+        "provider API credentials"
+    )
     for doc in (contributing, reference):
         assert "local integration tests with no live services" in doc
+        assert "external local binaries, SDKs, or services" in doc
     assert "fake providers, subprocesses, or filesystem state" in contributing
     assert "in-process end-to-end tests with fake providers" not in "\n".join(
         (contributing, reference, descriptions["integration_local"])

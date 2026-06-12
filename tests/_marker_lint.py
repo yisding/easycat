@@ -37,6 +37,14 @@ def validate_provider_surface_markers(nodeid: str, marker_names: set[str]) -> li
     has_provider = bool(marker_names.intersection(PROVIDER_MARKERS)) or "provider" in marker_names
     has_surface = bool(marker_names.intersection(SURFACE_MARKERS))
 
+    if "integration_live" in marker_names and not has_provider and not has_surface:
+        errors.append(
+            f"{nodeid} uses bare integration_live; live tests must declare provider and "
+            "surface metadata, or use integration_external/integration_local for "
+            "non-provider dependencies"
+        )
+        return errors
+
     if has_provider and not has_surface:
         surface_names = ", ".join(sorted(SURFACE_MARKERS))
         errors.append(

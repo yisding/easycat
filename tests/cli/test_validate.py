@@ -28,6 +28,7 @@ from easycat.validation.report import (
     ValidationSkip,
 )
 from easycat.validation.runner import (
+    VALIDATION_SELECTORS,
     CommandResult,
     ValidationRunResult,
     main,
@@ -329,13 +330,16 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
     runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
     test_source = (REPO_ROOT / "tests/cli/test_validate.py").read_text(encoding="utf-8")
     quick_selector = (
-        "not integration_socket and not integration_live and not slow and not stress and not flaky"
+        "not integration_socket and not integration_live and not integration_external "
+        "and not contract and not slow and not stress and not flaky"
     )
     socket_selector = "integration_socket and not integration_live and not flaky"
 
     assert "Current verified state:" in section
     assert "from easycat.validation.runner import main" in script_source
     assert "raise SystemExit(main())" in script_source
+    assert VALIDATION_SELECTORS["quick"] == quick_selector
+    assert VALIDATION_SELECTORS["socket"] == socket_selector
     for token in (
         "run_validation_slice",
         "VALIDATION_SELECTORS",
@@ -343,8 +347,6 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
         '"socket"',
         '"stress"',
         '"contracts"',
-        quick_selector,
-        socket_selector,
         'run_dir = artifacts_root / "runs" / run_id',
         "junit.xml",
         "stdout.log",
@@ -759,8 +761,8 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
     assert command[-2:] == [
         "-m",
         (
-            "not integration_socket and not integration_live and not slow "
-            "and not stress and not flaky"
+            "not integration_socket and not integration_live and not integration_external "
+            "and not contract and not slow and not stress and not flaky"
         ),
     ]
     assert any(arg.startswith("--junitxml=") for arg in command)
@@ -990,7 +992,8 @@ def test_release_validation_builds_installed_wheel_and_aggregates_reports(
     assert any(
         "-m" in command
         and any(
-            "not integration_socket and not integration_live and not slow" in arg
+            "not integration_socket and not integration_live and not integration_external" in arg
+            and "not contract" in arg
             for arg in command
         )
         for command in commands
@@ -1034,8 +1037,8 @@ def test_release_validation_fails_when_child_slice_fails(
                 )
             )
         quick_selector = (
-            "not integration_socket and not integration_live and not slow "
-            "and not stress and not flaky"
+            "not integration_socket and not integration_live and not integration_external "
+            "and not contract and not slow and not stress and not flaky"
         )
         if quick_selector in command:
             return CommandResult(exit_code=1, stdout="", stderr="quick failed")

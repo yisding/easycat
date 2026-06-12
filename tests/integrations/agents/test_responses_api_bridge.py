@@ -1005,6 +1005,8 @@ class TestIntegration:
     """AC2C.13 -- gated integration test against a live endpoint."""
 
     @pytest.mark.integration_live
+    @pytest.mark.provider("remote_responses")
+    @pytest.mark.surface_agent
     @pytest.mark.asyncio
     async def test_live_responses_api(self):
         base_url = os.environ.get("RESPONSES_API_BASE_URL")

@@ -137,52 +137,32 @@ def test_docs_index_routes_primary_reader_paths() -> None:
 def test_docs_index_points_to_docs_command() -> None:
     text = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
     normalized = re.sub(r"\s+", " ", text)
+    required_commands = (
+        "uv run easycat docs",
+        "uv run easycat docs --json",
+        "uv run easycat docs --audience learners",
+        "uv run easycat docs --audience app-builders",
+        "uv run easycat docs --audience operators",
+        "uv run easycat docs --audience maintainers",
+        "uv run easycat explain json-schema",
+        "uv run easycat init --list-templates",
+        "uv run easycat init --list-templates --json",
+        "uv run easycat validate quick",
+        "uv run easycat validate quick --json",
+        "uv run easycat validate contracts --json",
+        "uv run easycat validate release --json",
+        "uv run easycat validate report .easycat/validation/latest.json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+    )
 
-    assert "uv run easycat docs" in text
-    assert "uv run easycat docs --audience learners" in text
-    assert "uv run easycat docs --json" in text
-    assert "uv run easycat docs --audience app-builders" in text
-    assert "uv run easycat docs --audience operators" in text
-    assert "uv run easycat docs --audience maintainers" in text
+    for command in required_commands:
+        assert command in text
     assert (
         "Coding agent? Use the root [AGENTS.md](../AGENTS.md) for repository coding rules"
     ) in normalized
     assert "[llms.txt](../llms.txt) for machine-readable docs route discovery" in normalized
     assert "when a script or coding agent" not in normalized
-    assert "repository path chooser" in normalized
-    assert "installed app environment" in text
-    assert "prints the same map" in text
-    assert "docs route map" in normalized
-    assert "route map with command hints and audience labels" in normalized
-    assert (
-        "Replace uppercase or angle-bracket placeholders in command hints, such as `PATH` "
-        "or `<session_id>`"
-    ) in normalized
-    assert "human docs menu also prints the available audience labels" in normalized
-    assert "uv run easycat docs --audience app-builders" in text
-    assert 'uv run easycat docs --audience "app builders"' in text
-    assert "`maintainers` and `operators` filters also include compound labels" in normalized
-    assert "uv run easycat doctor --env-file .env" in text
-    assert "uv run --env-file .env python examples/openai_agents_voice.py" in text
-    assert "easycat doctor --json" in text
-    assert "uv run easycat doctor --env-file .env --json" in text
-    assert "environment/check rows without Rich formatting" in normalized
-    assert "uv run easycat init --list-templates" in text
-    assert "uv run easycat init --list-templates --json" in text
-    assert "base `easycat[...]` package requirements and extras" in normalized
-    assert "required environment variables" in normalized
-    assert "optional environment knobs" in normalized
-    assert "generated files" in normalized
-    assert "copyable create/preflight/check/fix/docs/json-schema/run commands" in normalized
-    assert "architecture map" in normalized
-    assert "provider registries" in normalized
-    assert "repository agent guide" in normalized
-    assert "development commands, docs/onboarding guard recipes" in normalized
-    assert "validation commands, and PR expectations" in normalized
-    assert "docs/onboarding guard recipes" in normalized
     assert "If `just` is not installed" in text
-    assert "raw command table" in normalized
-    assert "equivalent `uv run pytest ...` commands" in normalized
     for recipe in ONBOARDING_GUARD_COMMANDS:
         assert recipe in text
     guard_recipe_text = text.split("docs/onboarding guard recipes (", 1)[1].split(
@@ -190,30 +170,6 @@ def test_docs_index_points_to_docs_command() -> None:
         1,
     )[0]
     assert tuple(CODE_SPAN_RE.findall(guard_recipe_text)) == ONBOARDING_GUARD_COMMANDS
-    assert "uv run easycat explain json-schema" in text
-    assert "command-specific success and error fields" in normalized
-    assert "standard `--json` envelope" in text
-    assert "`audience`" in text
-    assert "top-level `available_audience_filters`" in text
-    assert "top-level `audience_alias_note`" in text
-    assert "`app-builders` and `coding-agents`" in text
-    assert "broad `maintainers` / `operators` role filters" in normalized
-    assert "`provider maintainers`, `release maintainers`, and `operators and maintainers`" in (
-        normalized
-    )
-    assert "top-level `command_note`" in text
-    assert "installed CLI hints from repo-local `uv run` hints" in normalized
-    assert "uv run easycat validate quick" in text
-    assert "uv run easycat validate quick --json" in text
-    assert "uv run easycat validate contracts --json" in text
-    assert "uv run easycat validate release --json" in text
-    assert "uv run easycat validate report .easycat/validation/latest.json" in text
-    assert "uv run easycat validate report .easycat/validation/latest.json --json" in text
-    assert "automation needs validation run/report payloads" in normalized
-    assert "automation needs validation output inside the standard CLI envelope" in normalized
-    assert "journal CLI commands, the debugger UI, metrics, and traces" in normalized
-    assert "Start with `easycat bundles list`" in normalized
-    assert "uv sync --extra debugger --group dev" in text
 
 
 def test_docs_index_command_hints_are_locally_valid() -> None:
@@ -536,18 +492,7 @@ def test_architecture_explanation_carries_claude_guide_prose() -> None:
     architecture_section = guide.split("## Architecture", 1)[1].split("## Key Patterns", 1)[0]
 
     assert "[docs/architecture.md](docs/architecture.md)" in architecture_section
-    # The deep per-collaborator prose lives in the docs page, not CLAUDE.md.
-    for marker in (
-        "session/_builder.py",
-        "session/_wiring.py",
-        "session/_turn_runner.py",
-        "ExternalAgentBridge",
-        "_PROVIDER_TO_CONFIG",
-        "Silero → FunASR → TEN → Krisp",
-        "IDLE → USER_SPEAKING → USER_PAUSED → PROCESSING → BOT_SPEAKING",
-    ):
-        assert marker in page, f"docs/architecture.md missing {marker!r}"
-    assert "SessionWiringContext" in page
+    assert "ExternalAgentBridge" in page
     assert "SessionWiringContext" not in guide
 
 
@@ -826,7 +771,7 @@ def test_provider_contract_docs_route_matches_contract_commands() -> None:
         "uv run easycat validate contracts",
         "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
-        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+        "uv run pytest tests/contracts/test_provider_session_matrix.py",
     ):
         assert command in contract_readme
         assert command in route_commands

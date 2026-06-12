@@ -499,7 +499,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run easycat validate contracts",
         "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
-        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+        "uv run pytest tests/contracts/test_provider_session_matrix.py",
     ]
     assert commands["CONTRIBUTING.md"] == [
         *_DOCS_ONBOARDING_GUARD_COMMANDS,

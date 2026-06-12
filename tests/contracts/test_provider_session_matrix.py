@@ -65,8 +65,7 @@ from easycat.tts.factory import _PROVIDERS as _TTS_REGISTRY
 from easycat.tts.factory import create_tts_provider_from_config
 from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.turn_manager import TurnManagerConfig
-
-from .harness import (
+from tests.integration.harness import (
     EventCollector,
     QueueTransport,
     RecordingTTS,
@@ -76,7 +75,7 @@ from .harness import (
     patch_provider_factories,
 )
 
-pytestmark = pytest.mark.integration_local
+pytestmark = [pytest.mark.contract, pytest.mark.integration_local]
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 

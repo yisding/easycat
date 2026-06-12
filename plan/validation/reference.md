@@ -54,7 +54,7 @@ Implemented strengths:
 - `tests/conftest.py` skips `integration_socket` tests when localhost socket
   bind/connect is unavailable, enforces provider/surface marker pairing for
   provider-scoped validation tests, and enforces flaky quarantine metadata.
-- `tests/integration/test_provider_contract_matrix.py` already validates
+- `tests/contracts/test_provider_session_matrix.py` already validates
   STT/TTS registry dispatch, EventBus injection, and session wiring with fake
   providers.
 - `easycat validate latency` writes structured latency artifacts with samples,
@@ -189,7 +189,7 @@ Runner selector for PR-local quick validation:
 
 ```bash
 uv run pytest -q --junitxml=<run-dir>/junit.xml \
-  -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
+  -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
 ```
 
 Expected coverage: unit tests, local integration tests, fake-provider agent
@@ -243,7 +243,7 @@ Use a strict request, loose response rule:
 - Unknown additive fields are warnings unless they break parsing or conflict
   with documented behavior.
 
-Keep `tests/integration/test_provider_contract_matrix.py` focused on registry
+Keep `tests/contracts/test_provider_session_matrix.py` focused on registry
 and session wiring. Put protocol cassettes under a future `tests/contracts/`
 suite.
 
@@ -503,6 +503,7 @@ Keep existing markers:
 - `integration_local`
 - `integration_socket`
 - `integration_live`
+- `integration_external`
 - `slow`
 
 Add planned markers:
@@ -545,7 +546,8 @@ strict_config = true
 markers = [
     "integration_local: local integration tests with no live services; may use subprocesses/filesystem",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
-    "integration_live: tests requiring live API keys and optional provider extras",
+    "integration_live: tests requiring live provider/API endpoints, API keys, and optional provider extras",
+    "integration_external: tests requiring external local binaries, SDKs, or services without live provider API credentials",
     "slow: long-running end-to-end tests; opt in with '-m slow'",
     "contract: provider, protocol, or bridge contract tests",
     "latency: latency measurement or latency SLO tests",
@@ -571,8 +573,8 @@ markers = [
 Current CI:
 
 - `lint`
-- `test` on Python 3.12 and 3.14 with
-  `not integration_socket and not integration_live`
+- `test` on Python 3.12 and 3.14 with the quick selector excluding socket,
+  live, external-dependency, contract, slow, stress, and flaky tests
 - `integration-socket` on Python 3.12 and 3.14 with `integration_socket`
 - manual `integration-live` on Python 3.12 with `integration_live`
 

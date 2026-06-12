@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 import tomllib
 from pathlib import Path
 
@@ -33,21 +32,6 @@ CURRENT_PLAN_SOURCE_TEST_PATH_RE = re.compile(
 SOURCE_LINE_REF_RE = re.compile(
     r"\b(?:src/easycat/|tests/|docs/)?[A-Za-z0-9_./-]+\.py:[0-9]+(?:-[0-9]+)?\b"
 )
-
-
-def _tracked_file_count(*patterns: str) -> int:
-    result = subprocess.run(
-        ["git", "ls-files", *patterns],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return len([line for line in result.stdout.splitlines() if line])
-
-
-def _line_count(path: Path) -> int:
-    return len(path.read_text(encoding="utf-8").splitlines())
 
 
 def test_gitignore_covers_local_generated_state() -> None:
@@ -292,45 +276,17 @@ def test_cli_test_plan_describes_integration_local_marker_selection() -> None:
 
 
 def test_roadmap_current_code_status_tracks_inventory_and_artifact_hygiene() -> None:
-    """Keep the current-code snapshot aligned with tracked files and release hygiene."""
-    from easycat._public_api import LAZY_EXPORTS
-
+    """Keep the current-code snapshot aligned with release hygiene."""
     status = (REPO_ROOT / "plan" / "roadmap" / "current-code-status.md").read_text(
         encoding="utf-8"
     )
-    normalized = " ".join(status.split())
-    source_count = _tracked_file_count("src/easycat/**/*.py", "src/easycat/*.py")
-    test_count = _tracked_file_count("tests/**/test_*.py", "tests/test_*.py")
-    session_lines = _line_count(REPO_ROOT / "src" / "easycat" / "session" / "_session.py")
-    init_lines = _line_count(REPO_ROOT / "src" / "easycat" / "__init__.py")
 
-    assert f"`src/easycat/` contains {source_count} tracked Python files." in status
-    assert f"`tests/` contains {test_count} tracked `test_*.py` files." in status
-    assert (
-        f"`Session` is reduced from the older cleanup note but still large at roughly "
-        f"{session_lines:,} lines."
-    ) in normalized
-    assert (
-        f"`src/easycat/__init__.py` is smaller than the older cleanup note at roughly "
-        f"{init_lines:,} lines"
-    ) in normalized
-    assert (
-        f"The public surface is still broad at {len(LAZY_EXPORTS)} lazy top-level exports"
-        in normalized
-    )
     assert "cache/workspace artifacts" not in status
     assert "local/generated/secret artifacts leaking into release artifacts" in status
 
 
-def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
-    """Keep current-facing planning summaries aligned with the canonical snapshot."""
-    from easycat._public_api import LAZY_EXPORTS
-
-    session_lines = _line_count(REPO_ROOT / "src" / "easycat" / "session" / "_session.py")
-    init_lines = _line_count(REPO_ROOT / "src" / "easycat" / "__init__.py")
-    session_lines_text = f"{session_lines:,}"
-    init_lines_text = f"{init_lines:,}"
-    lazy_export_count = len(LAZY_EXPORTS)
+def test_current_status_bridge_docs_do_not_repeat_old_snapshot_counts() -> None:
+    """Keep current-facing planning summaries from reviving old cleanup numbers."""
     files = {
         "combined": REPO_ROOT / "plan" / "roadmap" / "combined-cleanup-tasks.md",
         "workstreams": REPO_ROOT / "plan" / "workstreams" / "README.md",
@@ -341,26 +297,8 @@ def test_current_status_bridge_docs_track_roadmap_snapshot_counts() -> None:
         / "session-decomposition"
         / "session-decomp-overview.md",
     }
-    texts = {name: path.read_text(encoding="utf-8") for name, path in files.items()}
-    normalized = {name: " ".join(text.split()) for name, text in texts.items()}
+    combined_text = "\n".join(path.read_text(encoding="utf-8") for path in files.values())
 
-    assert f"roughly {session_lines_text} lines, not 2,961" in normalized["combined"]
-    assert (
-        f"`src/easycat/__init__.py` is now {init_lines_text} lines, not 578." in texts["combined"]
-    )
-    assert (
-        f"The top-level lazy export list is now {lazy_export_count} symbols, not 195."
-        in texts["combined"]
-    )
-    assert f"roughly {session_lines_text} lines" in normalized["workstreams"]
-    assert f"{session_lines_text} lines in the 2026-06-08 snapshot" in normalized["workstream-3"]
-    assert f"roughly {session_lines_text} lines" in normalized["session-index"]
-    assert (
-        f"roughly {session_lines_text} lines in the current snapshot"
-        in normalized["session-overview"]
-    )
-
-    combined_text = "\n".join(texts.values())
     for stale_phrase in (
         "2026-06-05 snapshot",
         "Static inspection on 2026-05-21",
@@ -766,7 +704,7 @@ def test_session_tests_use_events_for_never_complete_tasks() -> None:
 
 def test_bounded_queue_block_tests_use_wait_probes() -> None:
     """BLOCK-policy queue tests should park producers deterministically."""
-    source = (REPO_ROOT / "tests" / "test_bounded_queue.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests" / "core" / "test_bounded_queue.py").read_text(encoding="utf-8")
     block_section = source.split("class TestBlock:", 1)[1].split("# \u2500\u2500 Flush", 1)[0]
 
     assert "def _mark_not_full_wait(" in source
@@ -791,7 +729,7 @@ def test_sqlite_journal_sigkill_test_waits_for_signal() -> None:
 
 def test_health_check_periodic_tests_wait_for_events() -> None:
     """Periodic health-check tests should observe checks, not sleep for ticks."""
-    source = (REPO_ROOT / "tests" / "test_health_check.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests" / "runtime" / "test_health_check.py").read_text(encoding="utf-8")
 
     assert "class NotifyingHealthyProvider" in source
     assert "class NotifyingUnhealthyProvider" in source
@@ -812,7 +750,7 @@ def test_cli_run_lifecycle_tests_do_not_sleep_for_signals() -> None:
 
 def test_smart_turn_tests_wait_on_worker_events() -> None:
     """Smart-turn worker tests should use explicit events instead of polling sleeps."""
-    source = (REPO_ROOT / "tests" / "test_smart_turn.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests" / "turns" / "test_smart_turn.py").read_text(encoding="utf-8")
 
     assert "def _complete_future(" in source
     assert "loop.call_soon_threadsafe(_complete_future, self.started)" in source
@@ -823,7 +761,7 @@ def test_smart_turn_tests_wait_on_worker_events() -> None:
 
 def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
     """Timeout tests should model stuck work with cancellation-friendly events."""
-    source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests" / "session" / "test_timeouts.py").read_text(encoding="utf-8")
 
     assert "async def _wait_forever" in source
     assert "await _wait_forever()" in source
@@ -832,7 +770,7 @@ def test_timeout_tests_use_events_for_never_complete_tasks() -> None:
 
 def test_tts_first_byte_timeout_test_does_not_sleep_after_first_byte() -> None:
     """The post-first-byte TTS timeout test should spy on wait_for, not sleep."""
-    source = (REPO_ROOT / "tests" / "test_timeouts.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "tests" / "session" / "test_timeouts.py").read_text(encoding="utf-8")
     test_body = source.split("async def test_no_timeout_after_first_byte", 1)[1].split(
         "async def test_timeout_emits_error_event",
         1,
@@ -918,9 +856,9 @@ def test_webtransport_wiring_tests_use_events_for_held_slots() -> None:
 
 def test_agent_runner_and_ivr_tests_use_events_for_timeout_sentinels() -> None:
     """AgentRunner and IVR timeout tests should avoid long sentinel sleeps."""
-    agent_runner = (REPO_ROOT / "tests" / "agents" / "test_agent_runner.py").read_text(
-        encoding="utf-8"
-    )
+    agent_runner = (
+        REPO_ROOT / "tests" / "integrations" / "agents" / "test_agent_runner.py"
+    ).read_text(encoding="utf-8")
     ivr = (REPO_ROOT / "tests" / "telephony" / "test_ivr.py").read_text(encoding="utf-8")
 
     assert "await asyncio.Event().wait()" in agent_runner

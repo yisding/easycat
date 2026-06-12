@@ -2003,6 +2003,7 @@ def test_examples_can_run_as_scripts_without_package_import_errors(script_path: 
         env=env,
         capture_output=True,
         text=True,
+        timeout=15,
         check=False,
     )
 

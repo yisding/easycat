@@ -61,7 +61,8 @@ from easycat.validation.report import (
 
 VALIDATION_SELECTORS = {
     "quick": (
-        "not integration_socket and not integration_live and not slow and not stress and not flaky"
+        "not integration_socket and not integration_live and not integration_external "
+        "and not contract and not slow and not stress and not flaky"
     ),
     "socket": "integration_socket and not integration_live and not flaky",
     "stress": "stress and not integration_live and not flaky",

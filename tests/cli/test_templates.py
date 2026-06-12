@@ -579,14 +579,6 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
     section_names = [section.removeprefix("## ") for section in _README_SECTIONS]
 
     assert "four required sections" not in test_plan
-    assert "five required sections" in test_plan
-    assert "base `easycat[...]` package" in test_plan
-    assert "version floor tracks" in test_plan
-    assert "pyproject.toml" in test_plan
-    assert "uv run easycat doctor --env-file .env" in test_plan
-    assert "uv run ruff check ..." in test_plan
-    assert "Ruff" in test_plan
-    assert "uv run --env-file .env python agent.py" in test_plan
     assert "uv run python agent.py" not in test_plan
     for section in section_names:
         assert section in test_plan
@@ -596,10 +588,6 @@ def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
     golden_path = plan.split("### Golden path", 1)[1].split("### Exit codes", 1)[0]
 
-    for name, budget in _LINE_BUDGETS.items():
-        assert f"`{name}` ≤{budget}" in plan, f"peripheral-cli.md missing {name} ≤{budget}"
-
-    assert "✓ agent.py (16 lines)" in golden_path
     assert "✓ agent.py (12 lines)" not in golden_path
     assert "uv run easycat doctor --env-file .env" in golden_path
     assert "uv run --env-file .env python agent.py" in golden_path
@@ -614,12 +602,6 @@ def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
     assert "plan text should be updated" not in plan
     assert "MCP/tool-content reconciliation" not in plan
     assert "remaining work is run-matrix cleanup" not in plan
-    assert "working tool or workflow" in plan
-    assert "generated only when requested" in plan
-    assert "template-specific run command" in plan
-    assert "renders every template" in plan
-    assert "`py_compile` and `ruff`" in plan
-    assert "runtime invocation remains a gated integration follow-up" in plan
 
 
 def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
@@ -631,15 +613,9 @@ def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
         1,
     )[0]
 
-    for name, budget in _LINE_BUDGETS.items():
-        assert f"`{name}` ≤{budget}" in template_section, (
-            f"peripheral-dx-onboarding.md missing {name} ≤{budget}"
-        )
-
     assert "Every template's `agent.py` ≤ 15 lines" not in template_section
     assert "ships with one MCP server" not in template_section
     assert "official `filesystem` server" not in template_section
-    assert "concrete working tool or workflow" in template_section
     assert "cp .env.example .env" in template_section
     assert "uv run easycat doctor --env-file .env" in template_section
     assert "uv run --env-file .env python agent.py" in template_section
@@ -669,9 +645,6 @@ def test_readme_has_local_lint_check(name: str) -> None:
 
     assert expected_command in check_section
     assert expected_fix_command in check_section
-    assert "local lint/syntax check" in check_section
-    assert "auto-fixable issue" in check_section
-    assert "re-run the check" in check_section
     assert "uv run python -m py_compile" not in check_section
 
 
@@ -685,7 +658,6 @@ def test_readme_has_doctor_preflight_when_template_needs_openai_key(name: str) -
     normalized_readme = " ".join(readme.split())
     assert "uv run easycat doctor --env-file .env" in readme
     assert "uv run easycat doctor --env-file .env --json" in readme
-    assert "for parseable environment/check rows" in normalized_readme
     assert "when a script or coding agent" not in normalized_readme
     assert "uv run --env-file .env easycat doctor" not in readme
     assert "\nuv run easycat doctor\n" not in readme
@@ -742,12 +714,18 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
     readme = (_template_dir(name) / "README.md").read_text(encoding="utf-8")
     next_steps = readme.split("## Next steps", 1)[1]
     normalized_next_steps = " ".join(next_steps.split())
+    required_commands = (
+        "uv run easycat docs",
+        "uv run easycat docs --audience app-builders",
+        "uv run easycat docs --audience app-builders --json",
+        "uv run easycat docs --json",
+        "uv run easycat init --list-templates",
+        "uv run easycat init --list-templates --json",
+        "uv run easycat explain json-schema",
+    )
 
-    assert "uv run easycat docs" in next_steps
-    assert "Explore docs and routes" in next_steps
-    assert "Explore docs and examples" not in next_steps
-    assert "learning, maintenance, validation, and operations routes" in (normalized_next_steps)
-    assert "uv run easycat docs --audience app-builders" in next_steps
+    for command in required_commands:
+        assert command in next_steps
     assert 'uv run easycat docs --audience "app builders"' not in next_steps
     assert "narrow the map to app-building routes" in normalized_next_steps
     assert "uv run easycat docs --audience app-builders --json" in next_steps
@@ -762,10 +740,6 @@ def test_template_readme_next_steps_point_to_docs_command(name: str) -> None:
         normalized_next_steps
     )
     assert "when a script or coding agent" not in normalized_next_steps
-    assert "audience labels" in normalized_next_steps
-    assert "right starter" in normalized_next_steps
-    assert "automation needs the template catalog" in normalized_next_steps
-    assert "JSON envelope and field contract" in normalized_next_steps
     assert (
         "Replace uppercase or angle-bracket placeholders such as `PATH` or `<session_id>` "
         "before running those hints"

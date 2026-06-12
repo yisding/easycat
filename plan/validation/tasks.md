@@ -96,8 +96,8 @@ Status: completed
 Current verified state:
 
 - `pyproject.toml` registers `integration_local`, `integration_socket`,
-  `integration_live`, `slow`, `contract`, `latency`, `stress`, `release`,
-  `flaky`, provider markers, surface markers, `agent_bridge`, and
+  `integration_live`, `integration_external`, `slow`, `contract`, `latency`,
+  `stress`, `release`, `flaky`, provider markers, surface markers, `agent_bridge`, and
   `provider(name)`, with `strict_markers = true`.
 - The `requires_extra(name)` marker was dropped on 2026-06-09: it marked zero
   tests. Optional-extra coverage now relies on the nightly extras install
@@ -116,13 +116,15 @@ Files:
 Tasks:
 
 - Register `contract`, `latency`, `stress`, `release`, `flaky`,
-  `provider_openai`, `provider_deepgram`, `provider_elevenlabs`,
-  `provider_cartesia`, `surface_stt`, `surface_tts`, `surface_agent`,
-  `surface_transport`, `surface_vad`, `agent_bridge`, and `provider`.
+  `integration_external`, `provider_openai`, `provider_deepgram`,
+  `provider_elevenlabs`, `provider_cartesia`, `surface_stt`, `surface_tts`,
+  `surface_agent`, `surface_transport`, `surface_vad`, `agent_bridge`, and
+  `provider`.
 - Decide and document that `quick` means PR-local validation: deterministic,
-  no sockets, no live credentials, no slow/flaky tests. It may include
-  `integration_local` tests, but if measured runtime gets too high, split a
-  smaller `unit` command later instead of weakening CI coverage.
+  no sockets, no live credentials, no external dependencies, no contracts, and
+  no slow/stress/flaky tests. It may include `integration_local` tests, but if
+  measured runtime gets too high, split a smaller `unit` command later instead
+  of weakening CI coverage.
 - Confirm all current custom markers are registered.
 - Add marker-lint helpers so any `integration_live`, `contract`, or `latency`
   test that names a provider surface also declares provider and surface scope.
@@ -144,7 +146,7 @@ Verification:
 
 ```bash
 uv run pytest --collect-only -q
-uv run pytest -q -m "not integration_socket and not integration_live and not slow"
+uv run pytest -q -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
 ```
 
 ### V0.2 Define Validation Report Model
@@ -228,7 +230,7 @@ Current verified state:
   `run_validation_slice(...)`; `VALIDATION_SELECTORS` currently includes
   `quick`, `socket`, `stress`, and `contracts`.
 - The current `quick` selector is
-  `not integration_socket and not integration_live and not slow and not stress and not flaky`;
+  `not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky`;
   the current `socket` selector is
   `integration_socket and not integration_live and not flaky`.
 - `run_validation_slice(...)` creates isolated
@@ -253,7 +255,7 @@ Tasks:
 - Keep `scripts/validate.py` as a thin shim over reusable runner/report code
   so V1 can reuse the implementation instead of creating a parallel codepath.
 - Implement `quick` with:
-  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"`.
+  `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"`.
 - Implement `socket` with:
   `uv run pytest -q --junitxml=<run-dir>/junit.xml -m "integration_socket and not integration_live and not flaky"`.
 - Create `.easycat/validation/runs/<run_id>/` automatically. Use a run id
@@ -533,7 +535,7 @@ Acceptance:
 Verification:
 
 ```bash
-uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not slow and not flaky"
+uv run pytest -q --junitxml=.easycat/validation/runs/manual-quick/junit.xml -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
 uv run pytest -q --junitxml=.easycat/validation/runs/manual-socket/junit.xml -m "integration_socket and not integration_live and not flaky"
 ```
 
@@ -839,8 +841,8 @@ Current verified state:
   `test_stt_provider_contracts.py`, `test_transport_contracts.py`,
   `test_tts_provider_contracts.py`, `test_vad_provider_contracts.py`, and
   `test_ws_cassette_replay.py`.
-- The original provider contract matrix remains under `tests/integration/` and
-  is intentionally focused on factory/session wiring, not protocol cassettes.
+- The provider session matrix lives under `tests/contracts/` and is
+  intentionally focused on factory/session wiring, not protocol cassettes.
 - `tests/contracts/provider_surface_matrix.py` defines
   `ProviderSurfaceContract`, `PROVIDER_SURFACE_CONTRACTS`,
   `EXPLICIT_PROVIDER_SURFACE_EXCLUSIONS`, and
@@ -855,7 +857,7 @@ Current verified state:
   registered STT/TTS/VAD/transport provider surfaces unless explicitly
   excluded.
 - `tests/contracts/README.md` documents that protocol contracts live under
-  `tests/contracts/`, while `tests/integration/test_provider_contract_matrix.py`
+  `tests/contracts/`, while `tests/contracts/test_provider_session_matrix.py`
   stays scoped to the factory/session wiring seam.
 
 Files:
@@ -886,7 +888,7 @@ Status: completed (verified by 2026-05-26 audit)
 
 Current verified state:
 
-- `tests/integration/test_provider_contract_matrix.py` is the
+- `tests/contracts/test_provider_session_matrix.py` is the
   `factory/session wiring seam`, not a protocol cassette suite; its docstring
   explicitly excludes protocol cassette scope.
 - The wiring matrix builds `_STT_CONFIG_CLASSES` from
@@ -914,7 +916,7 @@ Current verified state:
 
 Files:
 
-- `tests/integration/test_provider_contract_matrix.py`
+- `tests/contracts/test_provider_session_matrix.py`
 - `tests/contracts/README.md` if useful
 
 Tasks:
@@ -1459,7 +1461,7 @@ Current verified state:
   the standalone script write the validation artifact and compare higher-is-worse,
   lower-is-worse, count, and sustained-boolean metrics against a raw or wrapped
   baseline.
-- `tests/perf/test_bench_journal.py` verifies raw-run embedding, summary shape,
+- `tests/validation/test_journal_benchmark_artifact.py` verifies raw-run embedding, summary shape,
   baseline regression reporting, and `main()` writing both raw output and the
   validation artifact with `run_benchmarks` monkeypatched.
 - V5.1 currently covers a validation-compatible benchmark artifact produced by

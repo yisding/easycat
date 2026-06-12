@@ -28,10 +28,10 @@ test:
 # (async event-loop / socket / port tests) pinned to one worker. Mirrors the
 # `quick` validation slice marker expression (validation/runner.py).
 test-fast:
-    uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
+    uv run pytest -n auto --dist loadscope -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
 
-# Run a single file or node id. Usage: just test-one tests/test_cancel.py
-# or: just test-one tests/test_cancel.py::TestCancelToken::test_cancel
+# Run a single file or node id. Usage: just test-one tests/session/test_cancel_token.py
+# or: just test-one tests/session/test_cancel_token.py::TestCancelToken::test_cancel
 test-one TARGET:
     uv run pytest "{{ TARGET }}"
 
@@ -73,7 +73,7 @@ typecheck-fast:
 # Coverage over the safe slice (pytest --cov is xdist-safe; never use
 # `coverage run -m pytest -n auto`, which reports 0% under xdist).
 cov:
-    uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not slow and not stress and not flaky"
+    uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
 
 # Guard root onboarding docs, install guidance, docs routes, public API docs, and CLI JSON envelopes.
 guard-docs:
@@ -89,7 +89,7 @@ guard-examples:
 
 # Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene.
 guard-templates:
-    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py
+    uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
@@ -101,7 +101,7 @@ guard-validation:
 
 # Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix.
 guard-contracts:
-    uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing tests/integration/test_provider_contract_matrix.py
+    uv run pytest tests/test_docs_index.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing
 
 # Guard operator docs, deployment guide, observability docs, journal CLI, and durability.
 guard-ops:

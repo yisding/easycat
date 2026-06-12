@@ -312,7 +312,7 @@ select = ["E", "F", "I", "W", "UP", "C901", "PLR0912", "PLR0915"]
 "tests/session/test_session_smoke.py" = ["PLR0915"]
 "tests/teaching/test_diagrams.py" = ["C901", "PLR0912"]
 "tests/teaching/test_ladder_index.py" = ["PLR0915"]
-"tests/test_config.py" = ["C901"]
+"tests/config/test_config.py" = ["C901"]
 "tests/test_docs_index.py" = ["PLR0915"]
 "tests/test_dx_helpers.py" = ["PLR0915"]
 "tests/test_examples.py" = ["C901"]
@@ -336,7 +336,8 @@ faulthandler_timeout = 55
 markers = [
     "integration_local: local integration tests with no live services; may use subprocesses/filesystem",
     "integration_socket: tests requiring localhost socket bind/connect permissions",
-    "integration_live: tests requiring live API keys and optional provider extras",
+    "integration_live: tests requiring live provider/API endpoints, API keys, and optional provider extras",
+    "integration_external: tests requiring external local binaries, SDKs, or services without live provider API credentials",
     "slow: long-running end-to-end tests; opt in with '-m slow'",
     "contract: provider, protocol, or bridge contract tests",
     "latency: latency measurement or latency SLO tests",
@@ -444,7 +445,7 @@ paths_to_mutate = [
 # above, so each mutant is checked in seconds, not against all ~3300
 # tests. `-p no:cacheprovider` keeps the copied mutants/ tree clean.
 pytest_add_cli_args_test_selection = [
-    "tests/test_strip_markdown.py",
+    "tests/session/test_strip_markdown.py",
     "tests/audio/test_audio_utils.py",
     "tests/session/test_session_helpers.py",
     "tests/session/test_session_streaming.py",

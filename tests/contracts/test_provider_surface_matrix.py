@@ -74,7 +74,7 @@ def test_every_registered_stt_tts_provider_surface_has_contract_row_or_exclusion
 
 
 def test_wiring_matrix_scope_is_documented_separately_from_protocol_contracts() -> None:
-    wiring_matrix = Path("tests/integration/test_provider_contract_matrix.py").read_text()
+    wiring_matrix = Path("tests/contracts/test_provider_session_matrix.py").read_text()
     contract_readme = Path("tests/contracts/README.md").read_text()
     normalized_readme = " ".join(contract_readme.split())
 
@@ -88,7 +88,7 @@ def test_wiring_matrix_scope_is_documented_separately_from_protocol_contracts() 
         "uv run easycat validate contracts",
         "uv run easycat validate contracts --json",
         "uv run pytest tests/contracts",
-        "uv run pytest tests/integration/test_provider_contract_matrix.py",
+        "uv run pytest tests/contracts/test_provider_session_matrix.py",
     ):
         assert command in contract_readme
     for linked_file in (
@@ -123,6 +123,7 @@ def test_validation_tasks_v31_current_state_tracks_contract_matrix_layout() -> N
         "test_provider_capability_report_model.py",
         "test_provider_capability_reports.py",
         "test_provider_reports.py",
+        "test_provider_session_matrix.py",
         "test_provider_surface_matrix.py",
         "test_sse_cassette_replay.py",
         "test_stt_provider_contracts.py",
@@ -138,8 +139,7 @@ def test_validation_tasks_v31_current_state_tracks_contract_matrix_layout() -> N
     assert not missing_registered_provider_surfaces()
     assert "Current verified state:" in section
     assert "`tests/contracts/`" in section
-    assert "`tests/integration/`" in section
-    assert "`tests/integration/test_provider_contract_matrix.py`" in section
+    assert "`tests/contracts/test_provider_session_matrix.py`" in section
     assert "`tests/contracts/README.md`" in section
     assert "factory/session wiring seam" in section
     assert "protocol contracts" in section
@@ -168,13 +168,13 @@ def test_validation_tasks_v31_current_state_tracks_contract_matrix_layout() -> N
 
 
 def test_validation_tasks_v32_current_state_tracks_provider_matrix_scope() -> None:
-    wiring_matrix = import_module("tests.integration.test_provider_contract_matrix")
+    wiring_matrix = import_module("tests.contracts.test_provider_session_matrix")
     plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
     section = plan.split("### V3.2 Preserve Existing Provider Matrix Scope", 1)[1].split(
         "### V3.3 Add STT/TTS/VAD/Transport Contract Tests", 1
     )[0]
     normalized_section = " ".join(section.split())
-    wiring_source = (REPO_ROOT / "tests/integration/test_provider_contract_matrix.py").read_text(
+    wiring_source = (REPO_ROOT / "tests/contracts/test_provider_session_matrix.py").read_text(
         encoding="utf-8"
     )
     contract_readme = (REPO_ROOT / "tests/contracts/README.md").read_text(encoding="utf-8")
@@ -204,7 +204,7 @@ def test_validation_tasks_v32_current_state_tracks_provider_matrix_scope() -> No
 
     assert "Current verified state:" in section
     for token in (
-        "tests/integration/test_provider_contract_matrix.py",
+        "tests/contracts/test_provider_session_matrix.py",
         "factory/session wiring seam",
         "_STT_CONFIG_CLASSES",
         "easycat.stt.factory._PROVIDER_TO_CONFIG",
