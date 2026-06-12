@@ -324,9 +324,21 @@ def _base_requirement(template_name: str) -> str:
 def _easycat_version_floor() -> str:
     """Return the EasyCat version used as generated dependency lower bound."""
     try:
-        return importlib.metadata.version("easycat")
+        return _ordered_specifier_version_floor(importlib.metadata.version("easycat"))
     except importlib.metadata.PackageNotFoundError:
         return _FALLBACK_EASYCAT_VERSION_FLOOR
+
+
+def _ordered_specifier_version_floor(version: str) -> str:
+    """Return ``version`` in a form accepted after ordered specifiers.
+
+    PEP 440 local version labels (for example ``0.1.0+local``) are valid
+    distribution versions, but packaging tools reject them with ordered
+    comparisons such as ``>=``.  The public version segment is the closest
+    lower-bound floor for generated scaffold dependencies.
+    """
+    public_version, _separator, _local_label = version.partition("+")
+    return public_version
 
 
 def _editable_easycat_source() -> Path | None:
