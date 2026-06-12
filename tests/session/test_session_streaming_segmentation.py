@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from easycat._turn_context import TURN_AUDIO_LOG_MAXLEN, TurnContext
+from easycat.cancel import CancelToken
 from easycat.session.interruption import (
     TtsChunk,
     _all_tts_audio_delivered,
@@ -9,6 +11,7 @@ from easycat.session.interruption import (
     _audio_bytes_likely_heard,
     _audio_bytes_likely_heard_hybrid,
     _estimate_text_spoken,
+    estimate_and_notify_interruption,
 )
 from easycat.session.text import (
     _cleanup_estimation_text,
@@ -231,6 +234,102 @@ def test_tts_chunk_named_fields_flow_through_consumers():
     assert _estimate_text_spoken(chunks, 960) == "Hello. How are you?"
     assert _all_tts_audio_delivered(chunks, 960)
     assert not _all_tts_audio_delivered(chunks, 959)
+
+
+def test_audio_send_log_eviction_preserves_cumulative_heard_bytes(monkeypatch):
+    now = 100.0
+
+    def monotonic() -> float:
+        nonlocal now
+        current = now
+        now += 0.001
+        return current
+
+    monkeypatch.setattr("easycat._turn_context.time.monotonic", monotonic)
+    turn = TurnContext("long-turn", CancelToken())
+    for _ in range(TURN_AUDIO_LOG_MAXLEN + 1):
+        turn.record_audio_sent(1, 1.0)
+
+    assert len(turn.audio_send_log) == TURN_AUDIO_LOG_MAXLEN
+    assert turn.audio_send_log_base_bytes == 1
+    assert turn.audio_send_log_base_playout_start is not None
+    assert turn.audio_bytes_sent == TURN_AUDIO_LOG_MAXLEN + 1
+
+    heard = _audio_bytes_likely_heard_hybrid(
+        list(turn.audio_send_log),
+        [],
+        None,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,
+        send_log_base_bytes=turn.audio_send_log_base_bytes,
+        send_log_base_playout_start=turn.audio_send_log_base_playout_start,
+        send_log_base_playout_cursor=turn.audio_send_log_base_playout_cursor,
+    )
+
+    assert heard == TURN_AUDIO_LOG_MAXLEN + 1
+
+
+def test_audio_send_log_base_accounts_partial_evicted_playout_window():
+    heard = _audio_bytes_likely_heard(
+        [],
+        1.5,
+        send_log_base_bytes=100,
+        send_log_base_playout_start=1.0,
+        send_log_base_playout_cursor=2.0,
+    )
+
+    assert heard == 50
+
+
+def test_audio_send_log_base_cutoff_inside_window_does_not_count_retained_chunks():
+    heard = _audio_bytes_likely_heard(
+        [(1.1, 100, 1000.0)],
+        1.5,
+        send_log_base_bytes=100,
+        send_log_base_playout_start=1.0,
+        send_log_base_playout_cursor=2.0,
+    )
+
+    assert heard == 50
+
+
+def test_long_turn_evicted_send_log_does_not_notify_when_fully_delivered(monkeypatch):
+    now = 200.0
+
+    def monotonic() -> float:
+        nonlocal now
+        current = now
+        now += 0.001
+        return current
+
+    class Agent:
+        def __init__(self) -> None:
+            self.interruptions: list[str] = []
+
+        def apply_interruption(self, delivered_text, cancellation_mode, **kwargs):
+            self.interruptions.append(delivered_text)
+
+    monkeypatch.setattr("easycat._turn_context.time.monotonic", monotonic)
+    turn = TurnContext("long-turn", CancelToken())
+    for _ in range(TURN_AUDIO_LOG_MAXLEN + 1):
+        turn.record_audio_sent(1, 1.0)
+
+    agent = Agent()
+    result = estimate_and_notify_interruption(
+        agent,
+        None,
+        turn,
+        [TtsChunk("complete response", TURN_AUDIO_LOG_MAXLEN + 1, True)],
+        tts_playback_started=True,
+        interrupted=True,
+        interruption_mode="truncate",
+        latency_compensation_ms=0,
+        ack_stale_ms=500,
+        ack_tail_cap_ms=500,
+    )
+
+    assert result is None
+    assert agent.interruptions == []
 
 
 def test_audio_bytes_likely_heard_without_cutoff_uses_all_bytes():

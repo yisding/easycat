@@ -857,6 +857,7 @@ async def test_streaming_interruption_prefers_cancel_token_timestamp(
         *,
         ack_stale_ms: int,
         ack_tail_cap_ms: int,
+        **_: object,
     ) -> int:
         captured["cutoff"] = cutoff_time
         return 0
