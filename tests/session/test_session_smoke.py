@@ -154,6 +154,19 @@ def test_session_from_providers_builds_raw_provider_session():
     assert session._config.turn_manager_config is _FAST_TURN
 
 
+def test_audio_session_requires_real_agent_when_pipeline_is_real():
+    """Missing-agent validation survives the default NoopAgent bridge wrapper."""
+    with pytest.raises(ValueError, match="agent"):
+        Session(
+            SessionConfig(
+                transport=SmokeTransport(),
+                vad=SmokeVAD(),
+                stt=SmokeSTT(),
+                tts=SmokeTTS(),
+            )
+        )
+
+
 # ── Smoke test ─────────────────────────────────────────────────────
 
 
