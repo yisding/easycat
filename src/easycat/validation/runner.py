@@ -522,6 +522,10 @@ def run_latency_validation(
             duration_s=duration_s,
             command=command,
             check_artifacts=check_artifacts,
+            sample_load_failure=sample_load_failure,
+            required_samples_failure=required_samples_failure,
+            reliability_failure=reliability_failure,
+            reliability_budget_failure=reliability_budget_failure,
             budget_failure=budget_failure,
             budget_violations=budget_violations,
             baseline_comparison=baseline_comparison,
@@ -1292,6 +1296,10 @@ def _latency_checks(
     duration_s: float,
     command: Sequence[str],
     check_artifacts: dict[str, ArtifactRef],
+    sample_load_failure: ValidationFailure | None,
+    required_samples_failure: ValidationFailure | None,
+    reliability_failure: ValidationFailure | None,
+    reliability_budget_failure: ValidationFailure | None,
     budget_failure: ValidationFailure | None,
     budget_violations: Sequence[Any],
     baseline_comparison: dict[str, Any] | None = None,
@@ -1319,6 +1327,27 @@ def _latency_checks(
             artifacts=check_artifacts,
         )
     ]
+
+    sample_failures = [
+        failure
+        for failure in (sample_load_failure, required_samples_failure)
+        if failure is not None
+    ]
+    if sample_failures:
+        checks.append(_latency_failure_check("latency.samples", sample_failures, check_artifacts))
+    if reliability_failure is not None:
+        checks.append(
+            _latency_failure_check("reliability.samples", [reliability_failure], check_artifacts)
+        )
+    if reliability_budget_failure is not None:
+        checks.append(
+            _latency_failure_check(
+                "reliability.budget",
+                [reliability_budget_failure],
+                check_artifacts,
+            )
+        )
+
     if mode is not LatencyMode.SMOKE:
         budget_artifacts: dict[str, ArtifactRef] = {}
         if "latency" in check_artifacts:
@@ -1353,6 +1382,35 @@ def _latency_checks(
             )
         )
     return checks
+
+
+def _latency_failure_check(
+    name: str,
+    failures: Sequence[ValidationFailure],
+    check_artifacts: Mapping[str, ArtifactRef],
+) -> ValidationCheck:
+    details = {
+        "failures": [
+            {
+                "name": failure.name,
+                "message": failure.message,
+                **(
+                    {"failure_class": failure.failure_class}
+                    if failure.failure_class is not None
+                    else {}
+                ),
+                **({"details": dict(failure.details)} if failure.details else {}),
+            }
+            for failure in failures
+        ]
+    }
+    return ValidationCheck(
+        name=name,
+        status="fail",
+        duration_s=0.0,
+        artifacts=check_artifacts,
+        details=details,
+    )
 
 
 def _compare_against_baseline(

@@ -193,6 +193,15 @@ def test_latency_runner_reports_malformed_samples_without_crashing(tmp_path: Pat
         "required_latency_samples": 1,
     }
     assert report["failures"][0]["name"] == "latency.samples"
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert checks_by_name["pytest.latency.sweep"]["status"] == "pass"
+    assert checks_by_name["latency.samples"]["status"] == "fail"
+    assert {
+        failure["message"] for failure in checks_by_name["latency.samples"]["details"]["failures"]
+    } == {
+        report["failures"][0]["message"],
+        "required latency validation produced no samples",
+    }
     assert (result.run_dir / "latency" / "sweep.json").exists()
     assert (tmp_path / "latency" / "sweep-latest.json").exists()
 
@@ -214,6 +223,32 @@ def test_latency_runner_can_require_samples_for_release_gates(tmp_path: Path) ->
     assert report["status"] == "fail"
     assert report["tool_exit_codes"] == {"pytest": 0, "required_latency_samples": 1}
     assert report["failures"][0]["message"] == "required latency validation produced no samples"
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert checks_by_name["pytest.latency.sweep"]["status"] == "pass"
+    assert checks_by_name["latency.samples"]["status"] == "fail"
+
+
+def test_latency_runner_smoke_required_samples_failure_records_failed_check(
+    tmp_path: Path,
+) -> None:
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        return CommandResult(exit_code=0, stdout="skipped", stderr="")
+
+    result = run_latency_validation(
+        LatencyMode.SMOKE,
+        artifacts_dir=tmp_path,
+        require_samples=True,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
+    )
+
+    report = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert report["status"] == "fail"
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert checks_by_name["pytest.latency.smoke"]["status"] == "pass"
+    assert checks_by_name["latency.samples"]["status"] == "fail"
+    assert "latency.budget" not in checks_by_name
 
 
 def test_latency_runner_sweep_requires_samples_by_default(tmp_path: Path) -> None:
@@ -300,4 +335,11 @@ def test_latency_runner_reports_malformed_reliability_samples_without_crashing(
     assert report["status"] == "fail"
     assert report["tool_exit_codes"] == {"pytest": 0, "reliability_samples": 1}
     assert report["failures"][0]["name"] == "reliability.samples"
+    checks_by_name = {check["name"]: check for check in report["checks"]}
+    assert checks_by_name["pytest.latency.smoke"]["status"] == "pass"
+    assert checks_by_name["reliability.samples"]["status"] == "fail"
+    assert report["failures"][0]["message"] in (
+        failure["message"]
+        for failure in checks_by_name["reliability.samples"]["details"]["failures"]
+    )
     assert report["latency"]["samples"][0]["sample_id"] == "sample-1"
