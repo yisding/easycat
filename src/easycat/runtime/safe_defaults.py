@@ -100,29 +100,25 @@ def _is_secret_name(name: str) -> bool:
     return any(frag in lower for frag in _SECRET_FRAGMENTS)
 
 
-def _safe_object_label(val: Any) -> str:
-    """Return a non-repr label for opaque objects.
-
-    Debug config snapshots must never call arbitrary ``__repr__`` methods:
-    live provider/client instances can embed API keys, bearer tokens, signed
-    URLs, or other sensitive initialization state in their repr.  A type label
-    preserves enough diagnostic value to identify that a custom object was
-    supplied without serialising object state.
-    """
-
-    cls = type(val)
-    return f"<{cls.__module__}.{cls.__qualname__}>"
-
-
 def _safe_repr(val: Any) -> str:
-    """repr() that redacts secret-looking fields at any nesting depth.
+    """Render a config value without invoking repr() on arbitrary objects.
 
-    Plain scalar values are rendered with ``repr(val)``.  Dataclass / dict /
-    list / tuple / set values are walked recursively and secret-looking fields
-    (api_key, token, …) are replaced with ``'***'`` before rendering.  Opaque
-    objects are represented by type label instead of ``repr(value)`` so custom
-    provider/client reprs cannot leak credentials into debug bundles.
+    For scalars this uses ``repr()`` with sensitive substrings redacted. For
+    dataclass / dict / list / tuple / set values it walks the structure and
+    replaces secret fields (api_key, token, …) with ``'***'`` before rendering.
+    Unknown live objects are reduced to their type identity so provider
+    instances with credential-bearing ``__repr__`` methods cannot leak secrets
+    into exported snapshots.
     """
+
+    def render_scalar_or_identity(v: Any) -> str:
+        if isinstance(v, str | int | float | bool | type(None)):
+            return redact_text(repr(v))
+        if isinstance(v, Enum):
+            return f"{type(v).__name__}.{v.name}"
+        if isinstance(v, type):
+            return f"<class {v.__module__}.{v.__qualname__}>"
+        return f"<{type(v).__module__}.{type(v).__qualname__} object>"
 
     def render(v: Any) -> str:
         # Dataclass instance (but not a dataclass *type*): rebuild a repr
@@ -139,9 +135,9 @@ def _safe_repr(val: Any) -> str:
             items = []
             for k, item in v.items():
                 if isinstance(k, str) and _is_secret_name(k):
-                    items.append(f"{k!r}: '***'")
+                    items.append(f"{render_scalar_or_identity(k)}: '***'")
                 else:
-                    items.append(f"{k!r}: {render(item)}")
+                    items.append(f"{render_scalar_or_identity(k)}: {render(item)}")
             return "{" + ", ".join(items) + "}"
         if isinstance(v, list):
             return "[" + ", ".join(render(item) for item in v) + "]"
@@ -150,9 +146,7 @@ def _safe_repr(val: Any) -> str:
             return f"({inner},)" if len(v) == 1 else f"({inner})"
         if isinstance(v, (set, frozenset)):
             return "{" + ", ".join(render(item) for item in v) + "}"
-        if isinstance(v, str | int | float | bool | bytes | type(None) | Enum):
-            return repr(v)
-        return _safe_object_label(v)
+        return render_scalar_or_identity(v)
 
     return render(val)
 
