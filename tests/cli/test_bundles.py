@@ -869,7 +869,7 @@ def test_bundles_show_newer_version(cli: CliRunner, tmp_path: Path) -> None:
         zf.writestr("journal.ndjson", "")
 
     result = cli.invoke(app, ["bundles", "show", str(newer)])
-    assert result.exit_code == 6
+    assert result.exit_code == 5
     assert "newer easycat" in result.stderr
     assert "upgrade easycat" in result.stderr
     assert "corrupt or unreadable" not in result.stderr
