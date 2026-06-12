@@ -290,3 +290,41 @@ def test_example_session_smoke():
             pytest.skip("No VAD backend available")
         raise
     assert session is not None
+
+
+def test_function_tool_timezone_examples_handle_malformed_zoneinfo_keys() -> None:
+    examples = [
+        "agent_event_subscription.py",
+        "function_tools_langchain.py",
+        "function_tools_langgraph.py",
+        "function_tools_openai.py",
+        "function_tools_pydantic.py",
+    ]
+
+    for example in examples:
+        path = REPO_ROOT / "examples" / example
+        module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        handlers: set[str] | None = None
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Try):
+                continue
+            calls_zoneinfo = any(
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "ZoneInfo"
+                for child in ast.walk(node)
+            )
+            if calls_zoneinfo:
+                handlers = set()
+                for handler in node.handlers:
+                    exc_type = handler.type
+                    if isinstance(exc_type, ast.Name):
+                        handlers.add(exc_type.id)
+                    elif isinstance(exc_type, ast.Tuple):
+                        handlers.update(
+                            elt.id for elt in exc_type.elts if isinstance(elt, ast.Name)
+                        )
+                break
+
+        assert handlers is not None, f"{example} should guard ZoneInfo(timezone_name)"
+        assert {"ZoneInfoNotFoundError", "ValueError"} <= handlers
