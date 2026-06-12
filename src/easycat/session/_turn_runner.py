@@ -427,7 +427,7 @@ class TurnRunner:
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
 
-        caught_exc = await self._await_agent_task(agent_task, tts_task)
+        caught_exc = await self._await_agent_task_recording_cancel(st, agent_task, tts_task)
         agent_error = agent_result.error if agent_result else caught_exc
         interrupted = agent_result.interrupted if agent_result else False
         accumulated_text = agent_result.text if agent_result else ""
@@ -569,6 +569,22 @@ class TurnRunner:
             else:
                 self._reset_turn_state()
 
+    async def _await_agent_task_recording_cancel(
+        self,
+        st: _StreamingTtsState,
+        agent_task: asyncio.Task[None],
+        tts_task: asyncio.Task[None],
+    ) -> Exception | None:
+        try:
+            return await self._await_agent_task(agent_task, tts_task)
+        except asyncio.CancelledError:
+            self._record_streaming_interruption(
+                st,
+                interrupted=st.turn.last_barge_in_time is not None,
+                source="streaming_turn_cancelled",
+            )
+            raise
+
     async def _await_agent_task(
         self,
         agent_task: asyncio.Task[None],
@@ -626,7 +642,13 @@ class TurnRunner:
             return stripped
         return accumulated_text
 
-    def _record_streaming_interruption(self, st: _StreamingTtsState, *, interrupted: bool) -> None:
+    def _record_streaming_interruption(
+        self,
+        st: _StreamingTtsState,
+        *,
+        interrupted: bool,
+        source: str = "streaming_turn",
+    ) -> None:
         """Estimate what the caller heard and record a barge-in, if any."""
         interruption_notification = estimate_and_notify_interruption(
             self._agent_stage,
@@ -644,7 +666,7 @@ class TurnRunner:
         )
         if interruption_notification is not None:
             self._cancel.record_interruption(
-                source="streaming_turn",
+                source=source,
                 mode=interruption_notification.mode,
                 text_spoken=interruption_notification.text_spoken,
                 notified=interruption_notification.notified,
