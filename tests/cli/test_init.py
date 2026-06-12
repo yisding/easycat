@@ -305,6 +305,28 @@ def test_init_renders_non_ascii_instructions_intact(
     compile(text, str(agent_py), "exec")
 
 
+def test_init_escapes_json_surrogates_in_agent_literals(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """JSON accepts lone surrogates, but generated source must stay UTF-8 encodable."""
+    monkeypatch.chdir(tmp_path)
+    config = json.dumps(
+        {
+            "schema_version": 1,
+            "template": "openai-agents",
+            "agent_name": "\ud800",
+            "agent_instructions": "Pair? \udfff",
+        }
+    )
+    result = cli.invoke(app, ["init", "demo", "--config", config, "--no-git"])
+    assert result.exit_code == 0, result.stderr
+    agent_py = tmp_path / "demo" / "agent.py"
+    text = agent_py.read_text(encoding="utf-8")
+    assert "\\ud800" in text
+    assert "\\udfff" in text
+    compile(text, str(agent_py), "exec")
+
+
 def test_init_webrtc_browser_template(
     cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
