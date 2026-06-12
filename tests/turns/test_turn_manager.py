@@ -296,22 +296,51 @@ async def test_mode_switching():
 
 
 @pytest.mark.asyncio
-async def test_bot_started_cancels_stale_silence_timer():
-    """bot_started_speaking should clear any stale pending silence timer."""
+async def test_bot_started_ignores_user_paused_until_turn_ends():
+    """bot_started_speaking must not bypass a paused user's TurnEnded path."""
     bus = EventBus()
-    config = TurnManagerConfig(end_of_turn_silence_ms=5000)
+    config = TurnManagerConfig(end_of_turn_silence_ms=50)
     tm = TurnManager(bus, config=config)
+    collector = EventCollector(bus)
 
     await tm.on_vad_event(VADStartSpeaking())
     await tm.on_vad_event(VADStopSpeaking())
 
+    assert tm.state == TurnManagerState.USER_PAUSED
     assert tm._silence_timer_task is not None
     assert not tm._silence_timer_task.done()
 
     await tm.bot_started_speaking()
 
-    assert tm.state == TurnManagerState.BOT_SPEAKING
-    assert tm._silence_timer_task is None
+    assert tm.state == TurnManagerState.USER_PAUSED
+    assert "BotStartedSpeaking" not in collector.type_names
+    assert tm._silence_timer_task is not None
+    assert not tm._silence_timer_task.done()
+
+    await asyncio.sleep(0.1)
+
+    assert tm.state == TurnManagerState.PROCESSING
+    assert "TurnEnded" in collector.type_names
+
+
+@pytest.mark.asyncio
+async def test_bot_started_cancels_stale_silence_timer_after_turn_completion():
+    """bot_started_speaking should clear stale timers once no user turn is active."""
+    bus = EventBus()
+    tm = TurnManager(bus)
+    stale_timer = asyncio.create_task(asyncio.sleep(10))
+    tm._state = TurnManagerState.PROCESSING
+    tm._silence_timer_task = stale_timer
+
+    try:
+        await tm.bot_started_speaking()
+
+        assert tm.state == TurnManagerState.BOT_SPEAKING
+        assert tm._silence_timer_task is None
+        await asyncio.sleep(0)
+        assert stale_timer.cancelled()
+    finally:
+        stale_timer.cancel()
 
 
 # ── Barge-in / interruption tests ────────────────────────────────────
