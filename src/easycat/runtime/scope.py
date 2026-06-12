@@ -188,15 +188,18 @@ class RuntimeScope:
             if task is current:
                 continue
             try:
-                await task
+                await asyncio.shield(task)
             except asyncio.CancelledError as exc:
+                if current is not None and current.cancelling():
+                    raise
                 if not cancel and pending is None:
                     pending = exc
             except Exception as exc:
                 if not cancel and pending is None:
                     pending = exc
             finally:
-                self._discard_task(task)
+                if task.done():
+                    self._discard_task(task)
 
         if pending is not None:
             raise pending
