@@ -176,6 +176,7 @@ easycat bundles export PATH --output DIR --json # emit context-pack metadata
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat inspect PATH --json # emit machine-readable bundle/journal summary
 easycat replay PATH       # replay a debug bundle or SQLite journal
+easycat debugger serve PATH # open the browser debugger UI for a bundle/journal
 easycat replay PATH --json # emit machine-readable replay summary
 easycat validate quick       # run deterministic local validation
 easycat validate quick --json # emit quick validation in the standard envelope
@@ -600,11 +601,17 @@ cross-system traces join cleanly.
 Use `debug="full"` when you need durable inspection. EasyCat writes SQLite
 journals under `.easycat/journals/`; pass `record_to="runs"` on `EasyConfig`
 or `create_text_session(...)` when you also want a timestamped debug bundle
-exported on shutdown. After the run, inspect a journal with:
+exported on shutdown. After the run, inspect a journal from the terminal or open the browser debugger UI:
 
 ```bash
 uv run easycat inspect .easycat/journals/<session_id>.sqlite
+uv run easycat debugger serve .easycat/journals/<session_id>.sqlite --no-open-browser
 ```
+
+The debugger UI is the during-call/post-call workspace: an overview dashboard,
+live event lanes, per-turn latency waterfalls, transcripts with audio playback,
+raw record inspection with paging, deterministic issue cards, cost rollups,
+replay, and live-session bundle export.
 
 ### Hook directly into agent/tool events
 You can subscribe to agent stream events (including tool calls) via the session:

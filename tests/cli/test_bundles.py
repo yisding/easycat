@@ -188,6 +188,51 @@ def test_peripheral_cli_plan_tracks_current_debug_commands() -> None:
     assert "SQLite crash dumps" in bundles_show
 
 
+def test_debugger_serve_loads_bundle_and_invokes_ui(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "session.zip"
+    _make_bundle(bundle, [{"sequence": 1, "session_id": "s1", "name": "event"}])
+    calls: list[dict[str, object]] = []
+
+    def _fake_serve(bundle_obj, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append({"records": list(bundle_obj.records()), **kwargs})
+
+    monkeypatch.setattr("easycat.debugger.serve_run_bundle", _fake_serve)
+
+    result = cli.invoke(
+        app,
+        ["debugger", "serve", str(bundle), "--no-open-browser", "--port", "0"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls
+    assert calls[0]["label"] == "session.zip"
+    assert calls[0]["open_browser"] is False
+    assert calls[0]["port"] == 0
+    assert calls[0]["records"] == [{"sequence": 1, "session_id": "s1", "name": "event"}]
+
+
+def test_debugger_serve_non_loopback_requires_allow_remote(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "session.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "event"}])
+
+    def _fake_serve(*_args, **_kwargs):
+        raise RuntimeError("Refusing to bind debugger to non-loopback host '0.0.0.0'")
+
+    monkeypatch.setattr("easycat.debugger.serve_run_bundle", _fake_serve)
+
+    result = cli.invoke(
+        app,
+        ["debugger", "serve", str(bundle), "--host", "0.0.0.0", "--no-open-browser"],
+    )
+
+    assert result.exit_code == 2
+    assert "Refusing to bind debugger" in result.stderr
+
+
 def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     # Regression: drive the fixture through the real ``export_debug_bundle``
     # serialization so the journal records carry the production shape — the

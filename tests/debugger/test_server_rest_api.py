@@ -39,6 +39,20 @@ async def test_api_serves_text_session_records(tmp_path):
         assert len(turns["turns"]) == 2
 
 
+async def test_api_serves_issue_rollup(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        payload = await (await client.get("/api/issues")).json()
+        assert set(payload) == {"issues", "summary", "total"}
+        assert payload["total"] == len(payload["issues"])
+        assert {"error", "warning", "info"} <= set(payload["summary"])
+
+
 async def test_api_serves_voice_session_artifact_bytes(tmp_path):
     """A bundle's TTS audio artifacts must be retrievable through /api/artifact."""
     bundle_path = await _build_voice_bundle(tmp_path)

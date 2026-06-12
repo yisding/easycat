@@ -508,6 +508,8 @@ easycat bundles list
 easycat bundles list --json
 easycat bundles show PATH
 easycat bundles show PATH --json
+easycat debugger serve PATH
+easycat debugger serve PATH --no-open-browser
 easycat inspect PATH
 easycat inspect PATH --json
 easycat replay PATH

@@ -87,6 +87,7 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
 - CLI entry points:
   `easycat bundles list`,
   `easycat bundles show <path>`,
+  `easycat debugger serve <path>`,
   `easycat inspect <path>`,
   `easycat replay <path>`, and
   `easycat bundles export <path>`.
@@ -96,8 +97,20 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   parseable summary.
 - Optional debugger UI:
   install the extra with `uv sync --extra debugger --group dev` from this repo,
-  or `uv add 'easycat[debugger]'` in an app. Then import
-  `serve_bundle` for an offline bundle or `serve_session` for a live session:
+  or `uv add 'easycat[debugger]'` in an app. For post-call inspection, launch
+  the first-class browser UI directly from the CLI:
+
+  ```bash
+  uv run easycat debugger serve runs/session.bundle --no-open-browser
+  uv run easycat debugger serve .easycat/journals/<session_id>.sqlite
+  ```
+
+  The UI gives every captured call a timeline-first forensic workspace: an
+  overview dashboard with recommended next steps, Live lanes for during-call
+  event flow, per-turn waterfalls, transcript/audio playback, paged raw records,
+  deterministic issue triage cards, cost rollups, replay controls, and
+  live-session bundle export. You can also import `serve_bundle` for an offline
+  bundle or `serve_session` for a live session:
 
   ```python
   from easycat.debugger import serve_bundle, serve_session

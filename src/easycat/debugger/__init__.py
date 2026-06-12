@@ -26,11 +26,13 @@ or for a live session:
 from easycat.debugger.server import (
     DebuggerSource,
     serve_bundle,
+    serve_run_bundle,
     serve_session,
 )
 
 __all__ = [
     "DebuggerSource",
     "serve_bundle",
+    "serve_run_bundle",
     "serve_session",
 ]
