@@ -315,6 +315,62 @@ def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_p
     assert "stt 50.0@50.0" in human.stdout
 
 
+def test_bundles_show_ignores_malformed_turn_ids_in_waterfall(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """Untrusted bundle records with non-string turn ids must not crash summary."""
+    bundle = tmp_path / "malformed-turn-id.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "session_id": "sess-malformed",
+                "name": "stage_start",
+                "turn_id": ["x"],
+                "timing": {"wall_ns": 1_000_000_000},
+                "data": {"stage": "stt"},
+            },
+            {
+                "sequence": 2,
+                "session_id": "sess-malformed",
+                "name": "stt_final",
+                "turn_id": {"id": "x"},
+                "timing": {"wall_ns": 1_100_000_000},
+                "data": {"text": "ignored"},
+            },
+            {
+                "sequence": 3,
+                "session_id": "sess-malformed",
+                "name": "stage_start",
+                "turn_id": "t1",
+                "timing": {"wall_ns": 1_200_000_000},
+                "data": {"stage": "agent"},
+            },
+            {
+                "sequence": 4,
+                "session_id": "sess-malformed",
+                "name": "stage_complete",
+                "turn_id": "t1",
+                "timing": {"wall_ns": 1_300_000_000},
+                "data": {"stage": "agent"},
+            },
+        ],
+    )
+
+    show = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert show.exit_code == 0, show.stderr
+    payload = json.loads(show.stdout)
+    assert payload["turn_count"] == 1
+    assert [turn["turn_id"] for turn in payload["turns"]] == ["t1"]
+
+    inspect = cli.invoke(app, ["inspect", str(bundle), "--json"])
+    assert inspect.exit_code == 0, inspect.stderr
+    inspect_payload = json.loads(inspect.stdout)
+    assert inspect_payload["turn_count"] == 1
+    assert [turn["turn_id"] for turn in inspect_payload["turns"]] == ["t1"]
+
+
 def test_inspect_crash_dump_turn_waterfall_reads_flat_wall_ns(
     cli: CliRunner, tmp_path: Path
 ) -> None:

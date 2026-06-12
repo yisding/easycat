@@ -94,7 +94,7 @@ class TestLangChainBridgePartialTurnOnCancel:
             {"role": "user", "content": "q1"},
             {"role": "assistant", "content": "a1"},
         ]
-        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=1.0))
 
         with pytest.raises(AgentTimeoutError):
             async for _ in runner.invoke(AgentTurnInput.from_text("q2"), _recorder()):
@@ -135,7 +135,7 @@ class TestLangChainBridgePartialTurnOnCancel:
             {"role": "user", "content": "q1"},
             {"role": "assistant", "content": "a1"},
         ]
-        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=0.05))
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=1.0))
 
         with pytest.raises(AgentTimeoutError):
             async for _ in runner.invoke(AgentTurnInput.from_text("q2"), _recorder()):

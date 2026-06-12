@@ -81,6 +81,16 @@ def _safe_turn_id(turn_id: str) -> str:
     return turn_id
 
 
+def _safe_record_turn_id(record: dict[str, Any]) -> str | None:
+    turn_id = record.get("turn_id")
+    if not isinstance(turn_id, str) or not turn_id:
+        return None
+    try:
+        return _safe_turn_id(turn_id)
+    except ValueError:
+        return None
+
+
 # ── Source adaptation ────────────────────────────────────────────
 
 
@@ -512,8 +522,8 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     by_turn: dict[str, dict[str, Any]] = {}
     for r in records:
-        turn_id = r.get("turn_id")
-        if not turn_id:
+        turn_id = _safe_record_turn_id(r)
+        if turn_id is None:
             continue
         bucket = by_turn.setdefault(
             turn_id,
@@ -588,7 +598,7 @@ def _cost_rollup(
         data = r.get("data") or {}
         if not isinstance(data, dict):
             continue
-        turn_id = r.get("turn_id") or ""
+        turn_id = _safe_record_turn_id(r) or ""
         bucket = by_turn.setdefault(
             turn_id, {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
         )

@@ -9,6 +9,7 @@ import zipfile
 
 from easycat.debug.bundle import RunBundle
 from easycat.debugger.server import (
+    _build_transcript,
     _cost_rollup,
     _filter_records,
     _session_source,
@@ -111,6 +112,56 @@ def test_cost_rollup_reports_exceeded_budget():
     assert out["budget"]["exceeded"] is True
     assert out["budget"]["remaining_usd"] == 0.0
     assert out["budget"]["overage_usd"] == pytest.approx(0.25)
+
+
+def test_transcript_ignores_malformed_turn_ids():
+    records = [
+        {
+            "sequence": 1,
+            "name": "stt_final",
+            "turn_id": ["bad"],
+            "data": {"text": "ignored"},
+        },
+        {
+            "sequence": 2,
+            "name": "agent_final",
+            "turn_id": {"id": "bad"},
+            "data": {"text": "also ignored"},
+        },
+        {
+            "sequence": 3,
+            "name": "stt_final",
+            "turn_id": "turn-1",
+            "data": {"text": "hello"},
+        },
+    ]
+
+    out = _build_transcript(records)
+
+    assert len(out) == 1
+    assert out[0]["turn_id"] == "turn-1"
+    assert out[0]["user"] == "hello"
+
+
+def test_cost_rollup_treats_malformed_turn_ids_as_session_level_cost():
+    records = [
+        {"sequence": 1, "name": "cost", "turn_id": ["bad"], "data": {"usd": 0.25}},
+        {
+            "sequence": 2,
+            "name": "cost_record",
+            "turn_id": {"id": "bad"},
+            "data": {"tts_chars": 10},
+        },
+        {"sequence": 3, "name": "cost", "turn_id": "turn-1", "data": {"usd": 0.75}},
+    ]
+
+    out = _cost_rollup(records)
+
+    assert out["totals"]["usd"] == pytest.approx(1.0)
+    assert out["totals"]["tts_chars"] == pytest.approx(10)
+    assert out["per_turn"][""]["usd"] == pytest.approx(0.25)
+    assert out["per_turn"][""]["tts_chars"] == pytest.approx(10)
+    assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.75)
 
 
 def test_summarise_turns_tracks_audio_bytes():
