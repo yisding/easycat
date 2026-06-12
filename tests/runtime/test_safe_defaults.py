@@ -68,6 +68,53 @@ class TestSafeConfigSnapshot:
         snap = safe_config_snapshot(_Extended())
         assert "custom_field" not in snap
 
+    def test_arbitrary_processor_repr_is_not_used(self):
+        """Custom processor instances must not leak secrets from __repr__."""
+
+        class _SecretNoiseReducer:
+            def process(self, frame: object) -> object:
+                return frame
+
+            def __repr__(self) -> str:
+                return "SecretNoiseReducer(api_key='nr_live_SECRET_12345')"
+
+        class _SecretEchoCanceller:
+            def process(self, frame: object) -> object:
+                return frame
+
+            def feed_reference(self, frame: object) -> None:
+                return None
+
+            def __repr__(self) -> str:
+                return "SecretEchoCanceller(token='aec_token_SECRET_67890')"
+
+        @dataclass
+        class _Cfg:
+            noise_reduction: object = None
+            echo_cancellation: object = None
+
+        snap = safe_config_snapshot(
+            _Cfg(
+                noise_reduction=_SecretNoiseReducer(),
+                echo_cancellation=_SecretEchoCanceller(),
+            )
+        )
+
+        assert "nr_live_SECRET_12345" not in snap["noise_reduction"]
+        assert "aec_token_SECRET_67890" not in snap["echo_cancellation"]
+        assert "api_key" not in snap["noise_reduction"]
+        assert "token" not in snap["echo_cancellation"]
+        assert snap["noise_reduction"] == (
+            "<tests.runtime.test_safe_defaults."
+            "TestSafeConfigSnapshot.test_arbitrary_processor_repr_is_not_used."
+            "<locals>._SecretNoiseReducer object>"
+        )
+        assert snap["echo_cancellation"] == (
+            "<tests.runtime.test_safe_defaults."
+            "TestSafeConfigSnapshot.test_arbitrary_processor_repr_is_not_used."
+            "<locals>._SecretEchoCanceller object>"
+        )
+
 
 class TestNestedSecretRedaction:
     def test_nested_dataclass_secret_is_redacted(self):
