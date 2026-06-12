@@ -85,14 +85,45 @@ def _stream_validation_output(
     result: ValidationRunResult,
     *,
     json_output: bool,
+    include_child_reports: bool = False,
 ) -> None:
+    streamed_paths: set[Path] = set()
     stdout_log = _artifact_path(result, "stdout")
     stderr_log = _artifact_path(result, "stderr")
+    _stream_artifact_logs(
+        stdout_log,
+        stderr_log,
+        json_output=json_output,
+        streamed_paths=streamed_paths,
+    )
+
+    if not include_child_reports:
+        return
+
+    for report_path in _child_report_paths(result):
+        payload = _read_validation_report(report_path)
+        if payload is None:
+            continue
+        _stream_artifact_logs(
+            _payload_artifact_path(payload, "stdout"),
+            _payload_artifact_path(payload, "stderr"),
+            json_output=json_output,
+            streamed_paths=streamed_paths,
+        )
+
+
+def _stream_artifact_logs(
+    stdout_log: Path | None,
+    stderr_log: Path | None,
+    *,
+    json_output: bool,
+    streamed_paths: set[Path],
+) -> None:
     if stdout_log is not None and stdout_log.exists():
         target = stderr_console.file if json_output else stdout_console.file
-        _write_log(target, stdout_log.read_text(encoding="utf-8"))
+        _write_log_once(target, stdout_log, streamed_paths=streamed_paths)
     if stderr_log is not None and stderr_log.exists():
-        _write_log(stderr_console.file, stderr_log.read_text(encoding="utf-8"))
+        _write_log_once(stderr_console.file, stderr_log, streamed_paths=streamed_paths)
 
 
 def _artifact_path(result: ValidationRunResult, name: str) -> Path | None:
@@ -105,6 +136,93 @@ def _artifact_path(result: ValidationRunResult, name: str) -> Path | None:
     if artifact is None:
         return None
     return Path(artifact.path)
+
+
+def _child_report_paths(result: ValidationRunResult) -> list[Path]:
+    parent_reports = {
+        _path_key(path)
+        for path in (
+            result.report_path,
+            _artifact_path(result, "report"),
+            _artifact_path(result, "requested_report"),
+        )
+        if path is not None
+    }
+    paths: list[Path] = []
+    seen: set[Path] = set(parent_reports)
+
+    def append_report(path: Path) -> None:
+        key = _path_key(path)
+        if key in seen:
+            return
+        seen.add(key)
+        paths.append(path)
+
+    for check in result.run.checks:
+        for artifact in check.artifacts.values():
+            if artifact.kind == "validation_report":
+                append_report(Path(artifact.path))
+
+    for name, artifact in result.run.artifacts.items():
+        if name in {"report", "requested_report"}:
+            continue
+        if artifact.kind == "validation_report":
+            append_report(Path(artifact.path))
+
+    return paths
+
+
+def _read_validation_report(path: Path) -> dict[str, object] | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    return payload if isinstance(payload, dict) else None
+
+
+def _payload_artifact_path(payload: dict[str, object], name: str) -> Path | None:
+    path = _named_payload_artifact_path(payload.get("artifacts"), name)
+    if path is not None:
+        return path
+
+    checks = payload.get("checks")
+    if not isinstance(checks, list):
+        return None
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        path = _named_payload_artifact_path(check.get("artifacts"), name)
+        if path is not None:
+            return path
+    return None
+
+
+def _named_payload_artifact_path(artifacts: object, name: str) -> Path | None:
+    if not isinstance(artifacts, dict):
+        return None
+    artifact = artifacts.get(name)
+    if not isinstance(artifact, dict):
+        return None
+    path = artifact.get("path")
+    return Path(str(path)) if path else None
+
+
+def _write_log_once(target: TextIO, path: Path, *, streamed_paths: set[Path]) -> None:
+    key = _path_key(path)
+    if key in streamed_paths:
+        return
+    streamed_paths.add(key)
+    _write_log(target, path.read_text(encoding="utf-8"))
+
+
+def _path_key(path: Path) -> Path:
+    return path.resolve(strict=False)
 
 
 def _write_log(target: TextIO, text: str) -> None:
@@ -498,7 +616,11 @@ def release(
     )
 
     if show_output:
-        _stream_validation_output(result, json_output=json_output)
+        _stream_validation_output(
+            result,
+            json_output=json_output,
+            include_child_reports=True,
+        )
 
     if json_output:
         status = "ok" if result.exit_code == 0 else "error"

@@ -1444,6 +1444,115 @@ def test_validate_release_cli_json_uses_standard_stdout_envelope(
     assert payload["validation"]["checks"][0]["name"] == "release.quick"
 
 
+@pytest.mark.parametrize(
+    ("args", "json_mode"),
+    [
+        (["--show-output"], False),
+        (["--json", "--show-output"], True),
+    ],
+)
+def test_validate_release_cli_show_output_streams_child_report_logs(
+    cli: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    json_mode: bool,
+) -> None:
+    parent_dir = tmp_path / "parent"
+    child_dir = tmp_path / "child"
+    parent_dir.mkdir()
+    child_dir.mkdir()
+    parent_stdout = parent_dir / "stdout.log"
+    parent_stderr = parent_dir / "stderr.log"
+    parent_report = parent_dir / "report.json"
+    child_stdout = child_dir / "stdout.log"
+    child_stderr = child_dir / "stderr.log"
+    child_report = child_dir / "report.json"
+    parent_stdout.write_text("release stdout\n", encoding="utf-8")
+    parent_stderr.write_text("release stderr\n", encoding="utf-8")
+    child_stdout.write_text("child pytest stdout\n", encoding="utf-8")
+    child_stderr.write_text("child pytest stderr\n", encoding="utf-8")
+
+    child_run = _validation_run(
+        run_id="20260523T120001Z-quick-child",
+        status="fail",
+        exit_code=1,
+        tool_exit_codes={"pytest": 1},
+        checks=[
+            ValidationCheck(
+                name="pytest.quick",
+                status="fail",
+                duration_s=1.0,
+                artifacts={
+                    "stdout": ArtifactRef(kind="stdout", path=str(child_stdout)),
+                    "stderr": ArtifactRef(kind="stderr", path=str(child_stderr)),
+                },
+            )
+        ],
+        artifacts={
+            "report": ArtifactRef(kind="validation_report", path=str(child_report)),
+            "stdout": ArtifactRef(kind="stdout", path=str(child_stdout)),
+            "stderr": ArtifactRef(kind="stderr", path=str(child_stderr)),
+        },
+    )
+    child_report.write_text(child_run.to_json(), encoding="utf-8")
+
+    parent_run = _validation_run(
+        run_id="20260523T120000Z-release-parent",
+        command=["easycat", "validate", "release"],
+        status="fail",
+        exit_code=1,
+        tool_exit_codes={"release.quick": 1},
+        checks=[
+            ValidationCheck(
+                name="release.quick",
+                status="fail",
+                duration_s=1.0,
+                artifacts={
+                    "report": ArtifactRef(kind="validation_report", path=str(child_report)),
+                },
+            )
+        ],
+        artifacts={
+            "report": ArtifactRef(kind="validation_report", path=str(parent_report)),
+            "stdout": ArtifactRef(kind="stdout", path=str(parent_stdout)),
+            "stderr": ArtifactRef(kind="stderr", path=str(parent_stderr)),
+            "quick_report": ArtifactRef(kind="validation_report", path=str(child_report)),
+        },
+    )
+    parent_report.write_text(parent_run.to_json(), encoding="utf-8")
+
+    def fake_run_release_validation(**kwargs) -> ValidationRunResult:  # noqa: ARG001, ANN003
+        return ValidationRunResult(
+            run=parent_run,
+            run_dir=parent_dir,
+            report_path=parent_report,
+            exit_code=1,
+        )
+
+    monkeypatch.setattr(
+        "easycat.cli.validate.run_release_validation",
+        fake_run_release_validation,
+    )
+
+    result = cli.invoke(app, ["validate", "release", *args])
+
+    assert result.exit_code == 1
+    assert "release stderr" in result.stderr
+    assert "child pytest stderr" in result.stderr
+    if json_mode:
+        payload = json.loads(result.stdout)
+        assert payload["command"] == "validate release"
+        assert payload["status"] == "error"
+        assert "release stdout" in result.stderr
+        assert "child pytest stdout" in result.stderr
+        assert "child pytest stdout" not in result.stdout
+    else:
+        assert "release stdout" in result.stdout
+        assert "child pytest stdout" in result.stdout
+        assert "release: fail" in result.stdout
+
+
 def test_validate_release_cli_rejects_conflicting_latency_modes(cli: CliRunner) -> None:
     result = cli.invoke(
         app,
