@@ -93,6 +93,55 @@ async def test_session_cost_budget_exceeded_stops_without_journal() -> None:
     assert session.journal is None
 
 
+def test_session_cost_budget_exceeded_off_loop_retries_when_loop_available() -> None:
+    journal = InMemoryRingBuffer()
+    session = Session(
+        SessionConfig(
+            runtime_mode="text_session",
+            journal=journal,
+            max_session_cost_usd=1.0,
+        )
+    )
+
+    session._journal_sink.append_record(
+        kind=JournalRecordKind.METRIC,
+        name="cost_record",
+        turn_id="turn-off-loop",
+        data={"usd": 1.25},
+    )
+
+    names_after_off_loop = [record.name for record in journal.read()]
+    assert names_after_off_loop == [
+        "cost_record",
+        "cost_budget_warning",
+        "cost_budget_exceeded",
+    ]
+    assert session._closed is False
+
+    async def retry_with_running_loop() -> None:
+        session._journal_sink.append_record(
+            kind=JournalRecordKind.METRIC,
+            name="cost_record",
+            turn_id="turn-retry",
+            data={"usd": 0.01},
+        )
+        await asyncio.wait_for(session.wait_closed(), timeout=1.0)
+
+    asyncio.run(retry_with_running_loop())
+
+    names_after_retry = [record.name for record in journal.read()]
+    assert names_after_retry[:6] == [
+        "cost_record",
+        "cost_budget_warning",
+        "cost_budget_exceeded",
+        "cost_record",
+        "cost_budget_stop_requested",
+        "task_scheduled",
+    ]
+    assert names_after_retry.count("cost_budget_exceeded") == 1
+    assert session._closed is True
+
+
 @pytest.mark.asyncio
 async def test_stop_keeps_sqlite_journal_and_bundle_readable(tmp_path):
     session_id = "sess"
