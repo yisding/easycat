@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import (
     CallAnswered,
     CallEnded,
@@ -16,6 +17,7 @@ from easycat.events import (
     EventBus,
     ScreeningTimedOut,
     STTFinal,
+    TTSAudio,
     VoicemailDetected,
 )
 from easycat.telephony.call_state import (
@@ -296,6 +298,36 @@ class TestOutboundCallStateMachine:
                 STTFinal(text="Please leave a message after the tone and we will get back to you")
             )
             assert sm.state == OutboundCallState.CLASSIFYING
+        finally:
+            sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_fused_classifying_does_not_promote_short_stt_to_human(self) -> None:
+        """Fusion-enabled classification waits for AMD/fusion instead of short STT."""
+        bus = EventBus()
+        flushed: list[list[TTSAudio]] = []
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            classification_gate=True,
+            expect_fused_voicemail=True,
+        )
+        sm.set_gate_flush_callback(flushed.append)
+        sm.start()
+        fmt = AudioFormat(sample_rate=16000, channels=1, sample_width=2)
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            assert sm.state == OutboundCallState.CLASSIFYING
+            assert sm.gate.is_buffering
+            await bus.emit(TTSAudio(chunk=AudioChunk(data=b"\x00" * 100, format=fmt)))
+            assert len(sm.gate.buffer) == 1
+
+            await bus.emit(STTFinal(text="leave your message"))
+
+            assert sm.state == OutboundCallState.CLASSIFYING
+            assert sm.gate.is_buffering
+            assert len(sm.gate.buffer) == 1
+            assert flushed == []
         finally:
             sm.stop()
 
