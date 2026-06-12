@@ -260,21 +260,15 @@ def _on_llm_start(ctx: _EventContext) -> Iterator[AgentBridgeEvent]:
     # a node's LCEL chain as node-direct and leak its raw tokens before
     # downstream redaction.
     #
-    # The immediate-parent check is intentionally strict but
-    # fail-*audible*: a node that invokes a BaseLLM through
-    # ``.with_retry()`` (the sync ``invoke`` path inserts an extra
-    # ``RunnableRetry`` span, so ``parent_ids`` becomes
-    # ``[node, retry]`` and the immediate parent is the retry span,
-    # not the node root) writing to a non-conventional state key is
-    # still recorded here as parented, but its result text is stashed
-    # in ``_on_llm_end`` so :meth:`LangGraphBridge._finalize_done`
-    # can fall back to it when nothing else surfaced — restoring audio
-    # without re-leaking raw tokens whenever the node/chain *did*
-    # compose public-safe text (the secure common path).  The other
-    # common wrappers — ``.with_config()`` / ``.bind()`` /
-    # ``RunnableBinding`` — are inert: they don't insert an
-    # intervening run, so the LLM's immediate parent stays the node
-    # root and those calls remain audible outright.
+    # Keep the immediate-parent check intentionally strict.  A node that
+    # invokes a BaseLLM through ``.with_retry()`` (the sync ``invoke`` path
+    # inserts an extra ``RunnableRetry`` span, so ``parent_ids`` becomes
+    # ``[node, retry]`` and the immediate parent is the retry span, not the
+    # node root) is indistinguishable from an LCEL/redaction wrapper at
+    # this event boundary.  Treat it as parented and let only surrounding
+    # public-safe chain/node output become audible rather than retaining a
+    # raw fallback that could bypass downstream redaction or output
+    # selection.
     node_roots = ctx.state.get("langgraph_node_run_ids")
     node_root_ids = node_roots if isinstance(node_roots, set) else set()
     immediate_parent = str(parents[-1]) if parents else ""
@@ -511,18 +505,10 @@ def _on_llm_end(ctx: _EventContext) -> Iterator[AgentBridgeEvent]:
     if ctx.state is not None and ctx.run_id:
         parented = ctx.state.get("parented_llm_run_ids")
         if isinstance(parented, set) and ctx.run_id in parented:
-            # Don't yield the raw tokens (downstream redaction stays
-            # authoritative), but stash the result text keyed by
-            # ``run_id`` so :meth:`LangGraphBridge._finalize_done` can
-            # use it as a fail-audible fallback when the node/chain
-            # produced no public-safe text at all (a node-direct LLM
-            # reached through an inert ``.with_retry()`` span writing
-            # to a non-conventional state key).  The secure common
-            # path — node/chain composed text — still wins, so this
-            # never re-leaks raw tokens when redaction did run.
-            suppressed = ctx.state.setdefault("suppressed_parented_llm_text", {})
-            if isinstance(suppressed, dict):
-                suppressed[ctx.run_id] = _llm_result_text(output)
+            # Suppressed parented LLM text is deliberately discarded.
+            # Downstream chains/nodes may redact, transform, select, or
+            # intentionally drop this raw output; retaining it as a later
+            # fallback would bypass that public-safe output boundary.
             return
         streamed = ctx.state.get("llm_streamed_run_ids")
         if isinstance(streamed, set) and ctx.run_id in streamed:
