@@ -28,7 +28,11 @@ from pathlib import Path
 import pytest
 
 from easycat.cli.diagnose.doctor import _parse_env_file
-from easycat.cli.scaffold._schema import InitConfig, available_templates
+from easycat.cli.scaffold._schema import (
+    TEMPLATE_ARTIFACT_DIRECTORY_NAMES,
+    InitConfig,
+    available_templates,
+)
 from easycat.cli.scaffold.init import (
     _COPY_FILE_IGNORE,
     _COPY_FILE_PREFIX_IGNORE,
@@ -954,6 +958,23 @@ def test_template_copy_filter_omits_local_secret_suffixes() -> None:
     assert {".pem", ".key"} <= expected_suffixes <= _COPY_SUFFIX_IGNORE
 
 
+def test_available_templates_omits_top_level_artifact_directories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    templates_root = tmp_path / "templates"
+    templates_root.mkdir()
+    (templates_root / "demo").mkdir()
+    for name in TEMPLATE_ARTIFACT_DIRECTORY_NAMES:
+        (templates_root / name).mkdir()
+
+    fake_schema_file = tmp_path / "_schema.py"
+    fake_schema_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr("easycat.cli.scaffold._schema.__file__", str(fake_schema_file))
+
+    assert available_templates() == ["demo"]
+
+
 def test_template_sources_skip_generated_artifacts(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -989,6 +1010,20 @@ def test_template_sources_skip_generated_artifacts(
     monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
 
     assert _template_sources("demo") == [kept]
+
+
+def test_template_sources_skip_ignored_top_level_template(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    templates_root = tmp_path / "templates"
+    template = templates_root / ".claude"
+    template.mkdir(parents=True)
+    leaked = template / "settings.local.json"
+    leaked.write_text('{"secret":"sentinel"}\n', encoding="utf-8")
+    monkeypatch.setattr("easycat.cli.scaffold.init._templates_root", lambda: templates_root)
+
+    assert _template_sources(".claude") == []
 
 
 # ── pre-launch local-source wiring ───────────────────────────────────
