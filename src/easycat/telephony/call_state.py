@@ -633,6 +633,27 @@ class OutboundCallStateMachine:
         if self._state == OutboundCallState.SCREENING:
             await self._transition(OutboundCallState.HUMAN)
 
+    async def _handle_classifying_stt_final(self, text: str) -> None:
+        if self._classify_ivr_prompt(text):
+            self._cancel_classification_timeout()
+            await self._transition(OutboundCallState.IVR)
+            return
+        if self._classify_greeting(text) == "machine":
+            # Short voicemail greetings (e.g. "Please leave a message")
+            # pass is_conversational's word-count check but contain known
+            # voicemail phrases -- let the fusion classifier handle them
+            # instead of misrouting to HUMAN.
+            return
+        if self._expect_fused_voicemail:
+            # When AMD/STT fusion is active, inbound STT is one of the
+            # classifier inputs rather than a terminal human signal.
+            # Do not let short callee-controlled phrases bypass the
+            # classification gate before fusion can classify voicemail.
+            return
+        if self._is_conversational(text, self._screening_patterns):
+            self._cancel_classification_timeout()
+            await self._transition(OutboundCallState.HUMAN)
+
     async def _on_stt_final(self, event: STTFinal) -> None:
         """Handle STTFinal for IVR detection (CLASSIFYING) and SCREENING → HUMAN."""
         text = event.text.strip()
@@ -651,18 +672,7 @@ class OutboundCallStateMachine:
             return
 
         if self._state == OutboundCallState.CLASSIFYING:
-            if self._classify_ivr_prompt(text):
-                self._cancel_classification_timeout()
-                await self._transition(OutboundCallState.IVR)
-            elif self._classify_greeting(text) == "machine":
-                # Short voicemail greetings (e.g. "Please leave a message")
-                # pass is_conversational's word-count check but contain known
-                # voicemail phrases — let the fusion classifier handle them
-                # instead of misrouting to HUMAN.
-                pass
-            elif self._is_conversational(text, self._screening_patterns):
-                self._cancel_classification_timeout()
-                await self._transition(OutboundCallState.HUMAN)
+            await self._handle_classifying_stt_final(text)
             return
 
         if self._state == OutboundCallState.SCREENING:
