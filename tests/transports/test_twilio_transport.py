@@ -637,6 +637,19 @@ class TestTwilioTransport(_UsesPytestTcpPortFactory):
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_send_playback_mark_without_stream_raises(self):
+        """Playback marks without an active stream must not report success."""
+        port = self._unused_port()
+        config = TwilioTransportConfig(host="127.0.0.1", port=port)
+        transport = TwilioTransport(config)
+        await transport.connect()
+
+        with pytest.raises(RuntimeError, match="active stream"):
+            await transport.send_playback_mark("unit_mark")
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
     async def test_dtmf_emitted_to_event_bus(self):
         """DTMF messages from Twilio are emitted as DTMF events."""
         port = self._unused_port()
@@ -815,6 +828,22 @@ class TestTwilioSendAudioConnectionClosed:
         assert not transport._client_connected.is_set()
 
     @pytest.mark.asyncio
+    async def test_server_variant_mark_raises_and_clears_state_on_connection_closed(self):
+        config = TwilioTransportConfig(host="127.0.0.1", port=0)
+        transport = TwilioTransport(config)
+        transport._ws = self._ClosedWS()
+        transport._stream_sid = "STREAM1"
+        transport._client_connected.set()
+
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await transport.send_playback_mark("unit_mark")
+
+        assert transport._ws is None
+        assert transport.stream_sid is None
+        assert not transport.has_client
+        assert not transport._client_connected.is_set()
+
+    @pytest.mark.asyncio
     async def test_connection_variant_clears_state_on_connection_closed(self):
         transport = TwilioConnectionTransport(self._ClosedWS())
         transport._stream_sid = "STREAM1"
@@ -824,6 +853,20 @@ class TestTwilioSendAudioConnectionClosed:
         delivered = await transport.send_audio(_make_chunk(640, sample_rate=16000))
 
         assert delivered is False
+        assert transport.stream_sid is None
+        assert not transport.is_connected
+        assert not transport._client_connected.is_set()
+
+    @pytest.mark.asyncio
+    async def test_connection_variant_mark_raises_and_clears_state_on_connection_closed(self):
+        transport = TwilioConnectionTransport(self._ClosedWS())
+        transport._stream_sid = "STREAM1"
+        transport._connected = True
+        transport._client_connected.set()
+
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await transport.send_playback_mark("unit_mark")
+
         assert transport.stream_sid is None
         assert not transport.is_connected
         assert not transport._client_connected.is_set()

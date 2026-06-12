@@ -429,15 +429,17 @@ class TestTwilioConnectionTransport(_UsesPytestTcpPortFactory):
         await server.wait_closed()
 
     @pytest.mark.asyncio
-    async def test_send_mark_no_stream_returns_empty(self):
-        """send_mark without an active stream returns gracefully."""
+    async def test_send_mark_no_stream_raises(self):
+        """send_mark without an active stream reports that no mark was sent."""
         port = self._unused_port()
 
         async def handler(ws):
             t = TwilioConnectionTransport(ws)
             await t.connect()
-            name = await t.send_mark("x")
-            assert name == ""  # No stream_sid → returns empty string.
+            with pytest.raises(RuntimeError, match="active stream"):
+                await t.send_mark("x")
+            with pytest.raises(RuntimeError, match="active stream"):
+                await t.send_playback_mark("playback_x")
             await t.disconnect()
 
         server = await websockets.serve(handler, "127.0.0.1", port)
