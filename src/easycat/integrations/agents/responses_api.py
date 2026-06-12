@@ -91,6 +91,7 @@ class RemoteResponsesAPIBridge:
         # Interruption replay state.
         self._replay_items: list[dict[str, Any]] | None = None
         self._pending_interruption_note: str | None = None
+        self._pending_assistant_history_items: list[dict[str, Any]] = []
         self._last_accumulated_items: list[dict[str, Any]] = []
         self._last_user_text: str | None = None
         self._interrupted_response_id: str | None = None
@@ -239,6 +240,7 @@ class RemoteResponsesAPIBridge:
         # but the caller will call apply_interruption separately).
         self._replay_items = None
         self._pending_interruption_note = None
+        self._pending_assistant_history_items = []
         self._pending_turn_metadata = None
 
         recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
@@ -374,6 +376,7 @@ class RemoteResponsesAPIBridge:
 
         self._replay_items = replay if replay else None
         self._pending_interruption_note = INTERRUPTION_NOTE
+        self._pending_assistant_history_items = []
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client, releasing connection pools."""
@@ -392,6 +395,7 @@ class RemoteResponsesAPIBridge:
         self._response_count = 0
         self._replay_items = None
         self._pending_interruption_note = None
+        self._pending_assistant_history_items = []
         self._last_accumulated_items = []
         self._last_user_text = None
         self._interrupted_response_id = None
@@ -418,23 +422,25 @@ class RemoteResponsesAPIBridge:
     # ── History post-processing ───────────────────────────────────
 
     def replace_last_assistant_text(self, text: str) -> None:
-        """Queue a developer note describing the post-processed text.
+        """Queue an assistant-role correction for post-processed text.
 
         The Responses API chains by ``previous_response_id`` — local state
-        cannot rewrite an already-committed response.  Instead we queue a
-        developer message so the next turn sees what the user actually
-        heard.  No-op when there is no prior completed response.
+        cannot rewrite an already-committed response.  Surface the text the
+        user actually heard as assistant history on the next turn instead of
+        promoting model/user-influenced text into a developer instruction.
+        No-op when there is no prior completed response.
         """
         if self._last_completed_response_id is None:
             return
-        note = (
-            "[The assistant's last response was post-processed before delivery. "
-            f'The user heard: "{text}"]'
+        self._pending_assistant_history_items.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "[The assistant's last response was post-processed before "
+                    f'delivery. The user heard: "{text}"]'
+                ),
+            }
         )
-        if self._pending_interruption_note is not None:
-            self._pending_interruption_note += "\n" + note
-        else:
-            self._pending_interruption_note = note
 
     def append_interruption_note(self, note: str) -> None:
         """Queue an interruption note for the next request."""
@@ -459,6 +465,12 @@ class RemoteResponsesAPIBridge:
         # succeeds, so a transient HTTP failure doesn't lose them.
         if self._replay_items:
             input_items.extend(self._replay_items)
+
+        # Surface post-processed assistant text as assistant history.  The
+        # content is derived from prior model output and can be influenced by
+        # the remote user, so it must not be sent with developer priority.
+        if self._pending_assistant_history_items:
+            input_items.extend(self._pending_assistant_history_items)
 
         # Add interruption note if pending.
         if self._pending_interruption_note:
