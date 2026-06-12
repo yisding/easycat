@@ -260,6 +260,47 @@ class TestNumberHealthMonitor:
             monitor.stop()
 
     @pytest.mark.asyncio
+    async def test_evicted_sid_late_initiated_callback_is_ignored(self) -> None:
+        """A late initiated callback for a tombstoned SID must not pin capacity."""
+        bus = EventBus()
+        monitor = NumberHealthMonitor(
+            bus,
+            max_concurrent_per_number=3,
+            max_calls_per_minute=100,
+            min_inter_call_delay_s=0.0,
+        )
+        monitor._max_sid_tracking = 4
+        from_number = "+15557654321"
+        to_number = "+15551234567"
+        monitor.start()
+        try:
+            for i in range(5):
+                await bus.emit(CallInitiated(call_sid=f"CA{i}", to=to_number, from_=from_number))
+            assert monitor._concurrent[from_number] == 3
+            assert "CA0" not in monitor._call_sid_to_number
+            assert "CA0" in monitor._terminal_call_sids
+            assert not monitor.can_place_call(from_number)
+
+            # A delayed/replayed Twilio ``initiated`` callback for the evicted
+            # SID must honor the tombstone rather than re-adding the SID and
+            # incrementing the caller-ID bucket.
+            await bus.emit(CallInitiated(call_sid="CA0", to=to_number, from_=from_number))
+            assert monitor._concurrent[from_number] == 3
+            assert "CA0" not in monitor._call_sid_to_number
+
+            # The matching terminal callback remains idempotent, and the true
+            # live calls can still release all capacity.
+            await bus.emit(CallEnded(call_sid="CA0", duration_s=5.0, number=from_number))
+            assert monitor._concurrent[from_number] == 3
+
+            for i in range(2, 5):
+                await bus.emit(CallEnded(call_sid=f"CA{i}", duration_s=5.0, number=from_number))
+            assert monitor._concurrent.get(from_number, 0) == 0
+            assert monitor.can_place_call(from_number)
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
     async def test_evicted_sid_late_terminal_callback_does_not_double_decrement(self) -> None:
         """A late terminal callback for an SID-evicted call must not double-release.
 

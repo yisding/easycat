@@ -220,6 +220,8 @@ class NumberHealthMonitor:
         # emits another via emit_call_status).
         if event.call_sid in self._call_sid_to_number:
             return
+        if event.call_sid in self._terminal_call_sids:
+            return
         number = event.from_
         self._call_sid_to_number[event.call_sid] = number
         self._ensure_number_capacity(number)
