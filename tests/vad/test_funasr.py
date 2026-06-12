@@ -136,6 +136,50 @@ async def test_funasr_vad_process_streaming_segments(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_funasr_vad_emits_complete_same_frame_segment(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Complete FunASR segments in one model result should not be dropped."""
+
+    class _FakeWaveform:
+        def astype(self, _dtype: object) -> _FakeWaveform:
+            return self
+
+        def __truediv__(self, _value: float) -> _FakeWaveform:
+            return self
+
+    class _FakeNumpy:
+        int16 = "int16"
+        float32 = "float32"
+
+        @staticmethod
+        def frombuffer(_data: bytes, dtype: object) -> _FakeWaveform:
+            assert dtype == "int16"
+            return _FakeWaveform()
+
+    class _FakeModel:
+        def __call__(self, audio_in: object, param_dict: dict[str, object]) -> list[list[int]]:
+            param_dict.setdefault("in_cache", [])
+            return [[0, 240]]
+
+    def _initialize(self: FunASROnnxVAD) -> None:
+        self._numpy = _FakeNumpy()
+        self._model = _FakeModel()
+        self._param_dict = {"in_cache": []}
+
+    monkeypatch.setattr(FunASROnnxVAD, "_initialize", _initialize)
+
+    vad = FunASROnnxVAD(chunk_size_ms=32)
+    vad._min_speech_duration_ms = 0
+    vad._min_silence_duration_ms = 0
+
+    events = [event async for event in vad.process(_make_chunk(1000))]
+
+    assert [type(event) for event in events] == [VADStartSpeaking, VADStopSpeaking]
+    assert vad._funasr_active is False
+
+
+@pytest.mark.asyncio
 async def test_funasr_vad_inference_errors_are_not_silenced(monkeypatch: pytest.MonkeyPatch):
     """Runtime failures should not make FunASR behave like permanent silence."""
 
