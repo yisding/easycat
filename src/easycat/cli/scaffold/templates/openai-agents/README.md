@@ -76,10 +76,13 @@ uv run pytest
   VAD + STT + endpointing into one streaming connection for lower latency.
 - **Try a different TTS voice:** pass `tts="openai"` with a specific voice via
   a typed `OpenAITTSConfig(voice="shimmer")`.
-- **Debug a session:** pass `debug="full", record_to="runs"` to
+- **Debug a session:** pass `debug="full", record_to=".easycat/runs"` to
   `EasyConfig.mic(...)`. EasyCat writes a SQLite journal under
-  `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
+  `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+  Debug bundles can contain raw transcripts, tool arguments, provider payloads,
+  and artifacts; keep them in the gitignored `.easycat/` tree unless you
+  redact them first.
 - **Graduate to the Session API:** when you need event subscriptions, text
   turns, or replayable debug bundles beyond `run(...)`, follow the
   from-EasyConfig-to-Session guide:

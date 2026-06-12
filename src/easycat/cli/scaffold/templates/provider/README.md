@@ -89,10 +89,13 @@ re-run the check.
 - **Publish the package:** rename `custom_vad.py` to your package name,
   fill in `pyproject.toml` metadata, and ship it; applications inject it
   with `EasyConfig.mic(vad=YourProvider())`.
-- **Debug a session:** pass `debug="light", record_to="runs"` to
+- **Debug a session:** pass `debug="light", record_to=".easycat/runs"` to
   `EasyConfig.mic(...)` in `agent.py`. EasyCat writes a SQLite journal under
-  `.easycat/journals/` and a timestamped `RunBundle` under `runs/`; inspect
+  `.easycat/journals/` and a timestamped `RunBundle` under `.easycat/runs/`; inspect
   the journal with `uv run easycat inspect .easycat/journals/<session_id>.sqlite`.
+  Debug bundles can contain raw transcripts, tool arguments, provider payloads,
+  and artifacts; keep them in the gitignored `.easycat/` tree unless you
+  redact them first.
 - **Explore docs and routes:** run `uv run easycat docs` to find learning,
   maintenance, validation, and operations routes. Use
   `uv run easycat docs --audience app-builders` to narrow the map to
