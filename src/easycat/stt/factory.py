@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any
 
@@ -230,21 +231,22 @@ def available_stt_providers() -> list[str]:
     return available_providers()
 
 
-def parse_stt_string(spec: str) -> STTConfig:
+def parse_stt_string(
+    spec: str, *, api_key_overrides: Mapping[str, str] | None = None
+) -> STTConfig:
     """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
 
     Looks up the provider in the registry, reads the corresponding API
-    key from the env var (:data:`_PROVIDER_ENV_VAR`), and returns a
-    concrete :class:`STTConfig` with ``model`` set when supplied.
+    key from ``api_key_overrides`` or the env var
+    (:data:`_PROVIDER_ENV_VAR`), and returns a concrete
+    :class:`STTConfig` with ``model`` set when supplied.
 
-    Callers that want programmatic API-key injection (e.g. feeding
-    ``EasyConfig.openai_api_key`` into an ``stt="openai"`` shortcut)
-    should set the provider's env var in the process scope before
-    calling — see ``_openai_env_override`` in ``easycat.config``.
+    ``api_key_overrides`` is keyed by env-var name so callers can inject
+    per-call credentials without mutating process-global environment.
 
     Raises:
         EasyCatError (EASYCAT_E104): Unknown provider, with fuzzy-match
             suggestion.
         EasyCatError (EASYCAT_E203): Missing required API key env var.
     """
-    return _CATALOG.parse_string(spec)
+    return _CATALOG.parse_string(spec, api_key_overrides=api_key_overrides)

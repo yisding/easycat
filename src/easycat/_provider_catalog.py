@@ -243,12 +243,14 @@ class ProviderCatalog:
             )
         return name
 
-    def parse_string(self, spec: str) -> Any:
+    def parse_string(
+        self, spec: str, *, api_key_overrides: Mapping[str, str] | None = None
+    ) -> Any:
         """Parse a ``"provider/model"`` (or bare ``"provider"``) shortcut.
 
         Looks up the provider in :attr:`providers`, reads the API key
-        from :attr:`env_vars`, and instantiates the provider's config
-        class. The ``model`` token is written to whichever field the
+        from ``api_key_overrides`` or :attr:`env_vars`, and instantiates
+        the provider's config class. The ``model`` token is written to whichever field the
         config exposes via its ``MODEL_FIELD`` class var (defaulting to
         ``"model"``).
 
@@ -265,7 +267,10 @@ class ProviderCatalog:
         provider = self.validate_name(provider)
 
         env_var = self.env_vars[provider]
-        api_key = os.getenv(env_var, "")
+        if api_key_overrides is not None and env_var in api_key_overrides:
+            api_key = api_key_overrides[env_var]
+        else:
+            api_key = os.getenv(env_var, "")
         if not api_key:
             raise EASYCAT_E203(var=env_var)
 
