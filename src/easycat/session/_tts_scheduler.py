@@ -85,6 +85,7 @@ class TTSScheduler:
 
         self._current_turn = wiring.current_turn
         self._is_gated = wiring.is_gated
+        self._session_actions = wiring.session_actions
         self._drain_session_actions = wiring.drain_session_actions
         self._clear_turn = wiring.clear_turn
 
@@ -197,12 +198,17 @@ class TTSScheduler:
         session should stop.
         """
         should_stop = await self._drain_session_actions()
-        if should_stop:
-            await self._audio_router.await_drain()
-            await self._turn_manager.bot_stopped_speaking()
-        else:
-            await self._turn_manager.bot_stopped_speaking()
-            await self._audio_router.await_drain()
+        try:
+            if should_stop:
+                await self._audio_router.await_drain()
+                await self._turn_manager.bot_stopped_speaking()
+            else:
+                await self._turn_manager.bot_stopped_speaking()
+                await self._audio_router.await_drain()
+        finally:
+            actions = self._session_actions()
+            if actions is not None:
+                actions.clear_no_interrupt()
         if self._current_turn() is turn and (
             turn_generation is None or (turn is not None and turn.generation == turn_generation)
         ):
