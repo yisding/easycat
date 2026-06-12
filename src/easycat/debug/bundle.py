@@ -440,12 +440,36 @@ class RunBundle:
                     continue
 
             entry_points = []
-            for ep in manifest_data.get("replay_entry_points", []):
+            raw_entry_points = manifest_data.get("replay_entry_points", [])
+            if not isinstance(raw_entry_points, list):
+                raise BundleValidationError(
+                    "Bundle replay_entry_points must be a list",
+                    reason_code="INVALID_REPLAY_ENTRY_POINT",
+                )
+            for ep in raw_entry_points:
+                if not isinstance(ep, dict):
+                    raise BundleValidationError(
+                        "Bundle replay_entry_points entries must be objects",
+                        reason_code="INVALID_REPLAY_ENTRY_POINT",
+                    )
+                sequence = ep.get("sequence", 0)
+                if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
+                    raise BundleValidationError(
+                        "Bundle replay_entry_points sequence must be a non-negative integer",
+                        reason_code="INVALID_REPLAY_ENTRY_POINT",
+                    )
+                stage = ep.get("stage", "")
+                unit_id = ep.get("unit_id", "")
+                if not isinstance(stage, str) or not isinstance(unit_id, str):
+                    raise BundleValidationError(
+                        "Bundle replay_entry_points stage and unit_id must be strings",
+                        reason_code="INVALID_REPLAY_ENTRY_POINT",
+                    )
                 entry_points.append(
                     CommittableCheckpoint(
-                        sequence=ep.get("sequence", 0),
-                        stage=ep.get("stage", ""),
-                        unit_id=ep.get("unit_id", ""),
+                        sequence=sequence,
+                        stage=stage,
+                        unit_id=unit_id,
                     )
                 )
 

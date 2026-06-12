@@ -657,6 +657,37 @@ class TestCommittableBoundary:
         assert loaded.replay_entry_points[0].unit_id == "u1"
         assert loaded.replay_entry_points[1].sequence == 20
 
+    @pytest.mark.parametrize(
+        "entry_point",
+        [
+            {"sequence": "not-an-int", "stage": "agent", "unit_id": "u1"},
+            {"sequence": -1, "stage": "agent", "unit_id": "u1"},
+            {"sequence": True, "stage": "agent", "unit_id": "u1"},
+            {"sequence": 1, "stage": ["agent"], "unit_id": "u1"},
+            {"sequence": 1, "stage": "agent", "unit_id": {"bad": "id"}},
+        ],
+    )
+    def test_replay_entry_points_reject_invalid_values(self, tmp_path, entry_point):
+        """Bundle-controlled checkpoint metadata should be validated at load time."""
+        manifest = {"format_version": FORMAT_VERSION, "replay_entry_points": [entry_point]}
+        bundle_path = _make_bundle_zip(tmp_path, manifest=manifest)
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_REPLAY_ENTRY_POINT"
+
+    @pytest.mark.parametrize("entry_points", ["not-a-list", [{"sequence": 1}, "not-an-object"]])
+    def test_replay_entry_points_reject_invalid_container_shapes(self, tmp_path, entry_points):
+        """Malformed checkpoint containers should fail with a bundle validation error."""
+        manifest = {"format_version": FORMAT_VERSION, "replay_entry_points": entry_points}
+        bundle_path = _make_bundle_zip(tmp_path, manifest=manifest)
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_REPLAY_ENTRY_POINT"
+
     def test_committable_checkpoint_is_frozen(self):
         cp = CommittableCheckpoint(sequence=1, stage="stt")
         with pytest.raises(AttributeError):
