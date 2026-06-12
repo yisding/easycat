@@ -638,36 +638,27 @@ class TestLangGraphBridgeState:
         assert done and done[0].text == "[REDACTED]"
 
     @pytest.mark.asyncio
-    async def test_node_direct_with_retry_llm_to_plain_state_field_is_audible(self):
-        """Fail-audible: a node directly invokes a non-chat ``BaseLLM`` via
-        ``.with_retry()``.  The sync ``invoke`` path inserts an intervening
-        ``RunnableRetry`` span, so the LLM's ``parent_ids`` are
-        ``[node, retry]`` and the immediate-parent check marks the run as
-        parented — its raw ``on_llm_*`` tokens are suppressed.  The node
-        writes the result to a plain (non-``messages``) state field, so the
-        node's own ``on_chain_stream`` dict is filtered out and the
-        messages tail stays the user turn (not an AI message).  Without a
-        fallback the turn would go silent; the suppressed ``on_llm_end``
-        text is stashed and surfaced as a fail-audible fallback, so
-        ``done.text`` is non-empty end to end."""
+    async def test_suppressed_parented_llm_without_public_output_stays_silent(self):
+        """Suppressed parented non-chat LLM output must not become a raw
+        fallback when the surrounding chain/node emits no public text.
+
+        Downstream LCEL components may redact, select, or intentionally
+        drop the raw model output. If the final messages tail is not an
+        AI message and no composed public text streams, the bridge should
+        finish silently rather than speaking the suppressed raw result.
+        """
 
         user_msg = _MockMessage("user", "hi")
-        # Output landed in a plain "draft" field, not "messages" — the
-        # messages tail stays the user turn so ``_last_output`` is not an
-        # AI message and the fail-audible fallback must supply the text.
         state = _MockState(
-            values={"messages": [user_msg], "draft": "completion text"},
+            values={"messages": [user_msg], "internal": "dropped"},
             checkpoint_id="cp-final",
         )
         scripted = [
             _node_start("answer", "n1"),
-            # ``.with_retry()`` inserts a ``RunnableRetry`` span between the
-            # node root and the BaseLLM, so the LLM's immediate parent is
-            # the retry span (not the node root).
             {
                 "event": "on_chain_start",
-                "name": "RunnableRetry",
-                "run_id": "retry",
+                "name": "RunnableSequence",
+                "run_id": "seq",
                 "parent_ids": ["n1"],
                 "data": {},
                 "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
@@ -676,7 +667,7 @@ class TestLangGraphBridgeState:
                 "event": "on_llm_start",
                 "name": "OpenAI",
                 "run_id": "l1",
-                "parent_ids": ["n1", "retry"],
+                "parent_ids": ["n1", "seq"],
                 "data": {},
                 "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
             },
@@ -684,18 +675,18 @@ class TestLangGraphBridgeState:
                 "event": "on_llm_end",
                 "name": "OpenAI",
                 "run_id": "l1",
-                "parent_ids": ["n1", "retry"],
-                "data": {"output": {"generations": [[{"text": "completion text"}]]}},
+                "parent_ids": ["n1", "seq"],
+                "data": {"output": {"generations": [[{"text": "SECRET_TOKEN=abc123"}]]}},
                 "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
             },
-            # The node's composed state output — a dict that
-            # ``_dict_output_text`` filters out (no conventional key).
+            # The node's composed state output is intentionally not
+            # speakable (no conventional public text key).
             {
                 "event": "on_chain_stream",
                 "name": "answer",
                 "run_id": "n1",
                 "parent_ids": [],
-                "data": {"chunk": {"draft": "completion text"}},
+                "data": {"chunk": {"internal": "dropped"}},
                 "metadata": {"langgraph_node": "answer", "checkpoint_id": "cp-1"},
             },
             _node_end("answer", "n1"),
@@ -709,8 +700,9 @@ class TestLangGraphBridgeState:
 
         text = "".join(e.text for e in events if e.kind == "text_delta")
         done = [e for e in events if e.kind == "done"]
-        assert text == "completion text"
-        assert done and done[0].text == "completion text"
+        assert text == ""
+        assert done and done[0].text == ""
+        assert all("SECRET_TOKEN" not in (e.text or "") for e in events)
 
     @pytest.mark.asyncio
     async def test_dispatch_custom_event_drives_text_delta_by_default(self):
