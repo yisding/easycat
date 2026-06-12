@@ -27,6 +27,9 @@ def test_finite_number_rejects_bool_nan_and_non_numbers() -> None:
         ({"max_session_cost_usd": 1.25}, 1.25),
         ({"max_session_cost_usd": "1.25"}, 1.25),
         ({"max_session_cost_usd": "1e-3"}, 0.001),
+        ({"max_session_cost_usd": " 1.25 "}, 1.25),
+        ({"max_session_cost_usd": "[1.25]"}, None),
+        ({"max_session_cost_usd": "1" * 65}, None),
         ({"max_session_cost_usd": 0}, None),
         ({"max_session_cost_usd": -1}, None),
         ({"max_session_cost_usd": True}, None),
@@ -36,6 +39,12 @@ def test_finite_number_rejects_bool_nan_and_non_numbers() -> None:
 )
 def test_max_session_cost_usd_from_snapshot(snapshot: dict[str, object] | None, expected: float):
     assert max_session_cost_usd_from_snapshot(snapshot) == expected
+
+
+def test_max_session_cost_usd_rejects_large_literal_string_without_parsing() -> None:
+    malicious_literal = "[" + ",".join(["1"] * 10_000) + "]"
+
+    assert max_session_cost_usd_from_snapshot({"max_session_cost_usd": malicious_literal}) is None
 
 
 def test_cost_budget_status_unconfigured() -> None:
