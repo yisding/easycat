@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from re import sub
 from typing import Any, TypeVar
 from uuid import uuid4
 
@@ -105,6 +106,14 @@ from easycat.stubs import (
 from easycat.turn_manager import TurnManager, TurnManagerState
 
 logger = logging.getLogger(__name__)
+
+
+def _recording_filename_session_id(session_id: str) -> str:
+    """Return a filesystem-local session id component for record_to exports."""
+    safe = sub(r"[:\\/]+", "-", session_id)
+    safe = safe.replace("..", "__").strip(". ")
+    return safe or "session"
+
 
 _HelperT = TypeVar("_HelperT")
 
@@ -671,7 +680,8 @@ class Session:
         try:
             record_to.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            path = record_to / f"{self.session_id}-{stamp}.zip"
+            safe_session_id = _recording_filename_session_id(self.session_id)
+            path = record_to / f"{safe_session_id}-{stamp}.zip"
             self.export_debug_bundle(str(path))
             logger.info("Recorded debug bundle to %s", path)
         except Exception:
