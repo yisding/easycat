@@ -260,6 +260,54 @@ def test_agent_runner_wrapping_a_bridge_delegates_history_ops():
     assert inner.reset_called
 
 
+class _PostDoneHangingBridge:
+    COMMITTABLE_BOUNDARIES: dict = {}
+
+    def __init__(self):
+        self.closed = False
+
+    async def invoke(self, turn_input, recorder, cancel_token=None):
+        try:
+            yield AgentBridgeEvent(kind="text_delta", text="ok")
+            yield AgentBridgeEvent(kind="done", text="ok")
+            await asyncio.Event().wait()
+            yield AgentBridgeEvent(kind="text_delta", text="late")  # pragma: no cover
+        finally:
+            self.closed = True
+
+    def snapshot_state(self):
+        from easycat.integrations.agents.base import FrameworkStateSnapshot
+
+        return FrameworkStateSnapshot(fields={}, kind="post-done-hanging")
+
+    def apply_interruption(self, delivered_text, mode, recorder=None, caused_by_signal_id=None):
+        pass
+
+    def replace_last_assistant_text(self, text):
+        pass
+
+    def append_interruption_note(self, note):
+        pass
+
+    def reset(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_bridge_delegation_stops_after_done_without_timeout():
+    inner = _PostDoneHangingBridge()
+    runner = AgentRunner(inner, AgentRunnerConfig(timeout=None))
+
+    events = await asyncio.wait_for(_drain(runner, "hello"), timeout=0.2)
+
+    assert [event.kind for event in events] == ["text_delta", "done"]
+    assert inner.closed
+    assert runner.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+
 class _HangingBridge:
     COMMITTABLE_BOUNDARIES: dict = {}
 

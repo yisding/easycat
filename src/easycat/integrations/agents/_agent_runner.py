@@ -13,6 +13,7 @@ history list and yields a single ``text_delta`` + ``done`` pair from
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -37,6 +38,38 @@ from easycat.integrations.agents.base import (
 from easycat.timeouts import AgentTimeoutError
 
 logger = logging.getLogger(__name__)
+
+_POST_DONE_STREAM_DRAIN_TIMEOUT_S = 0.01
+
+
+async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
+    """Let a terminal bridge stream finish promptly, then close if it keeps running.
+
+    Some async-generator bridges perform cleanup immediately after yielding their
+    terminal ``done`` event.  Closing them before one more iteration skips that
+    cleanup, but blindly awaiting the next item can hang on misbehaving streams
+    that continue waiting after ``done``.  Give the iterator one bounded chance
+    to finish, then close it defensively.
+    """
+
+    try:
+        await asyncio.wait_for(
+            stream.__anext__(),
+            timeout=_POST_DONE_STREAM_DRAIN_TIMEOUT_S,
+        )
+    except StopAsyncIteration:
+        return
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(Exception):
+            await aclose()
 
 
 # ── Configuration ───────────────────────────────────────────────────
@@ -151,6 +184,13 @@ class AgentRunner:
                     accumulated += text
                 elif kind == "done":
                     done_text = text
+                    await close_stream_after_done(inner_iter)
+                    self._history.append({"role": "user", "content": turn_input.text})
+                    final_text = done_text or accumulated
+                    if final_text:
+                        self._history.append({"role": "assistant", "content": final_text})
+                    yield event
+                    return
                 yield event
             if timed_out:
                 # Let the inner bridge keep its own partial state; the runner
