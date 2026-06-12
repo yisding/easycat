@@ -141,7 +141,7 @@ validate-release:
 
 # Render a saved validation report. Usage: just validate-report .easycat/validation/latest.json
 validate-report REPORT=".easycat/validation/latest.json":
-    uv run easycat validate report "{{ REPORT }}"
+    uv run easycat validate report {{ quote(REPORT) }}
 
 # The pre-PR gauntlet: format check + lint + full serial test suite.
 check: fmt-check lint test

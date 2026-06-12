@@ -121,6 +121,7 @@ def _render_recipe_command(command: str, args_text: str | None) -> str:
         return rendered.replace("{{ prepend('--extra ', EXTRAS) }}", extras)
 
     if args:
+        rendered = re.sub(r"\{\{\s*quote\([A-Z_]+\)\s*\}\}", shlex.quote(args[0]), rendered)
         rendered = re.sub(r'"?\{\{\s*[A-Z_]+\s*\}\}"?', args[0], rendered)
 
     return rendered
@@ -217,6 +218,13 @@ def test_contributing_docs_onboarding_map_lists_resolving_guard_targets() -> Non
             label=f"CONTRIBUTING.md docs guard `just {recipe}`",
         )
         assert not problems, "\n".join(problems)
+
+
+def test_validate_report_recipe_shell_quotes_report_argument() -> None:
+    command = just_recipe_commands(REPO_ROOT)["validate-report"]
+
+    assert "{{ quote(REPORT) }}" in command
+    assert '"{{ REPORT }}"' not in command
 
 
 def test_contributing_development_loop_just_recipes_stay_current() -> None:
