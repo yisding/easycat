@@ -135,6 +135,23 @@ class TestNestedSecretRedaction:
         assert "pw-list-secret" not in snap["stt"]
         assert "***" in snap["stt"]
 
+    def test_opaque_object_repr_is_not_called(self):
+        """Custom provider/client reprs may contain credentials and must not be used."""
+
+        class _LeakyProvider:
+            def __repr__(self) -> str:
+                return "LeakyProvider(api_key='sk-leaked', token='bearer-secret')"
+
+        @dataclass
+        class _Cfg:
+            stt: object = None
+
+        snap = safe_config_snapshot(_Cfg(stt=_LeakyProvider()))
+        assert "sk-leaked" not in snap["stt"]
+        assert "bearer-secret" not in snap["stt"]
+        assert "LeakyProvider" in snap["stt"]
+        assert "api_key" not in snap["stt"]
+
 
 class TestSafeEnvSnapshot:
     def test_includes_allowlisted_vars(self):
