@@ -654,8 +654,11 @@ class AudioRouter:
                 ):
                     await self._turn_manager.bot_stopped_speaking()
 
-        # Send a final mark for any trailing bytes
-        turn = self._current_turn()
+        await self.flush_trailing_playback_mark()
+
+    async def flush_trailing_playback_mark(self, turn: TurnContext | None = None) -> None:
+        """Emit a playback mark for queued tail bytes that missed the throttle interval."""
+        turn = turn or self._current_turn()
         if turn and turn.bytes_since_last_mark > 0 and self._playback_ack_transport is not None:
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
