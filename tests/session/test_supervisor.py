@@ -217,6 +217,50 @@ async def test_session_audio_broadcaster_can_suppress_frames_from_redaction_hook
 
 
 @pytest.mark.asyncio
+async def test_session_audio_broadcaster_suppresses_async_consent_hooks() -> None:
+    session = _DummySession()
+    hook_body_executed = False
+
+    async def consent(_frame):  # noqa: ANN001,ANN202
+        nonlocal hook_body_executed
+        hook_body_executed = True
+        return False
+
+    broadcaster = SessionAudioBroadcaster(session, consent_hook=consent)
+    _listener_id, queue = broadcaster.subscribe()
+    await broadcaster.drain_audit_events()
+
+    await session.event_bus.emit(AudioIn(chunk=_chunk(1), session_id=session.session_id))
+
+    assert broadcaster.consent_blocked_frames == 1
+    assert not hook_body_executed
+    with pytest.raises(asyncio.QueueEmpty):
+        queue.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_session_audio_broadcaster_suppresses_async_redaction_hooks() -> None:
+    session = _DummySession()
+    hook_body_executed = False
+
+    async def redact(frame):  # noqa: ANN001,ANN202
+        nonlocal hook_body_executed
+        hook_body_executed = True
+        return replace(frame, chunk=_chunk(9))
+
+    broadcaster = SessionAudioBroadcaster(session, redaction_hook=redact)
+    _listener_id, queue = broadcaster.subscribe()
+    await broadcaster.drain_audit_events()
+
+    await session.event_bus.emit(AudioIn(chunk=_chunk(1), session_id=session.session_id))
+
+    assert broadcaster.redacted_frames == 1
+    assert not hook_body_executed
+    with pytest.raises(asyncio.QueueEmpty):
+        queue.get_nowait()
+
+
+@pytest.mark.asyncio
 async def test_session_audio_broadcaster_emits_listener_audit_events() -> None:
     session = _DummySession()
     attached: list[SupervisorListenerAttached] = []

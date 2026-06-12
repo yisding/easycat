@@ -11,6 +11,7 @@ import asyncio
 import base64
 import contextlib
 import hmac
+import inspect
 import json
 import logging
 import os
@@ -273,6 +274,13 @@ async def _close_supervisor_with_error(
     await ws.close(code, reason)
 
 
+def _close_unawaited(value: object) -> None:
+    close = getattr(value, "close", None)
+    if callable(close):
+        with contextlib.suppress(Exception):
+            close()
+
+
 class SessionAudioBroadcaster:
     """Fan out caller/bot audio from one Session to many passive listeners.
 
@@ -428,6 +436,15 @@ class SessionAudioBroadcaster:
                     exc_info=True,
                 )
                 return None
+            if inspect.isawaitable(consented):
+                _close_unawaited(consented)
+                self._consent_blocked_frames += 1
+                logger.warning(
+                    "Supervisor consent hook returned an awaitable for session %s; "
+                    "suppressing frame",
+                    self._session.session_id,
+                )
+                return None
             if not consented:
                 self._consent_blocked_frames += 1
                 return None
@@ -443,6 +460,15 @@ class SessionAudioBroadcaster:
                 "Supervisor redaction hook raised for session %s; suppressing frame",
                 self._session.session_id,
                 exc_info=True,
+            )
+            return None
+        if inspect.isawaitable(redacted):
+            _close_unawaited(redacted)
+            self._redacted_frames += 1
+            logger.warning(
+                "Supervisor redaction hook returned an awaitable for session %s; "
+                "suppressing frame",
+                self._session.session_id,
             )
             return None
         if redacted is None:
