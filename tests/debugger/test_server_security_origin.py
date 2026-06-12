@@ -43,6 +43,36 @@ async def test_origin_guard_allows_loopback_origin(tmp_path):
         assert resp.status == 200
 
 
+async def test_origin_guard_refuses_dns_rebinding_origin_prefix(tmp_path):
+    """Loopback-looking origin prefixes must not match attacker-owned hosts."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={"Origin": "http://localhost.attacker.example:8765"},
+        )
+        assert resp.status == 403
+
+
+async def test_origin_guard_refuses_dns_rebinding_host_header(tmp_path):
+    """Requests addressed to attacker-controlled hostnames are rejected."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(
+            "/api/manifest",
+            headers={"Host": "localhost.attacker.example:8765"},
+        )
+        assert resp.status == 403
+
+
 async def test_manifest_strips_filesystem_path(tmp_path):
     """``manifest`` should expose only the bundle's basename, never the
     full filesystem path — bundles often live under user-named dirs."""

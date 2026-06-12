@@ -36,8 +36,10 @@ import wave
 import webbrowser
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from easycat.debug._turn_timeline import build_timeline as _build_timeline
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
@@ -759,18 +761,32 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
 
     static_dir = Path(__file__).parent / "static"
 
-    _SAFE_ORIGIN_PREFIXES = (
-        "http://127.0.0.1",
-        "http://localhost",
-        "http://[::1]",
-        "https://127.0.0.1",
-        "https://localhost",
-        "https://[::1]",
-    )
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+    def _hostname_is_loopback(hostname: str | None) -> bool:
+        if not hostname:
+            return False
+        normalized = hostname.strip().lower()
+        if normalized == "localhost":
+            return True
+        try:
+            return ip_address(normalized).is_loopback
+        except ValueError:
+            return False
+
     def _origin_is_safe(origin: str) -> bool:
-        return bool(origin) and origin.startswith(_SAFE_ORIGIN_PREFIXES)
+        if not origin:
+            return False
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        return _hostname_is_loopback(parsed.hostname)
+
+    def _host_is_safe(host: str) -> bool:
+        if not host:
+            return False
+        parsed = urlsplit(f"//{host}")
+        return _hostname_is_loopback(parsed.hostname)
 
     @web.middleware
     async def _origin_guard(request: Any, handler: Any) -> Any:
@@ -778,13 +794,15 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
 
         Three checks layered for defense-in-depth:
 
-        1. ``Origin`` header, when present, must point at a loopback
-           address.  Browsers always send Origin on cross-origin
+        1. ``Host`` must be an exact loopback hostname/address, blocking
+           DNS-rebinding hostnames such as ``localhost.attacker.example``.
+        2. ``Origin`` header, when present, must parse to an exact loopback
+           hostname/address. Browsers always send Origin on cross-origin
            fetches, ws upgrades, and POST.
-        2. ``Sec-Fetch-Site`` (set by all modern browsers) must be
+        3. ``Sec-Fetch-Site`` (set by all modern browsers) must be
            ``same-origin``, ``same-site``, or ``none`` (top-level nav).
            Any cross-site value is refused regardless of Origin.
-        3. State-changing methods (POST/PUT/PATCH/DELETE) require an
+        4. State-changing methods (POST/PUT/PATCH/DELETE) require an
            ``application/json`` content type and a present, safe
            Origin — kills the simple-form-POST CSRF vector that
            browsers wave through without preflight.
@@ -794,8 +812,11 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         """
         if allow_remote:
             return await handler(request)
+        host = request.headers.get("Host", "")
         origin = request.headers.get("Origin", "")
         site = request.headers.get("Sec-Fetch-Site", "")
+        if not _host_is_safe(host):
+            return web.Response(status=403, text="non-loopback host refused")
         if site and site not in ("same-origin", "same-site", "none"):
             return web.Response(status=403, text="cross-site requests refused")
         if origin and not _origin_is_safe(origin):
