@@ -321,10 +321,10 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             except TimeoutError:
                 # Give up on OpenAI's final and promote whatever we've
                 # streamed via ``...transcription.delta`` so the session
-                # can drive the LLM with the best partial.  The real
-                # ``.completed``, if it arrives later, will be dropped
-                # via ``_dropping_pending_final`` so the turn doesn't
-                # receive two ``STTFinal`` events.
+                # can drive the LLM with the best partial.  When a
+                # fallback FINAL is emitted, the real ``.completed`` is
+                # dropped later via ``_dropping_pending_final`` so the
+                # turn doesn't receive two ``STTFinal`` events.
                 logger.warning(
                     "Timed out after %.1fs waiting for OpenAI Realtime final; "
                     "promoting %d-char partial to FINAL",
@@ -334,7 +334,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                 if self._partial_text:
                     self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
                     self._partial_text = ""
-                self._dropping_pending_final = True
+                    self._dropping_pending_final = True
         return True
 
     def _on_receive_loop_end(self) -> None:
