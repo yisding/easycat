@@ -17,9 +17,9 @@ import importlib
 import importlib.metadata
 import os
 import re
+import secrets
 import shlex
 import sys
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -363,6 +363,39 @@ def _journal_dir() -> Path:
     return Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat")) / "journals"
 
 
+def _probe_journal_writable(path: Path) -> None:
+    """Write a short probe file without following attacker-created symlinks."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    probe: Path | None = None
+    fd: int | None = None
+    try:
+        for _ in range(16):
+            candidate = path / f".doctor-write-probe-{secrets.token_hex(16)}"
+            try:
+                fd = os.open(candidate, flags, 0o600)
+            except FileExistsError:
+                continue
+            probe = candidate
+            break
+        else:
+            raise FileExistsError("could not allocate a unique journal write probe")
+
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(b"ok")
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def check_journal_writable() -> CheckResult:
     """Verify the journal directory exists and is writable.
 
@@ -382,14 +415,8 @@ def check_journal_writable() -> CheckResult:
             code="EASYCAT_E207",
             fix=f"mkdir -p {path} && chmod u+w {path}",
         )
-    probe: Path | None = None
     try:
-        fd, probe_name = tempfile.mkstemp(prefix=".doctor-write-probe-", dir=path)
-        probe = Path(probe_name)
-        try:
-            os.write(fd, b"ok")
-        finally:
-            os.close(fd)
+        _probe_journal_writable(path)
     except OSError as exc:
         return CheckResult(
             name="journal_writable",
@@ -398,12 +425,6 @@ def check_journal_writable() -> CheckResult:
             code="EASYCAT_E207",
             fix=f"chmod u+w {path}",
         )
-    finally:
-        if probe is not None:
-            try:
-                probe.unlink(missing_ok=True)
-            except OSError:
-                pass
     return CheckResult(name="journal_writable", status="ok", detail=str(path))
 
 
