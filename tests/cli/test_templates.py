@@ -366,6 +366,16 @@ def _render_env_example(name: str, cfg: InitConfig) -> str:
     return rendered
 
 
+def _env_names_in(rendered: str) -> set[str]:
+    names: set[str] = set()
+    for line in rendered.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        names.add(stripped.partition("=")[0])
+    return names
+
+
 def _template_python_filenames(name: str) -> list[str]:
     return sorted(path.name for path in _template_dir(name).glob("*.py"))
 
@@ -847,7 +857,7 @@ def test_env_example_renders_for_doctor_env_file(name: str, tmp_path: Path) -> N
     env_file = tmp_path / f"{name}.env"
     env_file.write_text(rendered, encoding="utf-8")
 
-    parsed = _parse_env_file(env_file)
+    parsed = _parse_env_file(env_file, allowed_names=_env_names_in(rendered))
 
     assert parsed["OPENAI_API_KEY"] == "sk-your-key-here"
 
@@ -863,7 +873,7 @@ def test_voice_env_example_renders_selected_provider_keys(name: str, tmp_path: P
     env_file = tmp_path / f"{name}.env"
     env_file.write_text(rendered, encoding="utf-8")
 
-    parsed = _parse_env_file(env_file)
+    parsed = _parse_env_file(env_file, allowed_names=_env_names_in(rendered))
 
     assert parsed["OPENAI_API_KEY"] == "sk-your-key-here"
     assert parsed["DEEPGRAM_API_KEY"] == ""
