@@ -9,7 +9,7 @@ import pytest
 
 import easycat.transports.webrtc as webrtc_mod
 from easycat.events import EventBus
-from easycat.transports.webrtc import WebRTCTransport, WebRTCTransportConfig
+from easycat.transports.webrtc import ICEServer, WebRTCTransport, WebRTCTransportConfig
 
 from ._webrtc_fakes import (
     _HAS_WEBRTC_DEPS,
@@ -139,6 +139,32 @@ class TestWebRTCAuthToken:
         assert response.status == 401
 
     @pytest.mark.asyncio
+    async def test_config_rejects_missing_token(self):
+        transport = WebRTCTransport(WebRTCTransportConfig(auth_token="sekrit"))
+        transport._web = _FakeWeb
+
+        response = await transport._handle_config(_FakeOfferRequest())
+
+        assert response.status == 401
+
+    @pytest.mark.asyncio
+    async def test_config_accepts_bearer_token_and_returns_ice_servers(self):
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(
+                auth_token="sekrit",
+                ice_servers=[ICEServer(urls="stun:stun.example.com:3478")],
+            )
+        )
+        transport._web = _FakeWeb
+
+        response = await transport._handle_config(_FakeAuthorizedOfferRequest("sekrit"))
+
+        assert response.status == 200
+        assert json.loads(response.text) == {
+            "iceServers": [{"urls": ["stun:stun.example.com:3478"]}]
+        }
+
+    @pytest.mark.asyncio
     async def test_stats_rejects_missing_token(self, tmp_path):
         stats_path = tmp_path / "webrtc-stats.jsonl"
         transport = WebRTCTransport(
@@ -243,6 +269,30 @@ class TestWebRTCServedPlaygroundPage(_UsesPytestTcpPortFactory):
         assert 'id="latency"' in html
         assert 'id="interruption"' in html
         assert 'id="debuggerLink"' in html
+
+    @pytest.mark.asyncio
+    async def test_config_cors_preflight_allows_same_origin(self):
+        import aiohttp
+
+        port = self._unused_port()
+        origin = f"http://127.0.0.1:{port}"
+        transport = WebRTCTransport(WebRTCTransportConfig(host="127.0.0.1", port=port))
+
+        await transport.connect()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.options(
+                    f"{origin}/config",
+                    headers={
+                        "Origin": origin,
+                        "Access-Control-Request-Method": "GET",
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    assert resp.headers["Access-Control-Allow-Origin"] == origin
+                    assert "GET" in resp.headers["Access-Control-Allow-Methods"]
+        finally:
+            await transport.disconnect()
 
     @pytest.mark.asyncio
     async def test_connect_wires_browser_event_forwarder_to_session_bus(self):
