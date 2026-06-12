@@ -11,6 +11,7 @@ Run:   uv run python examples/session_actions_pydantic.py
        uv run --env-file .env python examples/session_actions_pydantic.py  # if keys live in .env
 """
 
+import os
 from dataclasses import dataclass
 
 try:
@@ -35,7 +36,7 @@ actions = SessionActions()
 deps = Deps(actions=actions)
 
 voice_agent = Agent(
-    "openai:gpt-5.2",
+    os.getenv("PYDANTIC_AI_MODEL", "openai:gpt-5.2"),
     deps_type=Deps,
     system_prompt=(
         "You are a helpful voice assistant. "

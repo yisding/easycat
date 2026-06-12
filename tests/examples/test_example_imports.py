@@ -127,6 +127,31 @@ def test_session_actions_pydantic_example_imports(monkeypatch: pytest.MonkeyPatc
     _load_slim_example(monkeypatch, "examples.session_actions_pydantic", framework="pydantic_ai")
 
 
+def test_session_actions_pydantic_model_can_be_overridden_by_env() -> None:
+    path = REPO_ROOT / "examples/session_actions_pydantic.py"
+    module = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    agent_calls = [
+        node
+        for node in ast.walk(module)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Agent"
+    ]
+
+    assert len(agent_calls) == 1
+    model_arg = agent_calls[0].args[0]
+    assert isinstance(model_arg, ast.Call)
+    assert isinstance(model_arg.func, ast.Attribute)
+    assert isinstance(model_arg.func.value, ast.Name)
+    assert model_arg.func.value.id == "os"
+    assert model_arg.func.attr == "getenv"
+    assert [arg.value for arg in model_arg.args if isinstance(arg, ast.Constant)] == [
+        "PYDANTIC_AI_MODEL",
+        "openai:gpt-5.2",
+    ]
+
+
 def test_pydantic_ai_workflow_voice_example_imports(monkeypatch: pytest.MonkeyPatch):
     _load_slim_example(monkeypatch, "examples.pydantic_ai_workflow_voice", framework="pydantic_ai")
 
