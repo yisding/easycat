@@ -339,7 +339,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat bundles show PATH --json",
             "uv run easycat bundles export PATH --output DIR --json",
             "uv run easycat replay PATH --json",
-            "uv run pytest tests/test_install_guidance.py",
+            "uv run pytest tests/install/test_install_guidance.py",
             *_DOCS_ONBOARDING_GUARD_COMMANDS,
             *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
             "uv run easycat validate quick",
@@ -459,7 +459,7 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat doctor --json",
             "uv run easycat serve",
             "uv run python examples/webrtc_server.py",
-            "uv run pytest tests/transports/test_webrtc.py",
+            "uv run pytest tests/transports/test_webrtc_auth_browser_playground.py",
         ),
     },
     {

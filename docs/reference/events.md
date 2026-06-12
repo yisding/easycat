@@ -2,7 +2,7 @@
 
 This page lists every public EasyCat event type with its when-emitted
 semantics. The catalog below is kept honest by
-`tests/test_docs_index.py::test_events_reference_tracks_public_event_types`,
+`tests/docs/test_route_contracts.py::test_events_reference_tracks_public_event_types`,
 which compares it against the event classes exported from `easycat`.
 
 Run `uv run easycat explain events` for a terminal summary of this page, and

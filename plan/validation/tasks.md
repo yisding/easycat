@@ -58,9 +58,9 @@ The audit verified:
 - Module and file presence for every milestone's listed files (CLI commands,
   validation modules, contract tests, workflows, observability stubs).
 - Test execution: 164 tests pass across `tests/validation/`,
-  `tests/cli/test_validate.py`, `tests/cli/test_latency_validation.py`,
+  `tests/cli/test_validate_*.py`, `tests/cli/test_latency_*.py`,
   `tests/contracts/`, `tests/test_validation_markers.py`, and
-  `tests/test_observability.py`.
+  `tests/observability/`.
 - Workflow content for `.github/workflows/ci.yml`,
   `.github/workflows/nightly-validation.yml`, and
   `.github/workflows/release-validation.yml`.
@@ -171,7 +171,7 @@ Current verified state:
 - `src/easycat/validation/redaction.py` owns report-boundary redaction through
   `redact_text`, `redact_runtime_secrets`, `redact_value`, `redact_command`,
   `UNSAFE_TEXT_FIELDS`, and secret-like key detection.
-- `tests/cli/test_validate.py` verifies deterministic required-field
+- `tests/cli/test_validate_report_model.py` verifies deterministic required-field
   serialization, secret-like and unsafe-value redaction, pass/fail/expected
   skip representation, and the difference between expected missing-secret
   skips and required-secret failures.
@@ -183,7 +183,7 @@ Files:
 
 - reusable validation module chosen for V0, or `src/easycat/cli/validate.py`
   if V1 is pulled forward
-- `tests/cli/test_validate.py` or a focused report-model test
+- `tests/cli/test_validate_report_model.py`
 
 Tasks:
 
@@ -215,7 +215,7 @@ Acceptance:
 Verification:
 
 ```bash
-uv run pytest tests/cli/test_validate.py -q
+uv run pytest tests/cli/test_validate_report_model.py -q
 ```
 
 ### V0.3 Create `scripts/validate.py quick/socket`
@@ -238,7 +238,7 @@ Current verified state:
   `stdout.log`, `stderr.log`, and `report.json`, atomically updates
   `latest.json`, stores public validation `exit_code` separately from
   `tool_exit_codes["pytest"]`, and redacts stdout/stderr/JUnit content.
-- `tests/cli/test_validate.py` verifies quick slice command selection,
+- `tests/cli/test_validate_runner.py` verifies quick slice command selection,
   report/JUnit/log/latest artifact writes, failed-pytest report writes,
   isolated run directories, and `main(...)` dispatch for socket/stress/contracts
   slices.
@@ -380,7 +380,7 @@ Current verified state:
   validation commands, validation chooser parity, marker taxonomy coverage,
   RunBundle helper coverage, docs/onboarding maintenance commands, and that
   this plan still includes the contributor quick command.
-- `tests/test_docs_index.py` verifies the `CONTRIBUTING.md` docs route exposes
+- `tests/docs/test_route_contracts.py` verifies the `CONTRIBUTING.md` docs route exposes
   validation report commands with `uv run` prefixes.
 
 Files:
@@ -436,7 +436,9 @@ Files:
 
 - `src/easycat/cli/validate.py`
 - `src/easycat/cli/_app.py`
-- `tests/cli/test_validate.py`
+- `tests/cli/test_validate_runner.py`
+- `tests/cli/test_validate_cli.py`
+- `tests/cli/test_validate_report_cli.py`
 - `tests/cli/TEST_PLANS.md`
 - `src/easycat/cli/_output.py` and `src/easycat/cli/diagnose/_codes.py` if
   validation adds or reserves new public exit-code meanings
@@ -473,7 +475,7 @@ Verification:
 ```bash
 uv run easycat validate quick --report /tmp/easycat-validation.json
 uv run easycat validate quick --json
-uv run pytest tests/cli/test_validate.py -q
+uv run pytest tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py -q
 ```
 
 ### V1.2 Update CI Required Jobs
@@ -494,12 +496,15 @@ Current verified state:
   version.
 - The socket validation job runs once on Python `3.12` through
   `easycat validate socket`.
-- Quick and socket jobs upload validation report JSON, JUnit XML,
-  stdout/stderr logs, and socket WebRTC stats when produced, using
-  `if: always()`.
-- Quick and socket jobs pass `--show-output` so pytest failure details appear
-  directly in the GitHub Actions job log as well as in saved stdout/stderr
-  artifacts.
+- The contract validation job runs once on Python `3.12` through
+  `easycat validate contracts`, keeping contract coverage PR-required while
+  the quick lane remains deterministic and small.
+- Quick, socket, and contract jobs upload validation report JSON, JUnit XML,
+  stdout/stderr logs, and socket WebRTC stats when produced, using `if:
+  always()`.
+- Quick, socket, and contract jobs pass `--show-output` so pytest failure
+  details appear directly in the GitHub Actions job log as well as in saved
+  stdout/stderr artifacts.
 - The workflow includes a Python `3.12` package build smoke job.
 - The live-provider job remains manual via `workflow_dispatch`.
 - CI no longer uses pytest `-x`.
@@ -1338,7 +1343,7 @@ Current verified state:
 - `classify_live_failure` currently emits the live failure classes
   `auth_or_quota`, `provider_quota`, `network`, `provider_drift`,
   `easycat_regression`, and `environment`.
-- `tests/cli/test_validate.py` verifies non-strict missing-secret skips,
+- `tests/cli/test_validate_live.py` verifies non-strict missing-secret skips,
   strict and release missing-secret failures, configured-provider command
   selection, provider report artifact creation, runtime secret redaction,
   selector failures, quota classification, release command auditing, and the
@@ -1461,7 +1466,7 @@ Current verified state:
   the standalone script write the validation artifact and compare higher-is-worse,
   lower-is-worse, count, and sustained-boolean metrics against a raw or wrapped
   baseline.
-- `tests/validation/test_journal_benchmark_artifact.py` verifies raw-run embedding, summary shape,
+- `tests/perf/test_journal_benchmark_artifact.py` verifies raw-run embedding, summary shape,
   baseline regression reporting, and `main()` writing both raw output and the
   validation artifact with `run_benchmarks` monkeypatched.
 - V5.1 currently covers a validation-compatible benchmark artifact produced by
@@ -1512,7 +1517,7 @@ Current verified state:
   and `evaluate_reliability_budgets(...)` reports saturation-threshold
   failures through `reliability.budget` when eligible reliability samples
   exceed budgets.
-- `tests/cli/test_validate.py` verifies stress-slice reliability samples are
+- `tests/cli/test_validate_runner.py` verifies stress-slice reliability samples are
   loaded from `EASYCAT_RELIABILITY_SAMPLES_PATH`, embedded under top-level
   `reliability`, and linked from the validation check artifact.
 - `tests/validation/test_stress_uses_public_sampler.py` guards against
@@ -1582,7 +1587,7 @@ Current verified state:
   through `EASYCAT_VALIDATION_PYTEST_COMMAND`, requires latency samples, and
   fails the release run when any child validation result fails.
 - `tests/test_ci_workflow.py` guards the workflow shape, and
-  `tests/cli/test_validate.py` verifies the release runner, child-failure
+  `tests/cli/test_validate_runner.py` verifies the release runner, child-failure
   aggregation, `validate release --json`, and conflicting latency-mode CLI
   errors.
 
@@ -1645,7 +1650,8 @@ Current verified state:
   `LOW_CARDINALITY_ATTRIBUTE_KEYS`, `FORBIDDEN_ATTRIBUTE_KEYS`, and
   `_FORBIDDEN_SUBSTRINGS`; the span-only GenAI keys are
   `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system`.
-- `tests/test_observability.py` verifies no-op behavior without OTel, fake
+- `tests/observability/test_instrumentation.py` and
+  `tests/observability/test_attributes.py` verify no-op behavior without OTel, fake
   tracer span creation, sanitized span attributes, a text-turn trace containing
   `easycat.session`, `easycat.agent.invoke`, and `easycat.turn.commit`, and
   representative voice-path spans for transport receive/send, VAD, agent tool,
@@ -1704,7 +1710,8 @@ Current verified state:
   `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal_memory.py`,
   `src/easycat/runtime/journal_sql.py`,
   and the stage modules under `src/easycat/stages/`.
-- `tests/test_observability.py` verifies metric definitions, fake meter
+- `tests/observability/test_instrumentation.py` and
+  `tests/observability/test_attributes.py` verify metric definitions, fake meter
   counter/histogram/gauge behavior, observable-gauge callback behavior,
   queue-depth refreshes, audio counters, provider/session error counters, and
   rejection of span-only GenAI keys on metric attributes.

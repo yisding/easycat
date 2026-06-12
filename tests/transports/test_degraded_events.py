@@ -2,9 +2,9 @@
 
 Covers the shared ``AudioQueueMixin`` emit seam (inbound queue-full +
 provider tagging + no-bus / no-loop no-ops) and the WebSocket-specific
-degradation paths.  WebRTC-specific paths live in ``test_webrtc.py`` (they
-need the fake-aiortc harness); WebTransport's are in
-``test_webtransport.py``.
+degradation paths.  WebRTC-specific paths live in
+``test_webrtc_lifecycle_server.py`` (they need the fake-aiortc harness);
+WebTransport's are in ``test_webtransport_degraded_events.py``.
 """
 
 from __future__ import annotations

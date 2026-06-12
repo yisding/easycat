@@ -60,8 +60,8 @@ Implemented:
   through the public CLI before release.
 - Provider-surface coverage lives in `tests/contracts/provider_surface_matrix.py`
   and `src/easycat/validation/provider_reports.py`.
-- CLI testing covers validation commands in `tests/cli/test_validate.py` and
-  `tests/cli/test_latency_validation.py`; CLI test planning lives in
+- CLI testing covers validation commands in `tests/cli/test_validate_*.py` and
+  `tests/cli/test_latency_*.py`; CLI test planning lives in
   `tests/cli/TEST_PLANS.md`.
 - Broader E2E planning in [../testing/](../testing/README.md) is backed by
   concrete tests under `tests/e2e/`.

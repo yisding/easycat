@@ -58,7 +58,7 @@ from tests._bridge_helpers import _TestBridgeBase
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 
 
-# ── Test fakes (mirrors test_session_streaming.py) ────────────────
+# ── Test fakes (mirrors _session_streaming_helpers.py) ────────────
 
 
 def _chunk(n: int = 320) -> AudioChunk:

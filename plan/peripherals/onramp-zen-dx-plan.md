@@ -280,13 +280,13 @@ def _validate(self):
             raise ValueError(f"{_provider_display_name(cfg, kind)} requires an API key.")
 ```
 
-**Files touched.** `src/easycat/config/easy.py`; `tests/config/test_config.py` (the empty-key assertions
+**Files touched.** `src/easycat/config/easy.py`; `tests/config/test_debug_errors.py` (the empty-key assertions
 that still expect a `ValueError` stay green because we keep the per-provider `ValueError`);
-`tests/test_examples.py` only needs review if the no-key stderr assertion is exercised with a
+`tests/examples/` only needs review if the no-key stderr assertion is exercised with a
 genuinely-missing key.
 
 **Verifier verdict.** Landed and guarded by
-`tests/config/test_config.py::test_missing_openai_key_with_no_stt_tts_raises_e203`. The **original
+`tests/config/test_debug_errors.py::test_missing_openai_key_with_no_stt_tts_raises_e203`. The **original
 snippet was infeasible** — it referenced an undefined `_provider_env_var(cfg, kind)` (only
 `src/easycat/config/easy.py::_provider_display_name` exists) and an unimported `EASYCAT_E203`
 (both `NameError`). **Corrections folded in:** add the import; put the coded error only in the
@@ -488,9 +488,9 @@ if config.wrap_agent and not isinstance(adapted, ExternalAgentBridge):
 `src/easycat/errors.py` if a coded error is preferred over `EasyConfigError`.
 
 **Verifier verdict.** Landed and guarded by
-`tests/config/test_config.py::test_create_session_rejects_bogus_agent`,
-`tests/config/test_config.py::test_create_session_rejects_sync_run_agent`, and
-`tests/config/test_config.py::test_create_session_skips_agent_check_when_wrap_agent_false`. The
+`tests/config/test_agent_adaptation.py::test_create_session_rejects_bogus_agent`,
+`tests/config/test_agent_adaptation.py::test_create_session_rejects_sync_run_agent`, and
+`tests/config/test_agent_adaptation.py::test_create_session_skips_agent_check_when_wrap_agent_false`. The
 original proposal was **oversold** — `@runtime_checkable` only checks *method-name presence*,
 so a sync `run`, a wrong-arity `run`, or a non-callable
 `run` still pass a bare `isinstance`. **Corrections folded in:** (1) placement is load-bearing —
@@ -609,7 +609,7 @@ delete the "copy the shared fields across" docstring. **Part B is DROPPED:** rem
 `create_text_session`'s loose-kwargs branch **breaks** the shipped text-chat scaffold
 (`src/easycat/cli/scaffold/templates/text-chat/agent.py` uses
 `create_text_session(agent=agent)`), ~15+ tests, and explicit regression tests in
-`tests/config/test_config.py`, and would force newcomers onto `TextSessionConfig` (not even in
+`tests/config/test_text_session_config.py`, and would force newcomers onto `TextSessionConfig` (not even in
 `__all__` today) — a worse onramp. Keep the dual
 signature exactly as-is. **Caveat:** this is a maintainer-facing DRY win, essentially invisible to
 a newcomer — do not sell it as concept reduction. Future maintainers must keep base fields
@@ -631,7 +631,7 @@ that no torch install is required. The lean install remains:
 `uv sync --extra local --extra openai --extra openai-agents --extra rnnoise --extra silero-vad`
 with no torch line.
 
-**Files touched.** `README.md`; `tests/test_install_guidance.py`.
+**Files touched.** `README.md`; `tests/install/test_install_guidance.py`.
 
 **Verifier verdict.** Landed and guarded by `test_silero_guidance_uses_bundled_onnx_not_torch`.
 
@@ -662,10 +662,10 @@ on the *programmatic* path (`python bot.py` / `run()`), not just the CLI.
      there is no `(cfg, kind) → env-var` helper today and the None branch captures ~all the
      leverage.
 3. `tests/` —
-   - `tests/config/test_config.py` has a case asserting `EASYCAT_E203` (an `EasyCatError`) is raised
+   - `tests/config/test_debug_errors.py` has a case asserting `EASYCAT_E203` (an `EasyCatError`) is raised
      when no key and no `stt`/`tts` are supplied; verify the existing `pytest.raises(ValueError, ...)`
      empty-key cases still pass (they do, because that branch is unchanged);
-   - `tests/test_examples.py` — review only if a no-key stderr assertion is exercised.
+   - `tests/examples/` — review only if a no-key stderr assertion is exercised.
 4. Manual check: `OPENAI_API_KEY= python bot.py` now prints
    `EASYCAT_E203: Missing API key: OPENAI_API_KEY\n  Fix: Set the env var: ...\n  Run \`easycat explain EASYCAT_E203\` for details.`
    instead of `ValueError: STT configuration is required.`

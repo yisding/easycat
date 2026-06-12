@@ -29,7 +29,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --group dev --python 3.12
       - run: mkdir -p "$VALIDATION_ARTIFACTS_DIR"
-      - run: uv run --python 3.12 pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not stress and not flaky"
+      - run: uv run --python 3.12 pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not integration_external and not stress and not flaky"
       - name: Upload full local validation artifacts
         if: always()
         uses: actions/upload-artifact@v4

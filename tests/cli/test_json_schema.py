@@ -426,7 +426,7 @@ def test_docs_envelope(cli: CliRunner) -> None:
     assert "uv run easycat docs --audience maintainers" in commands["CLAUDE.md"]
     assert "uv run easycat docs --audience maintainers --json" in commands["CLAUDE.md"]
     assert "uv run easycat docs --json" in commands["CLAUDE.md"]
-    assert "uv run pytest tests/test_install_guidance.py" in commands["CLAUDE.md"]
+    assert "uv run pytest tests/install/test_install_guidance.py" in commands["CLAUDE.md"]
     assert "just guard-docs" in commands["CLAUDE.md"]
     assert "just guard-teaching" in commands["CLAUDE.md"]
     assert "just guard-validation" in commands["CLAUDE.md"]

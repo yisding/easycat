@@ -40,7 +40,7 @@ playground page links there directly.
 
 Both browser transports speak the same JSON event vocabulary; the
 implementation lives in `src/easycat/transports/_browser_events.py` and is
-guarded by `uv run pytest tests/transports/test_webrtc.py`.
+guarded by `uv run pytest tests/transports/test_webrtc_auth_browser_playground.py`.
 
 ### WebSocket transport
 

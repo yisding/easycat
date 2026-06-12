@@ -1,0 +1,359 @@
+"""Session lifecycle, teardown, and cancellation behavior tests."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from easycat._bounded_queue import BoundedAudioQueue
+from easycat._turn_context import TurnContext
+from easycat.audio_format import AudioChunk
+from easycat.cancel import CancelToken
+from easycat.events import (
+    Interruption,
+    TTSAudio,
+)
+from easycat.runtime import InMemoryRingBuffer
+from easycat.runtime.records import JournalRecordKind
+from easycat.session._session import Session
+from easycat.session._types import TurnState
+from easycat.turn_manager import TurnManagerState
+from tests.session._session_core_helpers import (
+    FakeSTT,
+    FakeTransport,
+    FakeTTS,
+    FakeVAD,
+    TrackingJournal,
+    WarmupSTT,
+    WarmupTransport,
+    WarmupTTS,
+    _full_config,
+    _make_chunk,
+)
+
+
+@pytest.mark.asyncio
+async def test_start_runs_provider_warmup_before_audio_ingress():
+    calls: list[str] = []
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            stt=WarmupSTT(calls),
+            tts=WarmupTTS(calls),
+            transport=WarmupTransport(calls),
+            journal=journal,
+        )
+    )
+
+    await session.start()
+    await asyncio.sleep(0)
+    await session.stop(force=True)
+
+    assert "transport.receive" in calls
+    assert calls.index("transport.connect") < calls.index("stt.warmup")
+    assert calls.index("stt.warmup") < calls.index("tts.warmup")
+    assert calls.index("tts.warmup") < calls.index("transport.warmup")
+    assert calls.index("transport.warmup") < calls.index("transport.receive")
+    record = next(record for record in journal.read() if record.name == "warmup_completed")
+    assert [component["component"] for component in record.data["components"]] == [
+        "stt",
+        "tts",
+        "transport",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_session_default_construction():
+    session = Session(_full_config())
+    assert session.turn_state == TurnState.IDLE
+    assert not session.is_running
+    assert session.cancel_token is None
+
+
+@pytest.mark.asyncio
+async def test_session_start_and_stop():
+    transport = FakeTransport()
+    config = _full_config(transport=transport)
+    session = Session(config)
+
+    await session.start()
+    assert session.is_running
+    assert transport.connected
+
+    await session.stop()
+    assert not session.is_running
+    assert transport.disconnected
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_session_shutdown():
+    transport = FakeTransport()
+    config = _full_config(transport=transport)
+    session = Session(config)
+
+    await session.start()
+    await session.shutdown()
+
+    assert not session.is_running
+    assert transport.disconnected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
+    transport = FakeTransport()
+    journal = TrackingJournal()
+    session = Session(_full_config(transport=transport, journal=journal, session_id="sess"))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_session_teardown_closes_audio_providers(method_name: str):
+    calls: list[str] = []
+
+    class CloseSTT(FakeSTT):
+        def close(self) -> None:
+            calls.append("stt.close")
+
+    class AsyncCloseTTS(FakeTTS):
+        async def aclose(self) -> None:
+            calls.append("tts.aclose")
+
+    class AsyncCloseVAD(FakeVAD):
+        async def close(self) -> None:
+            calls.append("vad.close")
+
+    class CloseNoiseReducer:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def close(self) -> None:
+            calls.append("noise.close")
+
+    class AsyncCloseEchoCanceller:
+        async def process(self, chunk: AudioChunk) -> AudioChunk:
+            return chunk
+
+        def feed_reference(self, chunk: AudioChunk) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            calls.append("echo.aclose")
+
+    session = Session(
+        _full_config(
+            stt=CloseSTT(),
+            tts=AsyncCloseTTS(),
+            vad=AsyncCloseVAD(),
+            noise_reducer=CloseNoiseReducer(),
+            echo_canceller=AsyncCloseEchoCanceller(),
+        )
+    )
+
+    await getattr(session, method_name)()
+
+    assert calls == [
+        "stt.close",
+        "tts.aclose",
+        "vad.close",
+        "noise.close",
+        "echo.aclose",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_ends_active_stt_stream_without_close_hook():
+    class EndOnlySTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.end_calls = 0
+
+        async def end_stream(self) -> None:
+            self.end_calls += 1
+            await self._queue.put(None)
+
+    stt = EndOnlySTT()
+    session = Session(_full_config(stt=stt))
+    session._stt_active = True
+
+    await session.shutdown()
+
+    assert stt.end_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
+async def test_external_outbound_queue_survives_session_teardown(method_name: str):
+    transport = FakeTransport()
+    queue = BoundedAudioQueue()
+    session = Session(_full_config(transport=transport, outbound_queue=queue))
+
+    await session.start()
+    await getattr(session, method_name)()
+
+    assert await queue.put(_make_chunk())
+    assert queue.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_replay_gated_audio_stays_bot_speaking_until_outbound_drain():
+    transport = FakeTransport()
+    session = Session(_full_config(transport=transport))
+    events = [
+        TTSAudio(chunk=_make_chunk()),
+        TTSAudio(chunk=_make_chunk()),
+    ]
+
+    await session.replay_gated_audio(events)
+
+    assert session._turn_manager.state == TurnManagerState.BOT_SPEAKING
+    assert session._outbound_queue.qsize() == 2
+
+    await session._audio_router._drain_outbound_audio()
+
+    assert session._turn_manager.state == TurnManagerState.IDLE
+    assert len(transport.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_session_start_idempotent():
+    session = Session(_full_config())
+    await session.start()
+    await session.start()
+    assert session.is_running
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_start_rolls_back_after_connect_failure():
+    class FlakyTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.connect_calls = 0
+
+        async def connect(self) -> None:
+            self.connect_calls += 1
+            if self.connect_calls == 1:
+                raise RuntimeError("boom")
+            await super().connect()
+
+    transport = FlakyTransport()
+    session = Session(_full_config(transport=transport))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await session.start()
+
+    assert not session.is_running
+    assert session._audio_router.pipeline_task is None
+    assert session._audio_router.outbound_task is None
+
+    await session.start()
+
+    assert session.is_running
+    assert transport.connect_calls == 2
+    assert transport.connected
+
+    await session.stop()
+
+
+@pytest.mark.asyncio
+async def test_session_stop_idempotent():
+    session = Session(_full_config())
+    await session.stop()
+    assert not session.is_running
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_resets_state():
+    session = Session(_full_config())
+    session._turn_state = TurnState.LISTENING
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
+    await session.cancel_turn()
+    assert session.turn_state == TurnState.IDLE
+    assert turn.cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_barge_in_emits_interruption():
+    session = Session(_full_config())
+    session._turn_state = TurnState.BOT_SPEAKING
+    session._turn = TurnContext("test-turn", CancelToken())
+
+    received: list = []
+    session.event_bus.subscribe(Interruption, lambda e: received.append(e))
+
+    await session.cancel_turn(barge_in=True)
+    assert len(received) == 1
+    assert session.turn_state == TurnState.IDLE
+
+
+@pytest.mark.asyncio
+async def test_cancel_turn_barge_in_propagates_signal_through_all_stages():
+    """WS3 T3.8: a barge-in must dispatch an InterruptSignal through
+    every stage, producing one ControlSignalRecord per stage in the
+    journal so replay can see who observed the signal and when.
+    """
+    journal = InMemoryRingBuffer(capacity=64)
+    session = Session(_full_config(journal=journal))
+    session._turn_state = TurnState.BOT_SPEAKING
+    session._turn = TurnContext("test-turn-signal", CancelToken())
+
+    await session.cancel_turn(barge_in=True)
+
+    signal_records = [r for r in journal.read() if r.kind == JournalRecordKind.CONTROL]
+    # One per stage plus the trailing cause record.
+    stage_records = [r for r in signal_records if r.name == "control_signal"]
+    cause_records = [r for r in signal_records if r.name == "control_signal_cause"]
+    observed = {r.data["observed_stage"] for r in stage_records}
+    # Telephony doesn't have its own stage; the session only fans the
+    # signal through helpers when at least one is registered.
+    assert observed == {
+        "transport",
+        "tts",
+        "agent",
+        "turn",
+        "stt",
+        "vad",
+        "audio",
+    }
+    # Every stage record carries the same signal_id so a replay UI can
+    # group the upstream walk into one logical event.
+    signal_ids = {r.data["signal_id"] for r in stage_records}
+    assert len(signal_ids) == 1
+    # The cause record links the signal back to "barge_in".
+    assert len(cause_records) == 1
+    assert cause_records[0].data["cause"] == "barge_in"
+    assert cause_records[0].data["signal_id"] == next(iter(signal_ids))
+
+
+@pytest.mark.asyncio
+async def test_cancel_tts_playback_resets_state():
+    session = Session(_full_config())
+    session._turn_state = TurnState.BOT_SPEAKING
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
+    await session.cancel_tts_playback()
+    assert session.turn_state == TurnState.IDLE
+    # cancel_tts_playback should NOT cancel the shared token —
+    # only TTS is stopped, agent streams can continue.
+    assert not turn.cancel_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_reset_state():
+    session = Session(_full_config())
+    session._turn_state = TurnState.PROCESSING
+    turn = TurnContext("test-turn", CancelToken())
+    session._turn = turn
+    await session.reset_state()
+    assert session.turn_state == TurnState.IDLE
+    assert turn.cancel_token.is_cancelled

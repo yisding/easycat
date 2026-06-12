@@ -1,0 +1,250 @@
+"""Session output processor and markdown preparation tests."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+
+import pytest
+
+from easycat._turn_context import TurnContext
+from easycat.cancel import CancelToken
+from easycat.events import (
+    TTSEvent,
+    TTSEventType,
+)
+from easycat.llm_output_processing import PauseProcessor, PhoneticReplacementProcessor
+from easycat.runtime import InMemoryRingBuffer
+from easycat.session._session import Session
+from easycat.tts.input import TTSInput
+from tests.session._session_core_helpers import (
+    FakeSTT,
+    FakeTransport,
+    FakeTTS,
+    _full_config,
+    _make_chunk,
+)
+
+
+def test_session_strip_markdown_does_not_inject_hidden_processor():
+    class MarkerProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return payload
+
+    processor = MarkerProcessor()
+    session = Session(_full_config(strip_markdown=True, output_processors=[processor]))
+
+    assert session._tts_scheduler._output_processors == [processor]
+
+
+@pytest.mark.asyncio
+async def test_streaming_agent_strip_markdown_writes_journal_record():
+    class MarkdownAgent:
+        async def run(self, text: str) -> str:
+            return "Go to **Settings** first."
+
+    journal = InMemoryRingBuffer()
+    session = Session(_full_config(agent=MarkdownAgent(), journal=journal, strip_markdown=True))
+    session._turn = TurnContext("turn-markdown", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("help", token=None)
+
+    records = [record for record in journal.read() if record.name == "markdown_stripped"]
+    assert records, "expected a markdown_stripped record"
+    final_record = next(r for r in records if r.data.get("phase") == "streaming_final")
+    assert final_record.turn_id == "turn-markdown"
+    assert final_record.data == {
+        "phase": "streaming_final",
+        "changed": True,
+        "original_text": "Go to **Settings** first.",
+        "stripped_text": "Go to Settings first.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_tts_payload_writes_journal_record():
+    class PrefixProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return TTSInput(text=f"speak: {payload.text}", format=payload.format)
+
+    journal = InMemoryRingBuffer()
+    session = Session(
+        _full_config(
+            journal=journal,
+            output_processors=[PrefixProcessor()],
+        )
+    )
+    session._turn = TurnContext("turn-tts-prepared", CancelToken())
+
+    payload = session._tts_scheduler.prepare("hello", is_streaming=False, is_final=True)
+
+    assert payload.text == "speak: hello"
+    records = [record for record in journal.read() if record.name == "tts_payload_prepared"]
+    assert len(records) == 1
+    assert records[0].turn_id == "turn-tts-prepared"
+    assert records[0].data == {
+        "is_streaming": False,
+        "is_final": True,
+        "changed": True,
+        "original_text": "hello",
+        "original_format": "plain",
+        "prepared_text": "speak: hello",
+        "prepared_format": "plain",
+        "processors": ["PrefixProcessor"],
+        "ssml_downgraded": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_applies_output_processors_before_tts() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return True
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    class PrefixProcessor:
+        def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
+            return TTSInput(text=f"speak: {payload.text}", format=payload.format)
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[PrefixProcessor()],
+            transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
+            stt=FakeSTT(transcript="hello"),
+        )
+    )
+
+    session._turn = TurnContext("turn-output-proc", CancelToken())
+    await session._turn_runner.run_streaming_agent("call me at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].text.startswith("speak: ")
+    assert tts.payloads[0].format == "plain"
+
+
+@pytest.mark.asyncio
+async def test_session_falls_back_to_plain_when_ssml_not_supported() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                )
+            ],
+            transport=FakeTransport(chunks=[_make_chunk(), _make_chunk()]),
+            stt=FakeSTT(transcript="call AT&T at 415-555-2671"),
+        )
+    )
+
+    session._turn = TurnContext("turn-ssml-fallback", CancelToken())
+    await session._turn_runner.run_streaming_agent("call AT&T at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].format == "plain"
+    assert "<break" not in tts.payloads[0].text
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
+    assert "4 1 5" in tts.payloads[0].text
+
+
+@pytest.mark.asyncio
+async def test_session_falls_back_to_plain_unescapes_ssml_entities() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                )
+            ],
+        )
+    )
+
+    session._turn = TurnContext("turn-ssml-unescape", CancelToken())
+    await session._turn_runner.run_streaming_agent("Call AT&T at 415-555-2671", token=None)
+
+    assert tts.payloads
+    assert tts.payloads[0].format == "plain"
+    assert "AT&T" in tts.payloads[0].text
+    assert "AT&amp;T" not in tts.payloads[0].text
+
+
+@pytest.mark.asyncio
+async def test_session_composes_phonetic_and_phone_processors() -> None:
+    class CaptureTTS(FakeTTS):
+        def __init__(self) -> None:
+            self.payloads: list[TTSInput] = []
+
+        @property
+        def supports_ssml(self) -> bool:
+            return False
+
+        async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
+            if isinstance(payload, str):
+                payload = TTSInput(payload)
+            self.payloads.append(payload)
+            yield TTSEvent(type=TTSEventType.AUDIO, audio=_make_chunk())
+
+    tts = CaptureTTS()
+    session = Session(
+        _full_config(
+            tts=tts,
+            output_processors=[
+                PhoneticReplacementProcessor({"Siobhan": "shi-vawn"}),
+                PauseProcessor(
+                    pattern=r"\+?\d[\d\s().-]{5,}\d",
+                    unit_pattern=r"\d",
+                    minimum_units=7,
+                    pause_ms=140,
+                ),
+            ],
+        )
+    )
+
+    session._turn = TurnContext("turn-phonetic", CancelToken())
+    await session._turn_runner.run_streaming_agent("call Siobhan at 415-555-2671", token=None)
+
+    assert tts.payloads
+    # provider doesn't support SSML, so we should receive plain text fallback.
+    assert tts.payloads[0].format == "plain"
+    assert "shi-vawn" in tts.payloads[0].text
+    assert "4 1 5" in tts.payloads[0].text

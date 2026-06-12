@@ -312,11 +312,7 @@ select = ["E", "F", "I", "W", "UP", "C901", "PLR0912", "PLR0915"]
 "tests/session/test_session_smoke.py" = ["PLR0915"]
 "tests/teaching/test_diagrams.py" = ["C901", "PLR0912"]
 "tests/teaching/test_ladder_index.py" = ["PLR0915"]
-"tests/config/test_config.py" = ["C901"]
-"tests/test_docs_index.py" = ["PLR0915"]
 "tests/test_dx_helpers.py" = ["PLR0915"]
-"tests/test_examples.py" = ["C901"]
-"tests/vad/test_vad.py" = ["C901"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -442,24 +438,22 @@ paths_to_mutate = [
     "src/easycat/strip_markdown.py",
 ]
 # Only run the focused unit tests that actually exercise the modules
-# above, so each mutant is checked in seconds, not against all ~3300
+# above, so each mutant is checked in seconds, not against the full
 # tests. `-p no:cacheprovider` keeps the copied mutants/ tree clean.
 pytest_add_cli_args_test_selection = [
-    "tests/session/test_strip_markdown.py",
+    "tests/core/test_strip_markdown_utils.py",
     "tests/audio/test_audio_utils.py",
     "tests/session/test_session_helpers.py",
-    "tests/session/test_session_streaming.py",
+    "tests/session/test_session_streaming_segmentation.py",
 ]
 # mutmut copies source + the selected tests into a mutants/ tree and
 # re-runs pytest there. The selected tests import tests-package support
-# modules (conftest.py -> tests._marker_lint; test_session_streaming.py
-# -> tests._bridge_helpers), so these must be copied too or every mutant
-# errors on import and is miscounted.
+# modules through conftest.py, so these must be copied too or every
+# mutant errors on import and is miscounted.
 also_copy = [
     "tests/__init__.py",
     "tests/conftest.py",
     "tests/_marker_lint.py",
-    "tests/_bridge_helpers.py",
 ]
 # Disable the global 60s timeout (mutmut applies its own per-mutant
 # timeout) and silence collection-cache noise inside the mutants copy.

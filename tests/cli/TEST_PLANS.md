@@ -11,7 +11,7 @@ first, debug second, safety net third, and infrastructure last.
 | 1 | CLI boot integrity | `test_app.py` + E2E §1 |
 | 2 | `explain` catalog completeness | `test_explain.py` + `test_errors.py` |
 | 3 | `explain` fuzzy + meta paths | `test_explain.py` |
-| 4 | `docs` route map | `test_app.py` + `tests/test_docs_index.py` + `test_json_schema.py` |
+| 4 | `docs` route map | `test_app.py` + `tests/docs` + `test_json_schema.py` |
 | 5 | `init` template rendering | `test_init.py` + `test_templates.py` |
 | 6 | `init` schema rejection paths | `test_init.py` |
 | 7 | `init` overwrite safety | `test_init.py` |
@@ -20,7 +20,7 @@ first, debug second, safety net third, and infrastructure last.
 | 10 | Error-code registry integrity | `test_errors.py` |
 | 11 | Exit-code contract stability | `test_errors.py` + `test_exit_codes.py` |
 | 12 | JSON envelope stability | `test_json_schema.py` |
-| 13 | `validate` command and report rendering | `test_validate.py` |
+| 13 | `validate` command and report rendering | `test_validate_cli.py` + `test_validate_report_cli.py` + `test_validate_runner.py` |
 | 14 | Library prereqs — `run()` lifecycle | `test_library_prereqs.py` |
 | 15 | Library prereqs — string-keyed providers | `test_library_prereqs.py` |
 | 16 | Packaging — wheel and sdist ship template dotfiles, metadata, and clean contents | `test_packaging.py` (integration) |
@@ -141,7 +141,7 @@ route order stops putting onboarding paths first.
   first lesson, examples, architecture, and coding-agent routes on the first
   screen.
 
-**Backed by.** `tests/cli/test_app.py`, `tests/test_docs_index.py`, and
+**Backed by.** `tests/cli/test_app.py`, `tests/docs`, and
 `tests/cli/test_json_schema.py`.
 
 ---
@@ -411,7 +411,8 @@ called out; `--json` output diverging from the standard envelope.
 - Missing, invalid, unsupported-schema, and unknown-kind report files
   fail explicitly.
 
-**Backed by.** `test_validate.py`.
+**Backed by.** `test_validate_cli.py`, `test_validate_report_cli.py`,
+`test_validate_report_model.py`, and `test_validate_runner.py`.
 
 ---
 

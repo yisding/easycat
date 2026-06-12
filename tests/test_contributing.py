@@ -286,14 +286,13 @@ def test_contributing_development_loop_command_hints_are_locally_valid() -> None
 def test_contributing_pytest_target_validator_checks_node_ids() -> None:
     problems = _pytest_target_problems(
         (
-            "uv run pytest tests/test_install_guidance.py -k 'agent_guide or claude_' && "
+            "uv run pytest tests/install/test_agent_guides.py && "
             "uv run pytest tests/test_contributing.py::missing_test "
             "tests/test_contributing_missing.py"
         ),
         label="Broken pytest command",
     )
 
-    assert not any("agent_guide or claude_" in problem for problem in problems)
     assert (
         "Broken pytest command: missing pytest node tests/test_contributing.py::missing_test"
         in problems
@@ -435,6 +434,6 @@ def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> Non
         "CONTRIBUTING.md",
         "easycat validate",
         "tests/test_contributing.py",
-        "tests/test_docs_index.py",
+        "tests/docs/test_route_contracts.py",
     ):
         assert f"`{token}`" in section

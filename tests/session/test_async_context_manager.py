@@ -14,7 +14,7 @@ import pytest
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
-from tests.session.test_session import (
+from tests.session._session_core_helpers import (
     FakeAgent,
     FakeSTT,
     FakeTransport,

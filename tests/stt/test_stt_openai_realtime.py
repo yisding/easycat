@@ -210,7 +210,7 @@ def test_openai_realtime_version_info_reports_transcription_model():
     The transcription model and the realtime ``connection_model`` are
     distinct config knobs; ``version_info`` deliberately surfaces only the
     transcription ``model`` so it matches the cross-provider shape invariant
-    guarded by ``tests/runtime/test_version_info.py``.  The connection model
+    guarded by ``tests/providers/test_version_info.py``.  The connection model
     is exercised separately via the websocket URL.
     """
     config = OpenAIRealtimeSTTConfig(
