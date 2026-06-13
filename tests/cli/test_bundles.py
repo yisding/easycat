@@ -385,9 +385,9 @@ def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_p
     """``bundles show --json`` surfaces the per-turn latency waterfall.
 
     The ``turns`` array must carry per-stage spans plus the milestone
-    deltas (VAD endpoint → STT final → agent first token → TTS first
-    byte) so "why was that turn slow?" is answerable without the
-    debugger UI.  Records go through the real ``export_debug_bundle``
+    deltas (VAD endpoint → STT final → agent request → agent first token
+    → TTS first byte) so "why was that turn slow?" is answerable without
+    the debugger UI.  Records go through the real ``export_debug_bundle``
     path so timestamps carry the production ``timing.wall_ns`` shape.
     """
     base = 1_000_000_000
@@ -408,10 +408,11 @@ def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_p
         _rec(3, "stage_start", 50, {"stage": "stt"}),
         _rec(4, "stt_final", 100, {"text": "hi"}),
         _rec(5, "stage_complete", 100, {"stage": "stt"}),
-        _rec(6, "agent_delta", 300, {"text": "he"}),
-        _rec(7, "agent_final", 400, {"text": "hey"}),
-        _rec(8, "tts_frame", 500, {"stage": "tts", "audio_bytes": 320}),
-        _rec(9, "turn_ended", 600),
+        _rec(6, "agent_request_started", 180),
+        _rec(7, "agent_delta", 300, {"text": "he"}),
+        _rec(8, "agent_final", 400, {"text": "hey"}),
+        _rec(9, "tts_frame", 500, {"stage": "tts", "audio_bytes": 320}),
+        _rec(10, "turn_ended", 600),
     ]
     bundle = tmp_path / "waterfall.zip"
     export_debug_bundle(_FakeSession(records=records), bundle)
@@ -431,7 +432,10 @@ def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_p
 
     milestones = turn["milestones"]
     assert milestones["vad_endpoint_to_stt_final_ms"] == pytest.approx(100.0)
-    assert milestones["stt_final_to_agent_first_token_ms"] == pytest.approx(200.0)
+    # stt_final (100) → agent_request_started (180) = 80 ms of dispatch overhead.
+    assert milestones["stt_final_to_agent_request_ms"] == pytest.approx(80.0)
+    # agent_request_started (180) → first agent_delta (300) = 120 ms of LLM TTFT.
+    assert milestones["agent_request_to_first_token_ms"] == pytest.approx(120.0)
     assert milestones["agent_first_token_to_tts_first_byte_ms"] == pytest.approx(200.0)
     assert milestones["vad_endpoint_to_tts_first_byte_ms"] == pytest.approx(500.0)
 
@@ -520,6 +524,13 @@ def test_inspect_crash_dump_turn_waterfall_reads_flat_wall_ns(
             {
                 "sequence": 2,
                 "session_id": "sess-crash",
+                "name": "agent_request_started",
+                "turn_id": "t1",
+                "wall_ns": base + 100 * 1_000_000,
+            },
+            {
+                "sequence": 3,
+                "session_id": "sess-crash",
                 "name": "agent_final",
                 "turn_id": "t1",
                 "wall_ns": base + 250 * 1_000_000,
@@ -533,7 +544,10 @@ def test_inspect_crash_dump_turn_waterfall_reads_flat_wall_ns(
     payload = json.loads(result.stdout)
     (turn,) = payload["turns"]
     milestones = turn["milestones"]
-    assert milestones["stt_final_to_agent_first_token_ms"] == pytest.approx(250.0)
+    # stt_final (base) → agent_request_started (+100) = 100 ms dispatch overhead.
+    assert milestones["stt_final_to_agent_request_ms"] == pytest.approx(100.0)
+    # agent_request_started (+100) → agent_final (+250) = 150 ms LLM TTFT.
+    assert milestones["agent_request_to_first_token_ms"] == pytest.approx(150.0)
     # No VAD endpoint or TTS bytes in this dump — those deltas stay None.
     assert milestones["vad_endpoint_to_stt_final_ms"] is None
     assert milestones["agent_first_token_to_tts_first_byte_ms"] is None

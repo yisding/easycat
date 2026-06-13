@@ -808,9 +808,9 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
     """Render the per-turn latency waterfall for ``bundles show``/``inspect``.
 
     One row per turn: total wall time, the milestone deltas (VAD endpoint
-    → STT final → agent first token → TTS first byte), and the per-stage
-    spans as ``stage duration@offset``.  ``docs/latency.md`` explains how
-    to read the numbers and which defaults to tune.
+    → STT final → agent request → agent first token → TTS first byte), and
+    the per-stage spans as ``stage duration@offset``.  ``docs/latency.md``
+    explains how to read the numbers and which defaults to tune.
     """
     table = Table(
         title="Per-turn latency (ms) — see docs/latency.md",
@@ -823,7 +823,8 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
     table.add_column("turn", no_wrap=True, overflow="fold")
     table.add_column("wall", justify="right", no_wrap=True)
     table.add_column("vad→stt", justify="right", no_wrap=True)
-    table.add_column("stt→agent", justify="right", no_wrap=True)
+    table.add_column("stt→req", justify="right", no_wrap=True)
+    table.add_column("req→token", justify="right", no_wrap=True)
     table.add_column("agent→tts", justify="right", no_wrap=True)
     table.add_column("vad→tts", justify="right", no_wrap=True)
     table.add_column("spans (dur@off)", overflow="fold")
@@ -837,7 +838,8 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
             escape(str(turn.get("turn_id", ""))),
             _format_ms(turn.get("wall_ms")),
             _format_ms(milestones.get("vad_endpoint_to_stt_final_ms")),
-            _format_ms(milestones.get("stt_final_to_agent_first_token_ms")),
+            _format_ms(milestones.get("stt_final_to_agent_request_ms")),
+            _format_ms(milestones.get("agent_request_to_first_token_ms")),
             _format_ms(milestones.get("agent_first_token_to_tts_first_byte_ms")),
             _format_ms(milestones.get("vad_endpoint_to_tts_first_byte_ms")),
             escape(spans) if spans else "[dim](no stage spans)[/]",

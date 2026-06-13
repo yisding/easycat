@@ -14,8 +14,8 @@ Three public entry points:
 - :func:`build_timeline` — per-turn, per-stage span timing
   (the debugger ``/api/timeline`` waterfall).
 - :func:`turn_waterfall` — :func:`build_timeline` plus the milestone
-  deltas (VAD endpoint → STT final → agent first token → TTS first
-  byte) the CLI surfaces as the ``turns`` array in
+  deltas (VAD endpoint → STT final → agent request → agent first token
+  → TTS first byte) the CLI surfaces as the ``turns`` array in
   ``bundles show --json`` / ``inspect --json``.
 """
 
@@ -27,11 +27,14 @@ from typing import Any
 STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "telephony")
 
 # Milestone journal-record names.  ``vad_stop_speaking`` marks the VAD
-# endpoint, ``stt_final`` the committed transcript, ``agent_delta`` (or
-# ``agent_final`` for non-streaming agents) the first agent token, and
-# ``tts_frame`` / ``tts_audio`` the first synthesized audio bytes.
+# endpoint, ``stt_final`` the committed transcript, ``agent_request_started``
+# the moment the agent run is dispatched (request queueing/setup), ``agent_delta``
+# (or ``agent_final`` for non-streaming agents) the first agent token, and
+# ``tts_frame`` / ``tts_audio`` the first synthesized audio bytes.  Splitting at
+# the agent request lets us separate dispatch overhead from raw LLM TTFT.
 _VAD_ENDPOINT = "vad_stop_speaking"
 _STT_FINAL = "stt_final"
+_AGENT_REQUEST = "agent_request_started"
 _AGENT_FIRST = ("agent_delta", "agent_final")
 _TTS_FIRST = ("tts_frame", "tts_audio")
 
@@ -252,12 +255,14 @@ def _delta_ms(start_ns: int | None, end_ns: int | None) -> float | None:
 def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float | None]]:
     """Compute per-turn milestone deltas from existing journal records.
 
-    The chain is VAD endpoint → STT final → agent first token → TTS
-    first byte.  Each delta is ``None`` when either endpoint is missing
-    (text-only turns have no VAD endpoint; failed turns may never reach
-    TTS).  The VAD endpoint is the *last* ``vad_stop_speaking`` before
-    the turn's first ``stt_final``, since brief pauses can emit several
-    VAD stops within one turn.
+    The chain is VAD endpoint → STT final → agent request → agent first
+    token → TTS first byte.  The ``stt_final`` → ``agent_request_started``
+    delta is dispatch/queueing overhead; ``agent_request_started`` → first
+    agent token is the raw LLM time-to-first-token (TTFT).  Each delta is
+    ``None`` when either endpoint is missing (text-only turns have no VAD
+    endpoint; failed turns may never reach TTS).  The VAD endpoint is the
+    *last* ``vad_stop_speaking`` before the turn's first ``stt_final``,
+    since brief pauses can emit several VAD stops within one turn.
     """
     state: dict[str, dict[str, int | None]] = {}
     for r in records:
@@ -270,12 +275,20 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
         name = r.get("name")
         slot = state.setdefault(
             turn_id,
-            {"vad_endpoint": None, "stt_final": None, "agent_first": None, "tts_first": None},
+            {
+                "vad_endpoint": None,
+                "stt_final": None,
+                "agent_request": None,
+                "agent_first": None,
+                "tts_first": None,
+            },
         )
         if name == _VAD_ENDPOINT and slot["stt_final"] is None:
             slot["vad_endpoint"] = wall
         elif name == _STT_FINAL and slot["stt_final"] is None:
             slot["stt_final"] = wall
+        elif name == _AGENT_REQUEST and slot["agent_request"] is None:
+            slot["agent_request"] = wall
         elif name in _AGENT_FIRST and slot["agent_first"] is None:
             slot["agent_first"] = wall
         elif name in _TTS_FIRST and slot["tts_first"] is None:
@@ -285,7 +298,10 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
     for turn_id, slot in state.items():
         milestones[turn_id] = {
             "vad_endpoint_to_stt_final_ms": _delta_ms(slot["vad_endpoint"], slot["stt_final"]),
-            "stt_final_to_agent_first_token_ms": _delta_ms(slot["stt_final"], slot["agent_first"]),
+            "stt_final_to_agent_request_ms": _delta_ms(slot["stt_final"], slot["agent_request"]),
+            "agent_request_to_first_token_ms": _delta_ms(
+                slot["agent_request"], slot["agent_first"]
+            ),
             "agent_first_token_to_tts_first_byte_ms": _delta_ms(
                 slot["agent_first"], slot["tts_first"]
             ),
@@ -308,7 +324,8 @@ def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     milestones = turn_milestones(records)
     empty: dict[str, float | None] = {
         "vad_endpoint_to_stt_final_ms": None,
-        "stt_final_to_agent_first_token_ms": None,
+        "stt_final_to_agent_request_ms": None,
+        "agent_request_to_first_token_ms": None,
         "agent_first_token_to_tts_first_byte_ms": None,
         "vad_endpoint_to_tts_first_byte_ms": None,
     }

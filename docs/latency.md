@@ -32,15 +32,16 @@ events below. Three surfaces render them:
 The milestone chain is the response-latency skeleton of a turn:
 
 ```text
-VAD endpoint ──► STT final ──► agent first token ──► TTS first byte
-   (user stopped     (transcript      (LLM started        (bot started
-    speaking)         committed)       answering)           sounding)
+VAD endpoint ──► STT final ──► agent request ──► agent first token ──► TTS first byte
+   (user stopped     (transcript      (run             (LLM started        (bot started
+    speaking)         committed)       dispatched)      answering)           sounding)
 ```
 
 | Milestone delta | Journal records it is computed from |
 | --- | --- |
 | `vad_endpoint_to_stt_final_ms` | last `vad_stop_speaking` before the turn's first `stt_final` |
-| `stt_final_to_agent_first_token_ms` | first `stt_final` → first `agent_delta` (or `agent_final`) |
+| `stt_final_to_agent_request_ms` | first `stt_final` → first `agent_request_started` (dispatch/queueing overhead) |
+| `agent_request_to_first_token_ms` | first `agent_request_started` → first `agent_delta` (or `agent_final`); the raw LLM time-to-first-token |
 | `agent_first_token_to_tts_first_byte_ms` | first `agent_delta` → first `tts_frame` / `tts_audio` |
 | `vad_endpoint_to_tts_first_byte_ms` | the full voice-to-voice response gap |
 
@@ -92,6 +93,7 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
    finalization. That is the configured floor, not a regression.
 3. Enable `smart_turn=True` (or lower `end_of_turn_silence_ms`) and re-run;
    the same delta should drop to roughly the STT finalization cost.
-4. If `stt_final_to_agent_first_token_ms` dominates instead, the time is in
+4. If `agent_request_to_first_token_ms` dominates instead, the time is in
    your agent/LLM — no EasyCat default is involved; check the `agent` span
-   and your model choice.
+   and your model choice. (A large `stt_final_to_agent_request_ms` instead
+   points at dispatch/queueing overhead before the LLM was even called.)

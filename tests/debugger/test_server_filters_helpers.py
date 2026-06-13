@@ -338,7 +338,8 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
         assert turn["spans"] == by_turn[turn["turn_id"]]["spans"]
         assert set(turn["milestones"]) == {
             "vad_endpoint_to_stt_final_ms",
-            "stt_final_to_agent_first_token_ms",
+            "stt_final_to_agent_request_ms",
+            "agent_request_to_first_token_ms",
             "agent_first_token_to_tts_first_byte_ms",
             "vad_endpoint_to_tts_first_byte_ms",
         }
