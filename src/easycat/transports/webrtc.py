@@ -440,6 +440,7 @@ async def serve_webrtc_config_sessions(
     app.router.add_get("/", shim._handle_root)
     app.router.add_options("/offer", shim._handle_cors_preflight)
     app.router.add_options("/stats", shim._handle_cors_preflight)
+    app.router.add_options("/config", shim._handle_cors_preflight)
 
     static_dir = settings.static_dir
     if static_dir == WebRTCTransportConfig._USE_BUNDLED:

@@ -1088,6 +1088,57 @@ class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
             stop_event.set()
             await asyncio.wait_for(task, timeout=2)
 
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_allows_config_cors_preflight(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiohttp
+
+        import easycat.config as config_module
+
+        _install_fake_webrtc_modules(monkeypatch)
+        port = self._unused_port()
+        stop_event = asyncio.Event()
+        monkeypatch.setattr(config_module, "create_session", lambda _config: _FakeSession())
+        task = asyncio.create_task(
+            serve_webrtc_config_sessions(
+                lambda transport: {"transport": transport, "agent": object()},
+                WebRTCTransportConfig(
+                    host="127.0.0.1",
+                    port=port,
+                    static_dir=None,
+                    auth_token="secret",
+                    cors_allowed_origins=("https://app.example.com",),
+                ),
+                stop_event=stop_event,
+                runtime_feedback=False,
+                announce=False,
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as client:
+                for attempt in range(20):
+                    try:
+                        async with client.options(
+                            f"http://127.0.0.1:{port}/config",
+                            headers={
+                                "Origin": "https://app.example.com",
+                                "Access-Control-Request-Headers": "authorization",
+                            },
+                        ) as resp:
+                            assert resp.status == 200
+                            assert resp.headers["Access-Control-Allow-Origin"] == (
+                                "https://app.example.com"
+                            )
+                            break
+                    except aiohttp.ClientConnectorError:
+                        if attempt == 19:
+                            raise
+                        await asyncio.sleep(0.05)
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2)
+
 
 class TestWebRTCDegradedEvents:
     """SDP negotiation failure and inbound-track crash must surface a
