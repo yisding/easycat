@@ -1391,6 +1391,117 @@ def test_replay_bundle_json_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert "frames" in human.stdout
 
 
+def _make_two_turn_bundle(path: Path) -> None:
+    """Bundle with two turns whose sequences interleave by turn id.
+
+    Each turn's first sequence is declared as a committable replay entry
+    point so ``replay --turn`` can start a window there (the replay engine
+    refuses non-committable ``from_sequence`` values).
+    """
+    records = [
+        {
+            "sequence": 1,
+            "kind": "event",
+            "name": "stage_start",
+            "turn_id": "t1",
+            "session_id": "sess-xyz",
+            "data": {"stage": "stt"},
+        },
+        {
+            "sequence": 2,
+            "kind": "event",
+            "name": "stage_end",
+            "turn_id": "t1",
+            "session_id": "sess-xyz",
+            "data": {"stage": "stt"},
+        },
+        {
+            "sequence": 3,
+            "kind": "event",
+            "name": "stage_start",
+            "turn_id": "t2",
+            "session_id": "sess-xyz",
+            "data": {"stage": "stt"},
+        },
+        {
+            "sequence": 4,
+            "kind": "event",
+            "name": "stage_end",
+            "turn_id": "t2",
+            "session_id": "sess-xyz",
+            "data": {"stage": "stt"},
+        },
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format_version": FORMAT_VERSION,
+                    "provider_versions": {"stt": "openai-realtime-1.0"},
+                    "replay_entry_points": [
+                        {"sequence": 1, "stage": "stt", "unit_id": "t1"},
+                        {"sequence": 3, "stage": "stt", "unit_id": "t2"},
+                    ],
+                }
+            ),
+        )
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(r) for r in records))
+
+
+def test_replay_turn_sets_sequence_window(cli: CliRunner, tmp_path: Path) -> None:
+    """``replay --turn <id>`` resolves the turn's min/max journal sequence and
+    sets ``from_sequence``/``to_sequence`` accordingly."""
+    bundle = tmp_path / "two-turns.zip"
+    _make_two_turn_bundle(bundle)
+
+    result = cli.invoke(app, ["replay", str(bundle), "--turn", "t2", "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "replay"
+    assert payload["from_sequence"] == 3
+    assert payload["to_sequence"] == 4
+
+
+def test_replay_turn_overrides_explicit_sequence_bounds(cli: CliRunner, tmp_path: Path) -> None:
+    """``--turn`` wins over ``--from-sequence``/``--to-sequence``."""
+    bundle = tmp_path / "two-turns.zip"
+    _make_two_turn_bundle(bundle)
+
+    result = cli.invoke(
+        app,
+        ["replay", str(bundle), "--turn", "t1", "--from-sequence", "99", "--json"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["from_sequence"] == 1
+    assert payload["to_sequence"] == 2
+
+
+def test_replay_unknown_turn_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    """A turn id with no journal records is a not-found (exit 5)."""
+    bundle = tmp_path / "two-turns.zip"
+    _make_two_turn_bundle(bundle)
+
+    result = cli.invoke(app, ["replay", str(bundle), "--turn", "missing", "--json"])
+
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+
+
+def test_replay_invalid_turn_id_exits_2(cli: CliRunner, tmp_path: Path) -> None:
+    """A malformed turn id is rejected before any sequence resolution."""
+    bundle = tmp_path / "two-turns.zip"
+    _make_two_turn_bundle(bundle)
+
+    result = cli.invoke(app, ["replay", str(bundle), "--turn", "", "--json"])
+
+    assert result.exit_code == 2
+
+
 def test_replay_summary_renders_bracketed_stage_and_tool_names_literally(
     cli: CliRunner, tmp_path: Path
 ) -> None:

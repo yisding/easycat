@@ -72,6 +72,51 @@ def test_static_index_pipeline_includes_turn_stage():
     )
 
 
+def test_static_index_has_shareable_deeplink_hash():
+    """The SPA must encode tab/turn/seq into the URL hash and decode it back.
+
+    A copied URL should reopen on the same record.  The decoder validates a
+    turn id against the SAME ``[A-Za-z0-9_\\-]{1,128}`` regex the server
+    enforces (server.py ``_TURN_ID_OK``), writes the hash via
+    ``history.replaceState``/``location.hash`` only, and guards its own writes
+    against the ``hashchange`` listener so there is no feedback loop.  Like the
+    rest of the SPA it must never reach for innerHTML-family DOM.
+    """
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert "function _serializeHash" in text
+    assert "function _applyHashToState" in text
+    assert "history.replaceState" in text
+    assert "location.hash" in text
+    assert 'window.addEventListener("hashchange"' in text
+    # The decoder mirrors the server's turn-id validation regex verbatim.
+    assert r"/^[A-Za-z0-9_\-]{1,128}$/" in text
+    # The feedback-loop guard must be present and consulted before writing.
+    assert "_suppressHashWrite" in text
+    assert "if (_suppressHashWrite) return" in text
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"SPA must never use {forbidden}"
+
+
+def test_static_index_has_copy_replay_command_button():
+    """The Timeline turn actions must offer a copyable ``easycat replay``
+    command scoped to the turn, built with safe DOM helpers and copied via the
+    clipboard (with an ``alert`` fallback) — never injected as markup."""
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert "Copy replay cmd" in text
+    assert "function _copyReplayCommand" in text
+    assert "easycat replay" in text
+    assert "--turn" in text
+    assert "navigator.clipboard" in text
+
+
 def _static_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static"
 

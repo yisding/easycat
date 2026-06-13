@@ -1151,6 +1151,15 @@ def replay_bundle(
         "--to-sequence",
         help="Stop replay after this journal sequence.",
     ),
+    turn: str | None = typer.Option(
+        None,
+        "--turn",
+        help=(
+            "Restrict replay to one turn id; resolves the turn's min/max "
+            "journal sequence and sets the replay window (overrides "
+            "--from-sequence/--to-sequence)."
+        ),
+    ),
     stage: list[str] | None = typer.Option(
         None,
         "--stage",
@@ -1186,6 +1195,33 @@ def replay_bundle(
     timing_value = cast(Literal["fast", "wall"], timing)
 
     bundle = _load_bundle_or_journal(bundle_path, command="replay", json_output=json_output)
+    if turn is not None:
+        turn_id = safe_turn_id(turn)
+        if turn_id is None:
+            emit_command_error(
+                "replay",
+                f"Invalid turn id: {turn!r}.",
+                json_output=json_output,
+                exit_code=2,
+                path=str(bundle_path),
+            )
+            raise typer.Exit(2)
+        sequences = [
+            r["sequence"]
+            for r in bundle.filter_by_turn(turn_id)
+            if isinstance(r.get("sequence"), int)
+        ]
+        if not sequences:
+            emit_command_error(
+                "replay",
+                f"No journal records found for turn {turn_id!r}.",
+                json_output=json_output,
+                exit_code=5,
+                path=str(bundle_path),
+            )
+            raise typer.Exit(5)
+        from_sequence = min(sequences)
+        to_sequence = max(sequences)
     spec = ReplaySpec(
         fidelity=fidelity,
         from_sequence=from_sequence,

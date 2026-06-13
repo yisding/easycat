@@ -1287,6 +1287,61 @@ const state = {
   },
 };
 
+// ── Shareable deep-link (URL hash) ───────────────────────────────
+// The hash mirrors the minimal view state — active tab, the turn filter,
+// and the selected record sequence — so a URL can be copied and reopened
+// to land on the same record.  Decoded values only ever flow into ``state``
+// and into ``el()``/``textContent`` (never innerHTML or URL attributes), and
+// turn ids are validated against the SAME regex the server enforces
+// (server.py ``_TURN_ID_OK``) before they are trusted.
+const _HASH_TURN_OK = /^[A-Za-z0-9_\-]{1,128}$/;
+// Guards the ``hashchange`` listener against the writes we make ourselves —
+// without it, every state change would re-fire the listener in a loop.
+let _suppressHashWrite = false;
+
+function _serializeHash() {
+  const params = new URLSearchParams();
+  if (state.activeTab) params.set("tab", state.activeTab);
+  if (state.filters.turn) params.set("turn", state.filters.turn);
+  if (Number.isInteger(state.selectedSeq) && state.selectedSeq >= 0) {
+    params.set("seq", String(state.selectedSeq));
+  }
+  return params.toString();
+}
+
+function _writeHash() {
+  if (_suppressHashWrite) return;
+  const next = _serializeHash();
+  const target = next ? `#${next}` : "#";
+  if (location.hash === target || (location.hash === "" && target === "#")) return;
+  history.replaceState(null, "", target);
+}
+
+// Parse ``location.hash`` into ``state`` with strict validation.  Invalid
+// tabs/turns/seqs are dropped silently so a hand-edited URL can never push
+// the SPA into a bad state.  Returns the decoded tab (or null) so the boot
+// path can activate it after data loads.
+function _applyHashToState() {
+  const raw = location.hash.slice(1);
+  if (!raw) return null;
+  const params = new URLSearchParams(raw);
+  let tab = null;
+  const tabParam = params.get("tab");
+  if (tabParam && Object.prototype.hasOwnProperty.call(TAB_LOADERS, tabParam)) {
+    tab = tabParam;
+  }
+  const turnParam = params.get("turn");
+  if (turnParam && _HASH_TURN_OK.test(turnParam)) {
+    state.filters.turn = turnParam;
+  }
+  const seqParam = params.get("seq");
+  if (seqParam != null && /^\d+$/.test(seqParam)) {
+    const seq = Number(seqParam);
+    if (Number.isInteger(seq) && seq >= 0) state.selectedSeq = seq;
+  }
+  return tab;
+}
+
 // Stage names mirrored from runtime/replay.py:_STAGE_NAMES.  Used to
 // render the stage-filter checkbox group and the frame-stage select.
 const REPLAY_STAGE_NAMES = ["stt", "tts", "vad", "agent", "audio", "transport", "telephony", "turn"];
@@ -1405,6 +1460,7 @@ function activateTab(name) {
   }
   state.activeTab = name;
   TAB_LOADERS[name]?.();
+  _writeHash();
 }
 
 function rerenderActiveTab() {
@@ -1553,6 +1609,10 @@ function renderTimelineView() {
         onclick: () => playConcatAudio(turn.turn_id, "mic"),
       }, "▶ Caller"));
     }
+    actions.appendChild(el("button", {
+      title: "Copy an `easycat replay … --turn` command for this turn",
+      onclick: () => _copyReplayCommand(turn.turn_id),
+    }, "⧉ Copy replay cmd"));
     header.appendChild(actions);
     turnNode.appendChild(header);
 
@@ -1854,6 +1914,7 @@ function _liveSelectRecord(seq) {
     (state.records || []).find((r) => r.sequence === seq) ||
     (state.liveRecords || []).find((r) => r.sequence === seq);
   if (rec) selectRecord(rec);
+  else _writeHash();
 }
 
 async function playConcatAudio(turnId, track = "tts") {
@@ -1878,6 +1939,26 @@ function filterRecordsByTurn(turnId) {
   state.filters.turn = turnId;
   $("#stage-filter").value = "";
   activateTab("records");
+  _writeHash();
+}
+
+// Build and copy an ``easycat replay … --turn <id>`` command for one turn so
+// a reviewer can reproduce it from the shell.  Bundles carry a file name in
+// the manifest; live sessions have no on-disk path yet, so we emit a
+// ``<bundle>`` placeholder for the reader to fill in.  The string only ever
+// reaches the clipboard or ``textContent`` (alert fallback) — never innerHTML
+// or a URL attribute.
+function _copyReplayCommand(turnId) {
+  const name = state.manifest && state.manifest.source === "bundle" && state.manifest.name
+    ? state.manifest.name
+    : "<bundle>";
+  const cmd = `easycat replay ${name} --turn ${turnId}`;
+  const fallback = () => alert(cmd);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 // ── Pipeline view ────────────────────────────────────────────────
@@ -2066,6 +2147,7 @@ function selectRecord(record) {
       onclick: () => playPCM(record.output_ref, data.sample_rate, data.channels, data.sample_width),
     }, "▶ Play frame"));
   }
+  _writeHash();
 }
 
 // Convert raw PCM bytes to a WAV blob the browser can play.
@@ -2818,10 +2900,44 @@ setInterval(() => {
   $("#status-time").textContent = new Date().toLocaleTimeString();
 }, 1000);
 
-// Boot.
-state.activeTab = "timeline";
-refreshAll().catch(e => {
+// Re-open the view the hash points at without writing it back (which would
+// just be a redundant ``replaceState`` and could race the boot load).
+function _onHashChange() {
+  state.filters.turn = null;
+  state.selectedSeq = null;
+  const tab = _applyHashToState();
+  _suppressHashWrite = true;
+  try {
+    activateTab(tab || "timeline");
+    if (Number.isInteger(state.selectedSeq)) {
+      const seq = state.selectedSeq;
+      const rec = (state.records || []).find((r) => r.sequence === seq);
+      if (rec) selectRecord(rec);
+    }
+  } finally {
+    _suppressHashWrite = false;
+  }
+}
+window.addEventListener("hashchange", _onHashChange);
+
+// Boot.  Decode the hash into ``state`` first so the tab/turn/seq it names
+// survive the initial data load, then activate the decoded tab and re-select
+// the named record once records are available.
+const _bootTab = _applyHashToState() || "timeline";
+state.activeTab = _bootTab;
+_suppressHashWrite = true;
+refreshAll().then(() => {
+  activateTab(_bootTab);
+  if (Number.isInteger(state.selectedSeq)) {
+    const seq = state.selectedSeq;
+    const rec = (state.records || []).find((r) => r.sequence === seq);
+    if (rec) selectRecord(rec);
+  }
+}).catch(e => {
   $("#timeline-view").appendChild(el("div", { class: "error-msg" }, e.message));
+}).finally(() => {
+  _suppressHashWrite = false;
+  _writeHash();
 });
 connectWS();
 </script>
