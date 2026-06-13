@@ -73,6 +73,12 @@ _REPLAY_FRAME_LIMIT = 5000
 # callers see ``scan_truncated`` so the cap is visible rather than silent.
 _SEARCH_SCAN_LIMIT = 50000
 
+# Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
+# batch.  A burst can advance the sequence by thousands in one poll; capping
+# the slice keeps each frame small and lets the cursor catch up over a few
+# polls rather than serializing a megabyte at once.
+_WS_RECORD_BATCH_CAP = 200
+
 
 def _safe_ref(ref: str) -> str:
     """Reject anything that isn't a SHA-256 hex digest before any I/O.
@@ -879,6 +885,29 @@ def _bundle_zip_from_session(session: Any) -> Path | None:
     return tmp_path
 
 
+def _records_since(
+    source: DebuggerSource, after_seq: int, cap: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Return up to *cap* records with ``sequence > after_seq``.
+
+    Used by the live WebSocket loop to push only the records that arrived
+    since the last batch.  Records are already ascending by sequence, so we
+    filter then slice; the second return value is the new high-water cursor
+    (the last sequence actually pushed) so the caller advances correctly even
+    when the batch is capped mid-burst.
+    """
+    new_records = [
+        r
+        for r in source.records()
+        if isinstance(r.get("sequence"), int) and r["sequence"] > after_seq
+    ]
+    new_records.sort(key=lambda r: r["sequence"])
+    batch = new_records[:cap]
+    if not batch:
+        return [], after_seq
+    return batch, int(batch[-1]["sequence"])
+
+
 # ── HTTP API ─────────────────────────────────────────────────────
 
 
@@ -1257,12 +1286,16 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         """Push live updates to the UI.
 
         Sends a snapshot every poll interval (live sources) or once
-        (bundle sources).  Clients can send ``{"action": "ping"}`` to
-        keep the connection alive; we respond with ``pong``.
+        (bundle sources).  On a sequence advance it also pushes a capped,
+        only-new ``{"type": "records"}`` batch so the live-follow playhead
+        can append records without re-fetching the whole journal.  Clients
+        can send ``{"action": "ping"}`` to keep the connection alive; we
+        respond with ``pong``.
         """
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
         last_seq = -1
+        last_pushed_seq = 0
         try:
             while not ws.closed:
                 # Cheap O(1) growth probe — never re-reads or re-serializes
@@ -1279,6 +1312,24 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                             "manifest": source.manifest(),
                         }
                     )
+                    # On growth, slice only the new records (sequence beyond
+                    # the last pushed) bounded by a per-tick cap so a burst
+                    # can't push a multi-megabyte frame.  The snapshot above
+                    # stays for back-compat; the batch feeds the follow-now
+                    # playhead directly.
+                    if latest_seq > last_pushed_seq:
+                        new_records, last_pushed_seq = _records_since(
+                            source, last_pushed_seq, _WS_RECORD_BATCH_CAP
+                        )
+                        if new_records:
+                            await ws.send_json(
+                                {
+                                    "type": "records",
+                                    "records": new_records,
+                                    "from_seq": new_records[0].get("sequence"),
+                                    "to_seq": last_pushed_seq,
+                                }
+                            )
                 if not source.is_live:
                     break
                 # Poll every 500ms for new records.  WS clients also

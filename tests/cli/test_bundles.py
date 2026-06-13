@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import _format_size
+from easycat.cli.debug.bundles import _format_follow_line, _format_size
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
@@ -349,6 +349,71 @@ def test_journal_grep_invalid_regex_exits_with_error(cli: CliRunner, tmp_path: P
     payload = json.loads(result.stdout)
     assert payload["status"] == "error"
     assert "invalid regex" in payload["message"]
+
+
+def test_format_follow_line_basic_shape() -> None:
+    line = _format_follow_line(
+        {"sequence": 5, "turn_id": "t1", "name": "stt_final", "data": {"stage": "stt"}}
+    )
+    assert line == "[5] turn=t1 name=stt_final stage=stt"
+
+
+def test_format_follow_line_gap_marker() -> None:
+    # A synthetic BufferOverflow gap notice renders as a one-line marker.
+    line = _format_follow_line({"sequence": 7, "data": {"dropped_from": "follow_gap", "gap": 3}})
+    assert line == "-- gap: 3 records dropped --"
+
+
+def test_format_follow_line_milestone_and_audio_bar() -> None:
+    line = _format_follow_line(
+        {"sequence": 9, "turn_id": "t1", "name": "tts_frame", "data": {"audio_bytes": 2048}}
+    )
+    assert "milestone=tts_first_byte" in line
+    assert "audio=2048B" in line
+    # The same record with the milestone suppressed keeps the audio bar.
+    later = _format_follow_line(
+        {
+            "sequence": 11,
+            "turn_id": "t1",
+            "name": "tts_frame",
+            "data": {"audio_bytes": 2048},
+            "_no_milestone": True,
+        }
+    )
+    assert "milestone=tts_first_byte" not in later
+    assert "audio=2048B" in later
+
+
+def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:
+    # ZIP bundles are immutable and cannot grow, so live tail refuses them
+    # with guidance toward bundles show / journal grep.
+    bundle = tmp_path / "frozen.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted"}])
+
+    result = cli.invoke(app, ["journal", "follow", str(bundle), "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "immutable" in payload["message"]
+    assert "bundles show" in payload["message"]
+
+
+def test_tail_alias_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:
+    # The top-level ``easycat tail`` alias shares the follow implementation.
+    bundle = tmp_path / "frozen.bundle"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted"}])
+
+    result = cli.invoke(app, ["tail", str(bundle), "--json"])
+    assert result.exit_code == 2
+
+
+def test_journal_follow_missing_sqlite_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "gone.sqlite"
+    result = cli.invoke(app, ["journal", "follow", str(missing), "--json"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "not found" in payload["message"]
 
 
 def test_peripheral_cli_plan_tracks_current_debug_commands() -> None:

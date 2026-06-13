@@ -713,6 +713,41 @@ defaults to tune.
 
 Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat.
 
+### `easycat journal follow` / `easycat tail`
+
+Live-tail a SQLite journal as a session writes it, so you can watch a call
+unfold from the terminal instead of refreshing the debugger UI. `easycat
+journal follow` is the namespaced form; `easycat tail` is the top-level
+shorthand for the same command.
+
+```
+Usage: easycat journal follow [OPTIONS] JOURNAL
+       easycat tail [OPTIONS] JOURNAL
+
+Options:
+      --from-sequence INTEGER  Start at this sequence [default: future only; 0 replays history]
+      --errors                 Only print records that carry an error
+      --turn TEXT              Restrict the tail to a single turn id
+      --json                   Stream newline-delimited JSON, one record per line
+      --help                   Show this message and exit
+```
+
+It wraps a `ReadonlySqliteJournal` in a `JournalView` and drives
+`JournalView.follow(...)`, polling for new records and printing one redacted
+line per record (`[seq] turn=.. name=.. stage=.. detail`). The first TTS byte
+of each turn is flagged as a critical-path milestone, audio frames render a
+compact throughput bar, and a dropped-record gap surfaces as
+`-- gap: N records dropped --`. Transient `FileNotFoundError` /
+`sqlite3.OperationalError` while the writer is mid-rotation are retried rather
+than aborting the tail; Ctrl-C exits cleanly.
+
+`--json` emits newline-delimited JSON (one record per line, not a single
+envelope) so a consumer can read the stream incrementally. Exported ZIP
+bundles are immutable and cannot grow, so a `.zip`/`.bundle` path exits 2 with
+guidance to use `bundles show` or `journal grep` instead.
+
+Exit codes: 0 clean / Ctrl-C, 2 immutable bundle path, 5 journal missing.
+
 ## Commands NOT in This Plan
 
 Explicit non-goals, with reasoning.
@@ -823,6 +858,7 @@ EasyCat — voice bot framework
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
     journal     Search and tail captured journals and crash dumps
+    tail        Live-tail a SQLite journal as it grows
 
   Validation
     validate    Run validation checks and inspect validation reports

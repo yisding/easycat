@@ -36,8 +36,10 @@ output; it is not a separate bundle file format.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
+import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1519,6 +1521,236 @@ def journal_grep(
         )
 
 
+# ── `easycat journal follow` / `easycat tail` ────────────────────
+
+
+# Record names whose ``data['audio_bytes']`` we render as a compact audio
+# bar so a tail watcher can eyeball codec/frame throughput without opening
+# the debugger UI.
+_FOLLOW_AUDIO_NAMES = frozenset(("tts_frame", "stt_audio_in"))
+# The TTS first-byte names mirror ``debug/_turn_timeline._TTS_FIRST`` — the
+# first such record per turn closes the critical-path milestone, so the
+# follow line flags it as a per-turn milestone landmark.
+_FOLLOW_TTS_FIRST = frozenset(("tts_frame", "tts_audio"))
+
+
+def _follow_audio_bar(record: Mapping[str, Any]) -> str:
+    """Render a tiny throughput bar for an audio record, or ``""``.
+
+    Reads ``data['audio_bytes']`` (the per-frame byte count the audio
+    stages journal) and maps it onto a short block-glyph bar so a long
+    tail stays scannable.  Never raises on malformed data.
+    """
+    data = record.get("data")
+    if not isinstance(data, Mapping):
+        return ""
+    audio_bytes = data.get("audio_bytes")
+    if not isinstance(audio_bytes, int) or audio_bytes <= 0:
+        return ""
+    # ~1 block per kilobyte, capped so a large frame can't blow out the line.
+    blocks = min(20, max(1, audio_bytes // 1024))
+    return f"audio={audio_bytes}B {'▮' * blocks}"
+
+
+def _format_follow_line(record: Mapping[str, Any]) -> str:
+    """Render one live-tail line for *record* — pure and table-testable.
+
+    Shape: ``[seq] turn=.. name=.. stage=.. detail``.  Two special cases:
+
+    - A synthetic :class:`BufferOverflow` gap notice
+      (``data['dropped_from'] == 'follow_gap'``) renders as a one-line
+      ``-- gap: N records dropped --`` marker so a non-contiguous sequence
+      stream is obvious in the tail.
+    - The first TTS byte of a turn and audio frames append a milestone or
+      throughput annotation; both reuse ``_record_stage`` / ``_record_detail``
+      so the CLI and the bundle timeline agree on field projection.
+    """
+    data = record.get("data")
+    if isinstance(data, Mapping) and data.get("dropped_from") == "follow_gap":
+        gap = data.get("gap")
+        count = gap if isinstance(gap, int) and gap > 0 else "?"
+        return f"-- gap: {count} records dropped --"
+
+    seq = record.get("sequence")
+    seq_text = str(seq) if isinstance(seq, int) else "-"
+    turn_id = safe_turn_id(record.get("turn_id")) or "-"
+    name = str(record.get("name") or "-")
+    stage = _record_stage(record) or "-"
+
+    parts = [f"[{seq_text}]", f"turn={turn_id}", f"name={name}", f"stage={stage}"]
+    detail = _record_detail(record)
+    if detail:
+        parts.append(detail)
+    # The first TTS byte of a turn closes the critical-path milestone; callers
+    # that have already flagged it for a turn pass ``_no_milestone`` to drop
+    # the landmark on later frames of the same turn.
+    if name in _FOLLOW_TTS_FIRST and not record.get("_no_milestone"):
+        parts.append("milestone=tts_first_byte")
+    audio_bar = _follow_audio_bar(record)
+    if audio_bar:
+        parts.append(audio_bar)
+    return " ".join(parts)
+
+
+async def _stream_follow(
+    view: Any,
+    *,
+    from_sequence: int | None,
+    errors_only: bool,
+    turn_id: str | None,
+    json_output: bool,
+) -> None:
+    """Drive a :meth:`JournalView.follow` loop, printing one line per record.
+
+    Persistent SQLite journals are written by a separate live session, so
+    transient ``FileNotFoundError`` / ``sqlite3.OperationalError`` (a half-open
+    file, a table not yet created) are swallowed and retried on the next poll
+    rather than aborting the tail.  Per-turn milestone names ride the formatted
+    line so a tail watcher sees the critical-path landmarks inline.
+    """
+    seen_tts_first: set[str] = set()
+    async for record in view.follow(from_sequence=from_sequence, poll_interval=0.25):
+        record_dict = _record_to_follow_dict(record)
+        # ``errors_only`` filters to records that carry an error, but always
+        # let the synthetic gap notice through so a dropped-record warning is
+        # never hidden by the filter.
+        is_gap = (
+            isinstance(record_dict.get("data"), Mapping)
+            and record_dict["data"].get("dropped_from") == "follow_gap"
+        )
+        if errors_only and not record_dict.get("error") and not is_gap:
+            continue
+        rec_turn = safe_turn_id(record_dict.get("turn_id"))
+        if turn_id is not None and not is_gap and rec_turn != turn_id:
+            continue
+
+        if json_output:
+            # Newline-delimited JSON, one record per line (NOT a single
+            # envelope) so a consumer can ``read`` the stream incrementally.
+            stdout_console.print(json.dumps(record_dict, sort_keys=False))
+            continue
+
+        # Only the FIRST TTS byte of a turn is the milestone landmark; later
+        # frames of the same turn keep the throughput bar but drop the tag.
+        name = str(record_dict.get("name") or "")
+        if name in _FOLLOW_TTS_FIRST and rec_turn is not None:
+            if rec_turn in seen_tts_first:
+                record_dict = {**record_dict, "_no_milestone": True}
+            else:
+                seen_tts_first.add(rec_turn)
+        stdout_console.print(escape(_format_follow_line(record_dict)))
+
+
+def _record_to_follow_dict(record: Any) -> dict[str, Any]:
+    """Project a ``JournalRecord`` (or dict) into the follow-line dict shape."""
+    if isinstance(record, dict):
+        return record
+    out: dict[str, Any] = {}
+    for attr in ("sequence", "session_id", "name", "turn_id", "data", "input_ref", "output_ref"):
+        out[attr] = getattr(record, attr, None)
+    kind = getattr(record, "kind", None)
+    out["kind"] = getattr(kind, "value", kind)
+    error = getattr(record, "error", None)
+    if error is not None:
+        out["error"] = {
+            "type": getattr(error, "type", None),
+            "message": getattr(error, "message", None),
+        }
+    timing = getattr(record, "timing", None)
+    if timing is not None:
+        out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
+    return out
+
+
+@cli_command
+def follow_journal(
+    bundle_path: Path = typer.Argument(
+        ...,
+        help="Path to a live or crash-dump ``.sqlite`` journal to tail.",
+    ),
+    from_sequence: int | None = typer.Option(
+        None,
+        "--from-sequence",
+        help="Start the tail at this sequence (default: only future records; 0 replays history).",
+    ),
+    errors_only: bool = typer.Option(
+        False,
+        "--errors",
+        help="Only print records that carry an error.",
+    ),
+    turn: str | None = typer.Option(
+        None,
+        "--turn",
+        help="Restrict the tail to a single turn id.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Stream newline-delimited JSON, one record per line (not a single envelope).",
+    ),
+) -> None:
+    """Live-tail a SQLite journal as it grows, redacting every printed line.
+
+    Wraps a :class:`ReadonlySqliteJournal` in a :class:`JournalView` and
+    drives :meth:`JournalView.follow`, so a tail keeps up with a session
+    writing the same ``.sqlite`` file.  Exported ZIP bundles are immutable
+    and cannot grow, so they exit with guidance to use ``bundles show``.
+    """
+    from easycat.runtime import JournalView
+    from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+    if bundle_path.suffix != ".sqlite":
+        emit_command_error(
+            "journal_follow",
+            "Live tail only works on a .sqlite journal; ZIP bundles are immutable. "
+            "Use 'easycat bundles show <path>' or 'easycat journal grep <path>' instead.",
+            json_output=json_output,
+            exit_code=2,
+            path=str(bundle_path),
+        )
+        raise typer.Exit(2)
+    if not bundle_path.exists():
+        emit_command_error(
+            "journal_follow",
+            f"Journal not found: {bundle_path}",
+            json_output=json_output,
+            exit_code=5,
+            path=str(bundle_path),
+        )
+        raise typer.Exit(5)
+
+    view = JournalView(ReadonlySqliteJournal(bundle_path))
+    if not json_output:
+        stderr_console.print(
+            f"[bold]Tailing[/] [cyan]{escape(str(bundle_path))}[/] — Ctrl-C to stop."
+        )
+
+    async def _runner() -> None:
+        while True:
+            try:
+                await _stream_follow(
+                    view,
+                    from_sequence=from_sequence,
+                    errors_only=errors_only,
+                    turn_id=turn,
+                    json_output=json_output,
+                )
+                return
+            except (FileNotFoundError, sqlite3.OperationalError):
+                # The live writer may not have created the table yet, or the
+                # file is mid-rotation; back off briefly and retry the tail.
+                await asyncio.sleep(0.25)
+
+    # A bare Ctrl-C propagates out of ``asyncio.run`` as ``KeyboardInterrupt``;
+    # the top-level ``main()`` handler maps it to a clean exit code 130.
+    asyncio.run(_runner())
+
+
+journal_app.command(
+    name="follow", help="Live-tail a SQLite journal as it grows, redacting every line."
+)(follow_journal)
+
+
 journal_app.command(
     name="grep", help="Full-text search a journal or bundle, redacting every match."
 )(journal_grep)
@@ -1536,6 +1768,7 @@ bundles_app.command(name="export", help="Write a redacted context pack for a cod
 __all__: list[str] = [
     "bundles_app",
     "export_bundle",
+    "follow_journal",
     "inspect_bundle",
     "journal_app",
     "journal_grep",

@@ -959,6 +959,7 @@
         style="width: 140px;" />
         <span id="live-zoom-label" style="width: 70px;">100 px/s</span>
       </label>
+      <label><input id="live-follow-toggle" type="checkbox" checked /> follow now</label>
       <span class="spacer"></span>
       <span class="legend">
         <span style="color:#6ea8fe">vad</span>
@@ -1236,6 +1237,7 @@ const state = {
   manifest: null,
   records: [],
   liveRecords: [],
+  liveFollow: true,
   turns: [],
   timeline: [],
   transcripts: [],
@@ -1586,6 +1588,14 @@ $("#live-zoom").addEventListener("input", (e) => {
   _liveZoomPxPerSec = parseInt(e.target.value, 10) || 100;
   $("#live-zoom-label").textContent = `${_liveZoomPxPerSec} px/s`;
   if (state.activeTab === "live") renderLiveView();
+});
+$("#live-follow-toggle").addEventListener("change", (e) => {
+  state.liveFollow = e.target.checked;
+  // Snap the playhead to the right edge immediately when follow is enabled.
+  if (state.liveFollow && state.activeTab === "live") {
+    const canvas = $("#live-canvas");
+    if (canvas) canvas.scrollLeft = canvas.scrollWidth;
+  }
 });
 
 function renderLiveView() {
@@ -2570,9 +2580,37 @@ function connectWS() {
       const msg = JSON.parse(ev.data);
       if (msg.type === "snapshot") {
         _scheduleSnapshotRefresh();
+      } else if (msg.type === "records") {
+        _appendLiveRecords(msg.records);
       }
     } catch { /* ignore malformed */ }
   });
+}
+
+// Append a capped, only-new ``{type:'records'}`` batch to the Live view's
+// dedicated record set.  Dedups by sequence so a snapshot-driven refetch
+// overlapping with a push can't double-render a record, then re-renders the
+// live timeline and (when follow-now is on and the Live tab is active)
+// scrolls the playhead to the right edge so the newest events stay visible.
+function _appendLiveRecords(records) {
+  if (!Array.isArray(records) || records.length === 0) return;
+  const seen = new Set((state.liveRecords || []).map((r) => r.sequence));
+  let added = false;
+  for (const r of records) {
+    if (r == null || seen.has(r.sequence)) continue;
+    seen.add(r.sequence);
+    state.liveRecords.push(r);
+    added = true;
+  }
+  if (!added) return;
+  state.liveRecords.sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+  if (state.activeTab === "live") {
+    renderLiveView();
+    if (state.liveFollow) {
+      const canvas = $("#live-canvas");
+      if (canvas) canvas.scrollLeft = canvas.scrollWidth;
+    }
+  }
 }
 function setWSStatus(connected) {
   state.wsConnected = connected;

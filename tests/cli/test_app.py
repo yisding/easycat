@@ -174,6 +174,17 @@ def test_journal_group_registers_grep_subcommand() -> None:
     assert "grep" in journal_group.commands
 
 
+def test_journal_group_registers_follow_subcommand() -> None:
+    # WP9 adds ``journal follow`` as a subcommand only (no duplicate journal
+    # command-text/journey entry) plus a distinct top-level ``tail`` alias.
+    _register_commands()
+    journal_group = get_command(app).commands["journal"]
+    assert "follow" in journal_group.commands
+    assert "tail" in _registered_top_level_command_names()
+    # ``follow`` is a subcommand, not a top-level command name.
+    assert "follow" not in _registered_top_level_command_names()
+
+
 def test_journal_command_text_registered_exactly_once() -> None:
     # WP8 owns the single ``journal`` command-surface registration; later
     # work packages add only subcommands and must not re-add this entry.

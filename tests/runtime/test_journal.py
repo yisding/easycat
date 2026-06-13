@@ -427,6 +427,71 @@ class TestJournalView:
         assert "dropped_from" not in first.data
 
 
+class TestReadonlySqliteFollow:
+    """``JournalView.follow`` over a ``ReadonlySqliteJournal`` (the live-tail
+    backend used by ``easycat journal follow`` / ``easycat tail``)."""
+
+    async def test_follow_yields_appended_records(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        writer = SqliteJournal("tail-sess", data_dir=str(tmp_path))
+        try:
+            writer.append(kind=JournalRecordKind.EVENT, name="first", session_id="tail-sess")
+
+            # The readonly view re-opens the file each query, so it observes
+            # records the writer commits after the view was constructed.
+            db_path = tmp_path / "journals" / "tail-sess.sqlite"
+            view = JournalView(ReadonlySqliteJournal(db_path))
+
+            received: list[str] = []
+
+            async def follower() -> None:
+                async for rec in view.follow(from_sequence=0, poll_interval=0.01):
+                    received.append(rec.name)
+                    if len(received) >= 2:
+                        break
+
+            task = asyncio.create_task(follower())
+            await _yield_to_scheduled_tasks()
+            writer.append(kind=JournalRecordKind.EVENT, name="second", session_id="tail-sess")
+            await asyncio.wait_for(task, timeout=3.0)
+
+            assert received == ["first", "second"]
+        finally:
+            writer.close()
+
+    async def test_followed_records_format_with_follow_line(self, tmp_path):
+        # Acceptance: a followed record renders through the CLI formatter and a
+        # tts_frame yields the per-turn milestone landmark + audio bar.
+        from easycat.cli.debug.bundles import _format_follow_line, _record_to_follow_dict
+        from easycat.runtime import SqliteJournal
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        writer = SqliteJournal("fmt-sess", data_dir=str(tmp_path))
+        try:
+            writer.append(
+                kind=JournalRecordKind.EVENT,
+                name="tts_frame",
+                session_id="fmt-sess",
+                turn_id="t1",
+                data={"audio_bytes": 4096},
+            )
+            db_path = tmp_path / "journals" / "fmt-sess.sqlite"
+            view = JournalView(ReadonlySqliteJournal(db_path))
+
+            gen = view.follow(from_sequence=0, poll_interval=0.01)
+            rec = await asyncio.wait_for(gen.__anext__(), timeout=3.0)
+            await gen.aclose()
+
+            line = _format_follow_line(_record_to_follow_dict(rec))
+            assert "name=tts_frame" in line
+            assert "milestone=tts_first_byte" in line
+            assert "audio=4096B" in line
+        finally:
+            writer.close()
+
+
 class TestCreateJournal:
     def test_returns_ring_buffer(self):
         j = create_journal("test-session")
