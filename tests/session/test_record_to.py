@@ -14,6 +14,9 @@ from easycat.config import (
     create_session,
     create_text_session,
 )
+from easycat.runtime import InMemoryRingBuffer
+from easycat.session._session import Session
+from easycat.session._types import SessionConfig
 
 
 class _DummyAgent:
@@ -246,3 +249,71 @@ async def test_easyconfig_record_to_exports_on_stop(
     await session.stop()
 
     assert len(_bundles(tmp_path, session.session_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_to_sanitizes_low_level_session_id_path_components(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "intended"
+    escape = tmp_path / "escape"
+    session = Session(
+        SessionConfig(
+            journal=InMemoryRingBuffer(),
+            record_to=target,
+            session_id="../escape/owned",
+            runtime_mode="text_session",
+        )
+    )
+
+    await session.stop()
+
+    bundles = list(target.glob("__-escape-owned-*.zip"))
+    assert len(bundles) == 1
+    assert bundles[0].parent == target
+    assert not escape.exists()
+
+
+@pytest.mark.asyncio
+async def test_record_to_sanitizes_low_level_absolute_session_id(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "intended"
+    absolute_session_id = str(tmp_path / "escape" / "owned")
+    session = Session(
+        SessionConfig(
+            journal=InMemoryRingBuffer(),
+            record_to=target,
+            session_id=absolute_session_id,
+            runtime_mode="text_session",
+        )
+    )
+
+    await session.stop()
+
+    bundles = list(target.glob("*-escape-owned-*.zip"))
+    assert len(bundles) == 1
+    assert bundles[0].parent == target
+    assert not (tmp_path / "escape").exists()
+
+
+@pytest.mark.asyncio
+async def test_record_to_sanitizes_low_level_windows_drive_session_id(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "intended"
+    session = Session(
+        SessionConfig(
+            journal=InMemoryRingBuffer(),
+            record_to=target,
+            session_id=r"C:\escape\owned",
+            runtime_mode="text_session",
+        )
+    )
+
+    await session.stop()
+
+    bundles = list(target.glob("C-escape-owned-*.zip"))
+    assert len(bundles) == 1
+    assert bundles[0].parent == target
+    assert ":" not in bundles[0].name
