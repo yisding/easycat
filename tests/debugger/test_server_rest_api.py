@@ -6,7 +6,14 @@ pytest.importorskip("aiohttp")
 
 from easycat import create_text_session
 from easycat.debug.bundle import RunBundle
-from easycat.debugger.server import DebuggerSource, _bundle_source, _make_app
+from easycat.debugger import server as _server
+from easycat.debugger.server import (
+    DebuggerSource,
+    _bundle_source,
+    _coerce_frames_to_format,
+    _collect_audio_frames,
+    _make_app,
+)
 
 from ._server_helpers import _build_voice_bundle, _DeterministicAgent
 
@@ -256,6 +263,123 @@ async def test_api_audio_concat_rejects_invalid_turn_id(tmp_path):
         assert resp.status == 400
 
 
+async def test_api_audio_concat_mic_track_returns_caller_wav(tmp_path):
+    """``?track=mic`` stitches the STT stage's captured input into a WAV."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "stage_start"
+        and (r.get("data") or {}).get("stage") == "stt"
+        and r.get("input_ref")
+        and r.get("turn_id")
+    )
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/concat/{turn_id}?track=mic")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        body = await resp.read()
+        assert body[:4] == b"RIFF"
+        assert body[8:12] == b"WAVE"
+        assert len(body) > 44
+
+
+async def test_api_audio_concat_rejects_unknown_track(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        turn_id = next(
+            r.get("turn_id")
+            for r in RunBundle.load(bundle_path).records()
+            if r.get("name") == "tts_frame" and r.get("turn_id")
+        )
+        resp = await client.get(f"/api/audio/concat/{turn_id}?track=bogus")
+        assert resp.status == 400
+
+
+def _audio_source(records, blobs):
+    """Build a synthetic ``DebuggerSource`` over in-memory records/artifacts."""
+    return DebuggerSource(
+        label="audio-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: blobs.get(ref),
+        _manifest_fn=lambda: {},
+    )
+
+
+async def test_api_audio_concat_tts_format_mismatch_raises_409(tmp_path):
+    """The strict TTS track must refuse to splice differing PCM formats."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": "a",
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": "b",
+            "data": {"sample_rate": 24000, "channels": 1, "sample_width": 2},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x00" * 320, "b": b"\x01" * 320})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/concat/t1")
+        assert resp.status == 409
+
+
+async def test_api_audio_concat_mic_skips_format_mismatch_without_raising(tmp_path):
+    """The lenient mic track drops format-mismatched blobs instead of 409.
+
+    The first frame matches the chosen format; the second has a different
+    sample width (no audioop conversion path), so it is silently skipped and
+    the response is still a valid WAV built from the surviving frame.
+    """
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "b",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x00" * 320, "b": b"\x01" * 160})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/concat/t1?track=mic")
+        assert resp.status == 200
+        body = await resp.read()
+        assert body[:4] == b"RIFF"
+        # Only the first (matching) frame survives: 44-byte header + 320 bytes.
+        assert len(body) == 44 + 320
+
+
 async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):
     """Cost panel must degrade gracefully — a bundle with no CostRecord
     events still returns a well-formed totals dict."""
@@ -390,3 +514,89 @@ async def test_records_total_unchanged_when_filtering(tmp_path):
         all_resp = await (await client.get("/api/records")).json()
         tts_resp = await (await client.get("/api/records?stage=tts")).json()
         assert tts_resp["total"] < all_resp["total"]
+
+
+def test_coerce_frames_to_format_strict_raises_on_mismatch():
+    """The strict (TTS) path raises ValueError on a format mismatch."""
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x01" * 320, {"sample_rate": 24000, "channels": 1, "sample_width": 2}),
+    ]
+    with pytest.raises(ValueError):
+        _coerce_frames_to_format(frames, fmt, strict=True)
+
+
+def test_coerce_frames_to_format_lenient_resamples_with_audioop():
+    """Lenient (mic) path resamples a differing rate when audioop is present."""
+    if _server._audioop is None:  # pragma: no cover - 3.13+ path
+        pytest.skip("audioop unavailable on this interpreter")
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x02" * 320, {"sample_rate": 8000, "channels": 1, "sample_width": 2}),
+    ]
+    blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
+    # Both frames survive: the second is upsampled (8k -> 16k) rather than
+    # dropped, so we get two blobs and the resampled one is longer.
+    assert dropped == 0
+    assert len(blobs) == 2
+    assert len(blobs[1]) > len(frames[1][1])
+
+
+def test_coerce_frames_to_format_lenient_skips_when_audioop_missing(monkeypatch):
+    """When audioop is unavailable, a width mismatch is skipped, not raised."""
+    monkeypatch.setattr(_server, "_audioop", None)
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x01" * 160, {"sample_rate": 16000, "channels": 1, "sample_width": 1}),
+    ]
+    blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
+    assert blobs == [frames[0][1]]
+    assert dropped == 1
+
+
+def test_collect_audio_frames_mic_selects_stt_stage_start():
+    """The mic track picks STT stage_start input_ref frames, ordered by seq."""
+    records = [
+        {
+            "sequence": 5,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "b",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        # A non-STT stage_start and a tts_frame must be ignored on the mic track.
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "vad",
+            "data": {"stage": "vad", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 3,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": "tts",
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+    ]
+    blobs = {"a": b"AA", "b": b"BB", "vad": b"VV", "tts": b"TT"}
+    source = DebuggerSource(
+        label="mic-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: blobs.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    frames, fmt = _collect_audio_frames(source, "t1", track="mic")
+    assert frames == [b"AA", b"BB"]  # seq 1 then seq 5, vad/tts excluded
+    assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}

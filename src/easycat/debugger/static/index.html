@@ -510,6 +510,14 @@
     margin-bottom: 12px;
     white-space: pre-wrap;
   }
+  .transcript-turn .audio-caption {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 10px;
+    font-weight: 600;
+  }
   .transcript-turn audio {
     width: 100%;
     height: 32px;
@@ -1515,8 +1523,13 @@ function renderTimelineView() {
       onclick: () => filterRecordsByTurn(turn.turn_id),
     }, "Records"));
     actions.appendChild(el("button", {
-      onclick: () => playConcatAudio(turn.turn_id),
-    }, "▶ Audio"));
+      onclick: () => playConcatAudio(turn.turn_id, "tts"),
+    }, "▶ Bot"));
+    if ((turnSummary.stt_audio_bytes || 0) > 0) {
+      actions.appendChild(el("button", {
+        onclick: () => playConcatAudio(turn.turn_id, "mic"),
+      }, "▶ Caller"));
+    }
     header.appendChild(actions);
     turnNode.appendChild(header);
 
@@ -1738,11 +1751,14 @@ function _liveSelectRecord(seq) {
   if (rec) selectRecord(rec);
 }
 
-async function playConcatAudio(turnId) {
+async function playConcatAudio(turnId, track = "tts") {
   try {
-    const resp = await fetch(`/api/audio/concat/${encodeURIComponent(turnId)}`);
+    let path = `/api/audio/concat/${encodeURIComponent(turnId)}`;
+    if (track !== "tts") path += `?track=${encodeURIComponent(track)}`;
+    const resp = await fetch(path);
     if (!resp.ok) {
-      alert(`No audio for turn ${turnId}`);
+      const who = track === "mic" ? "caller" : "bot";
+      alert(`No ${who} audio for turn ${turnId}`);
       return;
     }
     const blob = await resp.blob();
@@ -2013,17 +2029,27 @@ function renderTranscriptView() {
         agentText.addEventListener("click", () => _liveSelectRecord(turn.agent_seq));
       }
       node.appendChild(agentText);
-      // Only render the audio element when the rollup says this turn
-      // produced TTS bytes — otherwise the browser shows a broken
-      // player when /api/audio/concat 404s.
-      const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
-      if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
-        node.appendChild(el("audio", {
-          controls: "",
-          src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}`,
-          preload: "none",
-        }));
-      }
+    }
+    // Only render an audio element when the rollup says this turn produced
+    // the matching bytes — otherwise the browser shows a broken player when
+    // /api/audio/concat 404s.  Caller (mic) and Bot (TTS) get separate
+    // labelled players so a developer can A/B the two sides of the turn.
+    const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
+    if (turnSummary && (turnSummary.stt_audio_bytes || 0) > 0) {
+      node.appendChild(el("div", { class: "audio-caption" }, "Caller"));
+      node.appendChild(el("audio", {
+        controls: "",
+        src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}?track=mic`,
+        preload: "none",
+      }));
+    }
+    if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
+      node.appendChild(el("div", { class: "audio-caption" }, "Bot"));
+      node.appendChild(el("audio", {
+        controls: "",
+        src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}?track=tts`,
+        preload: "none",
+      }));
     }
     root.appendChild(node);
   }

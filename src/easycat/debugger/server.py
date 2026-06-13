@@ -17,7 +17,7 @@ Routes:
 - ``GET  /api/cost``                  — cost rollup and budget status
 - ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
-- ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn
+- ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
 - ``POST /api/replay``                — run replay against the source
 - ``POST /api/export``                — export the source as a bundle ZIP
 - ``GET  /ws``                        — WebSocket push for live updates
@@ -54,6 +54,15 @@ from easycat.runtime.costs import (
     max_session_cost_usd_from_snapshot,
 )
 
+# ``audioop`` was removed from the stdlib in Python 3.13.  Mic-track audio
+# stitching uses it for best-effort resample/downmix, but the debugger must
+# import cleanly without it — when absent we skip format-mismatched frames
+# rather than coercing them.
+try:
+    import audioop as _audioop
+except ImportError:  # pragma: no cover - exercised on 3.13+
+    _audioop = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +87,13 @@ _SEARCH_SCAN_LIMIT = 50000
 # the slice keeps each frame small and lets the cursor catch up over a few
 # polls rather than serializing a megabyte at once.
 _WS_RECORD_BATCH_CAP = 200
+
+# Audio-track selectors for ``/api/audio/concat``.  ``tts`` stitches the bot's
+# synthesized output (``tts_frame``/``output_ref``); ``mic`` stitches the
+# caller's captured input (the STT stage's ``stage_start``/``input_ref``).
+_AUDIO_TRACK_TTS = "tts"
+_AUDIO_TRACK_MIC = "mic"
+_VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC})
 
 
 def _safe_ref(ref: str) -> str:
@@ -753,32 +769,105 @@ def _cost_rollup(
     return {"per_turn": by_turn, "totals": totals, "budget": budget}
 
 
-def _collect_tts_frames(
-    source: DebuggerSource, turn_id: str
-) -> tuple[list[bytes], dict[str, int]]:
-    """Return ``(pcm_blobs_in_order, format)`` for one turn's TTS frames.
+def _coerce_frames_to_format(
+    frames: list[tuple[int, bytes, dict[str, Any]]],
+    fmt: dict[str, int],
+    *,
+    strict: bool,
+) -> tuple[list[bytes], int]:
+    """Reconcile *frames* to a single PCM *format*, returning ``(blobs, dropped)``.
 
-    Streaming concat reads this and writes the WAV header up-front,
-    then pushes each PCM blob to the response without buffering the
-    entire stream in memory.
+    Every frame whose ``sample_rate``/``channels``/``sample_width`` already
+    matches *fmt* passes through untouched.  For a mismatch:
 
-    Raises ``ValueError`` if frames have inconsistent PCM formats —
-    never silently splices different sample rates together.
+    - ``strict=True`` (TTS) raises :class:`ValueError` — the bot's own output
+      should never splice across formats, and the route maps this to a 409.
+    - ``strict=False`` (mic) makes a best-effort conversion with stdlib
+      :mod:`audioop` (resample / downmix) when ``sample_width`` matches, and
+      otherwise *skips* the blob (incrementing the dropped counter) so a noisy
+      caller capture never aborts the whole turn.  When :mod:`audioop` is
+      unavailable (Python 3.13+) any mismatch is skipped.
     """
+    blobs: list[bytes] = []
+    dropped = 0
+    target_rate = fmt["sample_rate"]
+    target_channels = fmt["channels"]
+    target_width = fmt["sample_width"]
+    for _seq, blob, data in frames:
+        rate = int(data.get("sample_rate") or 0)
+        channels = int(data.get("channels") or 0)
+        width = int(data.get("sample_width") or 0)
+        if rate == target_rate and channels == target_channels and width == target_width:
+            blobs.append(blob)
+            continue
+        if strict:
+            raise ValueError(
+                "tts_frame format mismatch: cannot stitch frames with differing "
+                "sample_rate/channels/sample_width"
+            )
+        # Non-strict (mic): convert when the sample widths line up and audioop
+        # is present; otherwise drop the blob rather than corrupt the stream.
+        if _audioop is None or width != target_width or width <= 0:
+            dropped += 1
+            continue
+        try:
+            converted = blob
+            if channels == 2 and target_channels == 1:
+                converted = _audioop.tomono(converted, width, 0.5, 0.5)
+            elif channels != target_channels:
+                dropped += 1
+                continue
+            if rate > 0 and rate != target_rate:
+                converted, _ = _audioop.ratecv(
+                    converted, width, target_channels, rate, target_rate, None
+                )
+        except Exception:
+            # audioop rejects malformed PCM lengths; never abort the turn.
+            dropped += 1
+            continue
+        blobs.append(converted)
+    return blobs, dropped
+
+
+def _collect_audio_frames(
+    source: DebuggerSource, turn_id: str, *, track: str
+) -> tuple[list[bytes], dict[str, int]]:
+    """Return ``(pcm_blobs_in_order, format)`` for one turn's audio frames.
+
+    ``track == "tts"`` stitches the bot's synthesized output: ``tts_frame``
+    records carrying an ``output_ref`` artifact, ordered by sequence, and the
+    format is reconciled *strictly* (a mismatch raises :class:`ValueError`).
+
+    ``track == "mic"`` stitches the caller's captured input: the STT stage's
+    ``stage_start`` records (``data.stage == "stt"``) carrying an
+    ``input_ref`` artifact, ordered by sequence.  The format is reconciled
+    *leniently* — mismatched blobs are best-effort converted or skipped so a
+    ragged caller capture never aborts the response.
+
+    Streaming concat reads this and writes the WAV header up-front, then
+    pushes each PCM blob to the response without buffering the whole stream in
+    memory.
+    """
+    is_tts = track == _AUDIO_TRACK_TTS
     frames: list[tuple[int, bytes, dict[str, Any]]] = []
     for r in source.records():
-        if r.get("name") != "tts_frame":
-            continue
         if r.get("turn_id") != turn_id:
             continue
-        ref = r.get("output_ref")
+        data = r.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        if is_tts:
+            if r.get("name") != "tts_frame":
+                continue
+            ref = r.get("output_ref")
+        else:
+            if r.get("name") != "stage_start" or data.get("stage") != "stt":
+                continue
+            ref = r.get("input_ref")
         if not ref:
             continue
         blob = source.artifact(ref)
         if blob is None:
-            continue
-        data = r.get("data") or {}
-        if not isinstance(data, dict):
             continue
         frames.append((int(r.get("sequence") or 0), blob, data))
 
@@ -792,17 +881,19 @@ def _collect_tts_frames(
         "channels": int(fmt0.get("channels") or 1),
         "sample_width": int(fmt0.get("sample_width") or 2),
     }
-    for _seq, _blob, data in frames[1:]:
-        if (
-            int(data.get("sample_rate") or 0) != fmt["sample_rate"]
-            or int(data.get("channels") or 0) != fmt["channels"]
-            or int(data.get("sample_width") or 0) != fmt["sample_width"]
-        ):
-            raise ValueError(
-                f"tts_frame format mismatch in turn {turn_id}: cannot stitch "
-                "frames with differing sample_rate/channels/sample_width"
-            )
-    return [blob for _seq, blob, _data in frames], fmt
+    blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
+    return blobs, fmt
+
+
+def _collect_tts_frames(
+    source: DebuggerSource, turn_id: str
+) -> tuple[list[bytes], dict[str, int]]:
+    """Return ``(pcm_blobs_in_order, format)`` for one turn's TTS frames.
+
+    Thin back-compat wrapper over :func:`_collect_audio_frames` with the
+    strict TTS track; raises ``ValueError`` on inconsistent PCM formats.
+    """
+    return _collect_audio_frames(source, turn_id, track=_AUDIO_TRACK_TTS)
 
 
 def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
@@ -1105,13 +1196,22 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
             return web.Response(status=400, text="invalid turn_id")
+        track = request.query.get("track", _AUDIO_TRACK_TTS)
+        if track not in _VALID_AUDIO_TRACKS:
+            return web.Response(
+                status=400,
+                text=f"invalid track; expected one of {sorted(_VALID_AUDIO_TRACKS)}",
+            )
         try:
-            frames, fmt = _collect_tts_frames(source, turn_id)
+            frames, fmt = _collect_audio_frames(source, turn_id, track=track)
         except ValueError as exc:
-            logger.warning("Cannot assemble TTS audio for %s: %s", turn_id, exc)
+            # Only the strict TTS track raises; the mic track skips mismatched
+            # blobs instead, so a 409 here always means a bot-output format
+            # clash that we refuse to silently splice.
+            logger.warning("Cannot assemble %s audio for %s: %s", track, turn_id, exc)
             return web.Response(status=409, text="cannot assemble audio for this turn")
         if not frames:
-            return web.Response(status=404, text="no tts frames for turn")
+            return web.Response(status=404, text=f"no {track} frames for turn")
         # Stream the WAV out incrementally.  Whole-file response would
         # buffer tens of MB for long turns; StreamResponse lets aiohttp
         # backpressure the client and avoids the heap spike.
