@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from easycat.runtime._journal_codec import _row_to_record
+from easycat.runtime._journal_codec import _build_slice_where, _row_to_record
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 
 
@@ -49,16 +49,13 @@ class ReadonlySqliteJournal:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if kind is not None:
-            clauses.append("kind = ?")
-            params.append(kind.value)
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where, params = _build_slice_where(
+            kind=kind, session_id=session_id, turn_id=turn_id, name=name, tags=tags
+        )
         return self._query(f"SELECT * FROM journal{where} ORDER BY sequence", params)
 
     def close(self) -> None:
@@ -140,12 +137,21 @@ class FrozenJournalSnapshot:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         out = list(self._records)
         if kind is not None:
             out = [r for r in out if r.kind == kind]
         if session_id is not None:
             out = [r for r in out if r.session_id == session_id]
+        if turn_id is not None:
+            out = [r for r in out if r.turn_id == turn_id]
+        if name is not None:
+            out = [r for r in out if r.name == name]
+        if tags:
+            out = [r for r in out if tags <= r.tags]
         return out
 
     def close(self) -> None:

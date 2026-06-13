@@ -822,6 +822,7 @@ EasyCat — voice bot framework
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
+    journal     Search and tail captured journals and crash dumps
 
   Validation
     validate    Run validation checks and inspect validation reports

@@ -103,6 +103,36 @@ class TestInMemoryRingBuffer:
         assert len(j.slice(session_id="s1")) == 1
         assert len(j.slice(session_id="s2")) == 1
 
+    def test_slice_by_turn_id(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(kind=JournalRecordKind.EVENT, name="e1", session_id="s1", turn_id="t1")
+        j.append(kind=JournalRecordKind.EVENT, name="e2", session_id="s1", turn_id="t2")
+        assert [r.name for r in j.slice(turn_id="t1")] == ["e1"]
+
+    def test_slice_by_name(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(kind=JournalRecordKind.EVENT, name="stt_final", session_id="s1")
+        j.append(kind=JournalRecordKind.EVENT, name="tts_frame", session_id="s1")
+        assert [r.name for r in j.slice(name="stt_final")] == ["stt_final"]
+
+    def test_slice_by_tags_subset(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="e1",
+            session_id="s1",
+            tags=frozenset({"a", "b"}),
+        )
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="e2",
+            session_id="s1",
+            tags=frozenset({"a"}),
+        )
+        # ``a`` is a subset of both; ``a+b`` only matches the first record.
+        assert {r.name for r in j.slice(tags=frozenset({"a"}))} == {"e1", "e2"}
+        assert [r.name for r in j.slice(tags=frozenset({"a", "b"}))] == ["e1"]
+
     def test_overflow_drops_oldest(self):
         j = InMemoryRingBuffer(capacity=5)
         for i in range(10):
@@ -416,3 +446,58 @@ class TestCreateJournal:
         j = create_journal("test-session", debug="full", data_dir=str(tmp_path))
         assert isinstance(j, SqliteJournal)
         j.close()
+
+
+class TestSliceFiltersAcrossBackends:
+    """``slice(turn_id=/name=/tags=)`` must WHERE-match on every backend,
+    including the non-inheriting ``LitestreamSqliteJournal`` wrapper (which
+    must forward the new kwargs to its inner SQLite journal without an
+    arg-mismatch)."""
+
+    def _seed(self, j) -> None:
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="stt_final",
+            session_id="sess",
+            turn_id="t1",
+            tags=frozenset({"slow", "stt"}),
+        )
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="tts_frame",
+            session_id="sess",
+            turn_id="t2",
+            tags=frozenset({"stt"}),
+        )
+
+    def test_sqlite_slice_filters(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        try:
+            self._seed(j)
+            assert [r.name for r in j.slice(turn_id="t1")] == ["stt_final"]
+            assert [r.name for r in j.slice(name="tts_frame")] == ["tts_frame"]
+            # ``stt`` tags both rows; ``slow`` is unique to the first.
+            assert {r.name for r in j.slice(tags=frozenset({"stt"}))} == {
+                "stt_final",
+                "tts_frame",
+            }
+            assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        finally:
+            j.close()
+
+    def test_litestream_wrapper_slice_forwards_kwargs(self, tmp_path):
+        # No replica URL configured → degrades to plain SQLite, but the
+        # wrapper's slice() signature + forwarding must still accept and pass
+        # the new filters through without an arg mismatch.
+        from easycat.runtime import LitestreamSqliteJournal
+
+        j = LitestreamSqliteJournal("sess", data_dir=tmp_path)
+        try:
+            self._seed(j)
+            assert [r.name for r in j.slice(turn_id="t2")] == ["tts_frame"]
+            assert [r.name for r in j.slice(name="stt_final")] == ["stt_final"]
+            assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        finally:
+            j.close()

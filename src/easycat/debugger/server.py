@@ -10,7 +10,7 @@ Routes:
 
 - ``GET  /``                          — static HTML page
 - ``GET  /api/manifest``              — bundle/session metadata
-- ``GET  /api/records``               — journal records (filterable)
+- ``GET  /api/records``               — journal records (filterable; ``?q=`` text, ``&regex=1``)
 - ``GET  /api/turns``                 — per-turn rollup with stage counts
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
@@ -66,6 +66,12 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # bundles run a few thousand records, and a per-frame `data` dict is
 # small. UI surfaces `frames_truncated` + `total_frames` when this fires.
 _REPLAY_FRAME_LIMIT = 5000
+
+# Hard cap on records scanned by full-text search (``/api/records?q=`` and
+# ``easycat journal grep``) so a pathological journal can't pin the event
+# loop / CLI on a single request. Past this many records the scan stops and
+# callers see ``scan_truncated`` so the cap is visible rather than silent.
+_SEARCH_SCAN_LIMIT = 50000
 
 
 def _safe_ref(ref: str) -> str:
@@ -515,6 +521,127 @@ def _filter_and_paginate(
     return full, total
 
 
+def _record_searchable_text(record: dict[str, Any]) -> str:
+    """Build the haystack a full-text query is matched against.
+
+    Combines the serialized ``data`` payload, the error type/message/notes,
+    and the indexed ``name``/``turn_id`` so a query like ``timeout`` or a
+    phone number embedded in a tool argument is found regardless of where it
+    lives in the record.
+    """
+    parts: list[str] = []
+    name = record.get("name")
+    if name:
+        parts.append(str(name))
+    turn_id = record.get("turn_id")
+    if turn_id:
+        parts.append(str(turn_id))
+    data = record.get("data")
+    if data is not None:
+        try:
+            parts.append(json.dumps(data, default=str))
+        except (TypeError, ValueError):
+            parts.append(str(data))
+    error = record.get("error")
+    if isinstance(error, dict):
+        for key in ("type", "message", "traceback", "notes"):
+            value = error.get(key)
+            if value:
+                parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _record_match_fields(record: dict[str, Any], needle: Any, *, is_regex: bool) -> list[str]:
+    """Return the named fields of *record* whose text matches *needle*.
+
+    *needle* is a lowercased substring (when ``is_regex`` is false) or a
+    compiled :class:`re.Pattern` (when true).  Used to render match badges in
+    the SPA and to scope redaction in the CLI grep output.
+    """
+
+    def _hit(text: str) -> bool:
+        if not text:
+            return False
+        if is_regex:
+            return needle.search(text) is not None
+        return needle in text.lower()
+
+    fields: list[str] = []
+    if _hit(str(record.get("name") or "")):
+        fields.append("name")
+    if _hit(str(record.get("turn_id") or "")):
+        fields.append("turn_id")
+    data = record.get("data")
+    if data is not None:
+        try:
+            data_text = json.dumps(data, default=str)
+        except (TypeError, ValueError):
+            data_text = str(data)
+        if _hit(data_text):
+            fields.append("data")
+    error = record.get("error")
+    if isinstance(error, dict) and any(
+        _hit(str(error.get(key) or "")) for key in ("type", "message", "traceback", "notes")
+    ):
+        fields.append("error")
+    return fields
+
+
+def _search_records(
+    records: list[dict[str, Any]],
+    *,
+    query: str,
+    use_regex: bool = False,
+    errors_only: bool = False,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Full-text filter *records* against *query*, returning ``(matches, truncated)``.
+
+    The haystack per record is :func:`_record_searchable_text` (serialized
+    ``data`` + error fields + ``name``/``turn_id``).  Matching is a
+    case-insensitive substring by default; when *use_regex* is true *query* is
+    compiled with :data:`re.IGNORECASE` and a bad pattern raises
+    :class:`ValueError` (mapped to a 400 / CLI error by callers).
+
+    Matched records are returned as **shallow copies** carrying a
+    ``_match_fields`` list — the cached ``source.records()`` dicts are never
+    mutated.  The scan stops after :data:`_SEARCH_SCAN_LIMIT` records and the
+    second tuple element reports whether that cap was hit.
+    """
+    needle: Any
+    if use_regex:
+        try:
+            needle = re.compile(query, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError("invalid regex") from exc
+    else:
+        needle = query.lower()
+        if not needle:
+            # An empty query matches nothing rather than everything — an empty
+            # search box should not silently return the entire journal.
+            return [], False
+
+    matches: list[dict[str, Any]] = []
+    truncated = False
+    for index, record in enumerate(records):
+        if index >= _SEARCH_SCAN_LIMIT:
+            truncated = True
+            break
+        if errors_only and not record.get("error"):
+            continue
+        haystack = _record_searchable_text(record)
+        if use_regex:
+            if needle.search(haystack) is None:
+                continue
+        elif needle not in haystack.lower():
+            continue
+        fields = _record_match_fields(record, needle, is_regex=use_regex)
+        # Copy before annotating so the cached source records stay pristine.
+        copied = dict(record)
+        copied["_match_fields"] = fields
+        matches.append(copied)
+    return matches, truncated
+
+
 def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pull user transcripts and agent responses out of the journal.
 
@@ -861,21 +988,46 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
         # without being capped by ``limit``.
         names = [n for n in params.getall("name", ()) if n]
+        query = params.get("q") or None
+        use_regex = params.get("regex") == "1"
+        errors_only = params.get("errors") == "1"
+        scan_truncated = False
         try:
-            page, total = _filter_and_paginate(
-                source.records(),
-                stage=params.get("stage") or None,
-                turn_id=params.get("turn") or None,
-                name=names or None,
-                from_seq=from_seq,
-                to_seq=to_seq,
-                errors_only=params.get("errors") == "1",
-                limit=limit,
-                offset=offset,
-            )
+            if query is None:
+                page, total = _filter_and_paginate(
+                    source.records(),
+                    stage=params.get("stage") or None,
+                    turn_id=params.get("turn") or None,
+                    name=names or None,
+                    from_seq=from_seq,
+                    to_seq=to_seq,
+                    errors_only=errors_only,
+                    limit=limit,
+                    offset=offset,
+                )
+            else:
+                # Filter first (no pagination), full-text search the subset, then
+                # paginate the matches so "X of N" reflects the search result set.
+                subset = _filter_records(
+                    source.records(),
+                    stage=params.get("stage") or None,
+                    turn_id=params.get("turn") or None,
+                    name=names or None,
+                    from_seq=from_seq,
+                    to_seq=to_seq,
+                    errors_only=errors_only,
+                    limit=None,
+                    offset=0,
+                )
+                matched, scan_truncated = _search_records(subset, query=query, use_regex=use_regex)
+                total = len(matched)
+                page = matched[offset:]
+                if limit is not None:
+                    page = page[:limit]
         except ValueError as exc:
             logger.warning("Invalid records query: %s", exc)
-            return web.Response(status=400, text="invalid query parameters")
+            text = "invalid regex" if str(exc) == "invalid regex" else "invalid query parameters"
+            return web.Response(status=400, text=text)
         return web.json_response(
             {
                 "records": page,
@@ -883,6 +1035,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 "total": total,
                 "offset": offset,
                 "limit": limit,
+                "scan_truncated": scan_truncated,
             }
         )
 

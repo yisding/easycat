@@ -19,6 +19,7 @@ from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import (
     _JOURNAL_INSERT_SQL,
     _SQLITE_SCHEMA,
+    _build_slice_where,
     _encode_journal_row,
     _ensure_journal_schema,
     _journal_record_for_append,
@@ -130,16 +131,13 @@ class _SqlJournalBase:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        clauses: list[str] = []
-        params: list[Any] = []
-        if kind is not None:
-            clauses.append("kind = ?")
-            params.append(kind.value)
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        where, params = _build_slice_where(
+            kind=kind, session_id=session_id, turn_id=turn_id, name=name, tags=tags
+        )
         with self._lock:
             rows = self._conn.execute(
                 f"SELECT * FROM journal{where} ORDER BY sequence", params
@@ -719,8 +717,17 @@ class LitestreamSqliteJournal:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        return self._inner.slice(kind=kind, session_id=session_id)
+        return self._inner.slice(
+            kind=kind,
+            session_id=session_id,
+            turn_id=turn_id,
+            name=name,
+            tags=tags,
+        )
 
     def flush(self) -> None:
         self._inner.flush()

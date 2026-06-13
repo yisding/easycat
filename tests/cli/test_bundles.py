@@ -281,6 +281,76 @@ def test_inspect_crashed_journal_reports_error_type(cli: CliRunner, tmp_path: Pa
     assert payload["failing_turn_id"] == "t7"
 
 
+def test_journal_grep_json_redacts_matches(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "grep.zip"
+    _make_bundle(
+        bundle,
+        [
+            {
+                "sequence": 1,
+                "name": "stt_final",
+                "turn_id": "t1",
+                "data": {"text": "please call 555-123-4567 now"},
+            },
+            {"sequence": 2, "name": "tts_frame", "turn_id": "t2", "data": {"codec": "pcm"}},
+        ],
+    )
+
+    result = cli.invoke(app, ["journal", "grep", str(bundle), "--query", "call", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "journal_grep"
+    assert payload["total"] == 1
+    assert payload["scan_truncated"] is False
+    match = payload["matches"][0]
+    assert match["sequence"] == 1
+    assert match["match_fields"] == ["data"]
+    # The raw phone number must never reach the output; only the marker.
+    assert "555-123-4567" not in result.stdout
+    assert match["data"]["text"] == "please call [REDACTED_PHONE] now"
+
+
+def test_journal_grep_regex_and_errors(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "grep2.zip"
+    _make_bundle(
+        bundle,
+        [
+            {"sequence": 1, "name": "ok", "turn_id": "t1", "data": {"v": "fine"}},
+            {
+                "sequence": 2,
+                "name": "agent_failed",
+                "turn_id": "t1",
+                "data": {},
+                "error": {"type": "ToolTimeoutError", "message": "timed out"},
+            },
+        ],
+    )
+
+    result = cli.invoke(
+        app, ["journal", "grep", str(bundle), "--query", "timeout|fine", "--regex", "--json"]
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert {m["sequence"] for m in payload["matches"]} == {1, 2}
+
+    errors_only = cli.invoke(
+        app, ["journal", "grep", str(bundle), "--query", "t1", "--errors", "--json"]
+    )
+    payload = json.loads(errors_only.stdout)
+    assert [m["sequence"] for m in payload["matches"]] == [2]
+
+
+def test_journal_grep_invalid_regex_exits_with_error(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "grep3.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "ok", "data": {}}])
+
+    result = cli.invoke(app, ["journal", "grep", str(bundle), "--query", "[", "--regex", "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert "invalid regex" in payload["message"]
+
+
 def test_peripheral_cli_plan_tracks_current_debug_commands() -> None:
     plan = (Path(__file__).resolve().parents[2] / "plan/peripherals/peripheral-cli.md").read_text(
         encoding="utf-8"

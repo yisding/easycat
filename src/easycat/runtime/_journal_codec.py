@@ -73,6 +73,44 @@ _JOURNAL_INSERT_SQL = (
 )
 
 
+def _build_slice_where(
+    *,
+    kind: JournalRecordKind | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
+    name: str | None = None,
+    tags: frozenset[str] | None = None,
+) -> tuple[str, list[Any]]:
+    """Build the ``WHERE`` clause + params shared by every SQL ``slice``.
+
+    ``kind``/``session_id``/``turn_id``/``name`` map to indexed equality
+    predicates.  ``tags`` is stored as a sorted comma-joined string (see
+    :data:`_SQLITE_SCHEMA`), so each requested tag becomes a best-effort
+    ``tags LIKE '%tag%'`` substring predicate — a coarse filter that the
+    caller can tighten in Python if exact subset semantics are required.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if kind is not None:
+        clauses.append("kind = ?")
+        params.append(kind.value)
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if turn_id is not None:
+        clauses.append("turn_id = ?")
+        params.append(turn_id)
+    if name is not None:
+        clauses.append("name = ?")
+        params.append(name)
+    if tags:
+        for tag in sorted(tags):
+            clauses.append("tags LIKE ?")
+            params.append(f"%{tag}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
 def _encode_journal_row(
     *,
     sequence: int,

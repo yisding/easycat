@@ -82,6 +82,39 @@ async def test_api_filters_records_by_stage_and_turn(tmp_path):
             assert data.get("stage") == "tts" or data.get("observed_stage") == "tts"
 
 
+async def test_api_records_full_text_search_filters(tmp_path):
+    """``/api/records?q=`` must full-text filter and stay a subset of all records."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        all_recs = await (await client.get("/api/records?limit=10000")).json()
+        # ``tts`` appears in the stage/name of TTS records but not every record.
+        hits = await (await client.get("/api/records?q=tts&limit=10000")).json()
+        assert 0 < hits["total"] <= all_recs["total"]
+        assert hits["scan_truncated"] is False
+        for r in hits["records"]:
+            assert r.get("_match_fields")
+
+
+async def test_api_records_rejects_invalid_regex(tmp_path):
+    """``/api/records?regex=1&q=[`` must return 400, not a 500."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/records?regex=1&q=%5B")
+        assert resp.status == 400
+        body = await resp.text()
+        assert "invalid regex" in body
+
+
 async def test_api_timeline_emits_per_stage_spans(tmp_path):
     """``/api/timeline`` should compute real per-stage span timing for
     each turn, not just record counts.  The waterfall view depends on

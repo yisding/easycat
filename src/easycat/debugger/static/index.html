@@ -170,6 +170,26 @@
     font-family: var(--mono);
     font-size: 11px;
   }
+  #records-search.invalid {
+    border-color: var(--err, #e5534b);
+    outline: 1px solid var(--err, #e5534b);
+  }
+  .match-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: rgba(255, 214, 102, 0.18);
+    color: var(--muted);
+    font-size: 10px;
+    font-family: var(--mono);
+  }
+  mark.search-hit {
+    background: rgba(255, 214, 102, 0.45);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -976,6 +996,10 @@
       <div id="records-filters">
         <select id="stage-filter"><option value="">all stages</option></select>
         <input id="name-filter" placeholder="name…" style="width: 180px;" />
+        <input id="records-search" placeholder="search text / regex…" style="width: 200px;" />
+        <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
+          <input type="checkbox" id="records-regex" /> regex
+        </label>
         <input id="from-seq" placeholder="from seq" style="width: 100px;" />
         <input id="to-seq" placeholder="to seq" style="width: 100px;" />
         <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
@@ -1181,6 +1205,32 @@ function svg(tag, attrs, children) {
 const $ = sel => document.querySelector(sel);
 function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
+// Build a fragment that wraps every case-insensitive occurrence of the
+// current plain-text search query in <mark>, using textContent only so no
+// markup from journal data is ever interpreted.  Regex queries are not
+// highlighted (we only badge the matched fields) — the cell renders as
+// plain text.  Returns a single text node when there is nothing to mark.
+function _highlightText(text) {
+  text = text == null ? "" : String(text);
+  const query = state.filters.query;
+  if (!query || state.filters.regex) return document.createTextNode(text);
+  const frag = document.createDocumentFragment();
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let from = 0;
+  let idx = lowerText.indexOf(lowerQuery);
+  while (idx !== -1) {
+    if (idx > from) frag.appendChild(document.createTextNode(text.slice(from, idx)));
+    const hit = el("mark", { class: "search-hit" });
+    hit.textContent = text.slice(idx, idx + lowerQuery.length);
+    frag.appendChild(hit);
+    from = idx + lowerQuery.length;
+    idx = lowerText.indexOf(lowerQuery, from);
+  }
+  if (from < text.length) frag.appendChild(document.createTextNode(text.slice(from)));
+  return frag;
+}
+
 // ── State ────────────────────────────────────────────────────────
 const state = {
   manifest: null,
@@ -1190,7 +1240,7 @@ const state = {
   timeline: [],
   transcripts: [],
   cost: null,
-  filters: { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false },
+  filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   selectedSeq: null,
   ws: null,
   wsConnected: false,
@@ -1756,6 +1806,8 @@ function renderRecordsView() {
   // Restore filters into UI when the view is reopened.
   $("#stage-filter").value = state.filters.stage || "";
   $("#name-filter").value = state.filters.name || "";
+  $("#records-search").value = state.filters.query || "";
+  $("#records-regex").checked = !!state.filters.regex;
   $("#from-seq").value = state.filters.from ?? "";
   $("#to-seq").value = state.filters.to ?? "";
   $("#errors-only-toggle").checked = !!state.filters.errorsOnly;
@@ -1766,18 +1818,34 @@ async function loadAndRenderRecords() {
   if (state.filters.stage) params.set("stage", state.filters.stage);
   if (state.filters.turn) params.set("turn", state.filters.turn);
   if (state.filters.name) params.set("name", state.filters.name);
+  if (state.filters.query) params.set("q", state.filters.query);
+  if (state.filters.query && state.filters.regex) params.set("regex", "1");
   if (state.filters.from) params.set("from", state.filters.from);
   if (state.filters.to) params.set("to", state.filters.to);
   if (state.filters.errorsOnly) params.set("errors", "1");
   // Cap at 500 rows for the table; pager controls below would let the
   // user step through bigger result sets if we needed to expose more.
   params.set("limit", "500");
-  const r = await getJSON(`/api/records?${params}`);
+  const search = $("#records-search");
+  let r;
+  try {
+    r = await getJSON(`/api/records?${params}`);
+  } catch (e) {
+    // A bad regex returns 400; surface it inline rather than throwing.
+    if (search) search.classList.add("invalid");
+    $("#record-count").textContent = state.filters.regex
+      ? "invalid regex" : "query error";
+    renderRecordRows([]);
+    return;
+  }
+  if (search) search.classList.remove("invalid");
   const shown = r.records.length;
   const total = r.total ?? shown;
-  $("#record-count").textContent = shown === total
+  let label = shown === total
     ? `${total} record${total === 1 ? "" : "s"}`
     : `showing ${shown} of ${total} records`;
+  if (r.scan_truncated) label += " (scan capped)";
+  $("#record-count").textContent = label;
   renderRecordRows(r.records);
 }
 
@@ -1799,10 +1867,22 @@ function renderRecordRows(records) {
       ? el("td", null, el("span", { class: `stage-tag ${stage}` }, stage))
       : el("td");
 
+    // Name cell: highlight plain-text query hits and badge which fields
+    // matched so a hit in ``data`` or ``error`` is visible without opening
+    // the record.  ``_match_fields`` is set by the server's full-text scan.
+    const nameCell = el("td", { class: r.error ? "has-error" : "" });
+    nameCell.appendChild(_highlightText(r.name || ""));
+    const matchFields = Array.isArray(r._match_fields) ? r._match_fields : [];
+    for (const field of matchFields) {
+      const badge = el("span", { class: "match-badge" });
+      badge.textContent = field;
+      nameCell.appendChild(badge);
+    }
+
     const tr = el("tr", { dataset: { seq: String(r.sequence) } }, [
       el("td", null, String(r.sequence)),
       el("td", { class: r.kind === "control" ? "kind-control" : "" }, r.kind || ""),
-      el("td", { class: r.error ? "has-error" : "" }, r.name || ""),
+      nameCell,
       stageCell,
       el("td", null, (r.turn_id || "").slice(-12)),
       el("td", null, refSpans.length ? refSpans : ""),
@@ -2523,6 +2603,17 @@ $("#name-filter").addEventListener("input", () => {
     state.filters.name = $("#name-filter").value.trim();
     loadAndRenderRecords();
   }, 200);
+});
+$("#records-search").addEventListener("input", () => {
+  clearTimeout(window._searchDebounce);
+  window._searchDebounce = setTimeout(() => {
+    state.filters.query = $("#records-search").value.trim();
+    loadAndRenderRecords();
+  }, 200);
+});
+$("#records-regex").addEventListener("change", () => {
+  state.filters.regex = $("#records-regex").checked;
+  if (state.filters.query) loadAndRenderRecords();
 });
 for (const id of ["from-seq", "to-seq"]) {
   document.getElementById(id).addEventListener("change", () => {

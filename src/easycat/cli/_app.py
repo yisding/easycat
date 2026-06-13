@@ -111,6 +111,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Summarise critical-path latency percentiles for a bundle.",
         journey="Summarise critical-path latency percentiles for a bundle",
     ),
+    "journal": _CommandText(
+        help="Search and tail captured journals and crash dumps.",
+        journey="Search and tail captured journals and crash dumps",
+    ),
     "validate": _CommandText(
         help="Run validation checks and inspect validation reports.",
         journey="Run validation checks and inspect validation reports",
@@ -123,7 +127,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
-    ("Debug with the journal", ("bundles", "inspect", "replay", "latency")),
+    ("Debug with the journal", ("bundles", "inspect", "replay", "latency", "journal")),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
 )
@@ -874,6 +878,7 @@ def _register_commands() -> None:
     from easycat.cli.debug.bundles import (
         bundles_app,
         inspect_bundle,
+        journal_app,
         latency_command,
         replay_bundle,
     )
@@ -893,6 +898,7 @@ def _register_commands() -> None:
     app.command(name="replay", help=_COMMAND_TEXT["replay"].help)(replay_bundle)
     app.command(name="latency", help=_COMMAND_TEXT["latency"].help)(latency_command)
     app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
+    app.add_typer(journal_app, name="journal", help=_COMMAND_TEXT["journal"].help)
     app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
     _COMMANDS_REGISTERED = True
 

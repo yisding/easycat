@@ -435,6 +435,94 @@ def test_filter_records_zero_limit_raises():
         )
 
 
+def _search_sample_records() -> list[dict]:
+    return [
+        {"sequence": 1, "name": "stt_final", "turn_id": "t1", "data": {"text": "hello world"}},
+        {
+            "sequence": 2,
+            "name": "agent_error",
+            "turn_id": "t1",
+            "data": {},
+            "error": {"type": "TimeoutError", "message": "request timed out"},
+        },
+        {"sequence": 3, "name": "tts_frame", "turn_id": "t2", "data": {"codec": "pcm"}},
+    ]
+
+
+def test_search_records_matches_data_substring():
+    from easycat.debugger.server import _search_records
+
+    matched, truncated = _search_records(_search_sample_records(), query="hello")
+    assert [r["sequence"] for r in matched] == [1]
+    assert matched[0]["_match_fields"] == ["data"]
+    assert truncated is False
+
+
+def test_search_records_matches_error_fields():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="timed out")
+    assert [r["sequence"] for r in matched] == [2]
+    assert matched[0]["_match_fields"] == ["error"]
+
+
+def test_search_records_matches_name_and_turn():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="t1")
+    assert [r["sequence"] for r in matched] == [1, 2]
+    assert all("turn_id" in r["_match_fields"] for r in matched)
+
+
+def test_search_records_regex_matches():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="timeout|pcm", use_regex=True)
+    assert [r["sequence"] for r in matched] == [2, 3]
+
+
+def test_search_records_invalid_regex_raises():
+    from easycat.debugger.server import _search_records
+
+    with pytest.raises(ValueError, match="invalid regex"):
+        _search_records(_search_sample_records(), query="[", use_regex=True)
+
+
+def test_search_records_empty_query_matches_nothing():
+    from easycat.debugger.server import _search_records
+
+    matched, truncated = _search_records(_search_sample_records(), query="")
+    assert matched == []
+    assert truncated is False
+
+
+def test_search_records_errors_only():
+    from easycat.debugger.server import _search_records
+
+    # ``t1`` appears in two records but only the error one survives ``errors_only``.
+    matched, _ = _search_records(_search_sample_records(), query="t1", errors_only=True)
+    assert [r["sequence"] for r in matched] == [2]
+
+
+def test_search_records_does_not_mutate_source():
+    from easycat.debugger.server import _search_records
+
+    records = _search_sample_records()
+    _search_records(records, query="hello")
+    assert all("_match_fields" not in r for r in records)
+
+
+def test_search_records_sets_scan_truncated_past_limit():
+    from easycat.debugger.server import _SEARCH_SCAN_LIMIT, _search_records
+
+    big = [
+        {"sequence": i, "name": "x", "data": {"k": "match"}} for i in range(_SEARCH_SCAN_LIMIT + 5)
+    ]
+    matched, truncated = _search_records(big, query="match")
+    assert truncated is True
+    assert len(matched) == _SEARCH_SCAN_LIMIT
+
+
 def test_summarise_turns_dedupes_t3_8_interrupt_fanout():
     """T3.8 fans an InterruptSignal across 8 stages, so a single
     barge-in would appear as 9 interruptions (8 control_signal + 1

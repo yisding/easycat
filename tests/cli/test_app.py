@@ -167,6 +167,21 @@ def test_peripheral_cli_plan_tracks_journey_menu() -> None:
     assert "Replay a RunBundle against current code" not in help_architecture
 
 
+def test_journal_group_registers_grep_subcommand() -> None:
+    _register_commands()
+    assert "journal" in _registered_top_level_command_names()
+    journal_group = get_command(app).commands["journal"]
+    assert "grep" in journal_group.commands
+
+
+def test_journal_command_text_registered_exactly_once() -> None:
+    # WP8 owns the single ``journal`` command-surface registration; later
+    # work packages add only subcommands and must not re-add this entry.
+    assert "journal" in _COMMAND_TEXT
+    journey_names = [name for _, section_names in _JOURNEY_SECTIONS for name in section_names]
+    assert journey_names.count("journal") == 1
+
+
 def test_validation_tasks_current_state_tracks_cli_surface() -> None:
     _register_commands()
     plan = (REPO_ROOT / "plan/validation/tasks.md").read_text()
