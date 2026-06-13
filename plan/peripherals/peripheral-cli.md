@@ -713,6 +713,36 @@ defaults to tune.
 
 Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat.
 
+### `easycat diff`
+
+Compare two recorded bundles (or `.sqlite` crash journals) turn-by-turn so
+you can answer "what changed between this run and the baseline?" without
+opening the debugger UI. Turns are aligned positionally (turn 0 of A vs turn
+0 of B); ragged turn counts pad the missing side and mark the pair
+`unmatched` so a dropped or extra turn is obvious. Milestone keys are read
+dynamically from `debug/_turn_diff.diff_bundles`, which reuses the shared
+`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` /
+`turn_cost_rollup` rollups so the diff never reimplements the math.
+
+```
+Usage: easycat diff [OPTIONS] PATH_A PATH_B
+
+Options:
+      --turn TEXT               Restrict the diff to a single positional turn index
+      --json                    Emit the standard JSON envelope
+      --help                    Show this message and exit
+```
+
+Each milestone cell reports `{a, b, delta_ms, pct, regressed}`; a milestone
+is flagged `regressed` only when the B side is meaningfully slower (>10% AND
+>5 ms). Transcript text is redacted via `redact_text` before any row is
+printed, and the transcript cell carries a `changed` flag. The human table
+renders one row per aligned turn with regressed milestones in red; `--json`
+emits `{a, b, turns: [...], summary: {worst_regression, total_cost_delta}}`.
+See `../../docs/latency.md` for how to read the milestone deltas.
+
+Exit codes: 0 clean, 5 either bundle missing/corrupt/too new for this EasyCat.
+
 ### `easycat journal follow` / `easycat tail`
 
 Live-tail a SQLite journal as a session writes it, so you can watch a call
@@ -857,6 +887,7 @@ EasyCat — voice bot framework
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
+    diff        Diff two bundles turn-by-turn for milestone and cost regressions
     journal     Search and tail captured journals and crash dumps
     tail        Live-tail a SQLite journal as it grows
 

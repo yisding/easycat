@@ -7,6 +7,7 @@ import json
 import sqlite3
 import zipfile
 from array import array
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -623,6 +624,152 @@ def test_latency_missing_bundle_exits_5(cli: CliRunner, tmp_path: Path) -> None:
     assert result.exit_code == 5
     payload = json.loads(result.stdout)
     assert payload["command"] == "latency"
+    assert payload["status"] == "error"
+
+
+def _slow_milestone_records(
+    turn_id: str, base_ns: int, *, token_extra_ms: int
+) -> list[JournalRecord]:
+    """A milestone chain where the agent's first token is *token_extra_ms* late.
+
+    Mirrors :func:`_milestone_records` but shifts the ``agent_delta`` and
+    ``tts_frame`` walls later so the ``agent_request_to_first_token_ms``
+    milestone (and everything downstream) regresses by a known amount.  Records
+    are frozen, so the shifted records are rebuilt via ``dataclasses.replace``.
+    """
+    ms = 1_000_000
+    shifted: list[JournalRecord] = []
+    for record in _milestone_records(turn_id, base_ns):
+        if record.name in ("agent_delta", "tts_frame"):
+            new_timing = TimingInfo(wall_ns=record.timing.wall_ns + token_extra_ms * ms)
+            shifted.append(replace(record, timing=new_timing))
+        else:
+            shifted.append(record)
+    return shifted
+
+
+def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Path) -> None:
+    """``easycat diff A B --json`` emits ``command=='diff'`` with a turns array,
+    a regressed milestone, and the worst-regression summary."""
+    a_records = _milestone_records("t1", 1_000_000_000) + [
+        JournalRecord(
+            sequence=99,
+            session_id="sess-a",
+            name="cost",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_000_000_000),
+            data={"usd": 0.10},
+        ),
+    ]
+    # B's first token is 100 ms late and the turn costs more.
+    b_records = _slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100) + [
+        JournalRecord(
+            sequence=99,
+            session_id="sess-b",
+            name="cost",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_000_000_000),
+            data={"usd": 0.25},
+        ),
+    ]
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=a_records), bundle_a)
+    export_debug_bundle(_FakeSession(records=b_records), bundle_b)
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "diff"
+    assert payload["a"] == str(bundle_a)
+    assert payload["b"] == str(bundle_b)
+
+    (turn,) = payload["turns"]
+    assert turn["index"] == 0
+    cell = turn["milestones"]["agent_request_to_first_token_ms"]
+    assert cell["delta_ms"] == pytest.approx(100.0)
+    assert cell["regressed"] is True
+    assert turn["cost"]["delta"] == pytest.approx(0.15)
+
+    worst = payload["summary"]["worst_regression"]
+    assert worst is not None
+    assert worst["delta_ms"] >= 100.0
+    assert payload["summary"]["total_cost_delta"] == pytest.approx(0.15)
+
+
+def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> None:
+    """A phone number a caller said aloud is redacted in the diff transcript."""
+    phone = "Call me at 415-555-0199 please"
+
+    def _with_transcript(turn_id: str, session: str, text: str) -> list[JournalRecord]:
+        chain: list[JournalRecord] = []
+        for record in _milestone_records(turn_id, 1_000_000_000):
+            if record.name == "stt_final":
+                chain.append(replace(record, data={"text": text}, session_id=session))
+            else:
+                chain.append(record)
+        return chain
+
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=_with_transcript("t1", "sa", phone)), bundle_a)
+    export_debug_bundle(
+        _FakeSession(records=_with_transcript("t1", "sb", "Different words")), bundle_b
+    )
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--json"])
+    assert result.exit_code == 0, result.stderr
+    # The raw phone number must never reach stdout.
+    assert "415-555-0199" not in result.stdout
+    payload = json.loads(result.stdout)
+    (turn,) = payload["turns"]
+    assert "415-555-0199" not in turn["transcript"]["user_a"]
+    # Transcript drift is still detected after redaction.
+    assert turn["transcript"]["changed"] is True
+
+
+def test_diff_human_renders_table_and_worst_regression(cli: CliRunner, tmp_path: Path) -> None:
+    """The human (no ``--json``) output renders the per-turn diff table and the
+    worst-regression headline."""
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=_milestone_records("t1", 1_000_000_000)), bundle_a)
+    export_debug_bundle(
+        _FakeSession(records=_slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100)),
+        bundle_b,
+    )
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b)])
+    assert result.exit_code == 0, result.stderr
+    unwrapped = _unwrapped(result.stdout)
+    assert "Two-source diff" in unwrapped
+    assert "Worst regression" in unwrapped
+
+
+def test_diff_turn_filter_restricts_output(cli: CliRunner, tmp_path: Path) -> None:
+    """``--turn`` restricts the diff to a single positional turn index."""
+    a_records = _milestone_records("t1", 1_000_000_000) + _milestone_records("t2", 2_000_000_000)
+    b_records = _milestone_records("u1", 1_000_000_000) + _milestone_records("u2", 2_000_000_000)
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=a_records), bundle_a)
+    export_debug_bundle(_FakeSession(records=b_records), bundle_b)
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--turn", "1", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert len(payload["turns"]) == 1
+    assert payload["turns"][0]["index"] == 1
+
+
+def test_diff_missing_bundle_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    """A missing bundle path exits 5 like the other journal commands."""
+    present = tmp_path / "present.zip"
+    export_debug_bundle(_FakeSession(records=_milestone_records("t1", 1_000_000_000)), present)
+    result = cli.invoke(app, ["diff", str(present), str(tmp_path / "nope.zip"), "--json"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "diff"
     assert payload["status"] == "error"
 
 

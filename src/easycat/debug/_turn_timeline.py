@@ -24,6 +24,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from easycat.runtime.costs import finite_number
+
 STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "telephony")
 
 # Milestone journal-record names.  ``vad_stop_speaking`` marks the VAD
@@ -391,12 +393,129 @@ def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return turns
 
 
+# Cost-rollup accumulator keys, in the order the debugger / CLI surface them.
+# ``usd`` / ``stt_seconds`` accumulate seconds and dollars (floats); ``tts_chars``
+# / ``llm_tokens`` are counts that stay integer-zero until a finite value lands,
+# preserving the historical JSON shape (``0`` not ``0.0``).
+_COST_KEYS = ("usd", "stt_seconds", "tts_chars", "llm_tokens")
+
+
+def _empty_cost_bucket() -> dict[str, float]:
+    return {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
+
+
+def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pull per-turn user transcripts and agent responses out of the journal.
+
+    The debugger transcript panel and the two-source ``easycat diff`` both
+    render this, so the projection lives here (dependency-free) rather than in
+    the aiohttp-optional ``debugger/server.py``.  Sources:
+
+    - User text: ``stt_final`` event records (``data.text`` / ``data.transcript``).
+    - Agent reply: AgentStage ``stage_complete`` records (``data.response``) for
+      the basic path; concatenated ``agent_delta`` ``TEXT_DELTA`` records for the
+      streaming path; ``agent_final`` ``data.text`` as the non-streaming fallback.
+
+    Each entry keeps the first sequence each side was observed at so callers can
+    deep-link to the originating record.
+    """
+    by_turn: dict[str, dict[str, Any]] = {}
+    for r in records:
+        turn_id = safe_turn_id(r.get("turn_id"))
+        if turn_id is None:
+            continue
+        bucket = by_turn.setdefault(
+            turn_id,
+            {
+                "turn_id": turn_id,
+                "user": "",
+                "agent": "",
+                "user_seq": None,
+                "agent_seq": None,
+                "agent_delta": [],
+                "agent_delta_seq": None,
+            },
+        )
+        name = r.get("name") or ""
+        data = r.get("data") or {}
+        seq = r.get("sequence")
+        if not isinstance(data, dict):
+            continue
+        if name == "stt_final":
+            txt = data.get("text") or data.get("transcript")
+            if isinstance(txt, str) and txt:
+                bucket["user"] = txt
+                bucket["user_seq"] = seq
+        elif name == "stage_complete" and (
+            data.get("stage") == "agent" or data.get("observed_stage") == "agent"
+        ):
+            resp = data.get("response")
+            if isinstance(resp, str) and resp:
+                bucket["agent"] = resp
+                bucket["agent_seq"] = seq
+        elif name == "agent_delta":
+            txt = data.get("text")
+            if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
+                bucket["agent_delta"].append(txt)
+                if bucket["agent_delta_seq"] is None:
+                    bucket["agent_delta_seq"] = seq
+        elif name == "agent_final":
+            txt = data.get("text")
+            if isinstance(txt, str) and txt and not bucket["agent"]:
+                bucket["agent"] = txt
+                bucket["agent_seq"] = seq
+
+    transcripts = []
+    for turn_id, bucket in by_turn.items():
+        if not bucket["agent"] and bucket["agent_delta"]:
+            bucket["agent"] = "".join(bucket["agent_delta"])
+            if bucket["agent_seq"] is None:
+                bucket["agent_seq"] = bucket["agent_delta_seq"]
+        bucket.pop("agent_delta", None)
+        bucket.pop("agent_delta_seq", None)
+        transcripts.append(bucket)
+    return transcripts
+
+
+def turn_cost_rollup(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    """Aggregate ``CostRecord``-style entries into ``(per_turn, totals)``.
+
+    Cost records (``cost`` / ``cost_record``) are owned by the peripheral
+    observability/cost plan, so they may be absent; this degrades to zeroes
+    rather than raising.  Malformed turn ids roll up under the session-level
+    ``""`` bucket.  Budget evaluation stays with the caller (it needs the
+    config snapshot), so this is the pure number-crunching half shared by the
+    debugger cost panel and the two-source ``easycat diff``.
+    """
+    by_turn: dict[str, dict[str, float]] = {}
+    totals: dict[str, float] = _empty_cost_bucket()
+    for r in records:
+        if r.get("name") not in ("cost", "cost_record"):
+            continue
+        data = r.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        turn_id = safe_turn_id(r.get("turn_id")) or ""
+        bucket = by_turn.setdefault(turn_id, _empty_cost_bucket())
+        for key in _COST_KEYS:
+            value = finite_number(data.get(key))
+            if value is None:
+                continue
+            bucket[key] += value
+            totals[key] += value
+    return by_turn, totals
+
+
 __all__ = [
     "STAGE_ORDER",
     "build_timeline",
+    "extract_turn_transcripts",
     "record_wall_ns",
     "safe_turn_id",
     "summarise_turns",
+    "turn_cost_rollup",
     "turn_milestones",
     "turn_waterfall",
 ]

@@ -111,6 +111,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Summarise critical-path latency percentiles for a bundle.",
         journey="Summarise critical-path latency percentiles for a bundle",
     ),
+    "diff": _CommandText(
+        help="Diff two bundles turn-by-turn: milestone, transcript, and cost deltas.",
+        journey="Diff two bundles turn-by-turn for milestone and cost regressions",
+    ),
     "journal": _CommandText(
         help="Search and tail captured journals and crash dumps.",
         journey="Search and tail captured journals and crash dumps",
@@ -131,7 +135,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
-    ("Debug with the journal", ("bundles", "inspect", "replay", "latency", "journal", "tail")),
+    (
+        "Debug with the journal",
+        ("bundles", "inspect", "replay", "latency", "diff", "journal", "tail"),
+    ),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
 )
@@ -881,6 +888,7 @@ def _register_commands() -> None:
     from easycat.cli.console import console as console_cmd
     from easycat.cli.debug.bundles import (
         bundles_app,
+        diff_command,
         follow_journal,
         inspect_bundle,
         journal_app,
@@ -902,6 +910,7 @@ def _register_commands() -> None:
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)
     app.command(name="replay", help=_COMMAND_TEXT["replay"].help)(replay_bundle)
     app.command(name="latency", help=_COMMAND_TEXT["latency"].help)(latency_command)
+    app.command(name="diff", help=_COMMAND_TEXT["diff"].help)(diff_command)
     app.command(name="tail", help=_COMMAND_TEXT["tail"].help)(follow_journal)
     app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
     app.add_typer(journal_app, name="journal", help=_COMMAND_TEXT["journal"].help)

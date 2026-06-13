@@ -165,6 +165,76 @@ def test_cost_rollup_treats_malformed_turn_ids_as_session_level_cost():
     assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.75)
 
 
+def test_build_transcript_delegates_to_shared_helper():
+    """The server transcript projection is the shared dependency-free helper.
+
+    ``_build_transcript`` must be byte-identical to
+    ``debug/_turn_timeline.extract_turn_transcripts`` so the SPA transcript
+    panel and the two-source ``easycat diff`` agree on what each turn said.
+    """
+    import json as _json
+
+    from easycat.debug._turn_timeline import extract_turn_transcripts
+
+    records = [
+        {"sequence": 1, "name": "stt_final", "turn_id": "t1", "data": {"text": "hi there"}},
+        {
+            "sequence": 2,
+            "name": "agent_delta",
+            "turn_id": "t1",
+            "data": {"text": "hello", "type": "TEXT_DELTA"},
+        },
+        {
+            "sequence": 3,
+            "name": "agent_delta",
+            "turn_id": "t1",
+            "data": {"text": " back", "type": "TEXT_DELTA"},
+        },
+        {
+            "sequence": 4,
+            "name": "stage_complete",
+            "turn_id": "t2",
+            "data": {"stage": "agent", "response": "second answer"},
+        },
+        {"sequence": 5, "name": "stt_final", "turn_id": ["bad"], "data": {"text": "dropped"}},
+    ]
+
+    server_out = _build_transcript(records)
+    shared_out = extract_turn_transcripts(records)
+    # Byte-identical JSON serialization confirms the lift preserved the shape.
+    assert _json.dumps(server_out) == _json.dumps(shared_out)
+    assert server_out[0]["agent"] == "hello back"
+
+
+def test_cost_rollup_per_turn_and_totals_match_shared_helper():
+    """The server cost rollup's per-turn/totals halves come from the shared
+    ``turn_cost_rollup`` byte-for-byte; only the budget is layered on top."""
+    import json as _json
+
+    from easycat.debug._turn_timeline import turn_cost_rollup
+
+    records = [
+        {"sequence": 1, "name": "cost", "turn_id": "t1", "data": {"usd": 0.2, "stt_seconds": 1.5}},
+        {
+            "sequence": 2,
+            "name": "cost_record",
+            "turn_id": "t2",
+            "data": {"usd": 0.65, "tts_chars": 120, "llm_tokens": 42},
+        },
+        {"sequence": 3, "name": "cost", "turn_id": ["bad"], "data": {"usd": 0.1}},
+    ]
+
+    server_out = _cost_rollup(records)
+    by_turn, totals = turn_cost_rollup(records)
+    # The per-turn and totals halves are identical (incl. integer-zero counts).
+    assert _json.dumps(server_out["per_turn"]) == _json.dumps(by_turn)
+    assert _json.dumps(server_out["totals"]) == _json.dumps(totals)
+    # Unset counts stay integer 0, not 0.0 (historical JSON shape preserved).
+    assert server_out["per_turn"]["t1"]["tts_chars"] == 0
+    assert isinstance(server_out["per_turn"]["t1"]["tts_chars"], int)
+    assert "budget" in server_out
+
+
 def test_summarise_turns_tracks_audio_bytes():
     records = [
         {

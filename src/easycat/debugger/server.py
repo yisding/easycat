@@ -45,14 +45,15 @@ from urllib.parse import urlsplit
 
 from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
+from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
+from easycat.debug._turn_timeline import turn_cost_rollup as _turn_cost_rollup
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 from easycat.runtime.costs import (
     cost_budget_status,
-    finite_number,
     max_session_cost_usd_from_snapshot,
 )
 
@@ -114,16 +115,6 @@ def _safe_turn_id(turn_id: str) -> str:
     if not _TURN_ID_OK.match(turn_id):
         raise ValueError(f"invalid turn_id: {turn_id!r}")
     return turn_id
-
-
-def _safe_record_turn_id(record: dict[str, Any]) -> str | None:
-    turn_id = record.get("turn_id")
-    if not isinstance(turn_id, str) or not turn_id:
-        return None
-    try:
-        return _safe_turn_id(turn_id)
-    except ValueError:
-        return None
 
 
 # ── Source adaptation ────────────────────────────────────────────
@@ -670,68 +661,12 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pull user transcripts and agent responses out of the journal.
 
     The UI renders this alongside the waterfall so a developer can read
-    the conversation without opening every record.  Sources:
-    - User text: ``stt_final`` event records (``data.text``).
-    - Agent reply: AgentStage ``stage_complete`` records
-      (``data.response``) for the basic path; concatenated agent_delta
-      records for the streaming path.
+    the conversation without opening every record.  The pure projection
+    lives in :func:`easycat.debug._turn_timeline.extract_turn_transcripts`
+    so the two-source ``easycat diff`` shares one implementation; this thin
+    wrapper keeps the historical name the SPA routes call.
     """
-    by_turn: dict[str, dict[str, Any]] = {}
-    for r in records:
-        turn_id = _safe_record_turn_id(r)
-        if turn_id is None:
-            continue
-        bucket = by_turn.setdefault(
-            turn_id,
-            {
-                "turn_id": turn_id,
-                "user": "",
-                "agent": "",
-                "user_seq": None,
-                "agent_seq": None,
-                "agent_delta": [],
-                "agent_delta_seq": None,
-            },
-        )
-        name = r.get("name") or ""
-        data = r.get("data") or {}
-        seq = r.get("sequence")
-        if not isinstance(data, dict):
-            continue
-        if name == "stt_final":
-            txt = data.get("text") or data.get("transcript")
-            if isinstance(txt, str) and txt:
-                bucket["user"] = txt
-                bucket["user_seq"] = seq
-        elif name == "stage_complete" and (
-            data.get("stage") == "agent" or data.get("observed_stage") == "agent"
-        ):
-            resp = data.get("response")
-            if isinstance(resp, str) and resp:
-                bucket["agent"] = resp
-                bucket["agent_seq"] = seq
-        elif name == "agent_delta":
-            txt = data.get("text")
-            if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
-                bucket["agent_delta"].append(txt)
-                if bucket["agent_delta_seq"] is None:
-                    bucket["agent_delta_seq"] = seq
-        elif name == "agent_final":
-            txt = data.get("text")
-            if isinstance(txt, str) and txt and not bucket["agent"]:
-                bucket["agent"] = txt
-                bucket["agent_seq"] = seq
-
-    transcripts = []
-    for turn_id, bucket in by_turn.items():
-        if not bucket["agent"] and bucket["agent_delta"]:
-            bucket["agent"] = "".join(bucket["agent_delta"])
-            if bucket["agent_seq"] is None:
-                bucket["agent_seq"] = bucket["agent_delta_seq"]
-        bucket.pop("agent_delta", None)
-        bucket.pop("agent_delta_seq", None)
-        transcripts.append(bucket)
-    return transcripts
+    return _extract_turn_transcripts(records)
 
 
 def _cost_rollup(
@@ -744,26 +679,11 @@ def _cost_rollup(
     Cost records are owned by the peripheral observability/cost plan so
     they may not exist in any given bundle.  The endpoint returns a
     well-formed shape with zeroes rather than 404'ing so the UI can
-    always render the panel.
+    always render the panel.  The per-turn / total aggregation is the shared
+    :func:`easycat.debug._turn_timeline.turn_cost_rollup`; only the budget
+    evaluation (which needs the config snapshot) stays here.
     """
-    by_turn: dict[str, dict[str, float]] = {}
-    totals: dict[str, float] = {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
-    for r in records:
-        if r.get("name") not in ("cost", "cost_record"):
-            continue
-        data = r.get("data") or {}
-        if not isinstance(data, dict):
-            continue
-        turn_id = _safe_record_turn_id(r) or ""
-        bucket = by_turn.setdefault(
-            turn_id, {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
-        )
-        for key in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            value = finite_number(data.get(key))
-            if value is None:
-                continue
-            bucket[key] += value
-            totals[key] += value
+    by_turn, totals = _turn_cost_rollup(records)
     budget = cost_budget_status(
         totals["usd"],
         max_session_cost_usd_from_snapshot(config_snapshot),
