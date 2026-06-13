@@ -38,6 +38,14 @@ _AGENT_REQUEST = "agent_request_started"
 _AGENT_FIRST = ("agent_delta", "agent_final")
 _TTS_FIRST = ("tts_frame", "tts_audio")
 
+# Barge-in milestone record names.  ``bot_started_speaking`` opens a playback
+# window the user can interrupt; the FIRST ``vad_start_speaking`` at/after that
+# is the user starting to barge in, and the FIRST ``bot_stopped_speaking`` /
+# ``playback_mark_ack`` after the barge-in is the bot actually going quiet.
+_BOT_STARTED = "bot_started_speaking"
+_USER_SPEECH_START = "vad_start_speaking"
+_BOT_STOPPED = ("bot_stopped_speaking", "playback_mark_ack")
+
 
 def record_wall_ns(record: Mapping[str, Any]) -> int | None:
     """Read a record's wall-clock timestamp in nanoseconds.
@@ -265,6 +273,11 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
     since brief pauses can emit several VAD stops within one turn.
     """
     state: dict[str, dict[str, int | None]] = {}
+    # Per-turn ``(wall_ns, name)`` pairs for the barge-in scan, which depends on
+    # wall-clock ordering rather than the single-pass FSM the response chain
+    # uses.  Records can arrive out of wall order across backends, so we sort
+    # each turn's barge-in markers before walking them.
+    barge_records: dict[str, list[tuple[int, str]]] = {}
     for r in records:
         turn_id = safe_turn_id(r.get("turn_id"))
         if turn_id is None:
@@ -281,6 +294,8 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
                 "agent_request": None,
                 "agent_first": None,
                 "tts_first": None,
+                "user_speech_start": None,
+                "bot_stopped": None,
             },
         )
         if name == _VAD_ENDPOINT and slot["stt_final"] is None:
@@ -293,6 +308,14 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
             slot["agent_first"] = wall
         elif name in _TTS_FIRST and slot["tts_first"] is None:
             slot["tts_first"] = wall
+        if name == _BOT_STARTED or name == _USER_SPEECH_START or name in _BOT_STOPPED:
+            barge_records.setdefault(turn_id, []).append((wall, name if name else ""))
+
+    for turn_id, pairs in barge_records.items():
+        slot = state[turn_id]
+        user_speech_start, bot_stopped = _barge_in_walls(pairs)
+        slot["user_speech_start"] = user_speech_start
+        slot["bot_stopped"] = bot_stopped
 
     milestones: dict[str, dict[str, float | None]] = {}
     for turn_id, slot in state.items():
@@ -308,8 +331,33 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
             "vad_endpoint_to_tts_first_byte_ms": _delta_ms(
                 slot["vad_endpoint"], slot["tts_first"]
             ),
+            "user_speech_start_to_bot_stopped_ms": _delta_ms(
+                slot["user_speech_start"], slot["bot_stopped"]
+            ),
         }
     return milestones
+
+
+def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | None]:
+    """Find the barge-in user-speech-start and bot-stopped walls for one turn.
+
+    Pure wall-clock ordering: the FIRST ``vad_start_speaking`` at/after a
+    ``bot_started_speaking`` is the user starting to barge in, and the FIRST
+    ``bot_stopped_speaking`` / ``playback_mark_ack`` strictly after that is the
+    bot going quiet.  Returns ``(None, None)`` when the turn never opened a
+    playback window or the user never spoke into it.
+    """
+    ordered = sorted(pairs, key=lambda pair: pair[0])
+    bot_speaking = False
+    user_speech_start: int | None = None
+    for wall, name in ordered:
+        if name == _BOT_STARTED:
+            bot_speaking = True
+        elif name == _USER_SPEECH_START and bot_speaking and user_speech_start is None:
+            user_speech_start = wall
+        elif name in _BOT_STOPPED and user_speech_start is not None:
+            return user_speech_start, wall
+    return user_speech_start, None
 
 
 def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -328,10 +376,18 @@ def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "agent_request_to_first_token_ms": None,
         "agent_first_token_to_tts_first_byte_ms": None,
         "vad_endpoint_to_tts_first_byte_ms": None,
+        "user_speech_start_to_bot_stopped_ms": None,
+    }
+    # Per-turn deduped interruption counts ride alongside the milestones as a
+    # TOP-LEVEL turn key (never under ``milestones``): the milestone-key-set
+    # guard inspects only ``turn['milestones']`` and would trip on an extra key.
+    interruptions = {
+        turn["turn_id"]: turn.get("interruption_count", 0) for turn in summarise_turns(records)
     }
     turns = build_timeline(records)
     for turn in turns:
         turn["milestones"] = milestones.get(turn["turn_id"], dict(empty))
+        turn["interruption_count"] = interruptions.get(turn["turn_id"], 0)
     return turns
 
 

@@ -343,6 +343,7 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
             "agent_request_to_first_token_ms",
             "agent_first_token_to_tts_first_byte_ms",
             "vad_endpoint_to_tts_first_byte_ms",
+            "user_speech_start_to_bot_stopped_ms",
         }
     # A real voice turn reaches TTS, so at least one turn resolves the
     # full VAD endpoint → TTS first byte delta.

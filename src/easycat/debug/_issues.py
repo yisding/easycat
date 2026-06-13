@@ -28,7 +28,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from easycat.debug._turn_timeline import turn_waterfall
+from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
 
 # Severity rank for sorting (higher = more urgent).  Used to surface errors
 # before warnings before info in both the SPA cards and the CLI table.
@@ -54,6 +54,12 @@ class IssueThresholds:
         ("agent_request_to_first_token_ms", 2_500.0, "agent"),
         ("agent_first_token_to_tts_first_byte_ms", 1_500.0, "tts"),
     )
+    # ``barge_in_cutoff_ms`` is how long the bot may keep talking after a
+    # barge-in before the cutoff is "slow"; ``missed_barge_in_window_ms`` is how
+    # long the bot may keep playing over a user who started speaking before the
+    # turn is flagged as a missed barge-in (the bot never stopped).
+    barge_in_cutoff_ms: float = 600.0
+    missed_barge_in_window_ms: float = 1_500.0
     tool_failure_names: frozenset[str] = field(
         default_factory=lambda: frozenset({"tool_call_failed", "tool_error", "tool_call_error"})
     )
@@ -235,6 +241,142 @@ def _milestone_issues(
     return issues
 
 
+# Barge-in record names.  An ``interruption`` (or fanned ``control_signal``
+# with ``signal_kind == "interrupt"``) is an acted-on barge-in; the bot goes
+# quiet on ``bot_stopped_speaking`` / ``playback_mark_ack``; a user starting to
+# talk over the bot is ``vad_start_speaking`` inside a ``bot_started_speaking``
+# → bot-stopped window.
+_INTERRUPTION = "interruption"
+_CONTROL_SIGNAL = "control_signal"
+_BOT_STARTED_SPEAKING = "bot_started_speaking"
+_VAD_START_SPEAKING = "vad_start_speaking"
+_BOT_STOPPED_NAMES = frozenset({"bot_stopped_speaking", "playback_mark_ack"})
+
+
+def _is_interruption(record: Mapping[str, Any]) -> bool:
+    """True when *record* is a barge-in (legacy event or fanned control signal)."""
+    name = record.get("name")
+    if name == _INTERRUPTION:
+        return True
+    if name == _CONTROL_SIGNAL:
+        data = record.get("data")
+        if isinstance(data, dict) and data.get("signal_kind") == "interrupt":
+            return True
+    return False
+
+
+def _barge_in_cards(
+    records: list[dict[str, Any]], thresholds: IssueThresholds
+) -> list[dict[str, Any]]:
+    """Flag slow barge-in cutoffs and missed barge-ins per turn.
+
+    Detection is pure wall-clock ordering: an ``interruption`` whose next
+    bot-stopped marker lands more than ``barge_in_cutoff_ms`` later is a
+    ``slow_barge_in``; a ``vad_start_speaking`` inside an open playback window
+    with no interruption and no bot-stop within ``missed_barge_in_window_ms`` is
+    a ``missed_barge_in`` (the bot talked over the user).
+    """
+    by_turn: dict[str, list[tuple[int, str, bool]]] = {}
+    for record in records:
+        turn_id = safe_turn_id(record.get("turn_id"))
+        if turn_id is None:
+            continue
+        wall = record_wall_ns(record)
+        if wall is None:
+            continue
+        name = record.get("name")
+        if _is_interruption(record):
+            by_turn.setdefault(turn_id, []).append((wall, _INTERRUPTION, True))
+        elif name in (_BOT_STARTED_SPEAKING, _VAD_START_SPEAKING) or name in _BOT_STOPPED_NAMES:
+            by_turn.setdefault(turn_id, []).append((wall, str(name), False))
+
+    issues: list[dict[str, Any]] = []
+    for turn_id, raw in by_turn.items():
+        ordered = sorted(raw, key=lambda item: item[0])
+        issues.extend(_slow_barge_in_cards(turn_id, ordered, thresholds))
+        issues.extend(_missed_barge_in_cards(turn_id, ordered, thresholds))
+    return issues
+
+
+def _slow_barge_in_cards(
+    turn_id: str,
+    ordered: list[tuple[int, str, bool]],
+    thresholds: IssueThresholds,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for index, (wall, _name, is_interruption) in enumerate(ordered):
+        if not is_interruption:
+            continue
+        stop_wall = next(
+            (w for w, n, _i in ordered[index + 1 :] if n in _BOT_STOPPED_NAMES),
+            None,
+        )
+        if stop_wall is None:
+            continue
+        delta_ms = (stop_wall - wall) / 1_000_000
+        if delta_ms > thresholds.barge_in_cutoff_ms:
+            issues.append(
+                _issue(
+                    code="slow_barge_in",
+                    severity="warning",
+                    title="Slow barge-in cutoff",
+                    detail=(
+                        "The bot kept talking after the user interrupted. Tune "
+                        "interruption handling so playback stops sooner."
+                    ),
+                    turn_id=turn_id,
+                    stage="tts",
+                    metric="barge_in_cutoff_ms",
+                    value=delta_ms,
+                    threshold=thresholds.barge_in_cutoff_ms,
+                )
+            )
+    return issues
+
+
+def _missed_barge_in_cards(
+    turn_id: str,
+    ordered: list[tuple[int, str, bool]],
+    thresholds: IssueThresholds,
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    bot_speaking = False
+    for index, (wall, name, is_interruption) in enumerate(ordered):
+        if name == _BOT_STARTED_SPEAKING:
+            bot_speaking = True
+            continue
+        if name in _BOT_STOPPED_NAMES:
+            bot_speaking = False
+            continue
+        if name != _VAD_START_SPEAKING or not bot_speaking:
+            continue
+        # User started speaking over the bot. A miss is when nothing stopped the
+        # bot (no interruption acted and no bot-stop) within the window.
+        resolved = False
+        for next_wall, next_name, next_interrupt in ordered[index + 1 :]:
+            if next_interrupt or next_name in _BOT_STOPPED_NAMES:
+                if (next_wall - wall) / 1_000_000 <= thresholds.missed_barge_in_window_ms:
+                    resolved = True
+                break
+        if not resolved:
+            issues.append(
+                _issue(
+                    code="missed_barge_in",
+                    severity="warning",
+                    title="Missed barge-in",
+                    detail=(
+                        "The user started speaking while the bot was talking, but "
+                        "the bot never stopped. Check interruption detection."
+                    ),
+                    turn_id=turn_id,
+                    stage="vad",
+                    metric="missed_barge_in_window_ms",
+                    threshold=thresholds.missed_barge_in_window_ms,
+                )
+            )
+    return issues
+
+
 def _sort_key(issue: Mapping[str, Any]) -> tuple[int, str, int, str]:
     """Errors before warnings before info, then stable by turn/sequence/code."""
     rank = _SEVERITY_RANK.get(str(issue.get("severity")), 0)
@@ -256,7 +398,11 @@ def build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
     summary) so callers never special-case the no-findings path.
     """
     thresholds = _THRESHOLDS
-    issues = _record_issues(records, thresholds) + _milestone_issues(records, thresholds)
+    issues = (
+        _record_issues(records, thresholds)
+        + _milestone_issues(records, thresholds)
+        + _barge_in_cards(records, thresholds)
+    )
     issues.sort(key=_sort_key)
     summary = {"error": 0, "warning": 0, "info": 0}
     for issue in issues:

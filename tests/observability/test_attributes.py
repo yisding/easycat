@@ -285,10 +285,12 @@ def test_validation_tasks_v62_current_state_tracks_low_cardinality_metrics() -> 
             "easycat.stage.latency",
             "easycat.provider.errors.total",
         ),
+        "src/easycat/session/_journal_sink.py": ("easycat.interruption.total",),
     }
     reserved_metrics = (
         "easycat.transport.disconnects.total",
         "easycat.validation.failures.total",
+        "easycat.interruption.cutoff_latency",
     )
 
     assert "Current verified state:" in section

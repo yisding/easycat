@@ -808,7 +808,9 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
 
     turns = summary["turns"]
     if isinstance(turns, list) and turns:
-        stdout_console.print(_turn_waterfall_table(turns))
+        # The waterfall now carries milestone, barge-in, and interrupt columns;
+        # render wide so the spans column is never clipped on an 80-col stdout.
+        _print_wide(_turn_waterfall_table(turns), max(stdout_console.width, 120))
 
     if issues:
         report = summary["issues"]
@@ -887,6 +889,8 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
     table.add_column("req→token", justify="right", no_wrap=True)
     table.add_column("agent→tts", justify="right", no_wrap=True)
     table.add_column("vad→tts", justify="right", no_wrap=True)
+    table.add_column("barge-in", justify="right", no_wrap=True)
+    table.add_column("interrupts", justify="right", no_wrap=True)
     table.add_column("spans (dur@off)", overflow="fold")
     for turn in turns:
         milestones = turn.get("milestones") or {}
@@ -902,6 +906,8 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
             _format_ms(milestones.get("agent_request_to_first_token_ms")),
             _format_ms(milestones.get("agent_first_token_to_tts_first_byte_ms")),
             _format_ms(milestones.get("vad_endpoint_to_tts_first_byte_ms")),
+            _format_ms(milestones.get("user_speech_start_to_bot_stopped_ms")),
+            str(turn.get("interruption_count", 0)),
             escape(spans) if spans else "[dim](no stage spans)[/]",
         )
     return table

@@ -486,13 +486,60 @@ def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_p
     assert milestones["agent_request_to_first_token_ms"] == pytest.approx(120.0)
     assert milestones["agent_first_token_to_tts_first_byte_ms"] == pytest.approx(200.0)
     assert milestones["vad_endpoint_to_tts_first_byte_ms"] == pytest.approx(500.0)
+    # No barge-in this turn, so the cutoff delta is null.
+    assert milestones["user_speech_start_to_bot_stopped_ms"] is None
+    # interruption_count is a TOP-LEVEL turn key, never under milestones.
+    assert turn["interruption_count"] == 0
+    assert "interruption_count" not in milestones
 
     # The human summary renders the same waterfall with a docs pointer.
     human = cli.invoke(app, ["bundles", "show", str(bundle)])
     assert human.exit_code == 0, human.stderr
-    assert "Per-turn latency" in human.stdout
-    assert "docs/latency.md" in human.stdout
-    assert "stt 50.0@50.0" in human.stdout
+    unwrapped = _unwrapped(human.stdout)
+    assert "Per-turn latency" in unwrapped
+    assert "docs/latency.md" in unwrapped
+    assert "stt 50.0@50.0" in unwrapped
+    assert "barge-in" in unwrapped
+    assert "interrupts" in unwrapped
+
+
+def test_bundles_show_waterfall_surfaces_barge_in(cli: CliRunner, tmp_path: Path) -> None:
+    """A barge-in turn exposes the cutoff delta and the interruption count."""
+    base = 1_000_000_000
+
+    def _rec(seq: int, name: str, offset_ms: int, data: dict | None = None) -> JournalRecord:
+        return JournalRecord(
+            sequence=seq,
+            session_id="sess-bi",
+            name=name,
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=base + offset_ms * 1_000_000),
+            data=data,
+        )
+
+    records = [
+        _rec(1, "turn_started", 0),
+        _rec(2, "bot_started_speaking", 0),
+        _rec(3, "vad_start_speaking", 100),
+        _rec(
+            4,
+            "control_signal",
+            150,
+            {"stage": "tts", "signal_kind": "interrupt", "signal_id": "s1"},
+        ),
+        _rec(5, "bot_stopped_speaking", 400),
+        _rec(6, "turn_ended", 500),
+    ]
+    bundle = tmp_path / "barge_in.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    (turn,) = payload["turns"]
+    # user spoke at 100ms, bot stopped at 400ms → 300ms cutoff.
+    assert turn["milestones"]["user_speech_start_to_bot_stopped_ms"] == pytest.approx(300.0)
+    assert turn["interruption_count"] == 1
 
 
 def test_bundles_show_ignores_malformed_turn_ids_in_waterfall(

@@ -44,9 +44,12 @@ VAD endpoint ──► STT final ──► agent request ──► agent first t
 | `agent_request_to_first_token_ms` | first `agent_request_started` → first `agent_delta` (or `agent_final`); the raw LLM time-to-first-token |
 | `agent_first_token_to_tts_first_byte_ms` | first `agent_delta` → first `tts_frame` / `tts_audio` |
 | `vad_endpoint_to_tts_first_byte_ms` | the full voice-to-voice response gap |
+| `user_speech_start_to_bot_stopped_ms` | first `vad_start_speaking` inside a playback window → first `bot_stopped_speaking` / `playback_mark_ack`; the barge-in cutoff (how long the bot kept talking after the user spoke over it) |
 
 A delta is `null` when a turn never reached that milestone — text turns have
-no VAD endpoint, and a turn that errored before synthesis has no TTS byte.
+no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
+`user_speech_start_to_bot_stopped_ms` barge-in delta is `null` for turns the
+user never interrupted.
 
 ## Latency-adding defaults
 
