@@ -1731,3 +1731,186 @@ def test_bundles_show_newer_version(cli: CliRunner, tmp_path: Path) -> None:
 )
 def test_format_size(num_bytes: int, expected: str) -> None:
     assert _format_size(num_bytes) == expected
+
+
+# ── `easycat journal promote` ────────────────────────────────────
+
+
+def _make_promotable_bundle(path: Path) -> None:
+    """Bundle with one clean replayable turn (t1) and one tool-call turn (t2).
+
+    ``t1`` carries turn_started/agent_final/turn_ended so the promoted slice
+    replays deterministically and the generated stub's assertions pass.  ``t2``
+    carries a ``tool_call_started`` record, which the DENY tool policy blocks
+    during the validate-before-write replay → exit 6.
+    """
+    records = [
+        {
+            "sequence": 1,
+            "kind": "event",
+            "name": "turn_started",
+            "turn_id": "t1",
+            "session_id": "s",
+        },
+        {
+            "sequence": 2,
+            "kind": "event",
+            "name": "stage_start",
+            "turn_id": "t1",
+            "session_id": "s",
+            "data": {"stage": "agent"},
+        },
+        {
+            "sequence": 3,
+            "kind": "event",
+            "name": "agent_final",
+            "turn_id": "t1",
+            "session_id": "s",
+            "data": {"stage": "agent", "text": "hello there"},
+        },
+        {"sequence": 4, "kind": "event", "name": "turn_ended", "turn_id": "t1", "session_id": "s"},
+        {
+            "sequence": 5,
+            "kind": "event",
+            "name": "tool_call_started",
+            "turn_id": "t2",
+            "session_id": "s",
+            "data": {"tool_name": "send_email"},
+        },
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "format_version": FORMAT_VERSION,
+                    "replay_entry_points": [{"sequence": 1, "stage": "agent", "unit_id": "t1"}],
+                }
+            ),
+        )
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(r) for r in records))
+
+
+def test_promote_writes_replayable_single_turn_slice(cli: CliRunner, tmp_path: Path) -> None:
+    from easycat.debug.bundle import RunBundle
+
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "regressions" / "t1.zip"
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out)])
+    assert result.exit_code == 0, result.stderr
+    assert out.exists()
+
+    # The slice carries only the target turn's records.
+    promoted = RunBundle.load(out)
+    records = list(promoted.records())
+    assert records
+    assert all(r.get("turn_id") == "t1" for r in records)
+
+    # The printed stub is a ready-to-paste regression test.
+    assert "def test_t1(" in result.stdout
+    assert "easycat_bundle" in result.stdout
+    assert "assert_no_error" in result.stdout
+    assert "assert_turn_completed(bundle, 't1')" in result.stdout
+    assert "expected='hello there'" in result.stdout
+
+
+def test_promote_json_carries_stub(cli: CliRunner, tmp_path: Path) -> None:
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "t1.zip"
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "journal_promote"
+    assert payload["turn_id"] == "t1"
+    assert payload["out"] == str(out)
+    assert "def test_" in payload["stub"]
+    assert "easycat_bundle" in payload["stub"]
+    assert "assert_no_error" in payload["stub"]
+
+
+def test_promote_missing_turn_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "nope.zip"
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "no-such-turn", "--out", str(out)])
+    assert result.exit_code == 5
+    assert "No journal records" in result.stderr
+    assert not out.exists()
+
+
+def test_promote_nondeterministic_turn_exits_6_and_writes_nothing(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """A turn with a tool call is blocked under DENY during validation → exit 6."""
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "t2.zip"
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t2", "--out", str(out)])
+    assert result.exit_code == 6
+    assert not out.exists()
+    # No temp file is left behind in the destination directory.
+    assert list(tmp_path.glob("*.zip")) == [src]
+
+
+def test_promote_unmatched_turn_id_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    """A turn id that matches no record is treated as missing (exit 5)."""
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "bad.zip"
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "bad id!", "--out", str(out)])
+    assert result.exit_code == 5
+    assert not out.exists()
+
+
+def test_promote_existing_out_without_force_exits_101(cli: CliRunner, tmp_path: Path) -> None:
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "exists.zip"
+    out.write_text("already here")
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out)])
+    assert result.exit_code == 101
+    assert out.read_text() == "already here"
+
+
+def test_promote_force_overwrites_existing_out(cli: CliRunner, tmp_path: Path) -> None:
+    from easycat.debug.bundle import RunBundle
+
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "exists.zip"
+    out.write_text("already here")
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out), "--force"])
+    assert result.exit_code == 0, result.stderr
+    # The destination is now a valid single-turn bundle, not the old text.
+    promoted = RunBundle.load(out)
+    assert all(r.get("turn_id") == "t1" for r in promoted.records())
+
+
+def test_promoted_stub_is_a_runnable_regression_test(cli: CliRunner, tmp_path: Path) -> None:
+    """The emitted stub's assertions actually pass against the promoted bundle."""
+    from easycat.debug.testing import (
+        assert_exact_match,
+        assert_no_error,
+        assert_turn_completed,
+        load_bundle,
+    )
+
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "t1.zip"
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out)])
+    assert result.exit_code == 0, result.stderr
+
+    bundle = load_bundle(out)
+    assert_no_error(bundle)
+    assert_turn_completed(bundle, "t1")
+    assert_exact_match(bundle, expected="hello there")

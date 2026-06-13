@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -291,6 +292,65 @@ class RunBundle:
         from easycat.runtime.replay import replay_stt_audio as _replay_stt
 
         return _replay_stt(self, turn_id=turn_id, include_preroll=include_preroll)
+
+    def save(self, path: str | Path) -> None:
+        """Write this bundle to ``path`` as a portable ``.zip`` archive.
+
+        Mirrors :func:`easycat.debug.export.export_debug_bundle`'s member
+        layout exactly (``manifest.json``, ``journal.ndjson``,
+        ``artifacts/<sha256>.bin``) so a saved bundle round-trips through
+        :meth:`load` with equal records and artifacts.  Unlike the session
+        exporter, ``save`` is the in-memory writer: it serialises whatever
+        is already on this :class:`RunBundle`, including
+        :attr:`replay_entry_points` (which the session exporter omits).
+
+        Every artifact ref is validated against :data:`_SHA256_REF` and
+        every archive member name against :func:`_reject_traversal` before a
+        single byte is written, so a tampered in-memory bundle can never
+        emit a traversal path or a non-content-addressed artifact.  The
+        write is atomic: a sibling temp file is renamed into place only on
+        success.
+        """
+        path = Path(path)
+
+        manifest_dict: dict[str, Any] = {
+            "format_version": self.format_version,
+            "provider_versions": dict(self.manifest.provider_versions),
+            "config_snapshot": dict(self.manifest.config_snapshot),
+            "env_metadata": dict(self.manifest.env_metadata),
+            "sharing_banner": self.manifest.sharing_banner or self.sharing_banner,
+            "replay_entry_points": [
+                {"sequence": cp.sequence, "stage": cp.stage, "unit_id": cp.unit_id}
+                for cp in self.replay_entry_points
+            ],
+        }
+
+        # Validate artifact refs and member names before opening the archive
+        # so a malformed in-memory bundle fails fast and writes nothing.
+        for ref in self.artifact_blobs:
+            if not _SHA256_REF.match(ref):
+                raise BundleValidationError(
+                    f"Invalid artifact ref: {ref!r}",
+                    reason_code="INVALID_REF",
+                )
+            _reject_traversal(f"artifacts/{ref}.bin")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_name: str | None = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
+            tmp_name = tmp.name
+            tmp.close()  # Release the fd; ZipFile reopens the path itself.
+            with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
+                zf.writestr("journal.ndjson", self.journal_ndjson)
+                for ref, data in self.artifact_blobs.items():
+                    zf.writestr(f"artifacts/{ref}.bin", data)
+            Path(tmp_name).rename(path)
+        except Exception:
+            if tmp_name and Path(tmp_name).exists():
+                Path(tmp_name).unlink()
+            raise
 
     @staticmethod
     def load(path: str | Path) -> RunBundle:

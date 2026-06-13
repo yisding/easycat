@@ -20,7 +20,7 @@ Routes:
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
 - ``GET  /api/audio/waveform/<turn>`` — greyscale waveform PNG (``?track=tts|mic&w=&h=``)
 - ``POST /api/replay``                — run replay against the source
-- ``POST /api/export``                — export the source as a bundle ZIP
+- ``POST /api/export``                — export the source as a bundle ZIP (``?turn=`` slices one)
 - ``GET  /ws``                        — WebSocket push for live updates
 """
 
@@ -912,6 +912,39 @@ def _bundle_zip_from_session(session: Any) -> Path | None:
     return tmp_path
 
 
+def _turn_bundle_zip_from_session(session: Any, turn_id: str) -> Path | None:
+    """Build a single-turn slice ZIP for a live session and return its path.
+
+    Exports the full session bundle to a temp file, reloads it, and writes a
+    self-contained slice for *turn_id* via
+    :func:`easycat.debug.export.export_turn_bundle`.  Loopback-only, so no
+    redaction is applied — the slice carries raw transcripts/audio exactly
+    like the full export.  Returns ``None`` when the session has no journal
+    (debug='off'); raises :class:`ValueError` when the turn is absent so the
+    handler can map it to a 404.
+    """
+    import tempfile
+
+    from easycat.debug.export import export_turn_bundle
+
+    full_path = _bundle_zip_from_session(session)
+    if full_path is None:
+        return None
+    try:
+        bundle = RunBundle.load(full_path)
+    finally:
+        _safe_unlink(full_path)
+
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        export_turn_bundle(bundle, turn_id, tmp_path)
+    except Exception:
+        _safe_unlink(tmp_path)
+        raise
+    return tmp_path
+
+
 def _records_since(
     source: DebuggerSource, after_seq: int, cap: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -1333,16 +1366,39 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     async def export(request: Any) -> Any:
         if not source.manifest().get("supports_export"):
             return web.Response(status=405, text="export only supported for live sessions")
-        export_fn = getattr(source, "_export_fn", None)
-        if export_fn is None:
-            return web.Response(status=503, text="no export function bound")
-        try:
-            tmp_path = export_fn()
-        except Exception:  # noqa: BLE001 - never hide export errors
-            # Detail is logged server-side; don't leak exception text to the
-            # client (CodeQL py/stack-trace-exposure).
-            logger.exception("Export failed")
-            return web.Response(status=500, text="export failed")
+        # ``?turn=<id>`` writes a single-turn replayable slice (the SPA
+        # "Save as test case" button); no turn writes the whole session.
+        raw_turn = request.query.get("turn")
+        download_name = "session.zip"
+        if raw_turn is not None:
+            try:
+                turn_id = _safe_turn_id(raw_turn)
+            except ValueError as exc:
+                return web.json_response(
+                    {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+                )
+            export_turn_fn = getattr(source, "_export_turn_fn", None)
+            if export_turn_fn is None:
+                return web.Response(status=503, text="no turn-export function bound")
+            try:
+                tmp_path = export_turn_fn(turn_id)
+            except ValueError:
+                return web.Response(status=404, text="no records for that turn")
+            except Exception:  # noqa: BLE001 - never hide export errors
+                logger.exception("Turn export failed")
+                return web.Response(status=500, text="export failed")
+            download_name = f"turn-{turn_id}.zip"
+        else:
+            export_fn = getattr(source, "_export_fn", None)
+            if export_fn is None:
+                return web.Response(status=503, text="no export function bound")
+            try:
+                tmp_path = export_fn()
+            except Exception:  # noqa: BLE001 - never hide export errors
+                # Detail is logged server-side; don't leak exception text to the
+                # client (CodeQL py/stack-trace-exposure).
+                logger.exception("Export failed")
+                return web.Response(status=500, text="export failed")
         if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
         # FileResponse streams the bundle without loading it into memory.
@@ -1351,7 +1407,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             tmp_path,
             headers={
                 "Content-Type": "application/zip",
-                "Content-Disposition": "attachment; filename=session.zip",
+                "Content-Disposition": f"attachment; filename={download_name}",
             },
         )
         # Schedule cleanup once aiohttp has finished sending.
@@ -1497,6 +1553,11 @@ def serve_session(
     source = _session_source(session)
     # Wire up the export-bytes function so /api/export can stream a zip.
     source._export_fn = lambda: _bundle_zip_from_session(session)  # type: ignore[attr-defined]
+    # ``/api/export?turn=<id>`` slices a single replayable turn out of the
+    # live session; loopback-only, so the slice carries raw audio unredacted.
+    source._export_turn_fn = (  # type: ignore[attr-defined]
+        lambda turn_id: _turn_bundle_zip_from_session(session, turn_id)
+    )
     if not in_thread:
         _serve(
             source,

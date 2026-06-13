@@ -117,6 +117,23 @@ def test_static_index_has_copy_replay_command_button():
     assert "navigator.clipboard" in text
 
 
+def test_static_index_has_save_test_case_button():
+    """The Timeline and Transcript views must offer a "Save as test case"
+    button that POSTs to ``/api/export?turn=`` via ``_saveTestCase``, built
+    with safe DOM helpers only (no innerHTML family)."""
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert "Save as test case" in text
+    assert "function _saveTestCase" in text
+    assert "/api/export?turn=" in text
+    assert "encodeURIComponent(turnId)" in text
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"SPA must never use {forbidden}"
+
+
 def _static_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static"
 

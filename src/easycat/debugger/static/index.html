@@ -1613,6 +1613,10 @@ function renderTimelineView() {
       title: "Copy an `easycat replay … --turn` command for this turn",
       onclick: () => _copyReplayCommand(turn.turn_id),
     }, "⧉ Copy replay cmd"));
+    actions.appendChild(el("button", {
+      title: "Download a single-turn replayable bundle for a regression test",
+      onclick: () => _saveTestCase(turn.turn_id),
+    }, "Save as test case"));
     header.appendChild(actions);
     turnNode.appendChild(header);
 
@@ -2196,7 +2200,13 @@ function renderTranscriptView() {
   }
   for (const turn of state.transcripts) {
     const node = el("div", { class: "transcript-turn" });
-    node.appendChild(el("div", { class: "turn-id" }, turn.turn_id));
+    const turnHeader = el("div", { class: "turn-id" }, turn.turn_id);
+    turnHeader.appendChild(el("button", {
+      class: "save-test-case",
+      title: "Download a single-turn replayable bundle for a regression test",
+      onclick: () => _saveTestCase(turn.turn_id),
+    }, "Save as test case"));
+    node.appendChild(turnHeader);
     if (turn.user) {
       node.appendChild(el("div", { class: "speaker user" }, "User"));
       const userText = el("div", { class: "text" }, turn.user);
@@ -2745,6 +2755,34 @@ async function exportBundle() {
     a.click();
     document.body.removeChild(a);
   } catch (e) { alert(`Export failed: ${e.message}`); }
+}
+
+// "Save as test case": POST /api/export?turn=<id> to download a single-turn,
+// replayable slice the developer can drop into tests/regressions/.  Reuses the
+// exportBundle blob-download flow; only live sessions support export, so the
+// button is wired wherever a turn is shown.  The download name and the query
+// value are the only places the turn id is used and both go through
+// encodeURIComponent / textContent — never innerHTML or a blessed URL attr.
+async function _saveTestCase(turnId) {
+  try {
+    const r = await fetch(`/api/export?turn=${encodeURIComponent(turnId)}`, { method: "POST" });
+    if (!r.ok) {
+      if (r.status === 405) {
+        alert("Save as test case only works on a live session.");
+      } else if (r.status === 404) {
+        alert(`No records for turn ${turnId}.`);
+      } else {
+        alert(`Save as test case failed: ${r.status}`);
+      }
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: `turn-${turnId}.zip` });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) { alert(`Save as test case failed: ${e.message}`); }
 }
 
 // ── WebSocket live updates ───────────────────────────────────────

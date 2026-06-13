@@ -185,6 +185,16 @@ def test_journal_group_registers_follow_subcommand() -> None:
     assert "follow" not in _registered_top_level_command_names()
 
 
+def test_journal_group_registers_promote_subcommand() -> None:
+    # WP14 adds ``journal promote`` as a subcommand only (no duplicate journal
+    # command-text/journey entry and no new top-level command name).
+    _register_commands()
+    journal_group = get_command(app).commands["journal"]
+    assert "promote" in journal_group.commands
+    assert "promote" not in _registered_top_level_command_names()
+    assert "promote" not in _COMMAND_TEXT
+
+
 def test_journal_command_text_registered_exactly_once() -> None:
     # WP8 owns the single ``journal`` command-surface registration; later
     # work packages add only subcommands and must not re-add this entry.

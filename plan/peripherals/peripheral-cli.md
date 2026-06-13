@@ -778,6 +778,39 @@ guidance to use `bundles show` or `journal grep` instead.
 
 Exit codes: 0 clean / Ctrl-C, 2 immutable bundle path, 5 journal missing.
 
+### `easycat journal promote`
+
+Promote one captured turn into a self-contained, replayable regression bundle
+so a fixed bug stays fixed. `journal promote` is a subcommand on the `journal`
+group (no separate journey entry); it slices the turn's journal records and the
+artifact blobs they reference into a new bundle, validates it before writing,
+and prints a copy-pasteable pytest stub.
+
+```
+Usage: easycat journal promote [OPTIONS] BUNDLE TURN_ID
+
+Options:
+      --out, -o PATH           Destination .zip for the single-turn bundle [required]
+      --force                  Overwrite the destination if it already exists
+      --json                   Emit the standard JSON envelope (carries the stub)
+      --help                   Show this message and exit
+```
+
+The slice is written via `RunBundle.save`, which mirrors the exported-bundle
+member layout (`manifest.json`, `journal.ndjson`, `artifacts/<sha256>.bin`).
+Before anything reaches `--out`, the slice is replayed twice at ARTIFACT
+fidelity (tools denied, fast timing); the promotion is rejected when the replay
+fails or is non-deterministic, so a flaky turn never lands as a regression
+test. The emitted stub uses the `easycat_bundle` fixture plus `assert_no_error`
+/ `assert_turn_completed` / `assert_exact_match` (filling in the turn's
+`agent_final` reply when captured, else a `TODO`), ready to drop into
+`tests/regressions/`. The `POST /api/export?turn=<id>` debugger route and the
+SPA "Save as test case" button write the same single-turn slice.
+
+Exit codes: 0 clean, 2 invalid turn id, 5 turn missing/bundle unreadable,
+6 the turn does not replay deterministically, 101 destination exists without
+`--force`.
+
 ## Commands NOT in This Plan
 
 Explicit non-goals, with reasoning.
