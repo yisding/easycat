@@ -134,6 +134,34 @@ def test_static_index_has_save_test_case_button():
         assert forbidden not in text, f"SPA must never use {forbidden}"
 
 
+def test_static_index_has_annotation_controls_in_parity_with_python():
+    """The transcript view must build per-turn reviewer-verdict controls and
+    POST them to ``/api/annotate`` with safe DOM helpers only.
+
+    The hard-coded JS failure-type list must match
+    ``debug/annotations.FAILURE_TYPES`` exactly (single-source parity), and
+    the controls must be gated on ``supports_annotate`` so live sessions
+    never render them.
+    """
+    from easycat.debug.annotations import FAILURE_TYPES
+
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert "function _annotationRow" in text
+    assert '"/api/annotate"' in text
+    assert '"/api/annotations"' in text
+    assert "supports_annotate" in text, "annotation controls must be gated on supports_annotate"
+    # Every Python failure type appears verbatim in the SPA's hard-coded list.
+    for failure_type in FAILURE_TYPES:
+        assert f'"{failure_type}"' in text, f"SPA missing failure type {failure_type!r}"
+    # No unsafe DOM anywhere in the SPA, including the new controls.
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"SPA must never use {forbidden}"
+
+
 def _static_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static"
 

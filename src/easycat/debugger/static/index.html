@@ -523,6 +523,45 @@
     height: 32px;
     margin-top: 6px;
   }
+  /* Reviewer verdict row */
+  .annotation-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-size: 12px;
+  }
+  .annotation-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .annotation-row button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .annotation-pass.active { background: var(--green); color: #0b1a0b; border-color: var(--green); }
+  .annotation-fail.active { background: var(--red); color: #1a0b0b; border-color: var(--red); }
+  .annotation-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--muted);
+  }
+  .annotation-notes-field { flex: 1 1 220px; align-items: flex-start; }
+  .annotation-notes { flex: 1; min-width: 160px; font-family: inherit; font-size: 12px; }
+  .annotation-score-out { font-family: var(--mono); min-width: 1.2em; text-align: center; }
+  .annotation-status { color: var(--muted); font-size: 11px; }
 
   /* Cost view */
   #cost-view { padding: 14px; overflow: auto; }
@@ -1273,6 +1312,7 @@ const state = {
   timeline: [],
   transcripts: [],
   cost: null,
+  annotations: {},
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   selectedSeq: null,
   ws: null,
@@ -1346,6 +1386,13 @@ function _applyHashToState() {
 // render the stage-filter checkbox group and the frame-stage select.
 const REPLAY_STAGE_NAMES = ["stt", "tts", "vad", "agent", "audio", "transport", "telephony", "turn"];
 
+// Failure-type taxonomy mirrored from debug/annotations.py:FAILURE_TYPES.
+// Keep this list in lockstep with the Python tuple (a static-asset parity
+// test enforces the match).  Populates the per-turn annotation <select>.
+const ANNOTATION_FAILURE_TYPES = [
+  "asr_error", "barge_in_miss", "tts_cutoff", "wrong_tool", "hallucination", "self_echo",
+];
+
 const TAB_LOADERS = {
   timeline: renderTimelineView,
   live: renderLiveView,
@@ -1415,6 +1462,16 @@ async function loadAllSnapshots() {
   state.timeline = timelineResp.timeline;
   state.transcripts = transcriptResp.transcripts;
   state.cost = costResp;
+  // Hydrate reviewer verdicts from the bundle's annotation sidecar.  Only
+  // bundle sources advertise ``supports_annotate``; a missing/corrupt
+  // sidecar resolves to an empty map server-side, and any fetch error is
+  // swallowed so annotations never block the rest of the snapshot.
+  if (state.manifest && state.manifest.supports_annotate) {
+    const annResp = await getJSON("/api/annotations").catch(() => ({ annotations: {} }));
+    state.annotations = (annResp && annResp.annotations) || {};
+  } else {
+    state.annotations = {};
+  }
   $("#status-turns").textContent = `${state.turns.length} turns`;
   populateStageFilter();
 }
@@ -2248,8 +2305,120 @@ function renderTranscriptView() {
         preload: "none",
       }));
     }
+    // Reviewer verdict controls — only when the source advertises a sidecar
+    // (bundle sources).  Live sessions hide the row entirely.
+    if (state.manifest && state.manifest.supports_annotate) {
+      node.appendChild(_annotationRow(turn.turn_id));
+    }
     root.appendChild(node);
   }
+}
+
+// Build the per-turn reviewer verdict row: pass/fail toggle, failure-type
+// select, a 1-5 score slider, and a free-text notes field.  Every value is
+// hydrated from ``state.annotations`` into form fields only (never
+// innerHTML), and a debounced/blur save POSTs to ``/api/annotate`` via
+// ``postJSON``.  The whole subtree is built with ``el()`` + textContent.
+function _annotationRow(turnId) {
+  const current = (state.annotations && state.annotations[turnId]) || {};
+  const row = el("div", { class: "annotation-row" });
+  row.appendChild(el("span", { class: "annotation-label" }, "Verdict"));
+
+  // Local draft mirrors the form fields; ``_save`` snapshots it into the
+  // sidecar and refreshes the in-memory map on success.
+  const draft = {
+    passed: typeof current.passed === "boolean" ? current.passed : null,
+    failure_type: current.failure_type || null,
+    score: Number.isInteger(current.score) ? current.score : null,
+    notes: typeof current.notes === "string" ? current.notes : "",
+  };
+
+  const status = el("span", { class: "annotation-status" });
+  function _save() {
+    const payload = {
+      turn_id: turnId,
+      passed: draft.passed,
+      failure_type: draft.failure_type,
+      score: draft.score,
+      notes: draft.notes,
+    };
+    status.textContent = "saving…";
+    postJSON("/api/annotate", payload).then(resp => {
+      if (resp && resp.annotation) {
+        state.annotations[turnId] = resp.annotation;
+      }
+      status.textContent = "saved";
+    }).catch(e => { status.textContent = `save failed: ${e.message}`; });
+  }
+
+  // Pass / fail tri-state toggle.  Clicking the already-active button clears
+  // the verdict back to "no verdict".
+  const passBtn = el("button", { class: "annotation-pass", type: "button" }, "Pass");
+  const failBtn = el("button", { class: "annotation-fail", type: "button" }, "Fail");
+  function _paintToggle() {
+    passBtn.classList.toggle("active", draft.passed === true);
+    failBtn.classList.toggle("active", draft.passed === false);
+  }
+  passBtn.addEventListener("click", () => {
+    draft.passed = draft.passed === true ? null : true;
+    _paintToggle();
+    _save();
+  });
+  failBtn.addEventListener("click", () => {
+    draft.passed = draft.passed === false ? null : false;
+    _paintToggle();
+    _save();
+  });
+  _paintToggle();
+  row.appendChild(passBtn);
+  row.appendChild(failBtn);
+
+  // Failure-type select.  The empty option means "no failure type".
+  const select = el("select", { class: "annotation-failure-type" });
+  select.appendChild(el("option", { value: "" }, "(no failure type)"));
+  for (const ft of ANNOTATION_FAILURE_TYPES) {
+    select.appendChild(el("option", { value: ft }, ft));
+  }
+  select.value = draft.failure_type || "";
+  select.addEventListener("change", () => {
+    draft.failure_type = select.value || null;
+    _save();
+  });
+  row.appendChild(el("label", { class: "annotation-field" }, ["Type", select]));
+
+  // 1-5 score slider plus a live read-out.  Value 0 on the slider maps to
+  // "no score".
+  const score = el("input", {
+    type: "range", min: "0", max: "5", step: "1",
+    class: "annotation-score",
+  });
+  score.value = String(draft.score == null ? 0 : draft.score);
+  const scoreOut = el("span", { class: "annotation-score-out" },
+    draft.score == null ? "–" : String(draft.score));
+  score.addEventListener("input", () => {
+    const v = Number(score.value);
+    draft.score = v === 0 ? null : v;
+    scoreOut.textContent = draft.score == null ? "–" : String(draft.score);
+  });
+  score.addEventListener("change", _save);
+  row.appendChild(el("label", { class: "annotation-field" }, ["Score", score, scoreOut]));
+
+  // Free-text notes; saved on blur to avoid a POST per keystroke.
+  const notes = el("textarea", {
+    class: "annotation-notes", rows: "2", maxlength: "4000",
+    placeholder: "Notes (optional)",
+  });
+  notes.value = draft.notes;
+  notes.addEventListener("blur", () => {
+    if (notes.value === draft.notes) return;
+    draft.notes = notes.value;
+    _save();
+  });
+  row.appendChild(el("label", { class: "annotation-field annotation-notes-field" },
+    ["Notes", notes]));
+
+  row.appendChild(status);
+  return row;
 }
 
 // ── Issues view ──────────────────────────────────────────────────

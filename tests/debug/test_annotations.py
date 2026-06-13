@@ -1,0 +1,165 @@
+"""Tests for the read-only bundle annotation sidecar."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from easycat.debug.annotations import (
+    FAILURE_TYPES,
+    SCHEMA_VERSION,
+    Annotation,
+    AnnotationError,
+    load_annotations,
+    merged_tags,
+    save_annotation,
+    sidecar_path,
+)
+
+
+def test_failure_types_are_the_documented_six() -> None:
+    assert FAILURE_TYPES == (
+        "asr_error",
+        "barge_in_miss",
+        "tts_cutoff",
+        "wrong_tool",
+        "hallucination",
+        "self_echo",
+    )
+
+
+def test_sidecar_path_appends_annotations_suffix(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    assert sidecar_path(bundle) == tmp_path / "call.zip.annotations.json"
+    # String input is accepted and normalised to the same target.
+    assert sidecar_path(str(bundle)).name == "call.zip.annotations.json"
+
+
+def test_save_and_load_round_trips(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    record = save_annotation(
+        bundle,
+        Annotation(
+            turn_id="t1",
+            passed=False,
+            failure_type="tts_cutoff",
+            score=2,
+            notes="bot got cut off",
+        ),
+    )
+    assert record["passed"] is False
+    assert record["failure_type"] == "tts_cutoff"
+    assert record["score"] == 2
+    assert record["notes"] == "bot got cut off"
+    assert "updated_at" in record
+
+    loaded = load_annotations(bundle)
+    assert set(loaded) == {"t1"}
+    assert loaded["t1"]["failure_type"] == "tts_cutoff"
+    assert loaded["t1"]["score"] == 2
+
+    # Sidecar lands at <bundle>.annotations.json with the schema envelope.
+    sidecar = sidecar_path(bundle)
+    assert sidecar.exists()
+    import json
+
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert "t1" in payload["annotations"]
+
+
+def test_save_is_read_modify_write_per_turn(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    save_annotation(bundle, Annotation(turn_id="t1", passed=True, score=5))
+    save_annotation(bundle, Annotation(turn_id="t2", passed=False, failure_type="asr_error"))
+    # Re-annotating t1 must upsert, not wipe t2.
+    save_annotation(bundle, Annotation(turn_id="t1", passed=False, notes="changed my mind"))
+
+    loaded = load_annotations(bundle)
+    assert set(loaded) == {"t1", "t2"}
+    assert loaded["t1"]["passed"] is False
+    assert loaded["t1"]["notes"] == "changed my mind"
+    assert loaded["t2"]["failure_type"] == "asr_error"
+
+
+@pytest.mark.parametrize("failure_type", FAILURE_TYPES)
+def test_all_failure_types_accepted(failure_type: str) -> None:
+    ann = Annotation(turn_id="t1", failure_type=failure_type)
+    assert ann.failure_type == failure_type
+
+
+def test_bad_failure_type_rejected() -> None:
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="t1", failure_type="not_a_real_type")
+
+
+@pytest.mark.parametrize("score", [1, 2, 3, 4, 5])
+def test_score_in_band_accepted(score: int) -> None:
+    assert Annotation(turn_id="t1", score=score).score == score
+
+
+@pytest.mark.parametrize("score", [0, 6, -1, 100])
+def test_score_out_of_band_rejected(score: int) -> None:
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="t1", score=score)
+
+
+def test_score_bool_rejected() -> None:
+    # ``bool`` is an ``int`` subclass; a stray True must not pass as 1.
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="t1", score=True)  # type: ignore[arg-type]
+
+
+def test_passed_must_be_bool_or_none() -> None:
+    assert Annotation(turn_id="t1", passed=None).passed is None
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="t1", passed="yes")  # type: ignore[arg-type]
+
+
+def test_empty_turn_id_rejected() -> None:
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="")
+
+
+def test_notes_length_capped() -> None:
+    Annotation(turn_id="t1", notes="x" * 4000)
+    with pytest.raises(AnnotationError):
+        Annotation(turn_id="t1", notes="x" * 4001)
+
+
+def test_missing_sidecar_loads_empty(tmp_path: Path) -> None:
+    assert load_annotations(tmp_path / "never-written.zip") == {}
+
+
+def test_corrupt_sidecar_loads_empty(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar_path(bundle).write_text("{not valid json", encoding="utf-8")
+    assert load_annotations(bundle) == {}
+
+
+def test_non_object_sidecar_loads_empty(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar_path(bundle).write_text("[1, 2, 3]", encoding="utf-8")
+    assert load_annotations(bundle) == {}
+
+
+def test_sidecar_with_bad_annotations_block_loads_empty(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar_path(bundle).write_text('{"annotations": "nope"}', encoding="utf-8")
+    assert load_annotations(bundle) == {}
+
+
+def test_save_does_not_touch_the_bundle(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    bundle.write_bytes(b"ORIGINAL BUNDLE BYTES")
+    before = bundle.read_bytes()
+    save_annotation(bundle, Annotation(turn_id="t1", passed=True))
+    assert bundle.read_bytes() == before
+
+
+def test_merged_tags_returns_record_tags_stub() -> None:
+    # Stub until the WP8 tag-slice CLI wires annotation-derived tags in.
+    assert merged_tags({"tags": ["a", "b"]}, None) == ["a", "b"]
+    assert merged_tags({}, {"passed": False}) == []
+    assert merged_tags({"tags": "not-a-list"}, None) == []

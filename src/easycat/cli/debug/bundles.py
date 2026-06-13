@@ -62,6 +62,7 @@ from easycat.cli._output import (
 from easycat.debug._issues import build_issues
 from easycat.debug._turn_diff import diff_bundles
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
+from easycat.debug.annotations import load_annotations
 from easycat.debug.bundle import (
     BundleError,
     BundleInUseError,
@@ -122,7 +123,60 @@ def _format_mtime(mtime: float) -> str:
     return datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
-def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
+def _annotations_tally(annotations: Mapping[str, Any]) -> dict[str, Any]:
+    """Roll a per-turn verdict sidecar map into a small pass/fail tally.
+
+    ``annotations`` is the ``{turn_id: record}`` map from
+    ``debug/annotations.load_annotations``.  Surfaces the pass/fail counts
+    and a failure-type histogram so ``bundles show`` can show triage state
+    at a glance without listing every turn.
+    """
+    passed = 0
+    failed = 0
+    failure_types: dict[str, int] = {}
+    for record in annotations.values():
+        if not isinstance(record, Mapping):
+            continue
+        verdict = record.get("passed")
+        if verdict is True:
+            passed += 1
+        elif verdict is False:
+            failed += 1
+        failure_type = record.get("failure_type")
+        if isinstance(failure_type, str) and failure_type:
+            failure_types[failure_type] = failure_types.get(failure_type, 0) + 1
+    return {
+        "annotated": len(annotations),
+        "passed": passed,
+        "failed": failed,
+        "failure_types": failure_types,
+    }
+
+
+def _add_annotations_row(table: Table, tally: object) -> None:
+    """Append the reviewer-verdict tally row to *table*, or nothing.
+
+    A bundle with no annotated turns gets no row at all so ``bundles show``
+    stays terse for un-triaged captures.
+    """
+    if not isinstance(tally, Mapping) or not tally.get("annotated"):
+        return
+    passed = int(tally.get("passed", 0))
+    failed = int(tally.get("failed", 0))
+    annotated = int(tally.get("annotated", 0))
+    verdict = f"[green]{passed} pass[/] / [red]{failed} fail[/] of {annotated} annotated"
+    failure_types = tally.get("failure_types")
+    if isinstance(failure_types, Mapping) and failure_types:
+        tallies = ", ".join(
+            f"{escape(str(name))}={count}" for name, count in sorted(failure_types.items())
+        )
+        verdict = f"{verdict} ({tallies})"
+    table.add_row("annotations", verdict)
+
+
+def _summarise_bundle(
+    bundle: RunBundle, *, annotations: Mapping[str, Any] | None = None
+) -> dict[str, object]:
     """Collect the high-signal fields we surface in ``bundles show``/``inspect``."""
     turn_ids: set[str] = set()
     errors = 0
@@ -187,6 +241,10 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         "tool_calls": tool_calls,
         "records": record_count,
         "duration_ms": duration_ms,
+        # Reviewer verdict tally from the ``<bundle>.annotations.json``
+        # sidecar when one exists (always present so the JSON shape is
+        # stable; an absent sidecar yields all-zero counts).
+        "annotations": _annotations_tally(annotations or {}),
         "provider_versions": dict(bundle.manifest.provider_versions),
         "artifact_count": len(bundle.artifact_index),
         "replay_entry_points": [
@@ -771,7 +829,10 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
         command="bundles_show",
         json_output=json_output,
     )
-    summary = _summarise_bundle(bundle)
+    # Reviewer verdicts live in a sidecar next to the bundle, never inside
+    # the (read-only) journal; a missing/corrupt sidecar loads as empty.
+    annotations = load_annotations(bundle_path)
+    summary = _summarise_bundle(bundle, annotations=annotations)
 
     if json_output:
         emit_json(
@@ -807,6 +868,7 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
         failing_turn_id = summary["failing_turn_id"]
         if failing_turn_id:
             table.add_row("failing_turn_id", escape(str(failing_turn_id)))
+    _add_annotations_row(table, summary["annotations"])
     table.add_row("artifacts", str(summary["artifact_count"]))
     entry_points = summary["replay_entry_points"]
     if isinstance(entry_points, list) and entry_points:

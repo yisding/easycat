@@ -1108,6 +1108,67 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert "failing_turn_id" not in human.stdout
 
 
+def test_bundles_show_surfaces_annotation_tally(cli: CliRunner, tmp_path: Path) -> None:
+    """When a ``<bundle>.annotations.json`` sidecar exists, ``bundles show``
+    must surface a pass/fail + failure-type tally in both JSON and the table."""
+    from easycat.debug.annotations import Annotation, save_annotation
+
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [
+            {"sequence": 1, "name": "TurnStarted", "turn_id": "t1", "session_id": "sess-xyz"},
+            {"sequence": 2, "name": "TurnStarted", "turn_id": "t2", "session_id": "sess-xyz"},
+        ],
+    )
+    save_annotation(bundle, Annotation(turn_id="t1", passed=True, score=5))
+    save_annotation(
+        bundle, Annotation(turn_id="t2", passed=False, failure_type="tts_cutoff", score=2)
+    )
+
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    tally = payload["annotations"]
+    assert tally["annotated"] == 2
+    assert tally["passed"] == 1
+    assert tally["failed"] == 1
+    assert tally["failure_types"] == {"tts_cutoff": 1}
+
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    out = _unwrapped(human.stdout)
+    assert "annotations" in out
+    assert "1 pass" in out and "1 fail" in out
+    assert "tts_cutoff=1" in out
+
+
+def test_bundles_show_annotation_tally_empty_without_sidecar(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """No sidecar → the JSON tally is present but all-zero, and the table
+    omits the annotations row entirely."""
+    bundle = tmp_path / "demo.zip"
+    _make_bundle(
+        bundle,
+        [{"sequence": 1, "name": "TurnStarted", "turn_id": "t1", "session_id": "sess-xyz"}],
+    )
+
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["annotations"] == {
+        "annotated": 0,
+        "passed": 0,
+        "failed": 0,
+        "failure_types": {},
+    }
+
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "annotations" not in _unwrapped(human.stdout)
+
+
 def test_bundles_show_renders_bracketed_summary_values_literally(
     cli: CliRunner, tmp_path: Path
 ) -> None:

@@ -21,6 +21,8 @@ Routes:
 - ``GET  /api/audio/waveform/<turn>`` — greyscale waveform PNG (``?track=tts|mic&w=&h=``)
 - ``POST /api/replay``                — run replay against the source
 - ``POST /api/export``                — export the source as a bundle ZIP (``?turn=`` slices one)
+- ``POST /api/annotate``              — persist a per-turn verdict sidecar (bundle only)
+- ``GET  /api/annotations``           — read the per-turn verdict sidecar map (bundle only)
 - ``GET  /ws``                        — WebSocket push for live updates
 """
 
@@ -49,6 +51,12 @@ from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_tu
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
 from easycat.debug._turn_timeline import turn_cost_rollup as _turn_cost_rollup
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
+from easycat.debug.annotations import (
+    Annotation,
+    AnnotationError,
+    load_annotations,
+    save_annotation,
+)
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
@@ -141,6 +149,10 @@ class DebuggerSource:
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
+    # On-disk bundle path used to read/write the annotation sidecar.  Set only
+    # for bundle sources and never surfaced in ``manifest()`` — the browser
+    # learns it can annotate via the ``supports_annotate`` flag, never the path.
+    _annotate_path: Path | None = field(default=None, repr=False)
     is_live: bool = False
 
     def records(self) -> list[dict[str, Any]]:
@@ -301,6 +313,10 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
             "artifact_count": len(bundle.artifact_blobs),
             "supports_replay": True,
             "supports_export": False,
+            # Bundles are read-only, so reviewer verdicts land in a sidecar
+            # next to the bundle rather than the journal.  The SPA shows the
+            # per-turn annotation controls when this is true.
+            "supports_annotate": True,
             "is_live": False,
             "replay_entry_points": [
                 {
@@ -314,6 +330,9 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         },
         _bundle_fn=lambda: bundle,
         _replay_fn=_replay,
+        # Real on-disk path for the annotation sidecar; kept off the manifest
+        # so it never leaks into the browser.
+        _annotate_path=Path(str(bundle_path)),
         is_live=False,
     )
 
@@ -363,6 +382,9 @@ def _session_source(session: Any) -> DebuggerSource:
             "turn_state": str(getattr(session, "turn_state", "")),
             "supports_replay": False,
             "supports_export": True,
+            # Live sessions don't carry a stable on-disk bundle to sidecar
+            # against; verdicts are recorded after capture, on a bundle.
+            "supports_annotate": False,
             "is_live": True,
             "replay_entry_points": [],
         }
@@ -1415,6 +1437,65 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         loop.call_later(60.0, _safe_unlink, tmp_path)
         return response
 
+    async def annotations(_request: Any) -> Any:
+        """Return the per-turn verdict sidecar map for a bundle source.
+
+        Bundle-only — live sessions carry no on-disk sidecar.  A missing or
+        corrupt sidecar yields an empty map (``load_annotations`` tolerates
+        both) so the SPA always gets a well-formed response.
+        """
+        annotate_path = source._annotate_path
+        if annotate_path is None:
+            return web.Response(status=405, text="annotations only supported for bundle sources")
+        return web.json_response({"annotations": load_annotations(annotate_path)})
+
+    async def annotate(request: Any) -> Any:
+        """Persist a per-turn pass/fail verdict into the bundle's sidecar.
+
+        Bundle-only; the journal and the bundle ZIP on disk are never
+        touched.  ``_origin_guard`` already enforces JSON content-type and a
+        present, safe Origin on this POST, so we only validate the payload.
+        """
+        annotate_path = source._annotate_path
+        if annotate_path is None:
+            return web.Response(status=405, text="annotate only supported for bundle sources")
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - malformed body → 400, never 500
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be JSON"},
+                status=400,
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be a JSON object"},
+                status=400,
+            )
+        try:
+            turn_id = _safe_turn_id(str(body.get("turn_id", "")))
+        except ValueError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        try:
+            annotation = Annotation(
+                turn_id=turn_id,
+                passed=body.get("passed"),
+                failure_type=body.get("failure_type"),
+                score=body.get("score"),
+                notes=str(body.get("notes") or ""),
+            )
+        except AnnotationError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        try:
+            record = save_annotation(annotate_path, annotation)
+        except OSError:
+            logger.exception("Annotation write failed")
+            return web.Response(status=500, text="annotation write failed")
+        return web.json_response({"turn_id": turn_id, "annotation": record})
+
     async def refresh(_request: Any) -> Any:
         return web.json_response({"snapshot_size": len(source.records())})
 
@@ -1502,6 +1583,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
     app.router.add_post("/api/replay", replay)
     app.router.add_post("/api/export", export)
+    app.router.add_post("/api/annotate", annotate)
+    app.router.add_get("/api/annotations", annotations)
     app.router.add_get("/api/refresh", refresh)
     app.router.add_get("/api/health", healthcheck)
     app.router.add_get("/ws", websocket)
