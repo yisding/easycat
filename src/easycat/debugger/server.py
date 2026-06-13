@@ -19,6 +19,8 @@ Routes:
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
 - ``GET  /api/audio/waveform/<turn>`` — greyscale waveform PNG (``?track=tts|mic&w=&h=``)
+- ``GET  /api/aec/<turn>``            — AEC diagnostics (ERLE / double-talk / self-echo / tracks)
+- ``POST /api/aec/<turn>/vad-whatif`` — re-run VAD at an alternate threshold (bundle only)
 - ``POST /api/replay``                — run replay against the source
 - ``POST /api/export``                — export the source as a bundle ZIP (``?turn=`` slices one)
 - ``POST /api/annotate``              — persist a per-turn verdict sidecar (bundle only)
@@ -58,6 +60,21 @@ from easycat.debug.annotations import (
     save_annotation,
 )
 from easycat.debug.bundle import RunBundle
+from easycat.debugger._aec import (
+    align_tracks as _align_aec_tracks,
+)
+from easycat.debugger._aec import (
+    compute_erle as _compute_erle,
+)
+from easycat.debugger._aec import (
+    detect_double_talk as _detect_double_talk,
+)
+from easycat.debugger._aec import (
+    detect_self_echo as _detect_self_echo,
+)
+from easycat.debugger._aec import (
+    frame_rms_series as _frame_rms_series,
+)
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 from easycat.runtime.costs import (
@@ -854,6 +871,230 @@ def _collect_concat_pcm(
     return b"".join(frames), fmt
 
 
+# ── AEC diagnostics ──────────────────────────────────────────────
+
+# Default decode geometry used when the journal frames carry no explicit
+# PCM format fields (debugger-internal fixtures, malformed captures).
+_AEC_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+_AEC_FRAME_MS = 20
+
+
+def _aec_track_format(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Read the PCM geometry from the first aligned frame (defaulted)."""
+    fmt = dict(_AEC_DEFAULT_FMT)
+    if entries:
+        data = entries[0].get("data") or {}
+        if isinstance(data, dict):
+            for key in ("sample_rate", "channels", "sample_width"):
+                value = data.get(key)
+                if isinstance(value, int) and value > 0:
+                    fmt[key] = value
+    return fmt
+
+
+def _aec_interruption_frames(
+    records: list[dict[str, Any]],
+    turn_id: str,
+    post_aec: list[dict[str, Any]],
+    *,
+    frame_ms: int,
+) -> list[int]:
+    """Map this turn's interruption records onto post-AEC frame indices.
+
+    Each ``assistant_interruption_notified`` (or a ``turn_state_changed``
+    transition *into* ``user_speaking`` while the bot was speaking) is placed at
+    the frame whose monotonic timestamp it most closely follows, so self-echo
+    detection can tell a true barge-in from the bot hearing itself.
+    """
+    if not post_aec:
+        return []
+    base_ns = post_aec[0]["mono_ns"]
+    frame_span_ns = max(1, frame_ms) * 1_000_000
+    total_frames = 0
+    for entry in post_aec:
+        total_frames += max(
+            1,
+            len(
+                _frame_rms_series(
+                    entry["pcm"],
+                    frame_ms=frame_ms,
+                )
+            ),
+        )
+    frames: list[int] = []
+    for record in records:
+        if record.get("turn_id") != turn_id:
+            continue
+        name = record.get("name")
+        if name == "assistant_interruption_notified":
+            pass
+        elif name == "turn_state_changed":
+            data = record.get("data") or {}
+            if not (isinstance(data, dict) and data.get("to") == "user_speaking"):
+                continue
+        else:
+            continue
+        timing = record.get("timing")
+        mono_ns = timing.get("mono_ns") if isinstance(timing, dict) else None
+        if not isinstance(mono_ns, int):
+            continue
+        frame = max(0, (mono_ns - base_ns) // frame_span_ns)
+        frames.append(min(int(frame), max(0, total_frames - 1)))
+    return frames
+
+
+def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str, Any]:
+    """Build the AEC diagnostics payload for one turn.
+
+    Aligns mic-in / reference / post-AEC tracks on ``timing.mono_ns`` and
+    derives ERLE, double-talk bands, and self-echo hits.  Degrades gracefully:
+    a turn with no captured reference returns ``has_reference: False`` and empty
+    diagnostics rather than raising.
+    """
+    records = source.records()
+    tracks = _align_aec_tracks(records, source=source, turn_id=turn_id)
+    mic_in = tracks["mic_in"]
+    reference = tracks["reference"]
+    post_aec = tracks["post_aec"]
+    has_reference = bool(reference)
+
+    fmt = _aec_track_format(post_aec or mic_in)
+    frame_ms = _AEC_FRAME_MS
+    mic_pcm = b"".join(entry["pcm"] for entry in mic_in)
+    ref_pcm = b"".join(entry["pcm"] for entry in reference)
+    post_pcm = b"".join(entry["pcm"] for entry in post_aec)
+
+    erle = _compute_erle(
+        mic_pcm,
+        post_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    mic_rms = _frame_rms_series(
+        mic_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    ref_rms = _frame_rms_series(
+        ref_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    double_talk = _detect_double_talk(ref_rms, mic_rms)
+    interruption_frames = _aec_interruption_frames(records, turn_id, post_aec, frame_ms=frame_ms)
+    self_echo = _detect_self_echo(
+        post_pcm,
+        interruption_frames,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    return {
+        "turn_id": turn_id,
+        "has_reference": has_reference,
+        "frame_ms": frame_ms,
+        "format": fmt,
+        "erle": erle,
+        "double_talk": double_talk,
+        "self_echo": self_echo,
+        "interruption_frames": interruption_frames,
+        "tracks": {
+            "mic_in": {"frame_count": len(mic_in), "byte_count": len(mic_pcm)},
+            "reference": {"frame_count": len(reference), "byte_count": len(ref_pcm)},
+            "post_aec": {"frame_count": len(post_aec), "byte_count": len(post_pcm)},
+        },
+    }
+
+
+def _vad_baseline_start_count(records: list[dict[str, Any]], turn_id: str) -> int:
+    """Count the ``VADStartSpeaking`` events the live VAD emitted for a turn.
+
+    Reads the recorded VAD ``stage_complete`` event descriptors so the what-if
+    delta compares against what actually happened, not a re-run of the live
+    threshold.
+    """
+    count = 0
+    for record in records:
+        if record.get("turn_id") != turn_id or record.get("name") != "stage_complete":
+            continue
+        data = record.get("data") or {}
+        if not isinstance(data, dict) or data.get("stage") != "vad":
+            continue
+        for event in data.get("events") or []:
+            if isinstance(event, dict) and event.get("type") == "VADStartSpeaking":
+                count += 1
+    return count
+
+
+def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
+    """Return the turn's raw VAD ``stage_start`` input PCM blobs, in order.
+
+    These are the pre-mono mic frames captured before the VAD provider ran, so
+    the what-if re-drives a fresh provider against the same input the live run
+    saw.
+    """
+    frames: list[tuple[int, bytes]] = []
+    for record in source.records():
+        if record.get("turn_id") != turn_id or record.get("name") != "stage_start":
+            continue
+        data = record.get("data") or {}
+        if not isinstance(data, dict) or data.get("stage") != "vad":
+            continue
+        ref = record.get("input_ref")
+        if not ref:
+            continue
+        blob = source.artifact(ref)
+        if blob is None:
+            continue
+        frames.append((int(record.get("sequence") or 0), blob))
+    frames.sort(key=lambda item: item[0])
+    return [blob for _seq, blob in frames]
+
+
+async def _vad_whatif_for_turn(
+    source: DebuggerSource, turn_id: str, *, threshold: float
+) -> dict[str, Any]:
+    """Re-run VAD over a turn's captured input at an alternate sensitivity.
+
+    ``threshold`` is the alternate VAD *sensitivity* (0..1, higher = more
+    sensitive).  Returns ``{"threshold", "baseline_starts", "whatif_starts",
+    "false_trigger_delta"}``.  Raises :class:`RuntimeError` when the VAD
+    provider cannot be imported (the handler maps it to a 422 degrade).
+    """
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.events import VADStartSpeaking
+    from easycat.vad.factory import VADConfig, create_vad
+
+    records = source.records()
+    baseline = _vad_baseline_start_count(records, turn_id)
+    blobs = _vad_whatif_frames(source, turn_id)
+
+    try:
+        provider = create_vad(VADConfig(sensitivity=threshold))
+    except Exception as exc:  # noqa: BLE001 - import/availability degrade → 422
+        raise RuntimeError(f"VAD provider unavailable: {exc}") from exc
+
+    whatif_starts = 0
+    for blob in blobs:
+        chunk = AudioChunk(data=blob, format=PCM16_MONO_16K)
+        async for event in provider.process(chunk):
+            if isinstance(event, VADStartSpeaking):
+                whatif_starts += 1
+    return {
+        "threshold": threshold,
+        "baseline_starts": baseline,
+        "whatif_starts": whatif_starts,
+        "false_trigger_delta": whatif_starts - baseline,
+    }
+
+
 def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
     """Build a 44-byte RIFF/WAVE PCM header.
 
@@ -1273,6 +1514,56 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             headers={"Cache-Control": "no-store"},
         )
 
+    async def aec_diagnostics(request: Any) -> Any:
+        """AEC diagnostics for one turn: ERLE, double-talk, self-echo, tracks.
+
+        Reads the aligned mic-in / reference / post-AEC tracks from the journal
+        and derives the echo-cancellation health metrics.  ``has_reference`` is
+        ``False`` (with empty diagnostics) when AEC was disabled or no reference
+        frames were captured, rather than 404'ing — the SPA always gets a
+        well-formed shape.
+        """
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        return web.json_response(_aec_diagnostics_for_turn(source, turn_id))
+
+    async def aec_vad_whatif(request: Any) -> Any:
+        """Re-run VAD at an alternate sensitivity over a turn's captured input.
+
+        Bundle-only (mirrors replay's ``supports_replay`` 405 for live sources):
+        the captured ``stage_start`` input refs only exist on a settled bundle.
+        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        on this POST.  A missing VAD provider degrades to 422 rather than 500.
+        """
+        if source.is_live:
+            return web.Response(status=405, text="vad-whatif is only supported for bundle sources")
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        raw = request.query.get("threshold")
+        try:
+            threshold = float(raw) if raw is not None else 0.5
+        except (TypeError, ValueError):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "threshold must be a number"},
+                status=400,
+            )
+        if not (0.0 <= threshold <= 1.0):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "threshold must be between 0 and 1"},
+                status=400,
+            )
+        try:
+            result = await _vad_whatif_for_turn(source, turn_id, threshold=threshold)
+        except RuntimeError as exc:
+            return web.json_response(
+                {"error_code": "VAD_UNAVAILABLE", "message": str(exc)}, status=422
+            )
+        return web.json_response(result)
+
     _DESTRUCTIVE_FIDELITIES = frozenset({"live"})
     _DESTRUCTIVE_TOOL_POLICIES = frozenset({"allow"})
     _ALLOWED_REPLAY_KEYS = frozenset(
@@ -1581,6 +1872,8 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
     app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
+    app.router.add_get("/api/aec/{turn}", aec_diagnostics)
+    app.router.add_post("/api/aec/{turn}/vad-whatif", aec_vad_whatif)
     app.router.add_post("/api/replay", replay)
     app.router.add_post("/api/export", export)
     app.router.add_post("/api/annotate", annotate)

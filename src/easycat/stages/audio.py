@@ -10,6 +10,7 @@ from typing import Any
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
+from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
@@ -147,6 +148,51 @@ class AudioStage:
             data_extra=complete_extra,
         )
         return result
+
+    def record_reference(
+        self,
+        chunk: Any,
+        ctx: RunContext,
+        turn: TurnContext,
+    ) -> None:
+        """Journal one AEC far-end reference frame (the bot playback fed to AEC).
+
+        The reference (far-end) audio handed to the echo canceller is the one
+        leg of the AEC chain that the pipeline never journals on its own: the
+        captured mic-in lands as the audio stage's ``stage_start`` ``input_ref``
+        and the post-AEC result as its ``stage_complete`` ``output_ref``, but
+        the bot's own playback subtracted from the mic is fed straight into the
+        canceller as a delivery side effect.  Capturing it under
+        :data:`AEC_REFERENCE_FRAME_NAME` (mirroring TTSStage's ``tts_frame``)
+        lets the debugger align all three tracks on the timeline and compute
+        ERLE / double-talk / self-echo.
+
+        This is best-effort and additive: the caller invokes it only when AEC
+        is enabled and an artifact store is present, and when there is nothing
+        to store (no store, empty payload, or over the size cap) the frame is
+        simply skipped — no record, no raise.  A capture failure must never
+        disturb the live audio delivery path.
+        """
+        ctx = self._journal_ctx(ctx)
+        raw_bytes = getattr(chunk, "data", None) if not isinstance(chunk, bytes) else chunk
+        ref = put_artifact(ctx, raw_bytes)
+        if ref is None:
+            return
+        extra = {
+            "audio_bytes": len(raw_bytes) if isinstance(raw_bytes, (bytes, bytearray)) else 0,
+        }
+        extra.update(audio_format_fields(chunk))
+        duration = getattr(chunk, "duration_ms", None)
+        if duration is not None:
+            extra["duration_ms"] = duration
+        journal_append_event(
+            ctx,
+            stage=self.name,
+            name=AEC_REFERENCE_FRAME_NAME,
+            turn_id=turn.id,
+            output_ref=ref,
+            data_extra=extra,
+        )
 
     def snapshot_state(self) -> StageStateSnapshot:
         fields: dict[str, Any] = {

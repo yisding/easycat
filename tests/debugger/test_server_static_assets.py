@@ -162,6 +162,35 @@ def test_static_index_has_annotation_controls_in_parity_with_python():
         assert forbidden not in text, f"SPA must never use {forbidden}"
 
 
+def test_static_index_has_aec_view_without_innerhtml():
+    """The AEC tab must exist and render the three-track view, ERLE canvas, FSM
+    swimlane, and VAD what-if controls with safe DOM helpers only.
+
+    ``renderAecView`` fetches ``/api/aec/<turn>`` and the VAD what-if posts to
+    ``/api/aec/<turn>/vad-whatif``; everything is built via ``el()``/canvas so
+    untrusted bundle content can never inject markup.
+    """
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert 'data-tab="aec"' in text, "AEC tab missing from the tab strip"
+    assert 'id="aec-view"' in text, "AEC view section missing"
+    assert "function renderAecView" in text
+    assert "aec: renderAecView" in text, "AEC tab not wired into TAB_LOADERS"
+    assert '"/api/aec/"' in text, "renderAecView must fetch /api/aec/<turn>"
+    assert "/vad-whatif?threshold=" in text, "VAD what-if POST missing"
+    # The three aligned strips, the ERLE canvas painter, and the FSM swimlane.
+    assert "function _aecTrackStrip" in text
+    assert "function _paintAecErle" in text
+    assert "function _aecSwimlane" in text
+    assert "turn_state_changed" in text, "FSM swimlane must read turn_state_changed records"
+    # No unsafe DOM anywhere in the SPA, including the new view.
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"SPA must never use {forbidden}"
+
+
 def _static_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static"
 

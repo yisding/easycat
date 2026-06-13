@@ -697,6 +697,24 @@ class AudioRouter:
                     "the mic rate or resample before AEC.",
                     exc_info=True,
                 )
+            else:
+                # The far-end reference is now the one AEC leg the pipeline
+                # never journals on its own (mic-in/post-AEC are already
+                # captured by AudioStage.execute).  Journal it so the debugger
+                # can align all three tracks and compute ERLE.  Strictly
+                # additive: gated on an artifact store being present, and a
+                # capture failure here must NEVER raise, never disable AEC
+                # (do not set ``_aec_reference_failed``), and never be
+                # attributed to "Failed to send audio".
+                if self._run_ctx.artifact_store is not None:
+                    try:
+                        self._audio_stage.record_reference(
+                            chunk,
+                            self._run_ctx,
+                            turn or self._no_turn,
+                        )
+                    except Exception:
+                        logger.debug("Failed to record AEC reference frame", exc_info=True)
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton
