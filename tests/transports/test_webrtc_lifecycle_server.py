@@ -18,9 +18,11 @@ from easycat.transports.webrtc import (
     ICEServer,
     WebRTCTransport,
     WebRTCTransportConfig,
+    serve_webrtc_config_sessions,
 )
 
 from ._webrtc_fakes import (
+    _HAS_AIOHTTP,
     _HAS_WEBRTC_DEPS,
     _FakeAudioFrame,
     _FakeInboundTrack,
@@ -862,6 +864,229 @@ class TestConsumeAudioSentinel:
 
         # One chunk was dropped to make room for the sentinel; at most 1 chunk.
         assert len(chunks) <= 2
+
+
+class _FakeSession:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self, *args: object, **kwargs: object) -> None:
+        self.stopped.set()
+
+
+@pytest.mark.integration_socket
+@pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_creates_session_per_offer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiohttp
+
+        import easycat.config as config_module
+
+        _install_fake_webrtc_modules(monkeypatch)
+        port = self._unused_port()
+        stop_event = asyncio.Event()
+        sessions: list[_FakeSession] = []
+        transports: list[WebRTCTransport] = []
+
+        def create_session(config: dict[str, object]) -> _FakeSession:
+            session = _FakeSession()
+            sessions.append(session)
+            return session
+
+        def config_factory(transport: WebRTCTransport) -> dict[str, object]:
+            transports.append(transport)
+            return {"transport": transport, "agent": object()}
+
+        monkeypatch.setattr(config_module, "create_session", create_session)
+        task = asyncio.create_task(
+            serve_webrtc_config_sessions(
+                config_factory,
+                WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=None),
+                stop_event=stop_event,
+                runtime_feedback=False,
+                announce=False,
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as client:
+                for _ in range(2):
+                    for attempt in range(20):
+                        try:
+                            async with client.post(
+                                f"http://127.0.0.1:{port}/offer",
+                                json={"sdp": "v=0\r\n", "type": "offer"},
+                            ) as resp:
+                                assert resp.status == 200
+                                data = await resp.json()
+                                assert data == {"sdp": "fake-answer", "type": "answer"}
+                                break
+                        except aiohttp.ClientConnectorError:
+                            if attempt == 19:
+                                raise
+                            await asyncio.sleep(0.05)
+            assert len(sessions) == 2
+            assert len(transports) == 2
+            assert transports[0] is not transports[1]
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+            await asyncio.wait_for(sessions[1].started.wait(), timeout=1)
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2)
+        assert all(session.stopped.is_set() for session in sessions)
+
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_enforces_session_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiohttp
+
+        import easycat.config as config_module
+
+        _install_fake_webrtc_modules(monkeypatch)
+        port = self._unused_port()
+        stop_event = asyncio.Event()
+        sessions: list[_FakeSession] = []
+
+        def create_session(config: dict[str, object]) -> _FakeSession:
+            session = _FakeSession()
+            sessions.append(session)
+            return session
+
+        monkeypatch.setattr(config_module, "create_session", create_session)
+        task = asyncio.create_task(
+            serve_webrtc_config_sessions(
+                lambda transport: {"transport": transport, "agent": object()},
+                WebRTCTransportConfig(
+                    host="127.0.0.1", port=port, static_dir=None, max_sessions=1
+                ),
+                stop_event=stop_event,
+                runtime_feedback=False,
+                announce=False,
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as client:
+                for attempt in range(20):
+                    try:
+                        async with client.post(
+                            f"http://127.0.0.1:{port}/offer",
+                            json={"sdp": "v=0\r\n", "type": "offer"},
+                        ) as resp:
+                            assert resp.status == 200
+                            break
+                    except aiohttp.ClientConnectorError:
+                        if attempt == 19:
+                            raise
+                        await asyncio.sleep(0.05)
+                async with client.post(
+                    f"http://127.0.0.1:{port}/offer",
+                    json={"sdp": "v=0\r\n", "type": "offer"},
+                ) as resp:
+                    assert resp.status == 503
+                    data = await resp.json()
+                    assert "session limit" in data["error"]
+            assert len(sessions) == 1
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2)
+
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_rejects_bad_offer_before_session_start(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiohttp
+
+        import easycat.config as config_module
+
+        _install_fake_webrtc_modules(monkeypatch)
+        port = self._unused_port()
+        stop_event = asyncio.Event()
+        sessions: list[_FakeSession] = []
+
+        def create_session(config: dict[str, object]) -> _FakeSession:
+            session = _FakeSession()
+            sessions.append(session)
+            return session
+
+        monkeypatch.setattr(config_module, "create_session", create_session)
+        task = asyncio.create_task(
+            serve_webrtc_config_sessions(
+                lambda transport: {"transport": transport, "agent": object()},
+                WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=None),
+                stop_event=stop_event,
+                runtime_feedback=False,
+                announce=False,
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as client:
+                for attempt in range(20):
+                    try:
+                        async with client.post(
+                            f"http://127.0.0.1:{port}/offer",
+                            json={"sdp": "", "type": "offer"},
+                        ) as resp:
+                            assert resp.status == 400
+                            break
+                    except aiohttp.ClientConnectorError:
+                        if attempt == 19:
+                            raise
+                        await asyncio.sleep(0.05)
+            assert sessions == []
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2)
+
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_health_reports_capacity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import aiohttp
+
+        import easycat.config as config_module
+
+        _install_fake_webrtc_modules(monkeypatch)
+        port = self._unused_port()
+        stop_event = asyncio.Event()
+        monkeypatch.setattr(config_module, "create_session", lambda _config: _FakeSession())
+        task = asyncio.create_task(
+            serve_webrtc_config_sessions(
+                lambda transport: {"transport": transport, "agent": object()},
+                WebRTCTransportConfig(
+                    host="127.0.0.1", port=port, static_dir=None, max_sessions=7
+                ),
+                stop_event=stop_event,
+                runtime_feedback=False,
+                announce=False,
+            )
+        )
+        try:
+            async with aiohttp.ClientSession() as client:
+                for attempt in range(20):
+                    try:
+                        async with client.get(f"http://127.0.0.1:{port}/health") as resp:
+                            assert resp.status == 200
+                            data = await resp.json()
+                            assert data == {
+                                "status": "ok",
+                                "active_sessions": 0,
+                                "max_sessions": 7,
+                            }
+                            break
+                    except aiohttp.ClientConnectorError:
+                        if attempt == 19:
+                            raise
+                        await asyncio.sleep(0.05)
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2)
 
 
 class TestWebRTCDegradedEvents:

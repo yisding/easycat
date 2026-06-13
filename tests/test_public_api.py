@@ -107,6 +107,8 @@ PUBLIC_API_SNAPSHOT = (
     "register_tts_provider",
     "require_env",
     "run",
+    "run_webrtc_config_server",
+    "serve_webrtc_config_sessions",
     "set_easycat_log_level",
     "wait_for_shutdown_signal",
 )
@@ -121,7 +123,7 @@ TRANSPORT_EXTENSION_SURFACE = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 92
+    assert len(easycat.__all__) <= 94
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

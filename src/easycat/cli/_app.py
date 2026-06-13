@@ -559,6 +559,27 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Production servers",
+        "path": "docs/deployment/production-servers.md",
+        "audience": "operators and app builders",
+        "diataxis": "how-to",
+        "description": (
+            "Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers "
+            "with one isolated EasyCat session per client or call."
+        ),
+        "commands": (
+            "uv run easycat docs --audience operators",
+            "uv run easycat docs --audience operators --json",
+            "uv run python examples/ws_server.py",
+            "uv run python examples/webrtc_server.py",
+            "uv run python examples/webtransport_server.py",
+            "uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0",
+            "uv run pytest tests/transports/test_websocket_session_server.py",
+            "uv run pytest tests/transports/test_webrtc.py",
+            "uv run pytest tests/transports/test_webtransport.py",
+        ),
+    },
+    {
         "label": "Observability",
         "path": "docs/observability.md",
         "audience": "operators",

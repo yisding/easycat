@@ -206,6 +206,8 @@ custom transport.
 - `TwilioConnectionTransport`
 - `TwilioSessionActionConfig`
 - `WebRTCTransportConfig`
+- `run_webrtc_config_server`
+- `serve_webrtc_config_sessions`
 - `WebSocketConnectionTransport`
 - `WebSocketTransportConfig`
 - `WebTransportConnectionTransport`

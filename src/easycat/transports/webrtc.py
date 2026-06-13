@@ -28,13 +28,15 @@ import logging
 import os
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, ClassVar
 
 from easycat._extras import require_module
+from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
 from easycat.transports._base import AudioQueueMixin
@@ -230,6 +232,10 @@ class WebRTCTransportConfig:
         ``?token=`` from the page URL automatically).  Mirrors the
         WebSocket/docker ``EASYCAT_WS_TOKEN`` security default — pair it with
         a non-loopback ``host``.
+    max_sessions:
+        Maximum concurrent browser offers accepted by
+        :func:`serve_webrtc_config_sessions`. The single-client
+        :class:`WebRTCTransport` compatibility wrapper ignores this value.
     stats_max_records:
         Maximum JSONL records written to ``stats_path`` by this process.
     stats_max_file_bytes:
@@ -253,6 +259,7 @@ class WebRTCTransportConfig:
     cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
     auth_token: str | None = None
+    max_sessions: int = 64
     stats_max_records: int = 1_000
     stats_max_file_bytes: int = 1_048_576
     stats_max_requests_per_minute: int = 120
@@ -301,6 +308,7 @@ def webrtc_transport_config_from_env(
     host_env: str = "SIGNALING_HOST",
     port_env: str = "SIGNALING_PORT",
     auth_token_env: str = "WEBRTC_SIGNALING_TOKEN",
+    max_sessions_env: str = "WEBRTC_MAX_SESSIONS",
     expose_ice_credentials_env: str = "WEBRTC_EXPOSE_ICE_CREDENTIALS",
     static_dir: str | None = WebRTCTransportConfig._USE_BUNDLED,
 ) -> WebRTCTransportConfig:
@@ -311,7 +319,183 @@ def webrtc_transport_config_from_env(
         ice_servers=webrtc_ice_servers_from_env(),
         static_dir=static_dir,
         auth_token=os.getenv(auth_token_env) or None,
+        max_sessions=int(os.getenv(max_sessions_env, "64")),
         expose_ice_credentials=_env_flag(expose_ice_credentials_env),
+    )
+
+
+async def serve_webrtc_config_sessions(
+    config_factory: Callable[[WebRTCTransport], Any],
+    config: WebRTCTransportConfig | None = None,
+    *,
+    stop_event: asyncio.Event | None = None,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+) -> None:
+    """Serve one EasyCat session per browser WebRTC offer.
+
+    The returned signaling server exposes the same ``/offer``, ``/config``,
+    ``/stats``, ``/health``, root, static-file, CORS, and bearer-token behavior
+    as :class:`WebRTCTransport`, but each accepted offer receives an isolated
+    transport/session instead of replacing a singleton peer connection.
+    """
+    from easycat.config import create_session
+    from easycat.helpers import attach_runtime_feedback
+    from easycat.session_manager import SessionManager
+
+    settings = config or WebRTCTransportConfig()
+    if not _is_loopback_host(settings.host) and settings.auth_token is None:
+        raise ValueError(
+            "WebRTCTransportConfig.auth_token is required when binding WebRTC "
+            "signaling to a non-loopback host"
+        )
+    web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
+    manager: SessionManager[int] = SessionManager()
+    session_slots = asyncio.Semaphore(settings.max_sessions)
+    cleanup_tasks: set[asyncio.Task[None]] = set()
+    active_sessions: set[int] = set()
+    shutting_down = False
+
+    shim = WebRTCTransport(settings)
+    shim._web = web
+    shim._has_bundled_client = False
+
+    app = web.Application()
+
+    async def cleanup_session(key: int, transport: WebRTCTransport) -> None:
+        try:
+            await transport.wait_closed()
+        finally:
+            try:
+                await asyncio.shield(manager.remove(key))
+                active_sessions.discard(key)
+            finally:
+                session_slots.release()
+
+    async def handle_offer(request: Any) -> Any:
+        nonlocal shutting_down
+        if shutting_down:
+            return web.Response(
+                status=503,
+                text=json.dumps({"error": "Server is shutting down"}),
+                content_type="application/json",
+                headers=shim._cors_headers(request),
+            )
+        if session_slots.locked():
+            return web.Response(
+                status=503,
+                text=json.dumps({"error": "Server is at the configured session limit"}),
+                content_type="application/json",
+                headers=shim._cors_headers(request),
+            )
+        await session_slots.acquire()
+        transport = WebRTCTransport(replace(settings, static_dir=None))
+        transport._prepare_external_signaling(web)
+        key = id(transport)
+        session_started = False
+        try:
+            response = await transport._handle_offer(request)
+            if getattr(response, "status", 200) >= 400:
+                await transport.disconnect()
+                session_slots.release()
+                return response
+
+            session = create_session(config_factory(transport))
+            if runtime_feedback:
+                attach_runtime_feedback(session)
+            await manager.add(key, session)
+            session_started = True
+            active_sessions.add(key)
+            transport._ensure_browser_event_forwarder()
+            task = asyncio.create_task(cleanup_session(key, transport))
+            cleanup_tasks.add(task)
+            task.add_done_callback(cleanup_tasks.discard)
+            return response
+        except Exception:
+            if session_started:
+                await manager.remove(key)
+                active_sessions.discard(key)
+            await transport.disconnect()
+            session_slots.release()
+            raise
+
+    async def handle_health(request: Any) -> Any:
+        status = "draining" if shutting_down else "ok"
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(
+                {
+                    "status": status,
+                    "active_sessions": len(active_sessions),
+                    "max_sessions": settings.max_sessions,
+                }
+            ),
+            headers=shim._cors_headers(request),
+        )
+
+    app.router.add_post("/offer", handle_offer)
+    app.router.add_post("/stats", shim._handle_stats)
+    app.router.add_get("/config", shim._handle_config)
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/", shim._handle_root)
+    app.router.add_options("/offer", shim._handle_cors_preflight)
+    app.router.add_options("/stats", shim._handle_cors_preflight)
+
+    static_dir = settings.static_dir
+    if static_dir == WebRTCTransportConfig._USE_BUNDLED:
+        static_dir = WebRTCTransportConfig._BUNDLED_STATIC_DIR
+    if static_dir is not None:
+        static_path = Path(static_dir)
+        if static_path.is_dir():
+            default_client = static_path / "webrtc_client.html"
+            if default_client.is_file():
+                shim._has_bundled_client = True
+            app.router.add_static("/", static_path)
+            logger.info("Serving static files from %s", static_path)
+        else:
+            logger.warning(
+                "Configured static_dir '%s' does not exist or is not a directory; "
+                "static file serving is disabled",
+                static_path,
+            )
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, settings.host, settings.port)
+    await site.start()
+    if announce:
+        print(f"\nServer ready. Open http://{settings.host}:{settings.port} in your browser")
+        print("Press Ctrl+C to stop.\n")
+
+    event = stop_event or create_shutdown_event()
+    try:
+        await event.wait()
+    finally:
+        shutting_down = True
+        await site.stop()
+        await runner.cleanup()
+        for task in list(cleanup_tasks):
+            task.cancel()
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        await manager.stop_all()
+
+
+def run_webrtc_config_server(
+    config_factory: Callable[[WebRTCTransport], Any],
+    config: WebRTCTransportConfig | None = None,
+    *,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+) -> None:
+    """Run a multi-session WebRTC signaling server from a synchronous entry point."""
+    asyncio.run(
+        serve_webrtc_config_sessions(
+            config_factory,
+            config,
+            runtime_feedback=runtime_feedback,
+            announce=announce,
+        )
     )
 
 
@@ -568,6 +752,8 @@ class WebRTCTransport(AudioQueueMixin):
         self._consume_task: asyncio.Task[None] | None = None
         self._peer_generation = 0
         self._offer_lock = asyncio.Lock()
+        self._peer_closed = asyncio.Event()
+        self._peer_closed.set()
         self._stats_request_times: deque[float] = deque()
 
     # ── Helpers ─────────────────────────────────────────────────
@@ -745,6 +931,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         self._reset_audio_queue()
         self._has_bundled_client = False
+        self._peer_closed.set()
 
         app = web.Application()
         app.router.add_post("/offer", self._handle_offer)
@@ -844,6 +1031,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         self._enqueue_sentinel()
         self._client_connected.clear()
+        self._peer_closed.set()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""
@@ -1015,6 +1203,7 @@ class WebRTCTransport(AudioQueueMixin):
                     self._client_connected.set()
                 elif state in ("disconnected", "failed", "closed"):
                     self._client_connected.clear()
+                    self._peer_closed.set()
                     # Null the outbound track so send_audio() reports the
                     # drop (via bool False) instead of silently queueing into
                     # a source that nothing is draining any more.
@@ -1051,6 +1240,7 @@ class WebRTCTransport(AudioQueueMixin):
 
         self._peer_generation = peer_generation
         self._client_connected.clear()
+        self._peer_closed.clear()
         self._outbound_track = None
 
         # Close any existing peer connection only after the replacement SDP is
@@ -1267,6 +1457,18 @@ class WebRTCTransport(AudioQueueMixin):
             # callbacks don't fire.  Duplicate sentinels are harmless — the first
             # one stops receive_audio() and extras are cleared on next connection.
             self._enqueue_sentinel_for_peer(peer_generation)
+
+    async def wait_closed(self) -> None:
+        """Wait until the current peer connection is closed or failed."""
+        await self._peer_closed.wait()
+
+    def _prepare_external_signaling(self, web: Any) -> None:
+        """Mark this transport as owned by an outer multi-session signaling app."""
+        self._web = web
+        self._connected = True
+        self._reset_audio_queue()
+        self._peer_closed.set()
+        self._has_bundled_client = False
 
     # ── Properties ────────────────────────────────────────────────
 

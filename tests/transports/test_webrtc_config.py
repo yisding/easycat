@@ -75,6 +75,7 @@ class TestWebRTCTransportConfig:
             "TURN_CREDENTIAL",
             "WEBRTC_EXPOSE_ICE_CREDENTIALS",
             "WEBRTC_SIGNALING_TOKEN",
+            "WEBRTC_MAX_SESSIONS",
         ):
             monkeypatch.delenv(name, raising=False)
 
@@ -84,6 +85,7 @@ class TestWebRTCTransportConfig:
         assert config.port == 8080
         assert config.static_dir == WebRTCTransportConfig._USE_BUNDLED
         assert config.auth_token is None
+        assert config.max_sessions == 64
         assert config.expose_ice_credentials is False
         assert len(config.ice_servers) == 1
         assert config.ice_servers[0].urls == ["stun:stun.l.google.com:19302"]
@@ -96,6 +98,7 @@ class TestWebRTCTransportConfig:
         monkeypatch.setenv("TURN_CREDENTIAL", "turn-secret")
         monkeypatch.setenv("WEBRTC_EXPOSE_ICE_CREDENTIALS", "yes")
         monkeypatch.setenv("WEBRTC_SIGNALING_TOKEN", "signaling-secret")
+        monkeypatch.setenv("WEBRTC_MAX_SESSIONS", "12")
 
         config = webrtc_transport_config_from_env(static_dir="/tmp/web")
 
@@ -103,6 +106,7 @@ class TestWebRTCTransportConfig:
         assert config.port == 9090
         assert config.static_dir == "/tmp/web"
         assert config.auth_token == "signaling-secret"
+        assert config.max_sessions == 12
         assert config.expose_ice_credentials is True
         assert [server.urls[0] for server in config.ice_servers] == [
             "stun:stun.l.google.com:19302",

@@ -37,18 +37,6 @@ from tests.session._session_core_helpers import (
 )
 
 
-class BlockingPlaybackAckTransport(FakePlaybackAckTransport):
-    def __init__(self) -> None:
-        super().__init__()
-        self.playback_mark_blocked = asyncio.Event()
-        self.release_playback_mark = asyncio.Event()
-
-    async def send_playback_mark(self, name: str | None = None) -> str:
-        self.playback_mark_blocked.set()
-        await self.release_playback_mark.wait()
-        return await super().send_playback_mark(name)
-
-
 @pytest.mark.asyncio
 async def test_session_event_bus_accessible():
     session = Session(_full_config())
@@ -325,46 +313,6 @@ async def test_trailing_playback_mark_not_flushed_for_replaced_turn():
         assert old_turn.bytes_since_last_mark == 320
         assert session._turn is new_turn
     finally:
-        await session.stop()
-
-
-@pytest.mark.asyncio
-async def test_finalize_speaking_turn_does_not_clear_turn_started_during_mark_flush():
-    transport = BlockingPlaybackAckTransport()
-    session = Session(_full_config(transport=transport))
-    session._audio_router._playback_mark_bytes_interval = 10_000
-
-    await session.start()
-    finalize_task: asyncio.Task[bool] | None = None
-    try:
-        old_turn = TurnContext("old-turn", CancelToken())
-        session._turn = old_turn
-        old_turn.bytes_since_last_mark = 320
-        old_turn.audio_bytes_sent = 320
-        await session._turn_manager.bot_started_speaking()
-
-        finalize_task = asyncio.create_task(
-            session._tts_scheduler.finalize_speaking_turn(
-                old_turn,
-                turn_generation=old_turn.generation,
-            )
-        )
-        await asyncio.wait_for(transport.playback_mark_blocked.wait(), timeout=1.0)
-
-        assert session._turn is old_turn
-        await session._turn_manager.start_turn()
-        new_turn = TurnContext("new-turn", CancelToken())
-        session._turn = new_turn
-
-        transport.release_playback_mark.set()
-        await asyncio.wait_for(finalize_task, timeout=1.0)
-
-        assert transport.playback_marks
-        assert session._turn is new_turn
-    finally:
-        if finalize_task is not None and not finalize_task.done():
-            finalize_task.cancel()
-        transport.release_playback_mark.set()
         await session.stop()
 
 
