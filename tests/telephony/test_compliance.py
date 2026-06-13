@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from easycat.telephony.compliance import (
     AIDisclosureConfig,
     DNCList,
@@ -108,3 +110,59 @@ class TestDNCIntegration:
         assert detect_opt_out("Please remove me from your list")
         assert detect_opt_out("take my number off")
         assert detect_opt_out("remove me")
+
+
+class _SemanticOptOutClassifier:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def classify_opt_out(self, text: str):  # noqa: ANN201
+        self.calls.append(text)
+        if "leave me alone" in text.lower():
+            return "leave me alone"
+        return False
+
+
+class TestSemanticOptOutDetection:
+    @pytest.mark.asyncio
+    async def test_classify_opt_out_uses_phrase_match_before_classifier(self) -> None:
+        from easycat.telephony.compliance import classify_opt_out
+
+        classifier = _SemanticOptOutClassifier()
+
+        result = await classify_opt_out("please stop calling me", classifier=classifier)
+
+        assert result.matched
+        assert result.method == "phrase"
+        assert result.phrase == "stop calling"
+        assert classifier.calls == []
+
+    @pytest.mark.asyncio
+    async def test_classify_opt_out_uses_classifier_when_phrases_miss(self) -> None:
+        from easycat.telephony.compliance import classify_opt_out
+
+        classifier = _SemanticOptOutClassifier()
+
+        result = await classify_opt_out("honestly, just leave me alone", classifier=classifier)
+
+        assert result.matched
+        assert result.method == "llm"
+        assert result.phrase == "leave me alone"
+        assert classifier.calls == ["honestly, just leave me alone"]
+
+    @pytest.mark.asyncio
+    async def test_classify_opt_out_accepts_reusable_intent_callable(self) -> None:
+        from easycat.telephony.compliance import OPT_OUT_INTENT_SPEC, classify_opt_out
+
+        calls = []
+
+        async def classifier(text: str, spec):  # noqa: ANN001,ANN202
+            calls.append((text, spec))
+            return "drop me from the call list"
+
+        result = await classify_opt_out("drop me from the call list", classifier=classifier)
+
+        assert result.matched
+        assert result.method == "llm"
+        assert result.phrase == "drop me from the call list"
+        assert calls == [("drop me from the call list", OPT_OUT_INTENT_SPEC)]

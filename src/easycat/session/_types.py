@@ -26,6 +26,7 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerStat
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import ArtifactStore
     from easycat.runtime.journal import ExecutionJournal
+    from easycat.telephony.compliance import OptOutClassifier
 
 # ── Agent protocol (lightweight — agent adapters provide real implementations) ──
 
@@ -216,6 +217,7 @@ class SessionConfig:
     # ``OptOutDetected`` themselves.
     opt_out_detection: bool = True
     opt_out_phrases: tuple[str, ...] | None = None
+    opt_out_classifier: OptOutClassifier | None = None
     dnc_list: Any | None = None
 
     # Greeting synthesized automatically on the first

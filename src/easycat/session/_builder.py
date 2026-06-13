@@ -327,6 +327,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
     opt_out = OptOutPolicy(
         enabled=cfg.opt_out_detection,
         phrases=(list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None),
+        classifier=cfg.opt_out_classifier,
         dnc_list=cfg.dnc_list,
         caller_id=session._caller_id,
         session_actions=wiring.session_actions,

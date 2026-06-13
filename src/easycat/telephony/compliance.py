@@ -11,9 +11,21 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any, Literal, Protocol
+
+from easycat.intent import (
+    IntentClassification,
+    IntentClassifierLike,
+    IntentSpec,
+    OpenAIIntentClassifier,
+    classify_intent_with_optional_fallback,
+    normalize_intent_classification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +139,77 @@ def check_calling_hours(
 
 
 @dataclass(frozen=True)
+class OptOutDetectionResult:
+    """Structured opt-out detector decision.
+
+    ``matched`` is the only field the session policy uses to mutate DNC state.
+    The remaining fields provide an auditable reason for the decision whether it
+    came from deterministic phrase matching or a semantic classifier.
+    """
+
+    matched: bool
+    phrase: str | None = None
+    method: Literal["phrase", "llm", "none"] = "none"
+    confidence: float | None = None
+    reason: str | None = None
+
+
+class OptOutIntentClassifier(Protocol):
+    """Async semantic opt-out classifier protocol.
+
+    New classifiers should prefer the reusable
+    :class:`easycat.intent.IntentClassifier` contract.  This opt-out-specific
+    protocol remains supported for lightweight app adapters.
+    """
+
+    async def classify_opt_out(self, text: str) -> OptOutDetectionResult | bool | str | None:
+        """Classify whether *text* semantically revokes contact consent."""
+
+
+OptOutClassifierCallable = Callable[
+    [str],
+    Awaitable[OptOutDetectionResult | bool | str | None]
+    | OptOutDetectionResult
+    | bool
+    | str
+    | None,
+]
+OptOutClassifier = OptOutIntentClassifier | IntentClassifierLike | OptOutClassifierCallable
+
+
+OPT_OUT_INTENT_SPEC = IntentSpec(
+    name="contact_consent_revocation",
+    description=(
+        "The speaker is asking not to be called/contacted, to be removed from a list, "
+        "to unsubscribe, or otherwise to revoke contact consent."
+    ),
+    positive_guidance=(
+        "natural-language equivalents of stop calling, remove me, unsubscribe, or opt out",
+        "misspellings, indirect wording, and requests to lose/delete this phone number",
+        "messages that combine another request with a request not to be contacted",
+    ),
+    negative_guidance=(
+        "account, order, or appointment cancellation unless the speaker also asks "
+        "not to be contacted",
+        "quoted opt-out language that the speaker is not endorsing",
+        "negated examples such as 'do not stop calling me'",
+    ),
+    labels=("opt_out", "not_opt_out"),
+)
+
+
+class OpenAIOptOutIntentClassifier:
+    """Opt-out adapter around the reusable OpenAI intent classifier."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._classifier = OpenAIIntentClassifier(**kwargs)
+
+    async def classify_opt_out(self, text: str) -> OptOutDetectionResult:
+        classification = await self._classifier.classify_intent(text, OPT_OUT_INTENT_SPEC)
+        return _opt_out_result_from_intent(classification)
+
+
+@dataclass(frozen=True)
 class CallBlocked:
     """Emitted when a call is blocked by compliance checks."""
 
@@ -212,6 +295,28 @@ def detect_opt_out(text: str) -> bool:
     return match_opt_out_phrase(text) is not None
 
 
+async def classify_opt_out(
+    text: str,
+    *,
+    phrases: list[str] | None = None,
+    classifier: OptOutClassifier | None = None,
+) -> OptOutDetectionResult:
+    """Classify opt-out intent with phrase matching plus optional semantic fallback.
+
+    Deterministic phrase matching runs first so explicit compliance phrases do
+    not depend on a network call or model behavior.  When no phrase matches and
+    ``classifier`` is supplied, the classifier can use an LLM to catch long-tail
+    wording that strict string matching would miss.
+    """
+    phrase = match_opt_out_phrase(text, phrases)
+    if phrase is not None:
+        return OptOutDetectionResult(matched=True, phrase=phrase, method="phrase", confidence=1.0)
+    if classifier is None:
+        return OptOutDetectionResult(matched=False)
+    classified = await _call_opt_out_classifier(classifier, text)
+    return _normalize_opt_out_classifier_result(classified)
+
+
 def match_opt_out_phrase(text: str, phrases: list[str] | None = None) -> str | None:
     """Return the first matching opt-out phrase, or ``None`` when none match.
 
@@ -257,3 +362,65 @@ def _is_negated(lower: str, phrase_start: int) -> bool:
     # phrase (e.g. "do not want to *opt out*").
     trimmed = re.sub(r"[\s,]+$", "", preceding)
     return any(trimmed.endswith(prefix) for prefix in _NEGATION_PREFIXES)
+
+
+async def _call_opt_out_classifier(
+    classifier: OptOutClassifier, text: str
+) -> OptOutDetectionResult | bool | str | None | IntentClassification:
+    classify_opt_out = getattr(classifier, "classify_opt_out", None)
+    if classify_opt_out is not None:
+        result = classify_opt_out(text)
+        if hasattr(result, "__await__"):
+            result = await result
+        return result
+    if callable(classifier) and not hasattr(classifier, "classify_intent"):
+        if _callable_accepts_only_text(classifier):
+            result = classifier(text)
+            if hasattr(result, "__await__"):
+                result = await result
+            return result
+    return await classify_intent_with_optional_fallback(
+        text, spec=OPT_OUT_INTENT_SPEC, classifier=classifier
+    )
+
+
+def _callable_accepts_only_text(classifier: Callable[..., Any]) -> bool:
+    """Return whether a callable uses the legacy one-argument opt-out shape."""
+    try:
+        signature = inspect.signature(classifier)
+    except (TypeError, ValueError):
+        return False
+    parameters = tuple(signature.parameters.values())
+    if any(parameter.kind is inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return False
+    positional = (
+        inspect.Parameter.POSITIONAL_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    )
+    positional_parameters = tuple(
+        parameter for parameter in parameters if parameter.kind in positional
+    )
+    return len(positional_parameters) == 1
+
+
+def _normalize_opt_out_classifier_result(
+    result: OptOutDetectionResult | IntentClassification | bool | str | None,
+) -> OptOutDetectionResult:
+    if isinstance(result, OptOutDetectionResult):
+        return result
+    if isinstance(result, IntentClassification):
+        return _opt_out_result_from_intent(result)
+    normalized = normalize_intent_classification(result, method="llm")
+    return _opt_out_result_from_intent(normalized)
+
+
+def _opt_out_result_from_intent(classification: IntentClassification) -> OptOutDetectionResult:
+    phrase = classification.evidence or classification.label
+    method = "llm" if classification.matched else "none"
+    return OptOutDetectionResult(
+        matched=classification.matched,
+        phrase=phrase if classification.matched else None,
+        method=method,
+        confidence=classification.confidence,
+        reason=classification.reason,
+    )

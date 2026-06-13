@@ -37,6 +37,7 @@ class OptOutPolicy:
         *,
         enabled: bool,
         phrases: list[str] | None,
+        classifier: Any | None,
         dnc_list: Any | None,
         caller_id: CallerIdState,
         session_actions: Callable[[], SessionActions | None],
@@ -48,6 +49,7 @@ class OptOutPolicy:
     ) -> None:
         self._enabled = enabled
         self._phrases = phrases
+        self._classifier = classifier
         self._dnc_list = dnc_list
         self._caller_id = caller_id
         self._session_actions = session_actions
@@ -81,13 +83,16 @@ class OptOutPolicy:
         call terminates after the current agent utterance.
         """
         from easycat.events import OptOutDetected
-        from easycat.telephony.compliance import match_opt_out_phrase
+        from easycat.telephony.compliance import classify_opt_out
 
         if not event.text:
             return
-        phrase = match_opt_out_phrase(event.text, self._phrases)
-        if phrase is None:
+        result = await classify_opt_out(
+            event.text, phrases=self._phrases, classifier=self._classifier
+        )
+        if not result.matched:
             return
+        phrase = result.phrase or result.reason or result.method
 
         identity = self._caller_id.private_identity
         number = identity.caller_number if identity else ""

@@ -521,6 +521,7 @@ def create_session(config: EasyConfig) -> Session:
                 dnc_list=config.dnc_list,
                 opt_out_detection=config.opt_out_detection,
                 opt_out_phrases=config.opt_out_phrases,
+                opt_out_classifier=config.opt_out_classifier,
             )
         )
 

@@ -424,6 +424,7 @@ class SessionPolicyConfig:
     dnc_list: Any | None = None
     opt_out_detection: bool = True
     opt_out_phrases: tuple[str, ...] | None = None
+    opt_out_classifier: Any | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
 
 
@@ -478,6 +479,7 @@ _SESSION_POLICY_ALIAS_FIELDS = frozenset(
         "dnc_list",
         "opt_out_detection",
         "opt_out_phrases",
+        "opt_out_classifier",
         "caller_id_exposure",
     }
 )
@@ -665,6 +667,7 @@ class EasyConfig(_AgentSessionConfig):
     dnc_list: InitVar[Any | None] = None
     opt_out_detection: InitVar[bool | None] = None
     opt_out_phrases: InitVar[tuple[str, ...] | None] = None
+    opt_out_classifier: InitVar[Any | None] = None
     caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
 
     def __getattribute__(self, name: str) -> Any:
@@ -710,6 +713,7 @@ class EasyConfig(_AgentSessionConfig):
         dnc_list: Any | None,
         opt_out_detection: bool | None,
         opt_out_phrases: tuple[str, ...] | None,
+        opt_out_classifier: Any | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
         self._apply_observability_aliases(
@@ -742,6 +746,8 @@ class EasyConfig(_AgentSessionConfig):
             self.opt_out_detection = opt_out_detection
         if opt_out_phrases is not None:
             self.opt_out_phrases = opt_out_phrases
+        if opt_out_classifier is not None:
+            self.opt_out_classifier = opt_out_classifier
         if caller_id_exposure is not None:
             self.caller_id_exposure = caller_id_exposure
 

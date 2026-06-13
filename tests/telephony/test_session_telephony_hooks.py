@@ -53,6 +53,15 @@ class _DummyWebSocket:
         return None
 
 
+class _FakeOptOutClassifier:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def classify_opt_out(self, text: str):  # noqa: ANN201
+        self.calls.append(text)
+        return "semantic opt out" if "lose this number" in text.lower() else False
+
+
 class _ClosingWebSocket(_DummyWebSocket):
     def __init__(self, messages: list[str]) -> None:
         self._messages = messages
@@ -298,6 +307,24 @@ async def test_opt_out_custom_phrase_list() -> None:
     session2.call_identity = CallIdentity(caller_number="+15550001111", direction="inbound")
     await session2.event_bus.emit(STTFinal(text="stop calling me"))
     assert not dnc2.is_on_dnc("+15550001111")
+
+
+@pytest.mark.asyncio
+async def test_opt_out_classifier_detects_semantic_request_after_phrase_miss() -> None:
+    dnc = DNCList()
+    classifier = _FakeOptOutClassifier()
+    session = _text_session(dnc_list=dnc, opt_out_classifier=classifier)
+    session.call_identity = CallIdentity(caller_number="+15551234567", direction="inbound")
+
+    detected: list[OptOutDetected] = []
+    session.event_bus.subscribe(OptOutDetected, detected.append)
+
+    await session.event_bus.emit(STTFinal(text="Could you lose this number?"))
+
+    assert dnc.is_on_dnc("+15551234567")
+    assert len(detected) == 1
+    assert detected[0].phrase == "semantic opt out"
+    assert classifier.calls == ["Could you lose this number?"]
 
 
 # ── Inbound CallEnded on stop ─────────────────────────────────────

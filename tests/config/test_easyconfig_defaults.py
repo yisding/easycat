@@ -101,6 +101,7 @@ def test_easycat_config_uses_transport_echo_preference_capability():
 
 
 def test_easyconfig_session_policy_passes_opt_out_settings_to_session_config():
+    classifier = object()
     session = create_session(
         EasyConfig(
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
@@ -109,12 +110,14 @@ def test_easyconfig_session_policy_passes_opt_out_settings_to_session_config():
             session_policy=SessionPolicyConfig(
                 opt_out_detection=False,
                 opt_out_phrases=("retire me",),
+                opt_out_classifier=classifier,
             ),
         )
     )
 
     assert session._config.opt_out_detection is False
     assert session._config.opt_out_phrases == ("retire me",)
+    assert session._config.opt_out_classifier is classifier
 
 
 def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
@@ -124,6 +127,7 @@ def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
         greeting="Hello",
         opt_out_detection=False,
         opt_out_phrases=("retire me",),
+        opt_out_classifier="semantic",
         caller_id_exposure="system_message",
     )
 
@@ -131,6 +135,7 @@ def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
         greeting="Hello",
         opt_out_detection=False,
         opt_out_phrases=("retire me",),
+        opt_out_classifier="semantic",
         caller_id_exposure="system_message",
     )
     assert config.greeting == "Hello"
