@@ -9,6 +9,7 @@ import zipfile
 
 from easycat.debug.bundle import RunBundle
 from easycat.debugger.server import (
+    _build_issues,
     _build_transcript,
     _cost_rollup,
     _filter_records,
@@ -348,6 +349,27 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
     assert any(
         turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None for turn in waterfall
     )
+
+
+def test_build_issues_is_shared_with_debug_engine():
+    """The server's ``_build_issues`` re-export is the ``debug/_issues`` engine."""
+    from easycat.debug import _issues
+
+    assert _build_issues is _issues.build_issues
+
+
+def test_build_issues_returns_stable_rollup_shape():
+    """``/api/issues`` serves the ``{issues, summary, total}`` contract."""
+    records = [
+        {"sequence": 1, "name": "error", "turn_id": "t1", "error": {"type": "BoomError"}},
+        {"sequence": 2, "name": "stt_final", "turn_id": "t1", "data": {"text": ""}},
+    ]
+    report = _build_issues(records)
+    assert set(report) == {"issues", "summary", "total"}
+    assert report["total"] == 2
+    assert report["summary"] == {"error": 1, "warning": 1, "info": 0}
+    # Errors sort before warnings.
+    assert [issue["severity"] for issue in report["issues"]] == ["error", "warning"]
 
 
 def test_filter_records_negative_offset_raises():

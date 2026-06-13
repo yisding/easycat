@@ -113,6 +113,21 @@ async def test_api_timeline_emits_per_stage_spans(tmp_path):
                 }
 
 
+async def test_api_issues_serves_severity_rollup(tmp_path):
+    """``/api/issues`` serves the ``{issues, summary, total}`` rollup."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/issues")).json()
+        assert set(body) == {"issues", "summary", "total"}
+        assert set(body["summary"]) == {"error", "warning", "info"}
+        assert body["total"] == len(body["issues"])
+
+
 async def test_api_transcript_extracts_user_and_agent_text(tmp_path):
     """The transcript endpoint must surface user STT text and agent text."""
     session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)

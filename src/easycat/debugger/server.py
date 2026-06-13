@@ -15,6 +15,7 @@ Routes:
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
 - ``GET  /api/cost``                  — cost rollup and budget status
+- ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn
 - ``POST /api/replay``                — run replay against the source
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._turn_timeline import build_timeline as _build_timeline
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
 from easycat.debug.bundle import RunBundle
@@ -897,6 +899,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         config_snapshot = manifest.get("config_snapshot") if isinstance(manifest, dict) else None
         return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
 
+    async def issues(_request: Any) -> Any:
+        return web.json_response(_build_issues(source.records()))
+
     async def artifact(request: Any) -> Any:
         try:
             ref = _safe_ref(request.match_info["ref"])
@@ -1142,6 +1147,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/timeline", timeline)
     app.router.add_get("/api/transcript", transcript)
     app.router.add_get("/api/cost", cost)
+    app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
     app.router.add_post("/api/replay", replay)

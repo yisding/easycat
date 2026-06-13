@@ -381,6 +381,54 @@ def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert "failing_turn_id" in human.stdout
 
 
+def test_bundles_show_json_always_includes_issues(cli: CliRunner, tmp_path: Path) -> None:
+    """The ``issues`` key is always present in the JSON envelope (stable shape)."""
+    records = [
+        JournalRecord(
+            sequence=1,
+            session_id="sess-iss",
+            name="error",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_000_000_000),
+            error=ErrorInfo(type="BoomError", message="kaboom"),
+        ),
+        JournalRecord(
+            sequence=2,
+            session_id="sess-iss",
+            name="turn_ended",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_100_000_000),
+        ),
+    ]
+    bundle = tmp_path / "issues.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    # JSON output always carries the rollup, with or without --issues.
+    result = cli.invoke(app, ["bundles", "show", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert set(payload["issues"]) == {"issues", "summary", "total"}
+    assert payload["issues"]["summary"]["error"] == 1
+    codes = {issue["code"] for issue in payload["issues"]["issues"]}
+    assert "record_error" in codes
+
+    # Without --issues, the human summary does NOT render the issue table.
+    plain = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert plain.exit_code == 0, plain.stderr
+    assert "Issues —" not in plain.stdout
+
+    # With --issues, the human summary renders the severity-ranked table.
+    with_issues = cli.invoke(app, ["bundles", "show", str(bundle), "--issues"])
+    assert with_issues.exit_code == 0, with_issues.stderr
+    assert "Issues —" in with_issues.stdout
+    assert "record_error" in with_issues.stdout
+
+    # The friendly ``inspect`` alias accepts --issues too.
+    inspect = cli.invoke(app, ["inspect", str(bundle), "--issues"])
+    assert inspect.exit_code == 0, inspect.stderr
+    assert "Issues —" in inspect.stdout
+
+
 def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_path: Path) -> None:
     """``bundles show --json`` surfaces the per-turn latency waterfall.
 

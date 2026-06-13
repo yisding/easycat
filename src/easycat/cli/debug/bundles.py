@@ -57,6 +57,7 @@ from easycat.cli._output import (
     success,
     warn,
 )
+from easycat.debug._issues import build_issues
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
 from easycat.debug.bundle import (
     BundleError,
@@ -161,6 +162,11 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         # (VAD endpoint → STT final → agent first token → TTS first byte),
         # shared with the debugger UI via ``debug/_turn_timeline``.
         "turns": turn_waterfall(records),
+        # Severity-ranked heuristic findings (errors, tool failures, timeouts,
+        # empty transcripts, slow milestones) shared with the debugger UI via
+        # ``debug/_issues``.  Always present so the JSON shape is stable; the
+        # ``--issues`` flag only toggles the human-readable card table.
+        "issues": build_issues(records),
         "errors": errors,
         "error_type": error_type,
         "failing_turn_id": failing_turn_id,
@@ -739,7 +745,12 @@ def _load_bundle_or_journal(
         raise typer.Exit(5) from None
 
 
-def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
+def _build_issue_summary(bundle: RunBundle) -> dict[str, Any]:
+    """Compute the severity-ranked issue rollup for *bundle*."""
+    return build_issues(list(bundle.records()))
+
+
+def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool = False) -> None:
     """Load and render the bundle or SQLite journal summary used by all aliases."""
     bundle = _load_bundle_or_journal(
         bundle_path,
@@ -798,6 +809,55 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     turns = summary["turns"]
     if isinstance(turns, list) and turns:
         stdout_console.print(_turn_waterfall_table(turns))
+
+    if issues:
+        report = summary["issues"]
+        if isinstance(report, Mapping):
+            stdout_console.print(_issues_table(report))
+
+
+_ISSUE_SEVERITY_STYLE = {"error": "red", "warning": "yellow", "info": "cyan"}
+
+
+def _issues_table(report: Mapping[str, Any]) -> Table:
+    """Render the severity-ranked issue rollup for ``--issues``.
+
+    One row per finding: severity, code, the turn/sequence it points at, and
+    a short title.  ``report`` is the ``build_issues`` envelope, so an empty
+    journal renders an all-clear table.
+    """
+    found = report.get("issues") or []
+    summary = report.get("summary") or {}
+    counts = ", ".join(f"{summary.get(sev, 0)} {sev}" for sev in ("error", "warning", "info"))
+    table = Table(
+        title=f"Issues — {counts}",
+        show_header=True,
+        header_style="bold",
+        box=None,
+        padding=(0, 1),
+        title_justify="left",
+    )
+    table.add_column("severity", no_wrap=True)
+    table.add_column("code", no_wrap=True)
+    table.add_column("turn", no_wrap=True, overflow="fold")
+    table.add_column("seq", justify="right", no_wrap=True)
+    table.add_column("title", overflow="fold")
+    if not found:
+        table.add_row("[green]ok[/]", "—", "—", "—", "No issues detected.")
+        return table
+    for issue in found:
+        severity = str(issue.get("severity") or "info")
+        style = _ISSUE_SEVERITY_STYLE.get(severity, "cyan")
+        turn_id = issue.get("turn_id")
+        seq = issue.get("sequence")
+        table.add_row(
+            f"[{style}]{escape(severity)}[/]",
+            escape(str(issue.get("code") or "")),
+            escape(str(turn_id)) if turn_id else "[dim]-[/]",
+            str(seq) if isinstance(seq, int) else "[dim]-[/]",
+            escape(str(issue.get("title") or "")),
+        )
+    return table
 
 
 def _format_ms(value: object) -> str:
@@ -859,10 +919,15 @@ def show_bundle(
             "``.easycat-bundle``) or a ``.sqlite`` journal."
         ),
     ),
+    issues: bool = typer.Option(
+        False,
+        "--issues",
+        help="Render the severity-ranked issue rollup (errors, slow milestones, …).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Summarise a debug bundle or SQLite journal."""
-    _show_bundle_summary(bundle_path, json_output=json_output)
+    _show_bundle_summary(bundle_path, json_output=json_output, issues=issues)
 
 
 @cli_command
@@ -874,10 +939,15 @@ def inspect_bundle(
             "``.easycat-bundle``) or a ``.sqlite`` journal."
         ),
     ),
+    issues: bool = typer.Option(
+        False,
+        "--issues",
+        help="Render the severity-ranked issue rollup (errors, slow milestones, …).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     """Friendly alias for ``easycat bundles show`` for bundles and SQLite journals."""
-    _show_bundle_summary(bundle_path, json_output=json_output)
+    _show_bundle_summary(bundle_path, json_output=json_output, issues=issues)
 
 
 # ── `easycat bundles export` ─────────────────────────────────────
