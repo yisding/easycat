@@ -96,7 +96,9 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   parseable summary. Add `--issues` to `easycat bundles show <path>` /
   `easycat inspect <path>` to render a severity-ranked rollup of detected
   problems (errors, tool failures, timeouts, empty transcripts, slow
-  milestones); the `issues` key is always present in the `--json` envelope.
+  milestones, slow/missed barge-ins, and — when the bundle carries stored PCM
+  artifacts — audio-health cards for clipping, near-silent caller capture, and
+  dead air); the `issues` key is always present in the `--json` envelope.
 - Optional debugger UI:
   install the extra with `uv sync --extra debugger --group dev` from this repo,
   or `uv add 'easycat[debugger]'` in an app. Then import

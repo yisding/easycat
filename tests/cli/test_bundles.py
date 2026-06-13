@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import zipfile
+from array import array
 from pathlib import Path
 
 import pytest
@@ -52,8 +54,14 @@ def _make_bundle(
     records: list[dict],
     *,
     provider_versions: dict[str, str] | None = None,
+    artifacts: dict[str, bytes] | None = None,
 ) -> None:
-    """Roll a minimal valid bundle zip at *path*."""
+    """Roll a minimal valid bundle zip at *path*.
+
+    ``artifacts`` maps a content-addressed ref (64-hex sha256) to its bytes;
+    each is written under ``artifacts/<ref>.bin`` so ``RunBundle.load``
+    exposes it via ``artifact_blobs`` for the audio-health scan.
+    """
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "manifest.json",
@@ -66,6 +74,8 @@ def _make_bundle(
             ),
         )
         zf.writestr("journal.ndjson", "\n".join(json.dumps(r) for r in records))
+        for ref, blob in (artifacts or {}).items():
+            zf.writestr(f"artifacts/{ref}.bin", blob)
 
 
 def _make_crash_dump(path: Path, records: list[dict]) -> None:
@@ -427,6 +437,42 @@ def test_bundles_show_json_always_includes_issues(cli: CliRunner, tmp_path: Path
     inspect = cli.invoke(app, ["inspect", str(bundle), "--issues"])
     assert inspect.exit_code == 0, inspect.stderr
     assert "Issues —" in inspect.stdout
+
+
+def test_inspect_json_surfaces_clipping_audio_card(cli: CliRunner, tmp_path: Path) -> None:
+    """A clipped ``tts_frame`` artifact yields a ``clipping_bot`` audio card.
+
+    The card only appears because ``build_issues`` decodes the stored PCM via
+    the bundle's ``artifact_blobs`` resolver — a bundle with no artifact bytes
+    produces no audio cards (the WP4 record-only contract).
+    """
+    clipped = array("h", [32767] * 256).tobytes()
+    ref = hashlib.sha256(clipped).hexdigest()
+    records = [
+        {"sequence": 1, "name": "turn_started", "turn_id": "t1", "wall_ns": 0},
+        {
+            "sequence": 2,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": ref,
+            "wall_ns": 10_000_000,
+            "data": {"stage": "tts", "audio_bytes": len(clipped), "sample_width": 2},
+        },
+    ]
+    bundle = tmp_path / "clip.zip"
+    _make_bundle(bundle, records, artifacts={ref: clipped})
+
+    result = cli.invoke(app, ["inspect", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    codes = {issue["code"] for issue in payload["issues"]["issues"]}
+    assert "clipping_bot" in codes
+    assert payload["issues"]["summary"]["warning"] >= 1
+
+    # The human ``--issues`` table renders the audio card too.
+    with_issues = cli.invoke(app, ["inspect", str(bundle), "--issues"])
+    assert with_issues.exit_code == 0, with_issues.stderr
+    assert "clipping_bot" in with_issues.stdout
 
 
 def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_path: Path) -> None:

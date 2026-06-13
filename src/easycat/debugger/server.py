@@ -900,7 +900,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
 
     async def issues(_request: Any) -> Any:
-        return web.json_response(_build_issues(source.records()))
+        return web.json_response(
+            _build_issues(source.records(), artifact_resolver=source.artifact)
+        )
 
     async def artifact(request: Any) -> Any:
         try:

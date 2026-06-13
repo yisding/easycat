@@ -24,10 +24,15 @@ and the CLI table can both consume it without per-code special-casing.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from easycat.debug._audio_health import (
+    collect_caller_silence,
+    collect_clipping,
+    detect_dead_air,
+)
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
 
 # Severity rank for sorting (higher = more urgent).  Used to surface errors
@@ -60,6 +65,17 @@ class IssueThresholds:
     # turn is flagged as a missed barge-in (the bot never stopped).
     barge_in_cutoff_ms: float = 600.0
     missed_barge_in_window_ms: float = 1_500.0
+    # Audio-health heuristics (applied only when ``build_issues`` is given an
+    # ``artifact_resolver``).  ``clip_consecutive`` is the run of near-full-scale
+    # samples that counts as audible clipping; ``silence_rms`` is the caller-input
+    # RMS below which capture is "near silent" (a dead/muted mic); ``dead_air_ms``
+    # is the intra-turn gap with no bot output or caller input that counts as
+    # dead air; ``audio_stride`` stride-subsamples decoded PCM so a large bundle
+    # stays fast.
+    clip_consecutive: int = 16
+    silence_rms: float = 200.0
+    dead_air_ms: float = 3_000.0
+    audio_stride: int = 4
     tool_failure_names: frozenset[str] = field(
         default_factory=lambda: frozenset({"tool_call_failed", "tool_error", "tool_call_error"})
     )
@@ -377,6 +393,88 @@ def _missed_barge_in_cards(
     return issues
 
 
+def _audio_health_cards(
+    records: list[dict[str, Any]],
+    thresholds: IssueThresholds,
+    artifact_resolver: Callable[[str], bytes | None],
+) -> list[dict[str, Any]]:
+    """Decode stored PCM artifacts and flag clipping/silence/dead-air defects.
+
+    Only runs when ``build_issues`` is given an ``artifact_resolver`` (None
+    keeps the WP4 record-only contract).  Bot output (``tts_frame``) and caller
+    input (``stt`` ``stage_start``) are decoded stdlib-only and bounded by
+    ``audio_stride`` plus a per-blob byte cap.
+    """
+    issues: list[dict[str, Any]] = []
+
+    for side, turn_id, sequence in collect_clipping(
+        records,
+        artifact_resolver,
+        stride=thresholds.audio_stride,
+        clip_consecutive=thresholds.clip_consecutive,
+    ):
+        who = "bot output" if side == "bot" else "caller input"
+        issues.append(
+            _issue(
+                code=f"clipping_{side}",
+                severity="warning",
+                title=f"Clipping in {who}",
+                detail=(
+                    f"The {who} ran at near-full-scale for a long stretch, which "
+                    "distorts the audio. Lower the gain on the offending stage."
+                ),
+                turn_id=turn_id,
+                sequence=sequence,
+                stage="tts" if side == "bot" else "stt",
+                metric="clip_consecutive",
+                threshold=float(thresholds.clip_consecutive),
+            )
+        )
+
+    for turn_id, peak_rms in collect_caller_silence(
+        records,
+        artifact_resolver,
+        stride=thresholds.audio_stride,
+        silence_rms=thresholds.silence_rms,
+    ).items():
+        issues.append(
+            _issue(
+                code="near_silent_capture",
+                severity="warning",
+                title="Near-silent caller capture",
+                detail=(
+                    "The caller's mic input was nearly silent for the whole turn. "
+                    "Check the mic, gain, or transport routing — STT had nothing to "
+                    "work with."
+                ),
+                turn_id=turn_id,
+                stage="stt",
+                metric="silence_rms",
+                value=peak_rms,
+                threshold=thresholds.silence_rms,
+            )
+        )
+
+    for turn_id, gap_ms in detect_dead_air(records, dead_air_ms=thresholds.dead_air_ms).items():
+        issues.append(
+            _issue(
+                code="dead_air",
+                severity="info",
+                title="Dead air during turn",
+                detail=(
+                    "The bot produced no audio and the caller said nothing for a "
+                    "long stretch in this turn. Check for a stalled TTS or agent."
+                ),
+                turn_id=turn_id,
+                metric="dead_air_ms",
+                value=gap_ms,
+                threshold=thresholds.dead_air_ms,
+            )
+        )
+
+    return issues
+
+
 def _sort_key(issue: Mapping[str, Any]) -> tuple[int, str, int, str]:
     """Errors before warnings before info, then stable by turn/sequence/code."""
     rank = _SEVERITY_RANK.get(str(issue.get("severity")), 0)
@@ -388,7 +486,11 @@ def _sort_key(issue: Mapping[str, Any]) -> tuple[int, str, int, str]:
     return (-rank, turn_id, sequence, code)
 
 
-def build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
+def build_issues(
+    records: list[dict[str, Any]],
+    *,
+    artifact_resolver: Callable[[str], bytes | None] | None = None,
+) -> dict[str, Any]:
     """Scan journal records and return a severity-ranked issue rollup.
 
     Returns ``{"issues": [...], "summary": {"error": int, "warning": int,
@@ -396,6 +498,12 @@ def build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
     (then by turn id, sequence, and code) so the most urgent findings render
     first.  The shape is stable across an empty journal (no issues, all-zero
     summary) so callers never special-case the no-findings path.
+
+    When *artifact_resolver* is provided (a ``ref -> bytes | None`` callable,
+    e.g. ``bundle.artifact_blobs.get`` or ``DebuggerSource.artifact``), stored
+    PCM artifacts are decoded to add audio-health cards (clipping, near-silent
+    capture, dead air).  Passing ``None`` (the default) skips that work and
+    preserves the record-only contract for callers without artifact bytes.
     """
     thresholds = _THRESHOLDS
     issues = (
@@ -403,6 +511,8 @@ def build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
         + _milestone_issues(records, thresholds)
         + _barge_in_cards(records, thresholds)
     )
+    if artifact_resolver is not None:
+        issues += _audio_health_cards(records, thresholds, artifact_resolver)
     issues.sort(key=_sort_key)
     summary = {"error": 0, "warning": 0, "info": 0}
     for issue in issues:

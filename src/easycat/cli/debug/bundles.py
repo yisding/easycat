@@ -166,7 +166,7 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         # empty transcripts, slow milestones) shared with the debugger UI via
         # ``debug/_issues``.  Always present so the JSON shape is stable; the
         # ``--issues`` flag only toggles the human-readable card table.
-        "issues": build_issues(records),
+        "issues": build_issues(records, artifact_resolver=bundle.artifact_blobs.get),
         "errors": errors,
         "error_type": error_type,
         "failing_turn_id": failing_turn_id,
@@ -747,7 +747,7 @@ def _load_bundle_or_journal(
 
 def _build_issue_summary(bundle: RunBundle) -> dict[str, Any]:
     """Compute the severity-ranked issue rollup for *bundle*."""
-    return build_issues(list(bundle.records()))
+    return build_issues(list(bundle.records()), artifact_resolver=bundle.artifact_blobs.get)
 
 
 def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool = False) -> None:
