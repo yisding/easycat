@@ -934,7 +934,30 @@
     position: absolute; top: 0; bottom: 0;
     border-left: 1px solid var(--border); padding: 4px 4px;
   }
+  /* Per-turn waveform strip (Timeline tab). */
+  .turn-waveform-wrap { margin: 6px 0 2px; }
+  .turn-waveform {
+    display: block; width: 100%; height: 80px;
+    background: #12161e; border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer;
+  }
+  .turn-waveform-wrap audio { width: 100%; margin-top: 4px; height: 28px; }
+  /* Live waveform lane (Live tab). */
+  .live-row.waveform-row .lane-track.waveform-lane { background: #0f1320; }
+  .waveform-lane .waveform-img {
+    position: absolute; top: 3px; bottom: 3px; height: auto;
+    image-rendering: pixelated; border-radius: 2px;
+  }
+  .waveform-lane .waveform-vad {
+    position: absolute; top: 0; bottom: 0;
+    background: rgba(68, 209, 138, 0.16); pointer-events: none;
+  }
+  .waveform-lane .waveform-intr {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: #e0635a; pointer-events: none;
+  }
 </style>
+<script src="/static/waveform.js"></script>
 </head>
 <body>
 <header>
@@ -1536,6 +1559,34 @@ function renderTimelineView() {
     const critical = renderCriticalPath(turn);
     if (critical) turnNode.appendChild(critical);
 
+    // Waveform strip: prefer the caller (mic) track when present, else the
+    // bot (TTS) track.  VAD bands come from the turn's vad stage spans, and
+    // interruption ticks from the rollup's interruption count (positioned at
+    // turn end as a marker when finer offsets aren't available).
+    if (window.EasyCatWaveform) {
+      const hasMic = (turnSummary.stt_audio_bytes || 0) > 0;
+      const hasTts = (turnSummary.tts_audio_bytes || 0) > 0;
+      if (hasMic || hasTts) {
+        const vadBands = (turn.spans || [])
+          .filter(s => s.stage === "vad")
+          .map(s => ({ offsetMs: s.offset_ms, durationMs: s.duration_ms }));
+        const intrCount = turnSummary.interruption_count || 0;
+        const interruptions = [];
+        for (let k = 0; k < intrCount; k++) {
+          interruptions.push(((turn.wall_ms || 0) * (k + 1)) / (intrCount + 1));
+        }
+        window.EasyCatWaveform.renderTurnWaveform({
+          turn,
+          container: turnNode,
+          track: hasMic ? "mic" : "tts",
+          width: 600,
+          height: 80,
+          vad: vadBands,
+          interruptions,
+        });
+      }
+    }
+
     if (turn.spans.length === 0) {
       turnNode.appendChild(el("div", { class: "empty" }, "No stage spans recorded."));
     } else {
@@ -1721,6 +1772,60 @@ function renderLiveView() {
     row.appendChild(track);
     root.appendChild(row);
   }
+
+  // 11th strip: per-turn waveform images sharing the live t0 / px() zoom.
+  if (window.EasyCatWaveform) {
+    const turnWindows = _liveTurnWindows(records, t0);
+    if (turnWindows.length) {
+      window.EasyCatWaveform.renderLiveWaveform({
+        root,
+        turns: turnWindows,
+        px,
+        trackWidth,
+        track: "tts",
+      });
+    }
+  }
+}
+
+// Derive per-turn {turn_id, startMs, endMs, vad, interruptions} windows from
+// the live records, mapped onto the live ``t0`` origin so the waveform strip
+// lines up with the other lanes.  Turn bounds come from turn_started/_ended
+// (falling back to first/last record for the turn); VAD bands from
+// vad_start/stop pairs; interruption ticks from ``interruption`` events.
+function _liveTurnWindows(records, t0) {
+  const byTurn = new Map();
+  const msOf = (r) => (r.timing.mono_ns - t0) / 1e6;
+  for (const r of records) {
+    if (!r.turn_id) continue;
+    let slot = byTurn.get(r.turn_id);
+    if (!slot) {
+      slot = { turn_id: r.turn_id, startMs: null, endMs: null, vad: [], interruptions: [], _vadOpen: null };
+      byTurn.set(r.turn_id, slot);
+    }
+    const ms = msOf(r);
+    if (slot.startMs == null || ms < slot.startMs) slot.startMs = ms;
+    if (slot.endMs == null || ms > slot.endMs) slot.endMs = ms;
+    if (r.name === "turn_started") slot.startMs = ms;
+    else if (r.name === "turn_ended") slot.endMs = ms;
+    else if (r.name === "vad_start_speaking") slot._vadOpen = ms;
+    else if (r.name === "vad_stop_speaking" && slot._vadOpen != null) {
+      slot.vad.push({ offsetMs: slot._vadOpen - (slot.startMs || 0),
+        durationMs: ms - slot._vadOpen });
+      slot._vadOpen = null;
+    } else if (r.name === "interruption") {
+      slot.interruptions.push(ms - (slot.startMs || 0));
+    }
+  }
+  const out = [];
+  for (const slot of byTurn.values()) {
+    if (slot.startMs == null) continue;
+    if (slot.endMs == null || slot.endMs <= slot.startMs) slot.endMs = slot.startMs + 1;
+    delete slot._vadOpen;
+    out.push(slot);
+  }
+  out.sort((a, b) => a.startMs - b.startMs);
+  return out;
 }
 
 function _liveMarkerLabel(r) {

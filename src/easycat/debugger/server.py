@@ -18,6 +18,7 @@ Routes:
 - ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
+- ``GET  /api/audio/waveform/<turn>`` — greyscale waveform PNG (``?track=tts|mic&w=&h=``)
 - ``POST /api/replay``                — run replay against the source
 - ``POST /api/export``                — export the source as a bundle ZIP
 - ``GET  /ws``                        — WebSocket push for live updates
@@ -48,6 +49,7 @@ from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
+from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 from easycat.runtime.costs import (
     cost_budget_status,
     finite_number,
@@ -896,6 +898,20 @@ def _collect_tts_frames(
     return _collect_audio_frames(source, turn_id, track=_AUDIO_TRACK_TTS)
 
 
+def _collect_concat_pcm(
+    source: DebuggerSource, turn_id: str, *, track: str
+) -> tuple[bytes, dict[str, int]]:
+    """Return one turn's audio as a single ``(raw_pcm, format)`` blob.
+
+    Reuses :func:`_collect_audio_frames` and joins the per-frame blobs so
+    the waveform endpoint can decode peaks without rebuilding a WAV.  The
+    TTS track raises ``ValueError`` on inconsistent PCM formats; the mic
+    track is lenient (mismatched frames are dropped upstream).
+    """
+    frames, fmt = _collect_audio_frames(source, turn_id, track=track)
+    return b"".join(frames), fmt
+
+
 def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
     """Build a 44-byte RIFF/WAVE PCM header.
 
@@ -1235,6 +1251,53 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         await response.write_eof()
         return response
 
+    async def audio_waveform(request: Any) -> Any:
+        """Render one turn's audio as a greyscale waveform PNG.
+
+        Cheap ``<img>`` source for the Live waveform strip — the SPA Canvas
+        path decodes the WAV itself, but the Live view shares one strip per
+        turn and an ``<img>`` is far lighter than per-pixel JS.
+        """
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        track = request.query.get("track", _AUDIO_TRACK_TTS)
+        if track not in _VALID_AUDIO_TRACKS:
+            return web.Response(
+                status=400,
+                text=f"invalid track; expected one of {sorted(_VALID_AUDIO_TRACKS)}",
+            )
+
+        def _bounded(name: str, default: int, hi: int) -> int:
+            try:
+                value = int(request.query.get(name, default))
+            except (TypeError, ValueError):
+                return default
+            return max(1, min(hi, value))
+
+        width = _bounded("w", 600, 2000)
+        height = _bounded("h", 80, 400)
+        try:
+            pcm, fmt = _collect_concat_pcm(source, turn_id, track=track)
+        except ValueError as exc:
+            logger.warning("Cannot render %s waveform for %s: %s", track, turn_id, exc)
+            return web.Response(status=409, text="cannot assemble audio for this turn")
+        if not pcm:
+            return web.Response(status=404, text=f"no {track} frames for turn")
+        peaks = decode_pcm_peaks(
+            pcm,
+            sample_width=fmt.get("sample_width", 2),
+            channels=fmt.get("channels", 1),
+            buckets=width,
+        )
+        png = encode_peaks_png(peaks, width=width, height=height)
+        return web.Response(
+            body=png,
+            content_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
+
     _DESTRUCTIVE_FIDELITIES = frozenset({"live"})
     _DESTRUCTIVE_TOOL_POLICIES = frozenset({"allow"})
     _ALLOWED_REPLAY_KEYS = frozenset(
@@ -1460,6 +1523,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
+    app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
     app.router.add_post("/api/replay", replay)
     app.router.add_post("/api/export", export)
     app.router.add_get("/api/refresh", refresh)

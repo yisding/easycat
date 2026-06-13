@@ -12,6 +12,7 @@ from easycat.debugger.server import (
     _bundle_source,
     _coerce_frames_to_format,
     _collect_audio_frames,
+    _collect_concat_pcm,
     _make_app,
 )
 
@@ -378,6 +379,156 @@ async def test_api_audio_concat_mic_skips_format_mismatch_without_raising(tmp_pa
         assert body[:4] == b"RIFF"
         # Only the first (matching) frame survives: 44-byte header + 320 bytes.
         assert len(body) == 44 + 320
+
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+async def test_api_audio_waveform_returns_png(tmp_path):
+    """``GET /api/audio/waveform/{turn}?track=tts`` returns an image/png."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "tts_frame" and r.get("turn_id")
+    )
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?track=tts&w=600&h=80")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "image/png"
+        assert resp.headers["Cache-Control"] == "no-store"
+        body = await resp.read()
+        assert body[:8] == _PNG_SIGNATURE
+        # IHDR chunk must parse with the requested dimensions.
+        import struct
+
+        width, height = struct.unpack(">II", body[16:24])
+        assert (width, height) == (600, 80)
+
+
+async def test_api_audio_waveform_mic_track(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "stage_start"
+        and (r.get("data") or {}).get("stage") == "stt"
+        and r.get("input_ref")
+        and r.get("turn_id")
+    )
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?track=mic&w=120&h=40")
+        assert resp.status == 200
+        body = await resp.read()
+        assert body[:8] == _PNG_SIGNATURE
+
+
+async def test_api_audio_waveform_rejects_unknown_turn(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/no-such-turn")
+        assert resp.status == 404
+
+
+async def test_api_audio_waveform_rejects_invalid_turn_id(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/" + "x" * 200)
+        assert resp.status == 400
+
+
+async def test_api_audio_waveform_rejects_invalid_track(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        turn_id = next(
+            r.get("turn_id")
+            for r in RunBundle.load(bundle_path).records()
+            if r.get("name") == "tts_frame" and r.get("turn_id")
+        )
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?track=bogus")
+        assert resp.status == 400
+
+
+async def test_api_audio_waveform_clamps_dimensions(tmp_path):
+    """Out-of-range ``w``/``h`` are clamped, not rejected, so a hostile or
+    fat-fingered query can't allocate an enormous canvas."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    bundle = RunBundle.load(bundle_path)
+    turn_id = next(
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == "tts_frame" and r.get("turn_id")
+    )
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?w=99999&h=99999")
+        assert resp.status == 200
+        body = await resp.read()
+        import struct
+
+        width, height = struct.unpack(">II", body[16:24])
+        assert (width, height) == (2000, 400)
+
+
+def test_collect_concat_pcm_joins_frames():
+    """``_collect_concat_pcm`` returns one joined PCM blob plus the format."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": "a",
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "tts_frame",
+            "turn_id": "t1",
+            "output_ref": "b",
+            "data": {"sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+    ]
+    blobs = {"a": b"\x01\x02", "b": b"\x03\x04"}
+    source = DebuggerSource(
+        label="concat-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: blobs.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    pcm, fmt = _collect_concat_pcm(source, "t1", track="tts")
+    assert pcm == b"\x01\x02\x03\x04"
+    assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    # Unknown turn → empty pcm, empty fmt.
+    empty_pcm, empty_fmt = _collect_concat_pcm(source, "nope", track="tts")
+    assert empty_pcm == b"" and empty_fmt == {}
 
 
 async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):

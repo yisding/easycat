@@ -70,3 +70,50 @@ def test_static_index_pipeline_includes_turn_stage():
     assert 'id: "turn"' in text and 'label: "Turn"' in text, (
         "PIPELINE_STAGES missing the turn (SmartTurn) node"
     )
+
+
+def _static_dir() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parent.parent.parent / "src/easycat/debugger/static"
+
+
+def test_waveform_js_exposes_namespace_without_unsafe_dom():
+    """``waveform.js`` must expose the ``EasyCatWaveform`` namespace and build
+    its DOM with safe helpers only (no innerHTML family)."""
+    text = (_static_dir() / "waveform.js").read_text(encoding="utf-8")
+    assert "EasyCatWaveform" in text
+    assert "renderTurnWaveform" in text
+    assert "renderLiveWaveform" in text
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"waveform.js must never use {forbidden}"
+
+
+def test_index_html_loads_waveform_script():
+    """The SPA must load ``/static/waveform.js`` so the namespace is present
+    before the inline script wires the Timeline/Live strips."""
+    text = (_static_dir() / "index.html").read_text(encoding="utf-8")
+    assert '<script src="/static/waveform.js"></script>' in text
+    # The strips are wired through the global namespace from the inline script.
+    assert "window.EasyCatWaveform" in text
+
+
+async def test_static_waveform_js_served_with_correct_content_type(tmp_path):
+    """The static route serves ``waveform.js`` as JavaScript."""
+    from easycat.debug.bundle import RunBundle
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    from ._server_helpers import _build_voice_bundle
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    RunBundle.load(bundle_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/static/waveform.js")
+        assert resp.status == 200
+        ctype = resp.headers["Content-Type"]
+        assert "javascript" in ctype or "ecmascript" in ctype, ctype
+        body = await resp.text()
+        assert "EasyCatWaveform" in body
