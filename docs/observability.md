@@ -101,6 +101,7 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   the first-class browser UI directly from the CLI:
 
   ```bash
+  easycat debugger serve PATH --no-open-browser
   uv run easycat debugger serve runs/session.bundle --no-open-browser
   uv run easycat debugger serve .easycat/journals/<session_id>.sqlite
   ```
