@@ -496,7 +496,7 @@ docker compose -f docker/compose.yaml down
 
 - Path: docs/deployment/production-servers.md
 - URL: https://github.com/yisding/easycat/blob/main/docs/deployment/production-servers.md
-- Audience: operators and app builders
+- Audience: operators
 - Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers with one isolated EasyCat session per client or call.
 
 Commands:
@@ -509,8 +509,9 @@ uv run python examples/webrtc_server.py
 uv run python examples/webtransport_server.py
 uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
 uv run pytest tests/transports/test_websocket_session_server.py
-uv run pytest tests/transports/test_webrtc.py
-uv run pytest tests/transports/test_webtransport.py
+uv run pytest tests/transports/test_webrtc_config.py
+uv run pytest tests/transports/test_webrtc_lifecycle_server.py
+uv run pytest tests/transports/test_webtransport_session.py
 ```
 
 ## Observability
