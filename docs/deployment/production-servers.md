@@ -140,6 +140,7 @@ uv run python examples/webrtc_server.py
 uv run python examples/webtransport_server.py
 uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
 uv run pytest tests/transports/test_websocket_session_server.py
-uv run pytest tests/transports/test_webrtc.py
-uv run pytest tests/transports/test_webtransport.py
+uv run pytest tests/transports/test_webrtc_config.py
+uv run pytest tests/transports/test_webrtc_lifecycle_server.py
+uv run pytest tests/transports/test_webtransport_session.py
 ```

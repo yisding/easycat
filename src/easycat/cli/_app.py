@@ -561,7 +561,7 @@ _DOCS_LINKS: list[_DocsLink] = [
     {
         "label": "Production servers",
         "path": "docs/deployment/production-servers.md",
-        "audience": "operators and app builders",
+        "audience": "operators",
         "diataxis": "how-to",
         "description": (
             "Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers "
@@ -575,8 +575,9 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run python examples/webtransport_server.py",
             "uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0",
             "uv run pytest tests/transports/test_websocket_session_server.py",
-            "uv run pytest tests/transports/test_webrtc.py",
-            "uv run pytest tests/transports/test_webtransport.py",
+            "uv run pytest tests/transports/test_webrtc_config.py",
+            "uv run pytest tests/transports/test_webrtc_lifecycle_server.py",
+            "uv run pytest tests/transports/test_webtransport_session.py",
         ),
     },
     {
