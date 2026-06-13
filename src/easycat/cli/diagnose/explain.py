@@ -154,7 +154,8 @@ def explain(
         metavar="CODE",
         help=(
             "Error code (e.g., E102), CLI schema topic (exit-codes, init-schema, "
-            "json-schema), or concept topic (events, turn-taking, journal)."
+            "json-schema), concept topic (events, turn-taking, barge-in, journal), "
+            "or the symptom-first router (troubleshooting)."
         ),
     ),
     list_codes: bool = typer.Option(

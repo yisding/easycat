@@ -549,6 +549,15 @@ Options:
   related codes.
 - `easycat explain exit-codes` documents the exit-code contract.
 - `easycat explain init-schema` documents the `--config` schema.
+- `easycat explain troubleshooting` is the symptom-first router: it
+  maps five call symptoms (`didnt-hear-me`, `cut-me-off`, `too-slow`,
+  `said-wrong`, `crashed`) to the command, doc, and concept topic that
+  diagnose each. It is static routing — a pointer surface, not a live
+  issue report.
+- Concept topics `events`, `turn-taking`, `barge-in`, and `journal`
+  summarize a docs page and print its route. `explain` lives in the
+  *Debug with the journal* menu section because it is the entry point
+  for diagnosing a captured call.
 - Unknown code prints fuzzy-match suggestions.
 
 The registry is a single Python dict. Adding a code is a one-file
@@ -913,7 +922,6 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
-    explain     Look up errors and CLI schema topics
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
@@ -923,6 +931,7 @@ EasyCat — voice bot framework
     diff        Diff two bundles turn-by-turn for milestone and cost regressions
     journal     Search and tail captured journals and crash dumps
     tail        Live-tail a SQLite journal as it grows
+    explain     Route a call problem by symptom, or look up an error code
 
   Validation
     validate    Run validation checks and inspect validation reports

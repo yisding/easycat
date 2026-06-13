@@ -855,8 +855,10 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
     table.add_row("records", str(summary["records"]))
     table.add_row("turns", str(summary["turn_count"]))
     duration = summary["duration_ms"]
-    duration_str = f"{float(duration):.1f}ms" if isinstance(duration, float) else "[dim]n/a[/]"
-    table.add_row("duration", duration_str)
+    table.add_row(
+        "duration",
+        f"{float(duration):.1f}ms" if isinstance(duration, float) else "[dim]n/a[/]",
+    )
     table.add_row("tool_calls", str(summary["tool_calls"]))
     errors = int(summary["errors"])
     errors_fmt = f"[red]{errors}[/]" if errors else "0"
@@ -888,10 +890,30 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
         # render wide so the spans column is never clipped on an 80-col stdout.
         _print_wide(_turn_waterfall_table(turns), max(stdout_console.width, 120))
 
+    _print_troubleshooting_pointer(errors, turns)
+
     if issues:
         report = summary["issues"]
         if isinstance(report, Mapping):
             stdout_console.print(_issues_table(report))
+
+
+def _print_troubleshooting_pointer(errors: int, turns: object) -> None:
+    """Print a static symptom-first pointer when a call looks problematic.
+
+    Surfaces a one-line route to ``easycat explain troubleshooting`` when the
+    bundle carries errors or any interruption — not full card rendering (that
+    is ``--issues``).  Stays quiet on clean bundles.
+    """
+    interruptions = 0
+    if isinstance(turns, list):
+        interruptions = sum(int(turn.get("interruption_count", 0) or 0) for turn in turns)
+    if not (errors or interruptions):
+        return
+    stdout_console.print()
+    stdout_console.print(
+        "[dim]Likely issues:[/] run [cyan]easycat explain troubleshooting[/] to route by symptom."
+    )
 
 
 _ISSUE_SEVERITY_STYLE = {"error": "red", "warning": "yellow", "info": "cyan"}

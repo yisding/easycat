@@ -969,6 +969,64 @@ def test_bundles_show_waterfall_surfaces_barge_in(cli: CliRunner, tmp_path: Path
     assert turn["milestones"]["user_speech_start_to_bot_stopped_ms"] == pytest.approx(300.0)
     assert turn["interruption_count"] == 1
 
+    # WP16: an interruption surfaces a static symptom-first pointer.
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "easycat explain troubleshooting" in human.stdout
+
+
+def test_bundles_show_pointer_routes_to_troubleshooting_on_error(
+    cli: CliRunner, tmp_path: Path
+) -> None:
+    """An errored bundle surfaces a static 'Likely issues' troubleshooting pointer."""
+    records = [
+        JournalRecord(
+            sequence=1,
+            session_id="sess-err",
+            name="turn_started",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_000_000_000),
+        ),
+        JournalRecord(
+            sequence=2,
+            session_id="sess-err",
+            name="error",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=1_100_000_000),
+            error=ErrorInfo(type="BoomError", message="kaboom"),
+        ),
+    ]
+    bundle = tmp_path / "errored.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "Likely issues" in human.stdout
+    assert "easycat explain troubleshooting" in human.stdout
+
+    # A clean bundle stays quiet — no spurious pointer.
+    clean = [
+        JournalRecord(
+            sequence=1,
+            session_id="sess-ok",
+            name="turn_started",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=2_000_000_000),
+        ),
+        JournalRecord(
+            sequence=2,
+            session_id="sess-ok",
+            name="turn_ended",
+            turn_id="t1",
+            timing=TimingInfo(wall_ns=2_100_000_000),
+        ),
+    ]
+    clean_bundle = tmp_path / "clean.zip"
+    export_debug_bundle(_FakeSession(records=clean), clean_bundle)
+    clean_human = cli.invoke(app, ["bundles", "show", str(clean_bundle)])
+    assert clean_human.exit_code == 0, clean_human.stderr
+    assert "easycat explain troubleshooting" not in clean_human.stdout
+
 
 def test_bundles_show_ignores_malformed_turn_ids_in_waterfall(
     cli: CliRunner, tmp_path: Path

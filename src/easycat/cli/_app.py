@@ -93,7 +93,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
     ),
     "explain": _CommandText(
         help="Look up errors and CLI schema topics.",
-        journey="Look up errors and CLI schema topics",
+        journey="Route a call problem by symptom, or look up an error code",
     ),
     "bundles": _CommandText(
         help="Inspect captured debug bundles and crash dumps.",
@@ -134,10 +134,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
+    ("Scaffold", ("console", "init", "doctor", "serve")),
     (
         "Debug with the journal",
-        ("bundles", "inspect", "replay", "latency", "diff", "journal", "tail"),
+        ("bundles", "inspect", "replay", "latency", "diff", "journal", "tail", "explain"),
     ),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),

@@ -289,8 +289,65 @@ def test_explain_list_includes_concept_topics(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "--list"])
 
     assert result.exit_code == 0
-    for slug in ("events", "turn-taking", "journal"):
+    for slug in ("events", "turn-taking", "barge-in", "journal", "troubleshooting"):
         assert slug in result.stdout
+
+
+def test_explain_troubleshooting_routes_every_symptom(cli: CliRunner) -> None:
+    """The symptom-first router lists all five symptoms + routed commands."""
+    result = cli.invoke(app, ["explain", "troubleshooting"])
+    assert result.exit_code == 0, result.stderr
+    stdout = result.stdout
+    for symptom in ("didnt-hear-me", "cut-me-off", "too-slow", "said-wrong", "crashed"):
+        assert symptom in stdout, symptom
+    # Each symptom routes to a concrete command.
+    for command in (
+        "easycat inspect PATH",
+        "easycat explain barge-in",
+        "easycat latency PATH",
+        "easycat bundles show PATH",
+        "easycat replay PATH --turn",
+        "easycat journal promote",
+    ):
+        assert command in stdout, command
+    # And to a doc/topic.
+    for route in (
+        "docs/latency.md",
+        "docs/teaching/09-interruption/",
+        "docs/testing-and-evals.md",
+        "docs/observability.md",
+    ):
+        assert route in stdout, route
+
+
+def test_explain_troubleshooting_json_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "troubleshooting", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "explain"
+    assert payload["status"] == "ok"
+    assert payload["slug"] == "troubleshooting"
+    for symptom in ("didnt-hear-me", "cut-me-off", "too-slow", "said-wrong", "crashed"):
+        assert symptom in payload["body"], symptom
+
+
+def test_explain_barge_in_cross_links_turn_taking(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "barge-in"])
+    assert result.exit_code == 0, result.stderr
+    stdout = result.stdout
+    assert "interruption" in stdout.lower()
+    assert "easycat explain turn-taking" in stdout
+    assert "docs/teaching/09-interruption/" in stdout
+
+
+def test_explain_barge_in_json_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "barge-in", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "explain"
+    assert payload["status"] == "ok"
+    assert payload["slug"] == "barge-in"
+    assert "turn-taking" in payload["body"]
 
 
 def test_explain_meta_init_schema(cli: CliRunner) -> None:
