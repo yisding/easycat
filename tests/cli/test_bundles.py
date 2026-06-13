@@ -110,6 +110,11 @@ def test_bundles_list_empty(cli: CliRunner, tmp_path: Path) -> None:
     assert "EasyConfig(record_to=...)" in result.stderr
     assert "create_text_session(record_to=...)" in result.stderr
     assert "session.export_debug_bundle()" in result.stderr
+    # The empty hint names the durable-journal prerequisite and points at the
+    # journal explainer so newcomers know recordings need debug='full'.
+    unwrapped = _unwrapped(result.stderr)
+    assert "debug='full'" in unwrapped
+    assert "easycat explain journal" in unwrapped
 
 
 def test_bundles_list_empty_renders_bracketed_path_literally(

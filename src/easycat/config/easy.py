@@ -456,7 +456,7 @@ class ObservabilityConfig:
     keep working through legacy aliases.
     """
 
-    debug: Literal["off", "light", "full"] = "off"
+    debug: Literal["off", "light", "full"] = "full"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = ()
@@ -976,7 +976,7 @@ class TextSessionConfig(_AgentSessionConfig):
         *,
         agent: Any = None,
         session_id: str | None = None,
-        debug: Literal["off", "light", "full"] = "off",
+        debug: Literal["off", "light", "full"] = "full",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
         latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = None,
@@ -1003,7 +1003,7 @@ class TextSessionConfig(_AgentSessionConfig):
             loose = {
                 "agent": (agent, None),
                 "session_id": (session_id, None),
-                "debug": (debug, "off"),
+                "debug": (debug, "full"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
                 "latency_budget": (latency_budget, None),

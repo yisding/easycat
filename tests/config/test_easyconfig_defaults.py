@@ -43,6 +43,16 @@ def test_easycat_config_openai_defaults():
     assert isinstance(config.tts, OpenAITTSConfig)
 
 
+def test_easycat_config_defaults_debug_to_full():
+    # Durable journaling is on by default: the single source of the default
+    # lives on ObservabilityConfig, and EasyConfig inherits it through the
+    # observability alias proxy.
+    config = EasyConfig(openai_api_key="test-key")
+    assert config.debug == "full"
+    assert config.observability.debug == "full"
+    assert ObservabilityConfig().debug == "full"
+
+
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

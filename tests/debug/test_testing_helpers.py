@@ -204,13 +204,27 @@ async def test_run_text_turn_result_works_with_bundle_assert_helpers():
 
 
 async def test_run_text_turn_with_text_session_config():
-    cfg = TextSessionConfig(agent=_EchoAgent())  # debug defaults to "off"
+    cfg = TextSessionConfig(agent=_EchoAgent())  # debug defaults to "full"
 
     result = await run_text_turn(cfg, "config path")
 
     assert result.response == "echo: config path"
     assert_turn_completed(result, result.turn_id)
-    # The caller's config must not be mutated to get a journal.
+    # The caller's config must not be mutated to get a journal; the default
+    # debug="full" already journals, so run_text_turn uses it as-is.
+    assert cfg.debug == "full"
+
+
+async def test_run_text_turn_with_debug_off_config_upgrades_without_mutation():
+    # When the caller explicitly opted out (debug="off"), run_text_turn must
+    # upgrade a *copy* to "light" so the TurnResult is assertable, leaving the
+    # caller's config untouched.
+    cfg = TextSessionConfig(agent=_EchoAgent(), debug="off")
+
+    result = await run_text_turn(cfg, "off path")
+
+    assert result.response == "echo: off path"
+    assert_turn_completed(result, result.turn_id)
     assert cfg.debug == "off"
 
 

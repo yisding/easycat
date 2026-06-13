@@ -93,7 +93,9 @@ Group under `audio_processing=AudioProcessingConfig(...)`:
 Group under `observability=ObservabilityConfig(...)`:
 
 - `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
-  (records audio artifacts too).
+  (default; records audio artifacts too and auto-launches the local debugger
+  UI). Durable journaling is on by default so sessions are always recorded;
+  set `debug="off"` to opt out.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;

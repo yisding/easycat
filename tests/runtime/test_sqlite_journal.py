@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import textwrap
+import time
 from unittest import mock
 
 import pytest
@@ -826,11 +827,22 @@ class TestRetention:
             os.umask(old_umask)
 
     def test_retention_max_bytes_archives_and_cleans_sidecars_and_artifacts(self, tmp_path):
-        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
-        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+        # Use recent, ordered mtimes: the close-triggered internal retention
+        # now runs an on-by-default 14-day age window, so seeding 1970 epoch
+        # mtimes would let one journal prune the other before this call.
+        now = time.time()
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=now - 2)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=now - 1)
         max_bytes = self._retained_size(old) + self._retained_size(new) - 1
 
-        removed = run_retention(tmp_path, max_sessions=10, max_bytes=max_bytes, mode="archive")
+        # Disable the age window so this exercises only the byte cap.
+        removed = run_retention(
+            tmp_path,
+            max_sessions=10,
+            max_bytes=max_bytes,
+            max_age_days=10**9,
+            mode="archive",
+        )
 
         assert removed == 1
         for path in (old["db"], old["wal"], old["shm"], old["artifact_dir"]):
@@ -855,10 +867,12 @@ class TestRetention:
         assert len(remaining) == 1
 
     def test_retention_delete_mode_cleans_sidecars_and_artifacts(self, tmp_path):
-        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
-        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+        now = time.time()
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=now - 2)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=now - 1)
 
-        removed = run_retention(tmp_path, max_sessions=1, mode="delete")
+        # Disable the age window so this exercises only the count cap.
+        removed = run_retention(tmp_path, max_sessions=1, max_age_days=10**9, mode="delete")
 
         assert removed == 1
         assert not (tmp_path / "archive").exists()
@@ -1075,8 +1089,6 @@ class TestLitestreamSqliteJournal:
         j.flush()
 
         # Give litestream a moment to replicate, then close.
-        import time
-
         time.sleep(2)
         j.close()
 

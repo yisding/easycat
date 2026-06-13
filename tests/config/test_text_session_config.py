@@ -29,6 +29,31 @@ def test_create_text_session_forwards_observability_advanced_aliases():
     assert session._warmup.enabled is False
 
 
+def test_text_session_config_defaults_debug_to_full():
+    from easycat.config import TextSessionConfig
+
+    config = TextSessionConfig(agent=_DummyAgent())
+    assert config.debug == "full"
+    assert config.observability.debug == "full"
+
+
+def test_create_text_session_defaults_build_sqlite_journal(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    from easycat.runtime import InMemoryRingBuffer, SqliteJournal
+
+    monkeypatch.setenv("EASYCAT_DATA_DIR", str(tmp_path))
+    session = create_text_session(agent=_DummyAgent())
+    try:
+        # Durable journaling on by default: a read view is exposed and the
+        # backing journal is a SqliteJournal, not the in-memory ring buffer.
+        assert session.journal is not None
+        assert isinstance(session._journal, SqliteJournal)
+        assert not isinstance(session._journal, InMemoryRingBuffer)
+    finally:
+        session._journal.close()
+
+
 def test_create_text_session_accepts_config_object():
     from easycat.config import TextSessionConfig, create_text_session
 
@@ -94,6 +119,8 @@ def test_create_text_session_config_with_default_kwargs_ok():
     from easycat.config import TextSessionConfig, create_text_session
 
     # Passing config alongside only default-valued kwargs is allowed.
+    # The default is now debug="full"; passing the matching default kwarg
+    # is treated as "unset" by the config-vs-loose mutual-exclusion check.
     config = TextSessionConfig(agent=_DummyAgent(), debug="off")
-    session = create_text_session(config, debug="off")
+    session = create_text_session(config, debug="full")
     assert session is not None

@@ -491,6 +491,9 @@ def _write_context_pack(
         summary = {}
     records = _context_records(bundle)
     source_path = redact_text(str(bundle_path))
+    # Context-pack export always applies the conservative production redaction
+    # boundary regardless of the requested policy; durable journals are on by
+    # default, so exports must stay safe to share without an explicit opt-in.
     redaction_applied = "production"
     files = ["README.md", "summary.json", "timeline.md", "timeline.jsonl"]
 
@@ -599,6 +602,10 @@ def list_bundles(
             "[dim]Use [cyan]EasyConfig(record_to=...)[/], "
             "[cyan]create_text_session(record_to=...)[/], or "
             "[cyan]session.export_debug_bundle()[/] to capture one.[/]"
+        )
+        stderr_console.print(
+            "[dim]Durable journals need [cyan]debug='full'[/] (the default); see "
+            "[cyan]easycat explain journal[/] for how recordings are captured.[/]"
         )
         raise typer.Exit(0)
 

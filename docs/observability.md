@@ -182,10 +182,12 @@ There are three independent knobs, and they control different things:
   for log pipelines; `dev` / unset keeps the human renderer. An explicit
   `EASYCAT_LOG_FORMAT` always wins.
 
-- **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`) — controls the
-  journal (C) and the optional debugger UI. It is **orthogonal to log level**:
-  `debug=` decides whether and how much is journaled (and, for `"full"`, whether
-  the debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
+- **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`, default
+  `"full"`) — controls the journal (C) and the optional debugger UI. Durable
+  journaling is on by default so sessions are always recorded; set
+  `debug="off"` to opt out. It is **orthogonal to log level**: `debug=`
+  decides whether and how much is journaled (and, for `"full"`, whether the
+  debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
   console log is. Turning one up does not turn the other up.
 
 - **Advanced observability knobs** live on `ObservabilityConfig` and keep

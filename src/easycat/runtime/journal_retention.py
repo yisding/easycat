@@ -6,6 +6,7 @@ import logging
 import shutil
 import sqlite3
 import tarfile
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -19,13 +20,17 @@ def run_retention(
     *,
     max_sessions: int = 50,
     max_bytes: int = 2 * 1024 * 1024 * 1024,  # 2 GB
+    max_age_days: int = 14,
     mode: Literal["archive", "delete"] = "archive",
 ) -> int:
     """Enforce retention policy on journal files.  Returns number removed.
 
     Runs opportunistically on session close — never blocks a turn.
     Keeps the most recent *max_sessions* journals **or** *max_bytes* total,
-    whichever is tighter.
+    whichever is tighter, and additionally prunes any journal older than
+    *max_age_days* (an age window that is on by default) so a long-lived
+    project's ``.easycat/journals/`` directory does not accumulate stale
+    recordings indefinitely.
     """
     root = Path(data_dir)
     journals_dir = root / "journals"
@@ -37,22 +42,62 @@ def run_retention(
     if not files:
         return 0
 
-    total_bytes = sum(_session_bytes(root, f) for f in files)
-    removed = 0
+    sweep = _RetentionSweep(root, files, mode)
+    cutoff = time.time() - max_age_days * 86400
+    sweep.prune_older_than(cutoff)
+    sweep.prune_to_caps(max_sessions, max_bytes)
+    return sweep.removed
 
-    while files and (len(files) > max_sessions or total_bytes > max_bytes):
-        oldest = files.pop(0)
-        fsize = _session_bytes(root, oldest)
 
-        if mode == "archive" and not _archive_session(root, oldest):
-            continue
-        if not _remove_session(root, oldest):
-            continue
+class _RetentionSweep:
+    """Mutable retention state shared by the age-window and cap passes.
 
-        total_bytes -= fsize
-        removed += 1
+    Files are oldest-first; each pass pops from the front so a single
+    ``removed`` counter stays accurate across both passes.
+    """
 
-    return removed
+    def __init__(self, root: Path, files: list[Path], mode: str) -> None:
+        self._root = root
+        self._files = files
+        self._mode = mode
+        self._total_bytes = sum(_session_bytes(root, f) for f in files)
+        self.removed = 0
+
+    def prune_older_than(self, cutoff: float) -> None:
+        """Prune any journal older than *cutoff*, regardless of the caps."""
+        while self._files:
+            oldest = self._files[0]
+            try:
+                mtime = oldest.stat().st_mtime
+            except OSError:
+                self._files.pop(0)
+                continue
+            if mtime >= cutoff:
+                break
+            self._prune_oldest()
+
+    def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
+        """Prune the oldest journal until both the count and byte caps hold."""
+        while self._files and (len(self._files) > max_sessions or self._total_bytes > max_bytes):
+            self._prune_oldest()
+
+    def _prune_oldest(self) -> bool:
+        """Pop and archive/remove the oldest journal; True if it was pruned."""
+        oldest = self._files.pop(0)
+        fsize = _session_bytes(self._root, oldest)
+
+        # Guard file existence to avoid racing a concurrent crash-durability
+        # sweep that may have already removed the file out from under us.
+        if not oldest.exists():
+            return False
+        if self._mode == "archive" and not _archive_session(self._root, oldest):
+            return False
+        if not _remove_session(self._root, oldest):
+            return False
+
+        self._total_bytes -= fsize
+        self.removed += 1
+        return True
 
 
 def _session_bytes(root: Path, db_path: Path) -> int:
