@@ -26,11 +26,11 @@ from easycat.runtime._journal_codec import (
     _row_to_record,
 )
 from easycat.runtime._private_files import (
-    chmod_private_file,
     harden_sqlite_files,
     mkdir_private,
     touch_private_file,
 )
+from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
     ErrorInfo,
@@ -207,6 +207,17 @@ class SqliteJournal(_SqlJournalBase):
         journals_dir = root / "journals"
         mkdir_private(journals_dir)
         self._db_path = journals_dir / f"{session_id}.sqlite"
+
+        # Sweep crashed-but-unswept prior journals (different session ids whose
+        # process died without a clean close) before we open our own file.  The
+        # same-id recovery path below only fires when *this* session's id is
+        # reused; orphaned ids never reopen, so the sweep is what promotes them
+        # to crash-dumps/.  Best-effort: never block or fail journal startup.
+        try:
+            sweep_crashed_journals(root, skip=self._db_path)
+        except OSError:
+            logger.debug("Crash-journal sweep failed", exc_info=True)
+
         touch_private_file(self._db_path)
         self._session_id = session_id
         self._lock = threading.Lock()
@@ -229,6 +240,19 @@ class SqliteJournal(_SqlJournalBase):
 
         # Clear prior-session state markers (we're starting a new session).
         self._conn.execute("DELETE FROM session_state WHERE key IN ('clean_close', 'degraded')")
+
+        # Stamp our PID as a liveness marker (committed so a separate
+        # crash-sweep connection can read it).  An idle WAL journal between
+        # turns holds no write lock, so the orphan sweep cannot tell "live
+        # but idle" from "crashed" by lock alone; the PID lets it skip a
+        # journal whose owning process is still running.  Cleared on clean
+        # close so a cleanly-closed (or crashed-then-PID-reused) file never
+        # masquerades as live.
+        self._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', ?)",
+            (str(os.getpid()),),
+        )
+        self._conn.commit()
 
         # Recover sequence counter from any existing records.  Both the
         # crash-recovery and clean-reuse paths truncate the journal table
@@ -300,24 +324,12 @@ class SqliteJournal(_SqlJournalBase):
         # concurrent append() can use the connection while it's closed.
         with self._lock:
             try:
-                # Checkpoint WAL into the main database before copying.
-                # With wal_autocheckpoint=0, recent records may only
-                # exist in the WAL file; a bare file copy would lose them.
-                try:
-                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except sqlite3.OperationalError:
-                    pass  # Best-effort; copy WAL files as fallback below.
+                # Close our live connection so the shared file-level promoter
+                # can checkpoint+copy the on-disk database (the same core the
+                # orphan sweep uses), then reopen.  Checkpointing folds any
+                # WAL-only pages into the main DB before the byte copy.
                 self._conn.close()
-                shutil.copy2(str(self._db_path), str(crash_path))
-                chmod_private_file(crash_path)
-                # Also copy WAL/SHM if they still exist (checkpoint may
-                # have been incomplete due to concurrent readers).
-                for suffix in ("-wal", "-shm"):
-                    wal_src = Path(str(self._db_path) + suffix)
-                    if wal_src.exists():
-                        crash_sidecar = Path(str(crash_path) + suffix)
-                        shutil.copy2(str(wal_src), str(crash_sidecar))
-                        chmod_private_file(crash_sidecar)
+                _copy_journal_to_crash_dump(self._db_path, crash_path)
                 self._conn = self._open_connection()
                 # The prior session's records are now safely preserved
                 # in the crash dump.  Truncate the live journal so the
@@ -412,6 +424,9 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
+                # Drop the liveness marker: the process is shutting down, so
+                # the journal is no longer "live" for the crash sweep.
+                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):
                 pass
@@ -462,6 +477,7 @@ class SqliteJournal(_SqlJournalBase):
                 self._conn.execute(
                     "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
                 )
+                self._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
                 self._conn.commit()
                 self._clean_close_marked = True
             except (sqlite3.OperationalError, sqlite3.ProgrammingError):

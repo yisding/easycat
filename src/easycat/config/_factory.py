@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -579,7 +580,92 @@ def create_session(config: EasyConfig) -> Session:
 
         maybe_launch_debugger_ui(session)
 
+    if config.debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
+
     return session
+
+
+def _emergency_export_enabled(config: Any) -> bool:
+    """Whether opt-in emergency export should be armed for *config*.
+
+    Opt-in only: armed when ``EASYCAT_EMERGENCY_EXPORT=1`` is set in the
+    environment, or an ``observability.emergency_export`` knob is truthy.
+    Defaults off so a normal process never installs ``atexit`` / excepthook
+    hooks.
+    """
+    import os
+
+    if os.environ.get("EASYCAT_EMERGENCY_EXPORT") == "1":
+        return True
+    observability = getattr(config, "observability", None)
+    return bool(getattr(observability, "emergency_export", False))
+
+
+def install_emergency_export(session: Session) -> Callable[[], None]:
+    """Arm a best-effort debug-bundle export for an abnormal process exit.
+
+    Registers an ``atexit`` handler and chains ``sys.excepthook`` so a
+    crash (unhandled exception) or an unexpected interpreter shutdown
+    flushes a redacted debug bundle next to the session's data dir before
+    the process dies.  Returns an idempotent *unregister* callable; it is
+    also stored on ``session._emergency_export_unregister`` and invoked by
+    the export hooks themselves once a session has cleanly stopped, so the
+    hooks become inert after :meth:`Session.stop`.
+
+    Strictly opt-in (see :func:`_emergency_export_enabled`): callers must
+    explicitly arm it.  Never raises; the export is wrapped best-effort.
+    """
+    import atexit
+    import os
+    import sys
+    from datetime import UTC, datetime
+
+    state = {"done": False, "unregistered": False}
+    previous_excepthook = sys.excepthook
+
+    def _export() -> None:
+        if state["done"]:
+            return
+        # If the session already stopped cleanly, the normal teardown path
+        # (record_to / explicit export) owns the bundle — stay out of it.
+        if getattr(session, "_closed", False):
+            return
+        state["done"] = True
+        try:
+            data_dir = getattr(session, "_data_dir", None) or os.environ.get(
+                "EASYCAT_DATA_DIR", ".easycat"
+            )
+            crash_dir = Path(data_dir) / "crash-dumps"
+            crash_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = crash_dir / f"{session.session_id}-emergency-{stamp}.zip"
+            session.export_debug_bundle(str(path))
+            logger.info("Emergency debug bundle exported to %s", path)
+        except Exception:
+            logger.debug("Emergency debug-bundle export failed", exc_info=True)
+
+    def _excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+        _export()
+        previous_excepthook(exc_type, exc_value, exc_tb)
+
+    def _unregister() -> None:
+        if state["unregistered"]:
+            return
+        state["unregistered"] = True
+        try:
+            atexit.unregister(_export)
+        except Exception:
+            pass
+        # Restore the excepthook only if no one chained on top of ours; if
+        # they did, leave the chain intact rather than dropping their hook.
+        if sys.excepthook is _excepthook:
+            sys.excepthook = previous_excepthook
+
+    atexit.register(_export)
+    sys.excepthook = _excepthook
+    session._emergency_export_unregister = _unregister
+    return _unregister
 
 
 def create_text_session(

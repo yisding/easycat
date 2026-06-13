@@ -599,12 +599,18 @@ def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
 
 
 def discover_bundles(data_dir: str | None = None) -> list[Path]:
-    """Discover bundles in standard directories."""
+    """Discover bundles in standard directories.
+
+    Scans ``recordings/``, ``crash-dumps/``, and ``journals/`` so live and
+    crashed SQLite journals show up alongside exported ZIP bundles.  The
+    list[Path] signature is preserved for back-compat; callers that need a
+    per-path status use :func:`discover_bundles_with_status`.
+    """
     if data_dir is None:
         data_dir = os.environ.get("EASYCAT_DATA_DIR", ".easycat")
     data_path = Path(data_dir)
     bundles: list[Path] = []
-    for subdir in ("recordings", "crash-dumps"):
+    for subdir in ("recordings", "crash-dumps", "journals"):
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
@@ -616,3 +622,43 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
                 ) or f.name.endswith(".easycat-bundle"):
                     bundles.append(f)
     return sorted(bundles)
+
+
+def discover_bundles_with_status(data_dir: str | None = None) -> list[tuple[Path, str]]:
+    """Discover bundles with a coarse status for each path.
+
+    Status values:
+
+    - ``"bundle"`` — an exported ZIP bundle under ``recordings/``, or a
+      cleanly-closed ``journals/`` SQLite file (an inspectable recording).
+    - ``"crash-dump"`` — a promoted crash dump under ``crash-dumps/``.
+    - ``"crashed (uncommitted)"`` — a ``journals/`` SQLite file with rows
+      but no ``clean_close`` marker whose owning process is gone (a crash
+      not yet swept to ``crash-dumps/``).
+    - ``"live"`` — a ``journals/`` SQLite file held open by a running
+      session (live ``live_pid`` marker or write-locked), or whose state is
+      otherwise unreadable.
+    """
+    results: list[tuple[Path, str]] = []
+    for path in discover_bundles(data_dir):
+        results.append((path, _bundle_status(path)))
+    return results
+
+
+def _bundle_status(path: Path) -> str:
+    parent = path.parent.name
+    if parent == "crash-dumps":
+        return "crash-dump"
+    if parent != "journals" or path.suffix != ".sqlite":
+        return "bundle"
+    # Reuse the crash-sweep classifier so liveness detection (live_pid marker
+    # + write-lock probe) stays a single source of truth.
+    from easycat.runtime.crash_sweep import _read_only_state
+
+    state = _read_only_state(path)
+    if state == "crashed":
+        return "crashed (uncommitted)"
+    if state == "clean":
+        return "bundle"
+    # "skip" (live/locked/unreadable) and "empty" (just-opened) -> live.
+    return "live"

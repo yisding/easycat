@@ -63,7 +63,7 @@ from easycat.debug.bundle import (
     BundleInUseError,
     BundleVersionError,
     RunBundle,
-    discover_bundles,
+    discover_bundles_with_status,
 )
 from easycat.runtime.replay import (
     ProviderVersionMismatchError,
@@ -116,6 +116,8 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
     last_wall_ns: int | None = None
     tool_calls = 0
     record_count = 0
+    error_type: str | None = None
+    failing_turn_id: str | None = None
     records = list(bundle.records())
 
     for record in records:
@@ -130,8 +132,18 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
             if first_wall_ns is None:
                 first_wall_ns = wall_ns
             last_wall_ns = wall_ns
-        if record.get("error"):
+        error = record.get("error")
+        if error:
             errors += 1
+            # Surface the first error's type + the turn it failed on so the
+            # CLI summary points straight at the failure.  ``error['type']``
+            # is a bare exception/class name (redaction-safe — no payload);
+            # ``_summarise_bundle`` already feeds the redacted export path.
+            if error_type is None and isinstance(error, Mapping):
+                etype = error.get("type")
+                if etype:
+                    error_type = str(etype)
+                    failing_turn_id = turn_id
         # The journal sink records tool calls under the snake_case name
         # ``tool_call_started`` (see ``SessionJournalSink``), not the
         # CamelCase event class name.
@@ -150,6 +162,8 @@ def _summarise_bundle(bundle: RunBundle) -> dict[str, object]:
         # shared with the debugger UI via ``debug/_turn_timeline``.
         "turns": turn_waterfall(records),
         "errors": errors,
+        "error_type": error_type,
+        "failing_turn_id": failing_turn_id,
         "tool_calls": tool_calls,
         "records": record_count,
         "duration_ms": duration_ms,
@@ -572,16 +586,17 @@ def list_bundles(
 ) -> None:
     """List every bundle under the data directory."""
     data_dir = str(path) if path is not None else None
-    bundle_paths = discover_bundles(data_dir=data_dir)
+    bundle_paths = discover_bundles_with_status(data_dir=data_dir)
 
     entries: list[dict[str, object]] = []
-    for bundle_path in bundle_paths:
+    for bundle_path, status in bundle_paths:
         stat = bundle_path.stat()
         entries.append(
             {
                 "path": str(bundle_path),
                 "size_bytes": stat.st_size,
                 "mtime": stat.st_mtime,
+                "status": status,
             }
         )
 
@@ -610,16 +625,51 @@ def list_bundles(
         raise typer.Exit(0)
 
     table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
-    table.add_column("path", no_wrap=False, overflow="fold")
+    # Keep the path on a single, un-clipped line so it stays greppable: with
+    # the extra ``status`` column an 80-col console would otherwise fold (and
+    # interleave the other columns' cells between the path fragments) or clip
+    # it with an ellipsis.  Render through a console sized to the longest row
+    # so a long absolute path is never truncated.
+    table.add_column("path", no_wrap=True, overflow="ignore")
     table.add_column("size", justify="right", no_wrap=True)
     table.add_column("modified", no_wrap=True)
+    table.add_column("status", no_wrap=True)
+    longest_path = max((len(str(entry["path"])) for entry in entries), default=0)
+    longest_status = max((len(str(entry["status"])) for entry in entries), default=0)
+    # path + size(~8) + modified(~20) + status + inter-column padding/margin.
+    render_width = max(stdout_console.width, longest_path + longest_status + 40)
     for entry in entries:
+        status = str(entry["status"])
+        # Flag crashed-but-unswept journals in red so they stand out.
+        status_fmt = escape(status)
+        if status.startswith("crashed"):
+            status_fmt = f"[red]{status_fmt}[/]"
         table.add_row(
             escape(str(entry["path"])),
             _format_size(int(entry["size_bytes"])),
             _format_mtime(float(entry["mtime"])),
+            status_fmt,
         )
-    stdout_console.print(table)
+    _print_wide(table, render_width)
+
+
+def _print_wide(renderable: object, width: int) -> None:
+    """Print *renderable* through a console wide enough to avoid clipping.
+
+    ``Console.print(..., width=)`` is clamped to the console's own width, so
+    a long path in a no-wrap column would still be truncated.  Render via a
+    fresh console pinned to *width*, writing to the same destination as the
+    primary stdout console so capture/redirection still works.
+    """
+    from rich.console import Console
+
+    wide = Console(
+        file=stdout_console.file,
+        force_terminal=stdout_console.is_terminal,
+        no_color=stdout_console.no_color,
+        width=width,
+    )
+    wide.print(renderable)
 
 
 def _crash_dump_artifact_root(sqlite_path: Path) -> Path | None:
@@ -725,6 +775,13 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool) -> None:
     errors = int(summary["errors"])
     errors_fmt = f"[red]{errors}[/]" if errors else "0"
     table.add_row("errors", errors_fmt)
+    if errors:
+        error_type = summary["error_type"]
+        if error_type:
+            table.add_row("error_type", f"[red]{escape(str(error_type))}[/]")
+        failing_turn_id = summary["failing_turn_id"]
+        if failing_turn_id:
+            table.add_row("failing_turn_id", escape(str(failing_turn_id)))
     table.add_row("artifacts", str(summary["artifact_count"]))
     entry_points = summary["replay_entry_points"]
     if isinstance(entry_points, list) and entry_points:

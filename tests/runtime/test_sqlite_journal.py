@@ -480,6 +480,61 @@ class TestCrashRecovery:
         crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
         assert crash_dump.exists()
 
+    def test_open_sweeps_orphaned_foreign_crash(self, tmp_path):
+        # A *different* session id whose owning process is gone is promoted
+        # to crash-dumps/ the next time any SqliteJournal opens — the same-id
+        # recovery path never fires for an orphaned id.
+        j1 = SqliteJournal("ghost", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="ghost")
+        # Mark its liveness PID dead, then crash (no close()).
+        j1._conn.execute("COMMIT")
+        j1._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', '1')"
+        )
+        # PID 1 (init) is alive but not signalable -> reads as alive; force a
+        # genuinely-dead marker via os.kill probing instead by deleting it so
+        # the read-only path treats the file as crashed (no live_pid).
+        j1._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+        j1._conn.commit()
+        j1._conn.close()
+        j1._closed = True
+
+        j2 = SqliteJournal("fresh", data_dir=tmp_path)
+        try:
+            assert (tmp_path / "crash-dumps" / "ghost.sqlite").exists()
+            assert not (tmp_path / "journals" / "ghost.sqlite").exists()
+        finally:
+            j2.close()
+
+    def test_clean_close_clears_live_pid_marker(self, tmp_path):
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
+        # While open, the liveness marker is present.
+        live = j._conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        assert live is not None and live[0] not in (None, "")
+        j.close()
+
+        # After a clean close the marker is gone so the file never reads live.
+        conn = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        finally:
+            conn.close()
+        assert row is None
+
+    def test_open_does_not_sweep_a_live_sibling(self, tmp_path):
+        # A concurrently-open live journal (its PID is this test process,
+        # alive) must NOT be swept when another session opens.
+        live = SqliteJournal("alive", data_dir=tmp_path)
+        live.append(kind=JournalRecordKind.EVENT, name="ev", session_id="alive")
+        other = SqliteJournal("other", data_dir=tmp_path)
+        try:
+            assert (tmp_path / "journals" / "alive.sqlite").exists()
+            assert not (tmp_path / "crash-dumps" / "alive.sqlite").exists()
+        finally:
+            other.close()
+            live.close()
+
     def test_sqlite_journal_files_are_private_under_permissive_umask(self, tmp_path):
         old_umask = os.umask(0o022)
         j = None

@@ -153,6 +153,122 @@ def test_bundles_list_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["command"] == "bundles_list"
     assert len(payload["bundles"]) == 1
     assert payload["bundles"][0]["path"].endswith("one.zip")
+    # Exported recordings carry the "bundle" status.
+    assert payload["bundles"][0]["status"] == "bundle"
+
+
+def _crash_journal_file(journals_dir: Path, session_id: str) -> Path:
+    """Create a crashed ``journals/<id>.sqlite`` (rows, no clean_close)."""
+    from easycat.runtime import SqliteJournal
+    from easycat.runtime.records import JournalRecordKind
+
+    journals_dir.parent.mkdir(parents=True, exist_ok=True)
+    j = SqliteJournal(session_id, data_dir=journals_dir.parent)
+    j.append(kind=JournalRecordKind.EVENT, name="ev", session_id=session_id)
+    # Drop the live_pid marker so the file reads as crashed (a live PID would
+    # otherwise read as "live"), then abandon without a clean close.
+    j._conn.execute("COMMIT")
+    j._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+    j._conn.commit()
+    j._conn.close()
+    j._closed = True
+    return journals_dir / f"{session_id}.sqlite"
+
+
+def test_bundles_list_marks_crashed_journal(cli: CliRunner, tmp_path: Path) -> None:
+    journals = tmp_path / "journals"
+    crashed = _crash_journal_file(journals, "boom")
+    assert crashed.exists()
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path)])
+    assert result.exit_code == 0, result.stderr
+    out = _unwrapped(result.stdout)
+    assert "boom.sqlite" in out
+    assert "crashed (uncommitted)" in out
+
+
+def test_bundles_list_marks_crashed_journal_json(cli: CliRunner, tmp_path: Path) -> None:
+    journals = tmp_path / "journals"
+    _crash_journal_file(journals, "boom")
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    assert statuses["boom.sqlite"] == "crashed (uncommitted)"
+
+
+def test_bundles_list_marks_clean_journal_as_bundle(cli: CliRunner, tmp_path: Path) -> None:
+    from easycat.runtime import SqliteJournal
+    from easycat.runtime.records import JournalRecordKind
+
+    j = SqliteJournal("ok", data_dir=tmp_path)
+    j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="ok")
+    j.close()
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    assert statuses["ok.sqlite"] == "bundle"
+
+
+def test_bundles_list_marks_live_journal(cli: CliRunner, tmp_path: Path) -> None:
+    from easycat.runtime import SqliteJournal
+    from easycat.runtime.records import JournalRecordKind
+
+    live = SqliteJournal("alive", data_dir=tmp_path)
+    live.append(kind=JournalRecordKind.EVENT, name="ev", session_id="alive")
+    try:
+        result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+    finally:
+        live.close()
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    # A journal held open by a live (this-process) session reads as live.
+    assert statuses["alive.sqlite"] == "live"
+
+
+def test_discover_bundles_with_status_classifies_crash_dump(tmp_path: Path) -> None:
+    from easycat.debug.bundle import discover_bundles_with_status
+
+    crash_dir = tmp_path / "crash-dumps"
+    crash_dir.mkdir()
+    _make_crash_dump(crash_dir / "dumped.sqlite", [{"sequence": 1, "name": "ev"}])
+
+    statuses = {p.name: s for p, s in discover_bundles_with_status(str(tmp_path))}
+    assert statuses["dumped.sqlite"] == "crash-dump"
+
+
+def test_inspect_crashed_journal_reports_error_type(cli: CliRunner, tmp_path: Path) -> None:
+    # An errored crash dump surfaces error_type + failing_turn_id via --json.
+    crash_dir = tmp_path / "crash-dumps"
+    crash_dir.mkdir()
+    crash = crash_dir / "errored.sqlite"
+    conn = sqlite3.connect(crash)
+    try:
+        conn.execute(
+            "CREATE TABLE journal ("
+            "sequence INTEGER, session_id TEXT, kind TEXT, name TEXT, "
+            "wall_ns INTEGER, mono_ns INTEGER, turn_id TEXT, data TEXT, "
+            "error_type TEXT, error_msg TEXT, input_ref TEXT, output_ref TEXT, tags TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO journal (sequence, session_id, kind, name, turn_id, "
+            "error_type, error_msg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "sess", "error", "agent_failed", "t7", "ToolTimeoutError", "boom"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = cli.invoke(app, ["inspect", str(crash), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["errors"] == 1
+    assert payload["error_type"] == "ToolTimeoutError"
+    assert payload["failing_turn_id"] == "t7"
 
 
 def test_peripheral_cli_plan_tracks_current_debug_commands() -> None:
@@ -250,12 +366,19 @@ def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["duration_ms"] == pytest.approx(400.0)
     assert payload["tool_calls"] == 1
     assert payload["errors"] == 1
+    # The first error's type + the turn it failed on are surfaced.
+    assert payload["error_type"] == "BoomError"
+    assert payload["failing_turn_id"] == "t1"
 
     human = cli.invoke(app, ["bundles", "show", str(bundle)])
     assert human.exit_code == 0, human.stderr
     assert "sess-xyz" in human.stdout
     # duration_ms = (last - first) / 1e6 = 400 → "400.0ms"
     assert "400.0ms" in human.stdout
+    # Error rows render only when there are errors.
+    assert "error_type" in human.stdout
+    assert "BoomError" in human.stdout
+    assert "failing_turn_id" in human.stdout
 
 
 def test_bundles_show_emits_turn_waterfall_with_milestones(cli: CliRunner, tmp_path: Path) -> None:
@@ -438,6 +561,14 @@ def test_bundles_show_json(cli: CliRunner, tmp_path: Path) -> None:
     assert payload["records"] == 1
     assert payload["turn_count"] == 1
     assert payload["replay_entry_points"][0]["checkpoint_id"] == "cp_7"
+    # No errors -> error_type/failing_turn_id are present but null, and the
+    # human table omits the error rows.
+    assert payload["error_type"] is None
+    assert payload["failing_turn_id"] is None
+    human = cli.invoke(app, ["bundles", "show", str(bundle)])
+    assert human.exit_code == 0, human.stderr
+    assert "error_type" not in human.stdout
+    assert "failing_turn_id" not in human.stdout
 
 
 def test_bundles_show_renders_bracketed_summary_values_literally(
