@@ -689,6 +689,30 @@ comparison layer lands.
 Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat, 6
 replay failed or side effects were blocked.
 
+### `easycat latency`
+
+Summarise critical-path latency across a bundle's turns without opening
+the debugger UI. Rolls up the five milestone deltas (`vad->stt`,
+`stt->req`, `req->token`, `token->tts`, `vad->tts`) per turn and reports
+p50/p90/p95/p99 for each, reusing
+`validation.latency.LatencyPercentileStats`.
+
+```
+Usage: easycat latency [OPTIONS] BUNDLE
+
+Options:
+      --json                    Emit the standard JSON envelope
+      --help                    Show this message and exit
+```
+
+Human output prints a per-turn table plus a percentile summary table
+(`count`/`p50`/`p90`/`p95`/`p99`). `--json` emits
+`{turns: [...], percentiles: {milestone: {count, p50, p90, p95, p99}}}`.
+See `../../docs/latency.md` for how to read the numbers and which
+defaults to tune.
+
+Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat.
+
 ## Commands NOT in This Plan
 
 Explicit non-goals, with reasoning.
@@ -797,6 +821,7 @@ EasyCat — voice bot framework
     bundles     List captured debug bundles and crash dumps
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
+    latency     Summarise critical-path latency percentiles for a bundle
 
   Validation
     validate    Run validation checks and inspect validation reports

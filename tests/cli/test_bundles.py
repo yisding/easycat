@@ -391,6 +391,106 @@ def test_bundles_show_summary(cli: CliRunner, tmp_path: Path) -> None:
     assert "failing_turn_id" in human.stdout
 
 
+def _milestone_records(turn_id: str, base_ns: int) -> list[JournalRecord]:
+    """Build a full critical-path milestone chain for one turn.
+
+    VAD endpoint → STT final → agent request → agent first token → TTS
+    first byte, each 50 ms apart, so every milestone delta resolves.
+    """
+    ms = 1_000_000
+    return [
+        JournalRecord(
+            sequence=base_ns,
+            session_id="sess-lat",
+            name="vad_stop_speaking",
+            turn_id=turn_id,
+            timing=TimingInfo(wall_ns=base_ns),
+        ),
+        JournalRecord(
+            sequence=base_ns + 1,
+            session_id="sess-lat",
+            name="stt_final",
+            turn_id=turn_id,
+            timing=TimingInfo(wall_ns=base_ns + 50 * ms),
+            data={"text": "hi"},
+        ),
+        JournalRecord(
+            sequence=base_ns + 2,
+            session_id="sess-lat",
+            name="agent_request_started",
+            turn_id=turn_id,
+            timing=TimingInfo(wall_ns=base_ns + 100 * ms),
+        ),
+        JournalRecord(
+            sequence=base_ns + 3,
+            session_id="sess-lat",
+            name="agent_delta",
+            turn_id=turn_id,
+            timing=TimingInfo(wall_ns=base_ns + 200 * ms),
+            data={"text": "hello"},
+        ),
+        JournalRecord(
+            sequence=base_ns + 4,
+            session_id="sess-lat",
+            name="tts_frame",
+            turn_id=turn_id,
+            timing=TimingInfo(wall_ns=base_ns + 300 * ms),
+            data={"audio_bytes": 320},
+        ),
+    ]
+
+
+def test_latency_json_emits_percentiles_for_all_milestones(cli: CliRunner, tmp_path: Path) -> None:
+    """``easycat latency PATH --json`` reports count + p50/p90/p95/p99 for the
+    five critical-path milestone keys."""
+    records = _milestone_records("t1", 1_000_000_000) + _milestone_records("t2", 2_000_000_000)
+    bundle = tmp_path / "latency.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    result = cli.invoke(app, ["latency", str(bundle), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "latency"
+    assert payload["path"] == str(bundle)
+    assert len(payload["turns"]) == 2
+
+    percentiles = payload["percentiles"]
+    assert set(percentiles) == {"vad->stt", "stt->req", "req->token", "token->tts", "vad->tts"}
+    for key in percentiles:
+        stat = percentiles[key]
+        assert set(stat) == {"count", "p50", "p90", "p95", "p99"}
+        assert stat["count"] == 2
+    # vad->stt is the 50 ms STT-final delta for both turns.
+    assert percentiles["vad->stt"]["p50"] == pytest.approx(50.0)
+    # vad->tts is the full 300 ms voice-to-voice gap.
+    assert percentiles["vad->tts"]["p50"] == pytest.approx(300.0)
+
+
+def test_latency_human_renders_percentile_table(cli: CliRunner, tmp_path: Path) -> None:
+    """The human (no ``--json``) output renders the percentile summary table."""
+    records = _milestone_records("t1", 1_000_000_000)
+    bundle = tmp_path / "latency-human.zip"
+    export_debug_bundle(_FakeSession(records=records), bundle)
+
+    result = cli.invoke(app, ["latency", str(bundle)])
+    assert result.exit_code == 0, result.stderr
+    unwrapped = _unwrapped(result.stdout)
+    assert "Critical-path percentiles" in unwrapped
+    assert "p50" in unwrapped and "p95" in unwrapped and "p99" in unwrapped
+    # Per-turn table also renders.
+    assert "Per-turn critical path" in unwrapped
+    assert "t1" in unwrapped
+
+
+def test_latency_missing_bundle_exits_5(cli: CliRunner, tmp_path: Path) -> None:
+    """A missing bundle path exits 5 like the other journal commands."""
+    result = cli.invoke(app, ["latency", str(tmp_path / "nope.zip"), "--json"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "latency"
+    assert payload["status"] == "error"
+
+
 def test_bundles_show_json_always_includes_issues(cli: CliRunner, tmp_path: Path) -> None:
     """The ``issues`` key is always present in the JSON envelope (stable shape)."""
     records = [

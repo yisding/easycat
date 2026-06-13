@@ -352,6 +352,38 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
     )
 
 
+async def test_api_timeline_carries_per_turn_milestones(tmp_path):
+    """``/api/timeline`` now serves ``turn_waterfall``: each turn keeps its
+    stage spans (so the SPA waterfall is unaffected) AND a ``milestones``
+    block the critical-path panel renders."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    app = _make_app(_bundle_source(bundle_path))
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/timeline")).json()
+
+    assert "timeline" in body
+    assert body["timeline"], "expected at least one turn"
+    for turn in body["timeline"]:
+        assert "spans" in turn
+        assert set(turn["milestones"]) == {
+            "vad_endpoint_to_stt_final_ms",
+            "stt_final_to_agent_request_ms",
+            "agent_request_to_first_token_ms",
+            "agent_first_token_to_tts_first_byte_ms",
+            "vad_endpoint_to_tts_first_byte_ms",
+            "user_speech_start_to_bot_stopped_ms",
+        }
+    assert any(
+        turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None
+        for turn in body["timeline"]
+    )
+
+
 def test_build_issues_is_shared_with_debug_engine():
     """The server's ``_build_issues`` re-export is the ``debug/_issues`` engine."""
     from easycat.debug import _issues

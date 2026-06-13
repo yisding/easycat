@@ -355,6 +355,71 @@
     font-size: 10px;
   }
 
+  /* Critical-path waterfall: one connected bar made of contiguous
+     segments showing where a turn's latency went, VAD endpoint → TTS
+     first byte.  Built segment-by-segment via el() (no innerHTML). */
+  .critical-path {
+    margin: 4px 0 12px;
+    padding: 10px 0 0;
+    border-top: 1px dashed var(--border);
+  }
+  .critical-path .cp-title {
+    display: flex; align-items: baseline; gap: 10px;
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+  }
+  .critical-path .cp-title .cp-total {
+    margin-left: auto; color: var(--text); font-size: 11px;
+    text-transform: none; letter-spacing: 0;
+  }
+  .cp-track {
+    display: flex; height: 22px; width: 100%;
+    background: var(--bg-2); border-radius: 3px; overflow: hidden;
+  }
+  .cp-bar {
+    height: 100%; min-width: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 10px; font-weight: 600;
+    color: var(--bg); overflow: hidden; white-space: nowrap;
+    border-right: 1px solid var(--bg);
+  }
+  .cp-bar:last-child { border-right: none; }
+  /* Budget bands — green within budget, amber approaching, red over.
+     Thresholds come from CP_BUDGETS (see validation DEFAULT_BUDGETS). */
+  .cp-bar.ok { background: var(--green); }
+  .cp-bar.warn { background: var(--orange); }
+  .cp-bar.over { background: var(--red); }
+  /* Null/missing segment: a hatched placeholder so the bar stays
+     contiguous even when a milestone delta couldn't be measured. */
+  .cp-bar.cp-gap {
+    background: repeating-linear-gradient(
+      45deg, var(--bg-2), var(--bg-2) 4px, var(--border) 4px, var(--border) 8px);
+    color: var(--muted);
+  }
+  /* The single biggest contributor gets a brighter outline. */
+  .cp-bar.dominant {
+    box-shadow: inset 0 0 0 2px var(--text);
+    filter: brightness(1.12);
+  }
+  .critical-path .legend {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px;
+    color: var(--muted); font-size: 10px; font-family: var(--mono);
+  }
+  .critical-path .legend span::before {
+    content: ""; display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 4px; vertical-align: middle;
+  }
+  .critical-path .legend span.ok::before { background: var(--green); }
+  .critical-path .legend span.warn::before { background: var(--orange); }
+  .critical-path .legend span.over::before { background: var(--red); }
+  .critical-path .legend span.gap::before {
+    background: repeating-linear-gradient(
+      45deg, var(--bg-2), var(--bg-2) 3px, var(--border) 3px, var(--border) 6px);
+  }
+  .critical-path .legend span.dominant::before {
+    background: var(--bg-2); box-shadow: inset 0 0 0 2px var(--text);
+  }
+
   /* Pipeline view */
   #pipeline-view { padding: 14px; overflow: auto; }
   #pipeline-svg {
@@ -1265,6 +1330,113 @@ function rerenderActiveTab() {
 }
 
 // ── Timeline view ────────────────────────────────────────────────
+// ── Critical-path panel ──────────────────────────────────────────
+// One connected bar made of contiguous segments showing where a turn's
+// latency went, VAD endpoint → TTS first byte.  Each segment is a
+// milestone delta from ``turn.milestones`` (served by /api/timeline via
+// turn_waterfall).  Null deltas render as hatched .cp-gap placeholders so
+// the bar stays connected; the single biggest measured segment is marked
+// .dominant.  Built entirely with el() — no innerHTML.
+//
+// Ordered milestone segments. The budget bands derive from the two
+// validation defaults that have one (see validation/latency.py
+// DEFAULT_BUDGETS: llm_ttft 2500ms, tts_ttfb 1500ms). Stages without a
+// validation budget have a null budget and never colour amber/red.
+const CP_SEGMENTS = [
+  { key: "vad_endpoint_to_stt_final_ms", label: "vad→stt", budget: null },
+  { key: "stt_final_to_agent_request_ms", label: "stt→request", budget: null },
+  { key: "agent_request_to_first_token_ms", label: "request→token", budget: 2500 },
+  { key: "agent_first_token_to_tts_first_byte_ms", label: "token→tts", budget: 1500 },
+];
+// Per-segment budget thresholds; amber once a segment crosses the warn
+// fraction of its budget, red once it exceeds the budget outright.
+const CP_BUDGETS = {
+  agent_request_to_first_token_ms: 2500,
+  agent_first_token_to_tts_first_byte_ms: 1500,
+};
+const CP_WARN_FRACTION = 0.8;
+const CP_END_TO_END_KEY = "vad_endpoint_to_tts_first_byte_ms";
+
+function cpBand(value, budget) {
+  if (budget == null || value == null) return "ok";
+  if (value > budget) return "over";
+  if (value >= budget * CP_WARN_FRACTION) return "warn";
+  return "ok";
+}
+
+function renderCriticalPath(turn) {
+  const milestones = turn.milestones || {};
+  // Gather each segment's measured ms (or null) up front so we can scale
+  // the bar and pick the dominant contributor in one pass.
+  const segs = CP_SEGMENTS.map((spec) => ({
+    label: spec.label,
+    ms: typeof milestones[spec.key] === "number" ? milestones[spec.key] : null,
+    budget: CP_BUDGETS[spec.key] != null ? CP_BUDGETS[spec.key] : null,
+  }));
+  // Nothing to show if every segment is missing.
+  if (!segs.some((s) => s.ms != null)) return null;
+
+  const measured = segs.filter((s) => s.ms != null).map((s) => s.ms);
+  const total = measured.reduce((a, b) => a + b, 0);
+  // Each gap gets a fixed slice so the connected bar stays readable even
+  // when most of the path is measured.
+  const gapCount = segs.filter((s) => s.ms == null).length;
+  const gapSlice = total > 0 ? (total / Math.max(1, measured.length)) * 0.25 : 1;
+  const scaleTotal = total + gapCount * gapSlice || 1;
+  // Dominant = the single biggest measured segment.
+  let dominantIdx = -1;
+  let dominantMs = -1;
+  segs.forEach((s, i) => {
+    if (s.ms != null && s.ms > dominantMs) {
+      dominantMs = s.ms;
+      dominantIdx = i;
+    }
+  });
+
+  const panel = el("div", { class: "critical-path" });
+  const title = el("div", { class: "cp-title" }, "Critical path");
+  const endToEnd =
+    typeof milestones[CP_END_TO_END_KEY] === "number" ? milestones[CP_END_TO_END_KEY] : null;
+  title.appendChild(el("span", { class: "cp-total" },
+    endToEnd != null ? `${endToEnd.toFixed(0)}ms end-to-end` : "end-to-end unmeasured"));
+  panel.appendChild(title);
+
+  const track = el("div", { class: "cp-track" });
+  segs.forEach((s, i) => {
+    if (s.ms == null) {
+      const widthPct = (gapSlice / scaleTotal) * 100;
+      const gap = el("div", {
+        class: "cp-bar cp-gap",
+        style: `width: ${widthPct.toFixed(2)}%`,
+        title: `${s.label}: not measured`,
+      }, "—");
+      track.appendChild(gap);
+      return;
+    }
+    const widthPct = (s.ms / scaleTotal) * 100;
+    const band = cpBand(s.ms, s.budget);
+    const classes = ["cp-bar", band];
+    if (i === dominantIdx) classes.push("dominant");
+    const budgetNote = s.budget != null ? ` (budget ${s.budget}ms)` : "";
+    const bar = el("div", {
+      class: classes.join(" "),
+      style: `width: ${widthPct.toFixed(2)}%`,
+      title: `${s.label}: ${s.ms.toFixed(0)}ms${budgetNote}`,
+    }, widthPct > 6 ? `${s.ms.toFixed(0)}ms` : "");
+    track.appendChild(bar);
+  });
+  panel.appendChild(track);
+
+  const legend = el("div", { class: "legend" });
+  legend.appendChild(el("span", { class: "ok" }, "within budget"));
+  legend.appendChild(el("span", { class: "warn" }, "approaching"));
+  legend.appendChild(el("span", { class: "over" }, "over budget"));
+  legend.appendChild(el("span", { class: "gap" }, "not measured"));
+  legend.appendChild(el("span", { class: "dominant" }, "dominant"));
+  panel.appendChild(legend);
+  return panel;
+}
+
 function renderTimelineView() {
   const root = $("#timeline-view");
   clear(root);
@@ -1295,6 +1467,9 @@ function renderTimelineView() {
     }, "▶ Audio"));
     header.appendChild(actions);
     turnNode.appendChild(header);
+
+    const critical = renderCriticalPath(turn);
+    if (critical) turnNode.appendChild(critical);
 
     if (turn.spans.length === 0) {
       turnNode.appendChild(el("div", { class: "empty" }, "No stage spans recorded."));

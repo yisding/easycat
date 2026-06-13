@@ -88,10 +88,15 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `easycat bundles list`,
   `easycat bundles show <path>`,
   `easycat inspect <path>`,
-  `easycat replay <path>`, and
+  `easycat replay <path>`,
+  `easycat latency <path>`, and
   `easycat bundles export <path>`.
+  `easycat latency <path>` rolls the critical-path milestone deltas up across a
+  bundle's turns and reports `count`/`p50`/`p90`/`p95`/`p99` per segment; see
+  [latency](latency.md).
   Add `--json` (`easycat bundles list --json`, `easycat bundles show <path> --json`,
   `easycat inspect <path> --json`, `easycat replay <path> --json`,
+  `easycat latency <path> --json`,
   `easycat bundles export <path> --output DIR --json`) for a
   parseable summary. Add `--issues` to `easycat bundles show <path>` /
   `easycat inspect <path>` to render a severity-ranked rollup of detected

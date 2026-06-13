@@ -43,8 +43,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from easycat.debug._issues import build_issues as _build_issues
-from easycat.debug._turn_timeline import build_timeline as _build_timeline
+from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
+from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.runtime.costs import (
@@ -889,7 +890,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         return web.json_response({"turns": _summarise_turns(source.records())})
 
     async def timeline(_request: Any) -> Any:
-        return web.json_response({"timeline": _build_timeline(source.records())})
+        # ``turn_waterfall`` carries the same stage spans as ``build_timeline``
+        # (so the existing SPA span rendering is unaffected) plus the per-turn
+        # ``milestones`` the critical-path panel needs.
+        return web.json_response({"timeline": _turn_waterfall(source.records())})
 
     async def transcript(_request: Any) -> Any:
         return web.json_response({"transcripts": _build_transcript(source.records())})

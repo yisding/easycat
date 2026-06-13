@@ -22,6 +22,13 @@ events below. Three surfaces render them:
   per-stage `spans` (`stage`, `offset_ms`, `duration_ms`, `record_count`),
   and `milestones` deltas. The human (no `--json`) output renders the same
   waterfall as a `Per-turn latency` table.
+- **CLI percentiles** — `easycat latency PATH` rolls the milestone deltas
+  up across all turns and reports `count`/`p50`/`p90`/`p95`/`p99` for the
+  five critical-path segments (`vad->stt`, `stt->req`, `req->token`,
+  `token->tts`, `vad->tts`). It reuses the same percentile math as
+  `easycat validate latency`, so use it when one bundle has enough turns to
+  ask "what is my p95 time-to-first-token?" without a full validation run.
+  `easycat latency PATH --json` emits `{turns, percentiles}`.
 - **Debugger UI** — `serve_bundle(...)` / `serve_session(...)` render the
   interactive waterfall (`uv sync --extra debugger --group dev` from this
   repo). The CLI and the UI share one implementation
