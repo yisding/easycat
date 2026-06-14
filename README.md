@@ -177,6 +177,12 @@ easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat inspect PATH --json # emit machine-readable bundle/journal summary
 easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat replay PATH --json # emit machine-readable replay summary
+easycat latency PATH      # summarise critical-path latency percentiles for a bundle
+easycat diff PATH_A PATH_B # diff two bundles turn-by-turn for milestone and cost regressions
+easycat journal grep PATH --query TEXT # full-text search a journal or bundle (redacted)
+easycat journal follow PATH # live-tail a journal as it grows (redacted)
+easycat journal promote PATH --turn ID # save one turn as a replayable regression bundle
+easycat tail PATH         # live-tail a SQLite journal as it grows
 easycat validate quick       # run deterministic local validation
 easycat validate quick --json # emit quick validation in the standard envelope
 easycat validate contracts   # run offline provider/protocol contract validation

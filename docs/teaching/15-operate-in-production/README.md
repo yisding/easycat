@@ -427,12 +427,16 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
-    explain     Look up errors and CLI schema topics
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
+    latency     Summarise critical-path latency percentiles for a bundle
+    diff        Diff two bundles turn-by-turn for milestone and cost regressions
+    journal     Search and tail captured journals and crash dumps
+    tail        Live-tail a SQLite journal as it grows
+    explain     Route a call problem by symptom, or look up an error code
 
   Validation
     validate    Run validation checks and inspect validation reports
@@ -509,6 +513,19 @@ Run easycat explain json-schema for CLI JSON.
   journal from the shell. It defaults to artifact fidelity and denies live
   tool side effects unless you choose `--tool-policy stub` or
   `--tool-policy allow`.
+- **`uv run easycat latency <path>`** — summarise critical-path latency
+  percentiles (p50/p95/p99) for a bundle or SQLite journal, splitting the
+  pipeline dispatch wait from the model's first-token time so you can tell a
+  slow pipeline from a slow model.
+- **`uv run easycat diff <path-a> <path-b>`** — diff two bundles turn by turn,
+  surfacing milestone, transcript, and cost deltas so you can see which segment
+  regressed between a baseline ("before") and a comparison ("after") run.
+- **`uv run easycat journal grep <path>`** / **`uv run easycat journal follow
+  <path>`** / **`uv run easycat journal promote <path>`** — full-text search a
+  journal or bundle, live-tail one as it grows, or promote a single turn into a
+  replayable, self-contained regression bundle. Every emitted line is redacted.
+- **`uv run easycat tail <path>`** — live-tail a SQLite journal as it grows; a
+  short alias for `uv run easycat journal follow <path>`.
 - **`uv run easycat validate quick`** — deterministic local validation
   for normal PR work. `uv run easycat validate quick --json` emits the
   current quick validation run inside the
