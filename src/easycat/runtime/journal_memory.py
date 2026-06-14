@@ -110,6 +110,9 @@ class InMemoryRingBuffer:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
         with self._lock:
             out = list(self._buf)
@@ -117,6 +120,12 @@ class InMemoryRingBuffer:
             out = [r for r in out if r.kind == kind]
         if session_id is not None:
             out = [r for r in out if r.session_id == session_id]
+        if turn_id is not None:
+            out = [r for r in out if r.turn_id == turn_id]
+        if name is not None:
+            out = [r for r in out if r.name == name]
+        if tags:
+            out = [r for r in out if tags <= r.tags]
         return out
 
     def close(self) -> None:

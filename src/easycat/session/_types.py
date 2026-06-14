@@ -163,6 +163,13 @@ class SessionConfig:
     enable_echo_cancellation: bool = False
     enable_vad: bool = True
     auto_turn_from_stt_final: bool = False
+    # Strictly opt-in: journal the bot's far-end AEC reference frame (one
+    # artifact + journal row per captured frame) when AEC is enabled, so the
+    # debugger can align all three AEC tracks. Off by default because it adds
+    # ~50 writes/sec/session of fsync + journal pressure to the live audio
+    # loop; the router rate-limits captures to roughly one frame per second.
+    # The ``EASYCAT_CAPTURE_AEC_REFERENCE`` env var overrides this at runtime.
+    capture_aec_reference: bool = False
     strip_markdown: bool = False
     output_processors: Sequence[LLMOutputProcessor] = ()
 

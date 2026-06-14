@@ -93,7 +93,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
     ),
     "explain": _CommandText(
         help="Look up errors and CLI schema topics.",
-        journey="Look up errors and CLI schema topics",
+        journey="Route a call problem by symptom, or look up an error code",
     ),
     "bundles": _CommandText(
         help="Inspect captured debug bundles and crash dumps.",
@@ -111,6 +111,22 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Replay a debug bundle or SQLite journal.",
         journey="Replay a debug bundle or SQLite journal",
     ),
+    "latency": _CommandText(
+        help="Summarise critical-path latency percentiles for a bundle.",
+        journey="Summarise critical-path latency percentiles for a bundle",
+    ),
+    "diff": _CommandText(
+        help="Diff two bundles turn-by-turn: milestone, transcript, and cost deltas.",
+        journey="Diff two bundles turn-by-turn for milestone and cost regressions",
+    ),
+    "journal": _CommandText(
+        help="Search and tail captured journals and crash dumps.",
+        journey="Search and tail captured journals and crash dumps",
+    ),
+    "tail": _CommandText(
+        help="Live-tail a SQLite journal as it grows.",
+        journey="Live-tail a SQLite journal as it grows",
+    ),
     "validate": _CommandText(
         help="Run validation checks and inspect validation reports.",
         journey="Run validation checks and inspect validation reports",
@@ -122,8 +138,21 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
-    ("Debug with the journal", ("bundles", "debugger", "inspect", "replay")),
+    ("Scaffold", ("console", "init", "doctor", "serve")),
+    (
+        "Debug with the journal",
+        (
+            "bundles",
+            "debugger",
+            "inspect",
+            "replay",
+            "latency",
+            "diff",
+            "journal",
+            "tail",
+            "explain",
+        ),
+    ),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
 )
@@ -603,6 +632,13 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat inspect PATH --json",
             "easycat replay PATH",
             "easycat replay PATH --json",
+            "easycat latency PATH",
+            "easycat latency PATH --json",
+            "easycat diff PATH PATH",
+            "easycat journal grep PATH --query TEXT",
+            "easycat journal follow PATH",
+            "easycat journal promote PATH TURN_ID --out FILE",
+            "easycat tail PATH",
             "easycat bundles export PATH",
             "easycat bundles export PATH --output DIR --json",
             "uv sync --extra debugger --group dev",
@@ -621,6 +657,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat docs --audience operators",
             "easycat bundles show PATH --json",
             "easycat inspect PATH --json",
+            "easycat latency PATH",
+            "easycat latency PATH --json",
             "uv run easycat validate latency --smoke",
         ),
     },
@@ -686,7 +724,7 @@ _DOCS_COMMAND_NOTE = (
     "Commands already starting with uv run are repo-local and should run from the repository "
     "root. just commands are repo-local shortcuts; install just or use the raw command table "
     "in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, "
-    "and <session_id> before running."
+    "TEXT, TURN_ID, FILE, and <session_id> before running."
 )
 _DOCS_AUDIENCE_ALIAS_NOTE = (
     "Multi-word audiences also accept hyphens or underscores, such as app-builders. "
@@ -898,7 +936,11 @@ def _register_commands() -> None:
     from easycat.cli.debug.bundles import (
         bundles_app,
         debugger_app,
+        diff_command,
+        follow_journal,
         inspect_bundle,
+        journal_app,
+        latency_command,
         replay_bundle,
     )
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
@@ -915,8 +957,12 @@ def _register_commands() -> None:
     app.command(name="explain", help=_COMMAND_TEXT["explain"].help)(explain_cmd)
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)
     app.command(name="replay", help=_COMMAND_TEXT["replay"].help)(replay_bundle)
+    app.command(name="latency", help=_COMMAND_TEXT["latency"].help)(latency_command)
+    app.command(name="diff", help=_COMMAND_TEXT["diff"].help)(diff_command)
+    app.command(name="tail", help=_COMMAND_TEXT["tail"].help)(follow_journal)
     app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
     app.add_typer(debugger_app, name="debugger", help=_COMMAND_TEXT["debugger"].help)
+    app.add_typer(journal_app, name="journal", help=_COMMAND_TEXT["journal"].help)
     app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
     _COMMANDS_REGISTERED = True
 

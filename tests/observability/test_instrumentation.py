@@ -166,7 +166,37 @@ def test_metric_definitions_match_validation_reference() -> None:
         "easycat.queue.dropped.total": "counter",
         "easycat.event_loop.lag": "histogram",
         "easycat.journal.degraded": "observable_gauge",
+        "easycat.interruption.total": "counter",
+        "easycat.interruption.cutoff_latency": "histogram",
     }
+
+
+@pytest.mark.asyncio
+async def test_interruption_emits_counter_with_surface_attribute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.events import EventBus, Interruption
+    from easycat.runtime import InMemoryRingBuffer
+    from easycat.session._journal_sink import SessionJournalSink
+
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    bus = EventBus()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=InMemoryRingBuffer(),
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    # turn_id must NOT leak onto the metric — it is a forbidden attribute key.
+    await bus.emit(Interruption(session_id="event-session", turn_id="t1"))
+
+    assert meter.counters["easycat.interruption.total"].adds == [(1, {"easycat.surface": "vad"})]
 
 
 @pytest.mark.asyncio

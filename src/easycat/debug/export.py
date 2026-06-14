@@ -18,9 +18,12 @@ from typing import Any
 
 from easycat.debug.bundle import (
     FORMAT_VERSION,
+    ArtifactEntry,
     BundleExists,
+    CommittableCheckpoint,
     DebugCaptureDisabledError,
     Manifest,
+    RunBundle,
 )
 
 
@@ -122,6 +125,77 @@ def export_debug_bundle(
         if tmp_name and Path(tmp_name).exists():
             Path(tmp_name).unlink()
         raise
+
+
+def slice_bundle_by_turn(bundle: RunBundle, turn_id: str) -> RunBundle:
+    """Return a new, self-contained :class:`RunBundle` for a single turn.
+
+    Keeps only the records whose ``turn_id`` equals *turn_id*, collects the
+    artifact blobs those records reference via ``input_ref`` / ``output_ref``
+    (so the slice replays at ARTIFACT fidelity without the rest of the
+    session), and filters :attr:`RunBundle.replay_entry_points` down to the
+    sliced sequence set.  The manifest is reused verbatim — provider
+    versions and config snapshot describe the whole run, which is exactly
+    what a regression replay wants to assert against.
+
+    Raises :class:`ValueError` when no record carries the target turn so
+    callers can map an empty slice onto an explicit error.
+    """
+    sliced_records = bundle.filter_by_turn(turn_id)
+    if not sliced_records:
+        raise ValueError(f"No journal records found for turn {turn_id!r}")
+
+    referenced_refs: set[str] = set()
+    sliced_sequences: set[int] = set()
+    for record in sliced_records:
+        seq = record.get("sequence")
+        if isinstance(seq, int):
+            sliced_sequences.add(seq)
+        for ref_key in ("input_ref", "output_ref"):
+            ref = record.get(ref_key)
+            if isinstance(ref, str) and ref:
+                referenced_refs.add(ref)
+
+    artifact_index: dict[str, ArtifactEntry] = {}
+    artifact_blobs: dict[str, bytes] = {}
+    for ref in referenced_refs:
+        blob = bundle.artifact_blobs.get(ref)
+        if blob is None:
+            continue
+        artifact_blobs[ref] = blob
+        artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(blob))
+
+    journal_ndjson = "\n".join(
+        json.dumps(record, default=str) for record in sliced_records
+    ).encode("utf-8")
+
+    entry_points: list[CommittableCheckpoint] = [
+        cp for cp in bundle.replay_entry_points if cp.sequence in sliced_sequences
+    ]
+
+    return RunBundle(
+        format_version=bundle.format_version,
+        manifest=bundle.manifest,
+        journal_ndjson=journal_ndjson,
+        artifact_index=artifact_index,
+        artifact_blobs=artifact_blobs,
+        replay_entry_points=entry_points,
+        sharing_banner=bundle.manifest.sharing_banner or bundle.sharing_banner,
+    )
+
+
+def export_turn_bundle(source: RunBundle, turn_id: str, path: str | Path) -> None:
+    """Write a single-turn, self-contained bundle ZIP to *path*.
+
+    Shared by the debugger's ``POST /api/export?turn=`` route and the
+    ``easycat journal promote`` CLI: both need a portable slice of one turn
+    that replays on its own.  ``source`` is the full :class:`RunBundle`;
+    the slice is built by :func:`slice_bundle_by_turn` and written via
+    :meth:`RunBundle.save`, so the output round-trips through
+    :meth:`RunBundle.load`.
+    """
+    sliced = slice_bundle_by_turn(source, turn_id)
+    sliced.save(path)
 
 
 def _record_to_dict(record: Any) -> dict[str, Any]:

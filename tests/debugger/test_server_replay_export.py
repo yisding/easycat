@@ -80,6 +80,78 @@ async def test_export_endpoint_returns_zip_for_live_session():
         await session.stop()
 
 
+async def test_export_turn_returns_single_turn_slice(tmp_path):
+    """``POST /api/export?turn=<id>`` returns a ZIP whose journal has only
+    that turn — the SPA "Save as test case" flow."""
+    import io
+    import zipfile
+
+    from easycat.debugger import server as srv
+
+    session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("slice-me")
+    # Resolve the turn id the session recorded.
+    turn_ids = sorted({r.turn_id for r in session.journal.read() if getattr(r, "turn_id", None)})
+    assert turn_ids, "session should have recorded at least one turn"
+    turn_id = turn_ids[0]
+
+    source = _session_source(session)
+    source._export_turn_fn = lambda tid: srv._turn_bundle_zip_from_session(session, tid)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(f"/api/export?turn={turn_id}", headers=_SAFE_HEADERS)
+            assert resp.status == 200
+            body = await resp.read()
+            assert body[:2] == b"PK"
+            with zipfile.ZipFile(io.BytesIO(body)) as zf:
+                journal = zf.read("journal.ndjson").decode("utf-8")
+            import json as _json
+
+            turns = {_json.loads(line)["turn_id"] for line in journal.splitlines() if line.strip()}
+            assert turns == {turn_id}
+    finally:
+        await session.stop()
+
+
+async def test_export_turn_unknown_turn_returns_404(tmp_path):
+    from easycat.debugger import server as srv
+
+    session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("hi")
+    source = _session_source(session)
+    source._export_turn_fn = lambda tid: srv._turn_bundle_zip_from_session(session, tid)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post("/api/export?turn=turn-does-not-exist", headers=_SAFE_HEADERS)
+            assert resp.status == 404
+    finally:
+        await session.stop()
+
+
+async def test_export_turn_invalid_turn_id_returns_400(tmp_path):
+    session = create_text_session(agent=_DeterministicAgent(), debug="full", wrap_agent=False)
+    await session.send_text("hi")
+    source = _session_source(session)
+    from easycat.debugger import server as srv
+
+    source._export_turn_fn = lambda tid: srv._turn_bundle_zip_from_session(session, tid)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post("/api/export?turn=" + "x" * 200, headers=_SAFE_HEADERS)
+            assert resp.status == 400
+    finally:
+        await session.stop()
+
+
 async def test_export_rejected_for_bundle_source(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)

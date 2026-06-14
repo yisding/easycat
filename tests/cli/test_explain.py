@@ -289,8 +289,120 @@ def test_explain_list_includes_concept_topics(cli: CliRunner) -> None:
     result = cli.invoke(app, ["explain", "--list"])
 
     assert result.exit_code == 0
-    for slug in ("events", "turn-taking", "journal"):
+    for slug in ("events", "turn-taking", "barge-in", "journal", "troubleshooting"):
         assert slug in result.stdout
+
+
+def test_explain_troubleshooting_routes_every_symptom(cli: CliRunner) -> None:
+    """The symptom-first router lists all five symptoms + routed commands."""
+    result = cli.invoke(app, ["explain", "troubleshooting"])
+    assert result.exit_code == 0, result.stderr
+    stdout = result.stdout
+    for symptom in ("didnt-hear-me", "cut-me-off", "too-slow", "said-wrong", "crashed"):
+        assert symptom in stdout, symptom
+    # Each symptom routes to a concrete command.
+    for command in (
+        "easycat inspect PATH",
+        "easycat explain barge-in",
+        "easycat latency PATH",
+        "easycat bundles show PATH",
+        "easycat replay PATH --turn",
+        "easycat journal promote",
+    ):
+        assert command in stdout, command
+    # And to a doc/topic.
+    for route in (
+        "docs/latency.md",
+        "docs/teaching/09-interruption/",
+        "docs/testing-and-evals.md",
+        "docs/observability.md",
+    ):
+        assert route in stdout, route
+
+
+def _troubleshooting_commands() -> list[list[str]]:
+    """Extract every ``easycat …`` command referenced by the router body.
+
+    Pulls the command fragments out of the ``Run:``/``Read:``/``Topic:`` lines
+    (and any indented continuation lines), cutting at the first inline note
+    (``(`` or backtick) so only the runnable token sequence remains.  Returns
+    each as an arg list with the ``easycat`` prog name dropped, ready to feed
+    a :class:`CliRunner` with ``--help`` appended.
+    """
+    body = META_ENTRIES["troubleshooting"].body
+    commands: list[list[str]] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith(("Run:", "Read:", "Topic:", "easycat"))):
+            continue
+        for match in re.finditer(r"easycat [^(`\n]*", line):
+            fragment = match.group(0).strip()
+            args = fragment.split()[1:]  # drop the ``easycat`` prog name
+            if args:
+                commands.append(args)
+    return commands
+
+
+def test_explain_troubleshooting_commands_parse(cli: CliRunner) -> None:
+    """Every command the router suggests must parse against the real CLI.
+
+    Substring assertions cannot tell a real flag from a bogus one, so this
+    executes each suggested command with ``--help`` appended.  Typer/Click
+    short-circuits on ``--help`` with exit 0 only when every preceding option
+    is real — an unknown flag (the original ``easycat inspect PATH --errors``)
+    fails parsing with exit 2, so this catches a hallucinated flag.
+    """
+    commands = _troubleshooting_commands()
+    # Sanity-guard the extractor itself: the body must yield the routed
+    # commands, including the corrected crashed/promote routes.
+    assert ["inspect", "PATH", "--issues"] in commands
+    assert ["journal", "grep", "PATH", "--query", ".", "--regex", "--errors"] in commands
+    assert ["journal", "promote", "PATH", "TURN_ID", "--out", "regression.zip"] in commands
+
+    for args in commands:
+        result = cli.invoke(app, [*args, "--help"])
+        assert result.exit_code == 0, f"{' '.join(args)} failed to parse: {result.output}"
+
+
+def test_explain_troubleshooting_commands_parse_catches_bogus_flag(cli: CliRunner) -> None:
+    """Guard the guard: a hallucinated flag must fail the executable check.
+
+    This pins the failure mode the executable test relies on — an unknown
+    option like ``--errors`` on ``easycat inspect`` (which has only ``--issues``
+    and ``--json``) is rejected by Click before ``--help`` is honoured.
+    """
+    result = cli.invoke(app, ["inspect", "PATH", "--json", "--errors", "--help"])
+    assert result.exit_code == 2
+
+
+def test_explain_troubleshooting_json_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "troubleshooting", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "explain"
+    assert payload["status"] == "ok"
+    assert payload["slug"] == "troubleshooting"
+    for symptom in ("didnt-hear-me", "cut-me-off", "too-slow", "said-wrong", "crashed"):
+        assert symptom in payload["body"], symptom
+
+
+def test_explain_barge_in_cross_links_turn_taking(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "barge-in"])
+    assert result.exit_code == 0, result.stderr
+    stdout = result.stdout
+    assert "interruption" in stdout.lower()
+    assert "easycat explain turn-taking" in stdout
+    assert "docs/teaching/09-interruption/" in stdout
+
+
+def test_explain_barge_in_json_envelope(cli: CliRunner) -> None:
+    result = cli.invoke(app, ["explain", "barge-in", "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "explain"
+    assert payload["status"] == "ok"
+    assert payload["slug"] == "barge-in"
+    assert "turn-taking" in payload["body"]
 
 
 def test_explain_meta_init_schema(cli: CliRunner) -> None:

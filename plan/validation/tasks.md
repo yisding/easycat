@@ -424,8 +424,8 @@ Dependencies:
 Current verified state:
 
 - `src/easycat/cli/_app.py` registers top-level `console`, `init`, `doctor`,
-  `serve`, `docs`, `explain`, `debugger`, `inspect`, `replay`, plus the
-  `bundles` and `validate` groups.
+  `serve`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`, `tail`,
+  plus the `bundles`, `debugger`, `journal`, and `validate` groups.
 - The bare `easycat` journey menu includes `Scaffold`,
   `Debug with the journal`, `Validation`, and `Docs and guidance`; the
   `Validation` section points at `easycat validate`.
@@ -1692,10 +1692,12 @@ Current verified state:
   metrics `easycat.turns.total`, `easycat.audio.bytes.total`,
   `easycat.audio.frames.total`, `easycat.provider.errors.total`,
   `easycat.session.errors.total`, `easycat.transport.disconnects.total`,
-  `easycat.validation.failures.total`, and `easycat.queue.dropped.total`; and
-  observable gauges `easycat.sessions.active`, `easycat.queue.depth`, and
-  `easycat.journal.degraded`. The stored kind values are `histogram`,
-  `counter`, and `observable_gauge`.
+  `easycat.validation.failures.total`, `easycat.queue.dropped.total`, and
+  `easycat.interruption.total`; and observable gauges
+  `easycat.sessions.active`, `easycat.queue.depth`, and
+  `easycat.journal.degraded`. The barge-in cutoff histogram
+  `easycat.interruption.cutoff_latency` is defined for OTel consumers. The
+  stored kind values are `histogram`, `counter`, and `observable_gauge`.
 - `record_histogram(...)`, `increment_counter(...)`, and `observe_gauge(...)`
   route through `_record_metric(...)`, which enforces each metric kind and
   sanitizes attributes against `LOW_CARDINALITY_ATTRIBUTE_KEYS`.
@@ -1704,11 +1706,13 @@ Current verified state:
   queue drops, event-loop lag, journal append latency, and journal degraded
   state.
 - The current source tree defines but does not yet emit
-  `easycat.transport.disconnects.total` or `easycat.validation.failures.total`.
+  `easycat.transport.disconnects.total`, `easycat.validation.failures.total`, or
+  `easycat.interruption.cutoff_latency` (the barge-in cutoff histogram is
+  computed offline by the issues engine, not emitted at the sink).
 - Metric wiring is present in `src/easycat/_bounded_queue.py`,
   `src/easycat/session/_session.py`, `src/easycat/session/_turn_runner.py`,
-  `src/easycat/session/_audio_router.py`, `src/easycat/runtime/journal_memory.py`,
-  `src/easycat/runtime/journal_sql.py`,
+  `src/easycat/session/_audio_router.py`, `src/easycat/session/_journal_sink.py`,
+  `src/easycat/runtime/journal_memory.py`, `src/easycat/runtime/journal_sql.py`,
   and the stage modules under `src/easycat/stages/`.
 - `tests/observability/test_instrumentation.py` and
   `tests/observability/test_attributes.py` verify metric definitions, fake meter

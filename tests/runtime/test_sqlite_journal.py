@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import textwrap
+import time
 from unittest import mock
 
 import pytest
@@ -239,6 +240,48 @@ class TestSqliteJournalBasics:
         )
         rec = journal.read()[0]
         assert rec.tags == frozenset({"a", "b"})
+
+    def test_slice_by_tags_exact_not_substring(self, journal):
+        # SQL tag filtering must match whole tags, not substrings, so it agrees
+        # with the in-memory backend's ``requested <= record.tags`` contract.
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="hit",
+            session_id="test-session",
+            tags=frozenset({"stt"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="miss",
+            session_id="test-session",
+            tags=frozenset({"not_stt"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="multi",
+            session_id="test-session",
+            tags=frozenset({"stt", "vad"}),
+        )
+        # ``stt`` matches the exact-tag records, never the ``not_stt`` substring.
+        assert {r.name for r in journal.slice(tags=frozenset({"stt"}))} == {"hit", "multi"}
+        # Subset semantics: ``stt+vad`` only matches the record carrying both.
+        assert [r.name for r in journal.slice(tags=frozenset({"stt", "vad"}))] == ["multi"]
+
+    def test_slice_by_tags_escapes_like_wildcards(self, journal):
+        # ``_`` / ``%`` in a requested tag are literal, not SQL LIKE wildcards.
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="literal",
+            session_id="test-session",
+            tags=frozenset({"a_b"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="anychar",
+            session_id="test-session",
+            tags=frozenset({"axb"}),
+        )
+        assert [r.name for r in journal.slice(tags=frozenset({"a_b"}))] == ["literal"]
 
     def test_timing_populated(self, journal):
         journal.append(
@@ -478,6 +521,61 @@ class TestCrashRecovery:
 
         crash_dump = tmp_path / "crash-dumps" / "sess.sqlite"
         assert crash_dump.exists()
+
+    def test_open_sweeps_orphaned_foreign_crash(self, tmp_path):
+        # A *different* session id whose owning process is gone is promoted
+        # to crash-dumps/ the next time any SqliteJournal opens — the same-id
+        # recovery path never fires for an orphaned id.
+        j1 = SqliteJournal("ghost", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="ghost")
+        # Mark its liveness PID dead, then crash (no close()).
+        j1._conn.execute("COMMIT")
+        j1._conn.execute(
+            "INSERT OR REPLACE INTO session_state (key, value) VALUES ('live_pid', '1')"
+        )
+        # PID 1 (init) is alive but not signalable -> reads as alive; force a
+        # genuinely-dead marker via os.kill probing instead by deleting it so
+        # the read-only path treats the file as crashed (no live_pid).
+        j1._conn.execute("DELETE FROM session_state WHERE key = 'live_pid'")
+        j1._conn.commit()
+        j1._conn.close()
+        j1._closed = True
+
+        j2 = SqliteJournal("fresh", data_dir=tmp_path)
+        try:
+            assert (tmp_path / "crash-dumps" / "ghost.sqlite").exists()
+            assert not (tmp_path / "journals" / "ghost.sqlite").exists()
+        finally:
+            j2.close()
+
+    def test_clean_close_clears_live_pid_marker(self, tmp_path):
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        j.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
+        # While open, the liveness marker is present.
+        live = j._conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        assert live is not None and live[0] not in (None, "")
+        j.close()
+
+        # After a clean close the marker is gone so the file never reads live.
+        conn = sqlite3.connect(f"file:{tmp_path / 'journals' / 'sess.sqlite'}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM session_state WHERE key = 'live_pid'").fetchone()
+        finally:
+            conn.close()
+        assert row is None
+
+    def test_open_does_not_sweep_a_live_sibling(self, tmp_path):
+        # A concurrently-open live journal (its PID is this test process,
+        # alive) must NOT be swept when another session opens.
+        live = SqliteJournal("alive", data_dir=tmp_path)
+        live.append(kind=JournalRecordKind.EVENT, name="ev", session_id="alive")
+        other = SqliteJournal("other", data_dir=tmp_path)
+        try:
+            assert (tmp_path / "journals" / "alive.sqlite").exists()
+            assert not (tmp_path / "crash-dumps" / "alive.sqlite").exists()
+        finally:
+            other.close()
+            live.close()
 
     def test_sqlite_journal_files_are_private_under_permissive_umask(self, tmp_path):
         old_umask = os.umask(0o022)
@@ -826,11 +924,22 @@ class TestRetention:
             os.umask(old_umask)
 
     def test_retention_max_bytes_archives_and_cleans_sidecars_and_artifacts(self, tmp_path):
-        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
-        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+        # Use recent, ordered mtimes: the close-triggered internal retention
+        # now runs an on-by-default 14-day age window, so seeding 1970 epoch
+        # mtimes would let one journal prune the other before this call.
+        now = time.time()
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=now - 2)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=now - 1)
         max_bytes = self._retained_size(old) + self._retained_size(new) - 1
 
-        removed = run_retention(tmp_path, max_sessions=10, max_bytes=max_bytes, mode="archive")
+        # Disable the age window so this exercises only the byte cap.
+        removed = run_retention(
+            tmp_path,
+            max_sessions=10,
+            max_bytes=max_bytes,
+            max_age_days=10**9,
+            mode="archive",
+        )
 
         assert removed == 1
         for path in (old["db"], old["wal"], old["shm"], old["artifact_dir"]):
@@ -855,10 +964,12 @@ class TestRetention:
         assert len(remaining) == 1
 
     def test_retention_delete_mode_cleans_sidecars_and_artifacts(self, tmp_path):
-        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=1)
-        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=2)
+        now = time.time()
+        old = self._make_session_with_sidecars_and_artifact(tmp_path, "old-sess", mtime=now - 2)
+        new = self._make_session_with_sidecars_and_artifact(tmp_path, "new-sess", mtime=now - 1)
 
-        removed = run_retention(tmp_path, max_sessions=1, mode="delete")
+        # Disable the age window so this exercises only the count cap.
+        removed = run_retention(tmp_path, max_sessions=1, max_age_days=10**9, mode="delete")
 
         assert removed == 1
         assert not (tmp_path / "archive").exists()
@@ -1075,8 +1186,6 @@ class TestLitestreamSqliteJournal:
         j.flush()
 
         # Give litestream a moment to replicate, then close.
-        import time
-
         time.sleep(2)
         j.close()
 

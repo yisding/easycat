@@ -219,11 +219,15 @@ def test_create_session_endpoint_threshold_overrides_smart_turn(
 ):
     """An explicit manager endpoint_threshold wins and warns when it diverges."""
     _stub_audio_backends(monkeypatch)
+    # debug="off" keeps this caplog assertion focused on the threshold warning:
+    # the now-default debug="full" spins up the journal/warmup/debugger path,
+    # whose logging setup detaches caplog's handler before the warning lands.
     config = EasyConfig(
         openai_api_key="test-key",
         turn_taking=TurnManagerConfig(endpoint_threshold=0.8),
         smart_turn=SmartTurnConfig(enabled=True, threshold=0.5),
         agent=_DummyAgent(),
+        debug="off",
     )
 
     with caplog.at_level(logging.WARNING, logger="easycat.config"):

@@ -10,16 +10,21 @@ Routes:
 
 - ``GET  /``                          — static HTML page
 - ``GET  /api/manifest``              — bundle/session metadata
-- ``GET  /api/records``               — journal records (filterable)
+- ``GET  /api/records``               — journal records (filterable; ``?q=`` text, ``&regex=1``)
 - ``GET  /api/turns``                 — per-turn rollup with stage counts
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
 - ``GET  /api/cost``                  — cost rollup and budget status
-- ``GET  /api/issues``                — deterministic debugging issue hints
+- ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
-- ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn
+- ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
+- ``GET  /api/audio/waveform/<turn>`` — greyscale waveform PNG (``?track=tts|mic&w=&h=``)
+- ``GET  /api/aec/<turn>``            — AEC diagnostics (ERLE / double-talk / self-echo / tracks)
+- ``POST /api/aec/<turn>/vad-whatif`` — re-run VAD at an alternate threshold (bundle only)
 - ``POST /api/replay``                — run replay against the source
-- ``POST /api/export``                — export the source as a bundle ZIP
+- ``POST /api/export``                — export the source as a bundle ZIP (``?turn=`` slices one)
+- ``POST /api/annotate``              — persist a per-turn verdict sidecar (bundle only)
+- ``GET  /api/annotations``           — read the per-turn verdict sidecar map (bundle only)
 - ``GET  /ws``                        — WebSocket push for live updates
 """
 
@@ -31,6 +36,7 @@ import io
 import json
 import logging
 import re
+import socket
 import struct
 import threading
 import wave
@@ -42,16 +48,52 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from easycat.debug._turn_timeline import build_timeline as _build_timeline
+from easycat.debug._issues import build_issues as _build_issues
+from easycat.debug._pcm import full_scale as _full_scale
+from easycat.debug._pcm import is_supported_width as _is_supported_width
+from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
+from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
+from easycat.debug._turn_timeline import turn_cost_rollup as _turn_cost_rollup
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
+from easycat.debug.annotations import (
+    Annotation,
+    AnnotationError,
+    load_annotations,
+    save_annotation,
+)
 from easycat.debug.bundle import RunBundle
+from easycat.debugger._aec import (
+    align_tracks as _align_aec_tracks,
+)
+from easycat.debugger._aec import (
+    compute_erle as _compute_erle,
+)
+from easycat.debugger._aec import (
+    detect_double_talk as _detect_double_talk,
+)
+from easycat.debugger._aec import (
+    detect_self_echo as _detect_self_echo,
+)
+from easycat.debugger._aec import (
+    frame_rms_series as _frame_rms_series,
+)
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
+from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 from easycat.runtime.costs import (
     cost_budget_status,
-    finite_number,
     max_session_cost_usd_from_snapshot,
 )
+from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
+
+# ``audioop`` was removed from the stdlib in Python 3.13.  Mic-track audio
+# stitching uses it for best-effort resample/downmix, but the debugger must
+# import cleanly without it — when absent we skip format-mismatched frames
+# rather than coercing them.
+try:
+    import audioop as _audioop
+except ImportError:  # pragma: no cover - exercised on 3.13+
+    _audioop = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +107,36 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 # bundles run a few thousand records, and a per-frame `data` dict is
 # small. UI surfaces `frames_truncated` + `total_frames` when this fires.
 _REPLAY_FRAME_LIMIT = 5000
+
+# Hard cap on records scanned by full-text search (``/api/records?q=`` and
+# ``easycat journal grep``) so a pathological journal can't pin the event
+# loop / CLI on a single request. Past this many records the scan stops and
+# callers see ``scan_truncated`` so the cap is visible rather than silent.
+_SEARCH_SCAN_LIMIT = 50000
+
+# Upper bound on the search query string. The debugger binds loopback-only and
+# the query comes from the developer searching their own journal (no privilege
+# boundary), but bounding the length is cheap defense-in-depth that keeps a
+# pathological user-supplied regex from compiling into a huge automaton.
+_SEARCH_MAX_QUERY_LEN = 500
+
+# Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
+# batch.  A burst can advance the sequence by thousands in one poll; capping
+# the slice keeps each frame small and lets the cursor catch up over a few
+# polls rather than serializing a megabyte at once.
+_WS_RECORD_BATCH_CAP = 200
+
+# Audio-track selectors for ``/api/audio/concat`` and ``/api/audio/waveform``.
+# ``tts`` stitches the bot's synthesized output (``tts_frame``/``output_ref``);
+# ``mic`` stitches the caller's captured input (the STT stage's
+# ``stage_start``/``input_ref``); ``reference`` stitches the AEC far-end
+# reference (the bot playback fed to the echo canceller, journaled as
+# ``aec_reference_frame``/``output_ref``) so the AEC view can draw it as the
+# third aligned waveform strip alongside mic-in and post-AEC.
+_AUDIO_TRACK_TTS = "tts"
+_AUDIO_TRACK_MIC = "mic"
+_AUDIO_TRACK_REFERENCE = "reference"
+_VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
 
 
 def _safe_ref(ref: str) -> str:
@@ -83,16 +155,6 @@ def _safe_turn_id(turn_id: str) -> str:
     if not _TURN_ID_OK.match(turn_id):
         raise ValueError(f"invalid turn_id: {turn_id!r}")
     return turn_id
-
-
-def _safe_record_turn_id(record: dict[str, Any]) -> str | None:
-    turn_id = record.get("turn_id")
-    if not isinstance(turn_id, str) or not turn_id:
-        return None
-    try:
-        return _safe_turn_id(turn_id)
-    except ValueError:
-        return None
 
 
 # ── Source adaptation ────────────────────────────────────────────
@@ -119,10 +181,44 @@ class DebuggerSource:
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
+    # Bounded tail fetch used by the live WS loop: returns up to ``cap`` records
+    # with ``sequence > after_seq`` *without* materializing the whole journal.
+    # Live sources push this filter down to the journal's bounded
+    # ``read(start=..., limit=...)``; when absent, ``records_since`` falls back to
+    # slicing the (immutable, in-memory) ``records()`` list — correct for bundle
+    # and static sources where the full list is already cached.
+    _records_since_fn: Any | None = field(default=None, repr=False)
+    # On-disk bundle path used to read/write the annotation sidecar.  Set only
+    # for bundle sources and never surfaced in ``manifest()`` — the browser
+    # learns it can annotate via the ``supports_annotate`` flag, never the path.
+    _annotate_path: Path | None = field(default=None, repr=False)
     is_live: bool = False
 
     def records(self) -> list[dict[str, Any]]:
         return list(self._records_fn())
+
+    def records_since(self, after_seq: int, cap: int) -> list[dict[str, Any]]:
+        """Return up to *cap* records with ``sequence > after_seq`` (ascending).
+
+        Live sources push the bound down to the journal's
+        ``read(start=after_seq + 1, limit=cap)`` so an idle/caught-up WS tick
+        never re-reads or re-serializes the whole journal.  Sources without a
+        bounded fetch (bundles, static in-memory lists) fall back to slicing the
+        already-cached ``records()`` list — cheap because that list is immutable
+        and never re-decoded.
+        """
+        if cap <= 0:
+            return []
+        if self._records_since_fn is not None:
+            return list(self._records_since_fn(after_seq, cap))
+        out: list[dict[str, Any]] = []
+        for r in self.records():
+            seq = r.get("sequence")
+            if isinstance(seq, int) and seq > after_seq:
+                out.append(r)
+                if len(out) >= cap:
+                    break
+        return out
 
     def progress(self) -> tuple[int, int]:
         """Cheap ``(latest_sequence, record_count)`` without serializing.
@@ -211,8 +307,15 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _run_bundle_source(bundle: RunBundle, *, label: str) -> DebuggerSource:
-    """Build an immutable bundle-backed source from an already loaded bundle."""
+def _run_bundle_source(
+    bundle: RunBundle, *, label: str, annotate_path: Path | None = None
+) -> DebuggerSource:
+    """Build an immutable bundle-backed source from an already loaded bundle.
+
+    ``annotate_path`` is the real on-disk bundle path used for the reviewer
+    annotation sidecar; pass ``None`` for path-less bundles (e.g. a journal
+    loaded in-memory), which disables the annotation controls.
+    """
     cached_records = list(bundle.records())
 
     def _replay(**kwargs: Any) -> Any:
@@ -271,6 +374,11 @@ def _run_bundle_source(bundle: RunBundle, *, label: str) -> DebuggerSource:
             "artifact_count": len(bundle.artifact_blobs),
             "supports_replay": True,
             "supports_export": False,
+            # Bundles are read-only, so reviewer verdicts land in a sidecar
+            # next to the bundle rather than the journal.  The SPA shows the
+            # per-turn annotation controls only when we have a real on-disk
+            # path to write that sidecar to.
+            "supports_annotate": annotate_path is not None,
             "is_live": False,
             "replay_entry_points": [
                 {
@@ -284,6 +392,9 @@ def _run_bundle_source(bundle: RunBundle, *, label: str) -> DebuggerSource:
         },
         _bundle_fn=lambda: bundle,
         _replay_fn=_replay,
+        # Real on-disk path for the annotation sidecar; kept off the manifest
+        # so it never leaks into the browser.
+        _annotate_path=annotate_path,
         is_live=False,
     )
 
@@ -296,7 +407,11 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
     same list without re-decoding NDJSON, which matters when the UI
     polls and bundles run into the tens of thousands of records.
     """
-    return _run_bundle_source(RunBundle.load(bundle_path), label=Path(str(bundle_path)).name)
+    return _run_bundle_source(
+        RunBundle.load(bundle_path),
+        label=Path(str(bundle_path)).name,
+        annotate_path=Path(str(bundle_path)),
+    )
 
 
 def _session_source(session: Any) -> DebuggerSource:
@@ -312,6 +427,16 @@ def _session_source(session: Any) -> DebuggerSource:
         if journal is None:
             return []
         return [_record_to_dict(r) for r in journal.read()]
+
+    def _records_since(after_seq: int, cap: int) -> list[dict[str, Any]]:
+        # Push the tail bound down to the journal: ``read(start=after_seq + 1,
+        # limit=cap)`` returns only records with ``sequence > after_seq`` (the
+        # backend filters/limits in SQL or on the ring buffer), so a live WS
+        # tick serializes at most ``cap`` records instead of the whole journal.
+        journal = getattr(session, "journal", None)
+        if journal is None:
+            return []
+        return [_record_to_dict(r) for r in journal.read(start=after_seq + 1, limit=cap)]
 
     def _progress() -> tuple[int, int]:
         # O(1) growth probe: the backend keeps ``latest_sequence`` as an
@@ -344,6 +469,9 @@ def _session_source(session: Any) -> DebuggerSource:
             "turn_state": str(getattr(session, "turn_state", "")),
             "supports_replay": False,
             "supports_export": True,
+            # Live sessions don't carry a stable on-disk bundle to sidecar
+            # against; verdicts are recorded after capture, on a bundle.
+            "supports_annotate": False,
             "is_live": True,
             "replay_entry_points": [],
         }
@@ -352,6 +480,7 @@ def _session_source(session: Any) -> DebuggerSource:
         label=f"session-{getattr(session, 'session_id', 'unknown')}",
         _records_fn=_records,
         _progress_fn=_progress,
+        _records_since_fn=_records_since,
         _artifact_fn=_artifact,
         _manifest_fn=_manifest,
         _bundle_fn=None,
@@ -517,243 +646,139 @@ def _filter_and_paginate(
     return full, total
 
 
+def _record_searchable_text(record: dict[str, Any]) -> str:
+    """Build the haystack a full-text query is matched against.
+
+    Combines the serialized ``data`` payload, the error type/message/notes,
+    and the indexed ``name``/``turn_id`` so a query like ``timeout`` or a
+    phone number embedded in a tool argument is found regardless of where it
+    lives in the record.
+    """
+    parts: list[str] = []
+    name = record.get("name")
+    if name:
+        parts.append(str(name))
+    turn_id = record.get("turn_id")
+    if turn_id:
+        parts.append(str(turn_id))
+    data = record.get("data")
+    if data is not None:
+        try:
+            parts.append(json.dumps(data, default=str))
+        except (TypeError, ValueError):
+            parts.append(str(data))
+    error = record.get("error")
+    if isinstance(error, dict):
+        for key in ("type", "message", "traceback", "notes"):
+            value = error.get(key)
+            if value:
+                parts.append(str(value))
+    return "\n".join(parts)
+
+
+def _record_match_fields(record: dict[str, Any], needle: Any, *, is_regex: bool) -> list[str]:
+    """Return the named fields of *record* whose text matches *needle*.
+
+    *needle* is a lowercased substring (when ``is_regex`` is false) or a
+    compiled :class:`re.Pattern` (when true).  Used to render match badges in
+    the SPA and to scope redaction in the CLI grep output.
+    """
+
+    def _hit(text: str) -> bool:
+        if not text:
+            return False
+        if is_regex:
+            return needle.search(text) is not None
+        return needle in text.lower()
+
+    fields: list[str] = []
+    if _hit(str(record.get("name") or "")):
+        fields.append("name")
+    if _hit(str(record.get("turn_id") or "")):
+        fields.append("turn_id")
+    data = record.get("data")
+    if data is not None:
+        try:
+            data_text = json.dumps(data, default=str)
+        except (TypeError, ValueError):
+            data_text = str(data)
+        if _hit(data_text):
+            fields.append("data")
+    error = record.get("error")
+    if isinstance(error, dict) and any(
+        _hit(str(error.get(key) or "")) for key in ("type", "message", "traceback", "notes")
+    ):
+        fields.append("error")
+    return fields
+
+
+def _search_records(
+    records: list[dict[str, Any]],
+    *,
+    query: str,
+    use_regex: bool = False,
+    errors_only: bool = False,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Full-text filter *records* against *query*, returning ``(matches, truncated)``.
+
+    The haystack per record is :func:`_record_searchable_text` (serialized
+    ``data`` + error fields + ``name``/``turn_id``).  Matching is a
+    case-insensitive substring by default; when *use_regex* is true *query* is
+    compiled with :data:`re.IGNORECASE` and a bad pattern raises
+    :class:`ValueError` (mapped to a 400 / CLI error by callers).
+
+    Matched records are returned as **shallow copies** carrying a
+    ``_match_fields`` list — the cached ``source.records()`` dicts are never
+    mutated.  The scan stops after :data:`_SEARCH_SCAN_LIMIT` records and the
+    second tuple element reports whether that cap was hit.
+    """
+    if len(query) > _SEARCH_MAX_QUERY_LEN:
+        raise ValueError("search query too long")
+    needle: Any
+    if use_regex:
+        try:
+            needle = re.compile(query, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError("invalid regex") from exc
+    else:
+        needle = query.lower()
+        if not needle:
+            # An empty query matches nothing rather than everything — an empty
+            # search box should not silently return the entire journal.
+            return [], False
+
+    matches: list[dict[str, Any]] = []
+    truncated = False
+    for index, record in enumerate(records):
+        if index >= _SEARCH_SCAN_LIMIT:
+            truncated = True
+            break
+        if errors_only and not record.get("error"):
+            continue
+        haystack = _record_searchable_text(record)
+        if use_regex:
+            if needle.search(haystack) is None:
+                continue
+        elif needle not in haystack.lower():
+            continue
+        fields = _record_match_fields(record, needle, is_regex=use_regex)
+        # Copy before annotating so the cached source records stay pristine.
+        copied = dict(record)
+        copied["_match_fields"] = fields
+        matches.append(copied)
+    return matches, truncated
+
+
 def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pull user transcripts and agent responses out of the journal.
 
     The UI renders this alongside the waterfall so a developer can read
-    the conversation without opening every record.  Sources:
-    - User text: ``stt_final`` event records (``data.text``).
-    - Agent reply: AgentStage ``stage_complete`` records
-      (``data.response``) for the basic path; concatenated agent_delta
-      records for the streaming path.
+    the conversation without opening every record.  The pure projection
+    lives in :func:`easycat.debug._turn_timeline.extract_turn_transcripts`
+    so the two-source ``easycat diff`` shares one implementation; this thin
+    wrapper keeps the historical name the SPA routes call.
     """
-    by_turn: dict[str, dict[str, Any]] = {}
-    for r in records:
-        turn_id = _safe_record_turn_id(r)
-        if turn_id is None:
-            continue
-        bucket = by_turn.setdefault(
-            turn_id,
-            {
-                "turn_id": turn_id,
-                "user": "",
-                "agent": "",
-                "user_seq": None,
-                "agent_seq": None,
-                "agent_delta": [],
-                "agent_delta_seq": None,
-            },
-        )
-        name = r.get("name") or ""
-        data = r.get("data") or {}
-        seq = r.get("sequence")
-        if not isinstance(data, dict):
-            continue
-        if name == "stt_final":
-            txt = data.get("text") or data.get("transcript")
-            if isinstance(txt, str) and txt:
-                bucket["user"] = txt
-                bucket["user_seq"] = seq
-        elif name == "stage_complete" and (
-            data.get("stage") == "agent" or data.get("observed_stage") == "agent"
-        ):
-            resp = data.get("response")
-            if isinstance(resp, str) and resp:
-                bucket["agent"] = resp
-                bucket["agent_seq"] = seq
-        elif name == "agent_delta":
-            txt = data.get("text")
-            if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
-                bucket["agent_delta"].append(txt)
-                if bucket["agent_delta_seq"] is None:
-                    bucket["agent_delta_seq"] = seq
-        elif name == "agent_final":
-            txt = data.get("text")
-            if isinstance(txt, str) and txt and not bucket["agent"]:
-                bucket["agent"] = txt
-                bucket["agent_seq"] = seq
-
-    transcripts = []
-    for turn_id, bucket in by_turn.items():
-        if not bucket["agent"] and bucket["agent_delta"]:
-            bucket["agent"] = "".join(bucket["agent_delta"])
-            if bucket["agent_seq"] is None:
-                bucket["agent_seq"] = bucket["agent_delta_seq"]
-        bucket.pop("agent_delta", None)
-        bucket.pop("agent_delta_seq", None)
-        transcripts.append(bucket)
-    return transcripts
-
-
-def _issue(
-    *,
-    code: str,
-    severity: str,
-    title: str,
-    detail: str,
-    turn_id: str | None = None,
-    sequence: int | None = None,
-    stage: str | None = None,
-    metric: str | None = None,
-    value: float | int | str | None = None,
-    threshold: float | int | None = None,
-) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "code": code,
-        "severity": severity,
-        "title": title,
-        "detail": detail,
-    }
-    if turn_id:
-        out["turn_id"] = turn_id
-    if sequence is not None:
-        out["sequence"] = sequence
-    if stage:
-        out["stage"] = stage
-    if metric:
-        out["metric"] = metric
-    if value is not None:
-        out["value"] = value
-    if threshold is not None:
-        out["threshold"] = threshold
-    return out
-
-
-def _build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Surface deterministic call-debugging hints from journal records.
-
-    This is intentionally heuristic and local: it turns the raw journal into
-    first-pass triage cards without sending transcripts or prompts to a model.
-    The UI links every issue back to a sequence/turn so developers can jump
-    into the forensic timeline and raw record inspector.
-    """
-    issues: list[dict[str, Any]] = []
-    severity_rank = {"info": 0, "warning": 1, "error": 2}
-
-    for record in records:
-        seq = record.get("sequence")
-        turn_id = record.get("turn_id")
-        data = record.get("data") or {}
-        data = data if isinstance(data, dict) else {}
-        stage = data.get("stage") or data.get("observed_stage")
-        if record.get("error"):
-            err = record.get("error") or {}
-            msg = err.get("message") if isinstance(err, dict) else None
-            issues.append(
-                _issue(
-                    code="record_error",
-                    severity="error",
-                    title="Journal record captured an error",
-                    detail=str(msg or "Open the record inspector for the captured exception."),
-                    turn_id=str(turn_id) if turn_id else None,
-                    sequence=int(seq) if isinstance(seq, int) else None,
-                    stage=str(stage) if stage else None,
-                )
-            )
-        name = str(record.get("name") or "")
-        if name in {"tool_call_failed", "tool_error", "tool_call_error"}:
-            issues.append(
-                _issue(
-                    code="tool_failure",
-                    severity="error",
-                    title="Tool call failed",
-                    detail="Inspect the tool payload and result/error in the raw record.",
-                    turn_id=str(turn_id) if turn_id else None,
-                    sequence=int(seq) if isinstance(seq, int) else None,
-                    stage="agent",
-                )
-            )
-        if name in {"timeout", "stage_timeout", "provider_timeout"}:
-            issues.append(
-                _issue(
-                    code="timeout",
-                    severity="error",
-                    title="Timeout recorded",
-                    detail="A stage/provider timeout likely interrupted the turn.",
-                    turn_id=str(turn_id) if turn_id else None,
-                    sequence=int(seq) if isinstance(seq, int) else None,
-                    stage=str(stage) if stage else None,
-                )
-            )
-        if name == "stt_final":
-            text = data.get("text")
-            if text is None:
-                text = data.get("transcript")
-            if isinstance(text, str) and not text.strip():
-                issues.append(
-                    _issue(
-                        code="empty_stt_final",
-                        severity="warning",
-                        title="Empty STT final",
-                        detail=(
-                            "Speech ended but ASR committed an empty transcript; "
-                            "check VAD/ASR thresholds and audio quality."
-                        ),
-                        turn_id=str(turn_id) if turn_id else None,
-                        sequence=int(seq) if isinstance(seq, int) else None,
-                        stage="stt",
-                    )
-                )
-
-    for turn in _turn_waterfall(records):
-        turn_id = str(turn.get("turn_id") or "")
-        wall_ms = turn.get("wall_ms")
-        if isinstance(wall_ms, int | float) and wall_ms > 10_000:
-            issues.append(
-                _issue(
-                    code="slow_turn",
-                    severity="warning",
-                    title="Slow conversational turn",
-                    detail=(
-                        "End-to-end turn wall time exceeded 10 seconds; "
-                        "inspect the waterfall for the slowest stage."
-                    ),
-                    turn_id=turn_id,
-                    metric="wall_ms",
-                    value=round(float(wall_ms), 1),
-                    threshold=10_000,
-                )
-            )
-        milestones = turn.get("milestones") or {}
-        if isinstance(milestones, dict):
-            checks = (
-                ("vad_endpoint_to_stt_final_ms", 1500, "stt", "ASR finalization lag"),
-                ("stt_final_to_agent_first_token_ms", 2500, "agent", "Agent first-token lag"),
-                ("agent_first_token_to_tts_first_byte_ms", 1500, "tts", "TTS first-byte lag"),
-            )
-            for metric, threshold, stage, title in checks:
-                value = milestones.get(metric)
-                if isinstance(value, int | float) and value > threshold:
-                    issues.append(
-                        _issue(
-                            code=f"slow_{stage}",
-                            severity="warning",
-                            title=title,
-                            detail=(
-                                f"{title} exceeded {threshold:.0f} ms; "
-                                "inspect provider latency and queueing."
-                            ),
-                            turn_id=turn_id,
-                            stage=stage,
-                            metric=metric,
-                            value=round(float(value), 1),
-                            threshold=threshold,
-                        )
-                    )
-
-    issues.sort(
-        key=lambda item: (
-            -severity_rank.get(str(item.get("severity")), 0),
-            item.get("turn_id") or "",
-            item.get("sequence") or 0,
-            item.get("code") or "",
-        )
-    )
-    summary = {"error": 0, "warning": 0, "info": 0}
-    for item in issues:
-        sev = str(item.get("severity") or "info")
-        summary[sev] = summary.get(sev, 0) + 1
-    return {"issues": issues, "summary": summary, "total": len(issues)}
+    return _extract_turn_transcripts(records)
 
 
 def _cost_rollup(
@@ -766,26 +791,11 @@ def _cost_rollup(
     Cost records are owned by the peripheral observability/cost plan so
     they may not exist in any given bundle.  The endpoint returns a
     well-formed shape with zeroes rather than 404'ing so the UI can
-    always render the panel.
+    always render the panel.  The per-turn / total aggregation is the shared
+    :func:`easycat.debug._turn_timeline.turn_cost_rollup`; only the budget
+    evaluation (which needs the config snapshot) stays here.
     """
-    by_turn: dict[str, dict[str, float]] = {}
-    totals: dict[str, float] = {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
-    for r in records:
-        if r.get("name") not in ("cost", "cost_record"):
-            continue
-        data = r.get("data") or {}
-        if not isinstance(data, dict):
-            continue
-        turn_id = _safe_record_turn_id(r) or ""
-        bucket = by_turn.setdefault(
-            turn_id, {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
-        )
-        for key in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            value = finite_number(data.get(key))
-            if value is None:
-                continue
-            bucket[key] += value
-            totals[key] += value
+    by_turn, totals = _turn_cost_rollup(records)
     budget = cost_budget_status(
         totals["usd"],
         max_session_cost_usd_from_snapshot(config_snapshot),
@@ -793,32 +803,116 @@ def _cost_rollup(
     return {"per_turn": by_turn, "totals": totals, "budget": budget}
 
 
-def _collect_tts_frames(
-    source: DebuggerSource, turn_id: str
-) -> tuple[list[bytes], dict[str, int]]:
-    """Return ``(pcm_blobs_in_order, format)`` for one turn's TTS frames.
+def _coerce_frames_to_format(
+    frames: list[tuple[int, bytes, dict[str, Any]]],
+    fmt: dict[str, int],
+    *,
+    strict: bool,
+) -> tuple[list[bytes], int]:
+    """Reconcile *frames* to a single PCM *format*, returning ``(blobs, dropped)``.
 
-    Streaming concat reads this and writes the WAV header up-front,
-    then pushes each PCM blob to the response without buffering the
-    entire stream in memory.
+    Every frame whose ``sample_rate``/``channels``/``sample_width`` already
+    matches *fmt* passes through untouched.  For a mismatch:
 
-    Raises ``ValueError`` if frames have inconsistent PCM formats —
-    never silently splices different sample rates together.
+    - ``strict=True`` (TTS) raises :class:`ValueError` — the bot's own output
+      should never splice across formats, and the route maps this to a 409.
+    - ``strict=False`` (mic) makes a best-effort conversion with stdlib
+      :mod:`audioop` (resample / downmix) when ``sample_width`` matches, and
+      otherwise *skips* the blob (incrementing the dropped counter) so a noisy
+      caller capture never aborts the whole turn.  When :mod:`audioop` is
+      unavailable (Python 3.13+) any mismatch is skipped.
     """
+    blobs: list[bytes] = []
+    dropped = 0
+    target_rate = fmt["sample_rate"]
+    target_channels = fmt["channels"]
+    target_width = fmt["sample_width"]
+    for _seq, blob, data in frames:
+        rate = int(data.get("sample_rate") or 0)
+        channels = int(data.get("channels") or 0)
+        width = int(data.get("sample_width") or 0)
+        if rate == target_rate and channels == target_channels and width == target_width:
+            blobs.append(blob)
+            continue
+        if strict:
+            raise ValueError(
+                "tts_frame format mismatch: cannot stitch frames with differing "
+                "sample_rate/channels/sample_width"
+            )
+        # Non-strict (mic): convert when the sample widths line up and audioop
+        # is present; otherwise drop the blob rather than corrupt the stream.
+        if _audioop is None or width != target_width or width <= 0:
+            dropped += 1
+            continue
+        try:
+            converted = blob
+            if channels == 2 and target_channels == 1:
+                converted = _audioop.tomono(converted, width, 0.5, 0.5)
+            elif channels != target_channels:
+                dropped += 1
+                continue
+            if rate > 0 and rate != target_rate:
+                converted, _ = _audioop.ratecv(
+                    converted, width, target_channels, rate, target_rate, None
+                )
+        except Exception:
+            # audioop rejects malformed PCM lengths; never abort the turn.
+            dropped += 1
+            continue
+        blobs.append(converted)
+    return blobs, dropped
+
+
+def _collect_audio_frames(
+    source: DebuggerSource, turn_id: str, *, track: str
+) -> tuple[list[bytes], dict[str, int]]:
+    """Return ``(pcm_blobs_in_order, format)`` for one turn's audio frames.
+
+    ``track == "tts"`` stitches the bot's synthesized output: ``tts_frame``
+    records carrying an ``output_ref`` artifact, ordered by sequence, and the
+    format is reconciled *strictly* (a mismatch raises :class:`ValueError`).
+
+    ``track == "mic"`` stitches the caller's captured input: the STT stage's
+    ``stage_start`` records (``data.stage == "stt"``) carrying an
+    ``input_ref`` artifact, ordered by sequence.  The format is reconciled
+    *leniently* — mismatched blobs are best-effort converted or skipped so a
+    ragged caller capture never aborts the response.
+
+    ``track == "reference"`` stitches the AEC far-end reference: the bot
+    playback fed to the echo canceller, journaled as ``aec_reference_frame``
+    records carrying an ``output_ref`` artifact, ordered by sequence.  It is
+    reconciled *leniently* (like ``mic``) so a ragged reference capture never
+    aborts the AEC waveform strip.
+
+    Streaming concat reads this and writes the WAV header up-front, then
+    pushes each PCM blob to the response without buffering the whole stream in
+    memory.
+    """
+    is_tts = track == _AUDIO_TRACK_TTS
+    is_reference = track == _AUDIO_TRACK_REFERENCE
     frames: list[tuple[int, bytes, dict[str, Any]]] = []
     for r in source.records():
-        if r.get("name") != "tts_frame":
-            continue
         if r.get("turn_id") != turn_id:
             continue
-        ref = r.get("output_ref")
+        data = r.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        if is_tts:
+            if r.get("name") != "tts_frame":
+                continue
+            ref = r.get("output_ref")
+        elif is_reference:
+            if r.get("name") != AEC_REFERENCE_FRAME_NAME:
+                continue
+            ref = r.get("output_ref")
+        else:
+            if r.get("name") != "stage_start" or data.get("stage") != "stt":
+                continue
+            ref = r.get("input_ref")
         if not ref:
             continue
         blob = source.artifact(ref)
         if blob is None:
-            continue
-        data = r.get("data") or {}
-        if not isinstance(data, dict):
             continue
         frames.append((int(r.get("sequence") or 0), blob, data))
 
@@ -832,17 +926,277 @@ def _collect_tts_frames(
         "channels": int(fmt0.get("channels") or 1),
         "sample_width": int(fmt0.get("sample_width") or 2),
     }
-    for _seq, _blob, data in frames[1:]:
-        if (
-            int(data.get("sample_rate") or 0) != fmt["sample_rate"]
-            or int(data.get("channels") or 0) != fmt["channels"]
-            or int(data.get("sample_width") or 0) != fmt["sample_width"]
-        ):
-            raise ValueError(
-                f"tts_frame format mismatch in turn {turn_id}: cannot stitch "
-                "frames with differing sample_rate/channels/sample_width"
-            )
-    return [blob for _seq, blob, _data in frames], fmt
+    blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
+    return blobs, fmt
+
+
+def _collect_tts_frames(
+    source: DebuggerSource, turn_id: str
+) -> tuple[list[bytes], dict[str, int]]:
+    """Return ``(pcm_blobs_in_order, format)`` for one turn's TTS frames.
+
+    Thin back-compat wrapper over :func:`_collect_audio_frames` with the
+    strict TTS track; raises ``ValueError`` on inconsistent PCM formats.
+    """
+    return _collect_audio_frames(source, turn_id, track=_AUDIO_TRACK_TTS)
+
+
+def _collect_concat_pcm(
+    source: DebuggerSource, turn_id: str, *, track: str
+) -> tuple[bytes, dict[str, int]]:
+    """Return one turn's audio as a single ``(raw_pcm, format)`` blob.
+
+    Reuses :func:`_collect_audio_frames` and joins the per-frame blobs so
+    the waveform endpoint can decode peaks without rebuilding a WAV.  The
+    TTS track raises ``ValueError`` on inconsistent PCM formats; the mic and
+    reference tracks are lenient (mismatched frames are dropped upstream).
+    """
+    frames, fmt = _collect_audio_frames(source, turn_id, track=track)
+    return b"".join(frames), fmt
+
+
+# ── AEC diagnostics ──────────────────────────────────────────────
+
+# Default decode geometry used when the journal frames carry no explicit
+# PCM format fields (debugger-internal fixtures, malformed captures).
+_AEC_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+_AEC_FRAME_MS = 20
+
+
+def _aec_track_format(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Read the PCM geometry from the first aligned frame (defaulted)."""
+    fmt = dict(_AEC_DEFAULT_FMT)
+    if entries:
+        data = entries[0].get("data") or {}
+        if isinstance(data, dict):
+            for key in ("sample_rate", "channels", "sample_width"):
+                value = data.get(key)
+                if isinstance(value, int) and value > 0:
+                    fmt[key] = value
+    return fmt
+
+
+def _aec_interruption_frames(
+    records: list[dict[str, Any]],
+    turn_id: str,
+    post_aec: list[dict[str, Any]],
+    *,
+    frame_ms: int,
+) -> list[int]:
+    """Map this turn's interruption records onto post-AEC frame indices.
+
+    Each ``assistant_interruption_notified`` (or a ``turn_state_changed``
+    transition *into* ``user_speaking`` while the bot was speaking) is placed at
+    the frame whose monotonic timestamp it most closely follows, so self-echo
+    detection can tell a true barge-in from the bot hearing itself.
+    """
+    if not post_aec:
+        return []
+    base_ns = post_aec[0]["mono_ns"]
+    frame_span_ns = max(1, frame_ms) * 1_000_000
+    total_frames = 0
+    for entry in post_aec:
+        total_frames += max(
+            1,
+            len(
+                _frame_rms_series(
+                    entry["pcm"],
+                    frame_ms=frame_ms,
+                )
+            ),
+        )
+    frames: list[int] = []
+    for record in records:
+        if record.get("turn_id") != turn_id:
+            continue
+        name = record.get("name")
+        if name == "assistant_interruption_notified":
+            pass
+        elif name == "turn_state_changed":
+            data = record.get("data") or {}
+            if not (isinstance(data, dict) and data.get("to") == "user_speaking"):
+                continue
+        else:
+            continue
+        timing = record.get("timing")
+        mono_ns = timing.get("mono_ns") if isinstance(timing, dict) else None
+        if not isinstance(mono_ns, int):
+            continue
+        frame = max(0, (mono_ns - base_ns) // frame_span_ns)
+        frames.append(min(int(frame), max(0, total_frames - 1)))
+    return frames
+
+
+def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str, Any]:
+    """Build the AEC diagnostics payload for one turn.
+
+    Aligns mic-in / reference / post-AEC tracks on ``timing.mono_ns`` and
+    derives ERLE, double-talk bands, and self-echo hits.  Degrades gracefully:
+    a turn with no captured reference returns ``has_reference: False`` and empty
+    diagnostics rather than raising.
+    """
+    records = source.records()
+    tracks = _align_aec_tracks(records, source=source, turn_id=turn_id)
+    mic_in = tracks["mic_in"]
+    reference = tracks["reference"]
+    post_aec = tracks["post_aec"]
+    has_reference = bool(reference)
+
+    fmt = _aec_track_format(post_aec or mic_in)
+    # 8-bit mu-law (sample_width == 1) can't be linearly decoded for the energy
+    # math below; surface a clear unsupported result rather than mis-decoded
+    # garbage ERLE/self-echo numbers.
+    if not _is_supported_width(fmt["sample_width"]):
+        return {
+            "turn_id": turn_id,
+            "has_reference": has_reference,
+            "unsupported": True,
+            "reason": (
+                "unsupported audio format for AEC diagnostics: "
+                f"sample_width={fmt['sample_width']} "
+                "(8-bit/mu-law telephony audio is not decodable here)"
+            ),
+            "format": fmt,
+            "tracks": {
+                "mic_in": {"frame_count": len(mic_in)},
+                "reference": {"frame_count": len(reference)},
+                "post_aec": {"frame_count": len(post_aec)},
+            },
+        }
+    frame_ms = _AEC_FRAME_MS
+    mic_pcm = b"".join(entry["pcm"] for entry in mic_in)
+    ref_pcm = b"".join(entry["pcm"] for entry in reference)
+    post_pcm = b"".join(entry["pcm"] for entry in post_aec)
+
+    erle = _compute_erle(
+        mic_pcm,
+        post_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    mic_rms = _frame_rms_series(
+        mic_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    ref_rms = _frame_rms_series(
+        ref_pcm,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    double_talk = _detect_double_talk(ref_rms, mic_rms)
+    interruption_frames = _aec_interruption_frames(records, turn_id, post_aec, frame_ms=frame_ms)
+    self_echo = _detect_self_echo(
+        post_pcm,
+        interruption_frames,
+        sample_width=fmt["sample_width"],
+        channels=fmt["channels"],
+        sample_rate=fmt["sample_rate"],
+        frame_ms=frame_ms,
+    )
+    return {
+        "turn_id": turn_id,
+        "has_reference": has_reference,
+        "frame_ms": frame_ms,
+        "format": fmt,
+        "erle": erle,
+        "double_talk": double_talk,
+        "self_echo": self_echo,
+        "interruption_frames": interruption_frames,
+        "tracks": {
+            "mic_in": {"frame_count": len(mic_in), "byte_count": len(mic_pcm)},
+            "reference": {"frame_count": len(reference), "byte_count": len(ref_pcm)},
+            "post_aec": {"frame_count": len(post_aec), "byte_count": len(post_pcm)},
+        },
+    }
+
+
+def _vad_baseline_start_count(records: list[dict[str, Any]], turn_id: str) -> int:
+    """Count the ``VADStartSpeaking`` events the live VAD emitted for a turn.
+
+    Reads the recorded VAD ``stage_complete`` event descriptors so the what-if
+    delta compares against what actually happened, not a re-run of the live
+    threshold.
+    """
+    count = 0
+    for record in records:
+        if record.get("turn_id") != turn_id or record.get("name") != "stage_complete":
+            continue
+        data = record.get("data") or {}
+        if not isinstance(data, dict) or data.get("stage") != "vad":
+            continue
+        for event in data.get("events") or []:
+            if isinstance(event, dict) and event.get("type") == "VADStartSpeaking":
+                count += 1
+    return count
+
+
+def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
+    """Return the turn's raw VAD ``stage_start`` input PCM blobs, in order.
+
+    These are the pre-mono mic frames captured before the VAD provider ran, so
+    the what-if re-drives a fresh provider against the same input the live run
+    saw.
+    """
+    frames: list[tuple[int, bytes]] = []
+    for record in source.records():
+        if record.get("turn_id") != turn_id or record.get("name") != "stage_start":
+            continue
+        data = record.get("data") or {}
+        if not isinstance(data, dict) or data.get("stage") != "vad":
+            continue
+        ref = record.get("input_ref")
+        if not ref:
+            continue
+        blob = source.artifact(ref)
+        if blob is None:
+            continue
+        frames.append((int(record.get("sequence") or 0), blob))
+    frames.sort(key=lambda item: item[0])
+    return [blob for _seq, blob in frames]
+
+
+async def _vad_whatif_for_turn(
+    source: DebuggerSource, turn_id: str, *, threshold: float
+) -> dict[str, Any]:
+    """Re-run VAD over a turn's captured input at an alternate sensitivity.
+
+    ``threshold`` is the alternate VAD *sensitivity* (0..1, higher = more
+    sensitive).  Returns ``{"threshold", "baseline_starts", "whatif_starts",
+    "false_trigger_delta"}``.  Raises :class:`RuntimeError` when the VAD
+    provider cannot be imported (the handler maps it to a 422 degrade).
+    """
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.events import VADStartSpeaking
+    from easycat.vad.factory import VADConfig, create_vad
+
+    records = source.records()
+    baseline = _vad_baseline_start_count(records, turn_id)
+    blobs = _vad_whatif_frames(source, turn_id)
+
+    try:
+        provider = create_vad(VADConfig(sensitivity=threshold))
+    except Exception as exc:  # noqa: BLE001 - import/availability degrade → 422
+        raise RuntimeError(f"VAD provider unavailable: {exc}") from exc
+
+    whatif_starts = 0
+    for blob in blobs:
+        chunk = AudioChunk(data=blob, format=PCM16_MONO_16K)
+        async for event in provider.process(chunk):
+            if isinstance(event, VADStartSpeaking):
+                whatif_starts += 1
+    return {
+        "threshold": threshold,
+        "baseline_starts": baseline,
+        "whatif_starts": whatif_starts,
+        "false_trigger_delta": whatif_starts - baseline,
+    }
 
 
 def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
@@ -923,6 +1277,59 @@ def _bundle_zip_from_session(session: Any) -> Path | None:
         _safe_unlink(tmp_path)
         raise
     return tmp_path
+
+
+def _turn_bundle_zip_from_session(session: Any, turn_id: str) -> Path | None:
+    """Build a single-turn slice ZIP for a live session and return its path.
+
+    Exports the full session bundle to a temp file, reloads it, and writes a
+    self-contained slice for *turn_id* via
+    :func:`easycat.debug.export.export_turn_bundle`.  Loopback-only, so no
+    redaction is applied — the slice carries raw transcripts/audio exactly
+    like the full export.  Returns ``None`` when the session has no journal
+    (debug='off'); raises :class:`ValueError` when the turn is absent so the
+    handler can map it to a 404.
+    """
+    import tempfile
+
+    from easycat.debug.export import export_turn_bundle
+
+    full_path = _bundle_zip_from_session(session)
+    if full_path is None:
+        return None
+    try:
+        bundle = RunBundle.load(full_path)
+    finally:
+        _safe_unlink(full_path)
+
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        export_turn_bundle(bundle, turn_id, tmp_path)
+    except Exception:
+        _safe_unlink(tmp_path)
+        raise
+    return tmp_path
+
+
+def _records_since(
+    source: DebuggerSource, after_seq: int, cap: int
+) -> tuple[list[dict[str, Any]], int]:
+    """Return up to *cap* records with ``sequence > after_seq``.
+
+    Used by the live WebSocket loop to push only the records that arrived
+    since the last batch.  Delegates to :meth:`DebuggerSource.records_since`,
+    which pushes the bound down to the journal for live sources (so an
+    idle/caught-up tick never re-reads or re-serializes the whole journal) and
+    slices the cached list for bundle/static sources.  Records arrive ascending
+    by sequence, so no re-sort is needed; the second return value is the new
+    high-water cursor (the last sequence actually pushed) so the caller advances
+    correctly even when the batch is capped mid-burst.
+    """
+    batch = source.records_since(after_seq, cap)
+    if not batch:
+        return [], after_seq
+    return batch, int(batch[-1]["sequence"])
 
 
 # ── HTTP API ─────────────────────────────────────────────────────
@@ -1034,21 +1441,53 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
         # without being capped by ``limit``.
         names = [n for n in params.getall("name", ()) if n]
+        query = params.get("q") or None
+        use_regex = params.get("regex") == "1"
+        errors_only = params.get("errors") == "1"
+        scan_truncated = False
         try:
-            page, total = _filter_and_paginate(
-                source.records(),
-                stage=params.get("stage") or None,
-                turn_id=params.get("turn") or None,
-                name=names or None,
-                from_seq=from_seq,
-                to_seq=to_seq,
-                errors_only=params.get("errors") == "1",
-                limit=limit,
-                offset=offset,
-            )
+            if query is None:
+                page, total = _filter_and_paginate(
+                    source.records(),
+                    stage=params.get("stage") or None,
+                    turn_id=params.get("turn") or None,
+                    name=names or None,
+                    from_seq=from_seq,
+                    to_seq=to_seq,
+                    errors_only=errors_only,
+                    limit=limit,
+                    offset=offset,
+                )
+            else:
+                # Filter first (no pagination), full-text search the subset, then
+                # paginate the matches so "X of N" reflects the search result set.
+                subset = _filter_records(
+                    source.records(),
+                    stage=params.get("stage") or None,
+                    turn_id=params.get("turn") or None,
+                    name=names or None,
+                    from_seq=from_seq,
+                    to_seq=to_seq,
+                    errors_only=errors_only,
+                    limit=None,
+                    offset=0,
+                )
+                # Offload the full-text scan to a worker thread: a regex
+                # search compiles a user-supplied pattern (q=...&regex=1) and
+                # runs re.search over up to _SEARCH_SCAN_LIMIT records, so a
+                # catastrophic-backtracking pattern must not block the event
+                # loop. The substring path is offloaded too for uniformity.
+                matched, scan_truncated = await asyncio.to_thread(
+                    _search_records, subset, query=query, use_regex=use_regex
+                )
+                total = len(matched)
+                page = matched[offset:]
+                if limit is not None:
+                    page = page[:limit]
         except ValueError as exc:
             logger.warning("Invalid records query: %s", exc)
-            return web.Response(status=400, text="invalid query parameters")
+            text = "invalid regex" if str(exc) == "invalid regex" else "invalid query parameters"
+            return web.Response(status=400, text=text)
         return web.json_response(
             {
                 "records": page,
@@ -1056,6 +1495,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 "total": total,
                 "offset": offset,
                 "limit": limit,
+                "scan_truncated": scan_truncated,
             }
         )
 
@@ -1063,7 +1503,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         return web.json_response({"turns": _summarise_turns(source.records())})
 
     async def timeline(_request: Any) -> Any:
-        return web.json_response({"timeline": _build_timeline(source.records())})
+        # ``turn_waterfall`` carries the same stage spans as ``build_timeline``
+        # (so the existing SPA span rendering is unaffected) plus the per-turn
+        # ``milestones`` the critical-path panel needs.
+        return web.json_response({"timeline": _turn_waterfall(source.records())})
 
     async def transcript(_request: Any) -> Any:
         return web.json_response({"transcripts": _build_transcript(source.records())})
@@ -1074,7 +1517,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
 
     async def issues(_request: Any) -> Any:
-        return web.json_response(_build_issues(source.records()))
+        return web.json_response(
+            _build_issues(source.records(), artifact_resolver=source.artifact)
+        )
 
     async def artifact(request: Any) -> Any:
         try:
@@ -1091,13 +1536,38 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
             return web.Response(status=400, text="invalid turn_id")
+        track = request.query.get("track", _AUDIO_TRACK_TTS)
+        if track not in _VALID_AUDIO_TRACKS:
+            return web.Response(
+                status=400,
+                text=f"invalid track; expected one of {sorted(_VALID_AUDIO_TRACKS)}",
+            )
         try:
-            frames, fmt = _collect_tts_frames(source, turn_id)
+            frames, fmt = _collect_audio_frames(source, turn_id, track=track)
         except ValueError as exc:
-            logger.warning("Cannot assemble TTS audio for %s: %s", turn_id, exc)
+            # Only the strict TTS track raises; the mic track skips mismatched
+            # blobs instead, so a 409 here always means a bot-output format
+            # clash that we refuse to silently splice.
+            logger.warning("Cannot assemble %s audio for %s: %s", track, turn_id, exc)
             return web.Response(status=409, text="cannot assemble audio for this turn")
         if not frames:
-            return web.Response(status=404, text="no tts frames for turn")
+            return web.Response(status=404, text=f"no {track} frames for turn")
+        # 8-bit mu-law telephony (sample_width == 1) can't be losslessly
+        # wrapped as linear PCM WAV here — decoding it as int8 would emit
+        # garbage.  Surface a clear unsupported result instead.
+        if not _is_supported_width(fmt.get("sample_width", 2)):
+            return web.json_response(
+                {
+                    "unsupported": True,
+                    "reason": (
+                        "unsupported audio format for concat: "
+                        f"sample_width={fmt.get('sample_width')} "
+                        "(8-bit/mu-law telephony audio is not decodable here)"
+                    ),
+                    "format": fmt,
+                },
+                status=415,
+            )
         # Stream the WAV out incrementally.  Whole-file response would
         # buffer tens of MB for long turns; StreamResponse lets aiohttp
         # backpressure the client and avoids the heap spike.
@@ -1120,6 +1590,125 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             await response.write(blob)
         await response.write_eof()
         return response
+
+    async def audio_waveform(request: Any) -> Any:
+        """Render one turn's audio as a greyscale waveform PNG.
+
+        Cheap ``<img>`` source for the Live waveform strip — the SPA Canvas
+        path decodes the WAV itself, but the Live view shares one strip per
+        turn and an ``<img>`` is far lighter than per-pixel JS.
+        """
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        track = request.query.get("track", _AUDIO_TRACK_TTS)
+        if track not in _VALID_AUDIO_TRACKS:
+            return web.Response(
+                status=400,
+                text=f"invalid track; expected one of {sorted(_VALID_AUDIO_TRACKS)}",
+            )
+
+        def _bounded(name: str, default: int, hi: int) -> int:
+            try:
+                value = int(request.query.get(name, default))
+            except (TypeError, ValueError):
+                return default
+            return max(1, min(hi, value))
+
+        width = _bounded("w", 600, 2000)
+        height = _bounded("h", 80, 400)
+        try:
+            pcm, fmt = _collect_concat_pcm(source, turn_id, track=track)
+        except ValueError as exc:
+            logger.warning("Cannot render %s waveform for %s: %s", track, turn_id, exc)
+            return web.Response(status=409, text="cannot assemble audio for this turn")
+        if not pcm:
+            return web.Response(status=404, text=f"no {track} frames for turn")
+        sample_width = int(fmt.get("sample_width", 2) or 2)
+        # 8-bit mu-law (sample_width == 1) decodes to nothing in the shared PCM
+        # decoder; rather than paint a misleading flat/garbage strip, return a
+        # clear unsupported result so the SPA can show a placeholder.
+        if not _is_supported_width(sample_width):
+            return web.json_response(
+                {
+                    "unsupported": True,
+                    "reason": (
+                        "unsupported audio format for waveform: "
+                        f"sample_width={sample_width} "
+                        "(8-bit/mu-law telephony audio is not decodable here)"
+                    ),
+                    "format": fmt,
+                },
+                status=415,
+            )
+        peaks = decode_pcm_peaks(
+            pcm,
+            sample_width=sample_width,
+            channels=fmt.get("channels", 1),
+            buckets=width,
+        )
+        png = encode_peaks_png(
+            peaks,
+            width=width,
+            height=height,
+            full_scale_value=_full_scale(sample_width),
+        )
+        return web.Response(
+            body=png,
+            content_type="image/png",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def aec_diagnostics(request: Any) -> Any:
+        """AEC diagnostics for one turn: ERLE, double-talk, self-echo, tracks.
+
+        Reads the aligned mic-in / reference / post-AEC tracks from the journal
+        and derives the echo-cancellation health metrics.  ``has_reference`` is
+        ``False`` (with empty diagnostics) when AEC was disabled or no reference
+        frames were captured, rather than 404'ing — the SPA always gets a
+        well-formed shape.
+        """
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        return web.json_response(_aec_diagnostics_for_turn(source, turn_id))
+
+    async def aec_vad_whatif(request: Any) -> Any:
+        """Re-run VAD at an alternate sensitivity over a turn's captured input.
+
+        Bundle-only (mirrors replay's ``supports_replay`` 405 for live sources):
+        the captured ``stage_start`` input refs only exist on a settled bundle.
+        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        on this POST.  A missing VAD provider degrades to 422 rather than 500.
+        """
+        if source.is_live:
+            return web.Response(status=405, text="vad-whatif is only supported for bundle sources")
+        try:
+            turn_id = _safe_turn_id(request.match_info["turn"])
+        except ValueError:
+            return web.Response(status=400, text="invalid turn_id")
+        raw = request.query.get("threshold")
+        try:
+            threshold = float(raw) if raw is not None else 0.5
+        except (TypeError, ValueError):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "threshold must be a number"},
+                status=400,
+            )
+        if not (0.0 <= threshold <= 1.0):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "threshold must be between 0 and 1"},
+                status=400,
+            )
+        try:
+            result = await _vad_whatif_for_turn(source, turn_id, threshold=threshold)
+        except RuntimeError as exc:
+            return web.json_response(
+                {"error_code": "VAD_UNAVAILABLE", "message": str(exc)}, status=422
+            )
+        return web.json_response(result)
 
     _DESTRUCTIVE_FIDELITIES = frozenset({"live"})
     _DESTRUCTIVE_TOOL_POLICIES = frozenset({"allow"})
@@ -1236,16 +1825,39 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     async def export(request: Any) -> Any:
         if not source.manifest().get("supports_export"):
             return web.Response(status=405, text="export only supported for live sessions")
-        export_fn = getattr(source, "_export_fn", None)
-        if export_fn is None:
-            return web.Response(status=503, text="no export function bound")
-        try:
-            tmp_path = export_fn()
-        except Exception:  # noqa: BLE001 - never hide export errors
-            # Detail is logged server-side; don't leak exception text to the
-            # client (CodeQL py/stack-trace-exposure).
-            logger.exception("Export failed")
-            return web.Response(status=500, text="export failed")
+        # ``?turn=<id>`` writes a single-turn replayable slice (the SPA
+        # "Save as test case" button); no turn writes the whole session.
+        raw_turn = request.query.get("turn")
+        download_name = "session.zip"
+        if raw_turn is not None:
+            try:
+                turn_id = _safe_turn_id(raw_turn)
+            except ValueError as exc:
+                return web.json_response(
+                    {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+                )
+            export_turn_fn = getattr(source, "_export_turn_fn", None)
+            if export_turn_fn is None:
+                return web.Response(status=503, text="no turn-export function bound")
+            try:
+                tmp_path = export_turn_fn(turn_id)
+            except ValueError:
+                return web.Response(status=404, text="no records for that turn")
+            except Exception:  # noqa: BLE001 - never hide export errors
+                logger.exception("Turn export failed")
+                return web.Response(status=500, text="export failed")
+            download_name = f"turn-{turn_id}.zip"
+        else:
+            export_fn = getattr(source, "_export_fn", None)
+            if export_fn is None:
+                return web.Response(status=503, text="no export function bound")
+            try:
+                tmp_path = export_fn()
+            except Exception:  # noqa: BLE001 - never hide export errors
+                # Detail is logged server-side; don't leak exception text to the
+                # client (CodeQL py/stack-trace-exposure).
+                logger.exception("Export failed")
+                return web.Response(status=500, text="export failed")
         if tmp_path is None:
             return web.Response(status=409, text="session has no journal to export")
         # FileResponse streams the bundle without loading it into memory.
@@ -1254,13 +1866,72 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             tmp_path,
             headers={
                 "Content-Type": "application/zip",
-                "Content-Disposition": "attachment; filename=session.zip",
+                "Content-Disposition": f"attachment; filename={download_name}",
             },
         )
         # Schedule cleanup once aiohttp has finished sending.
         loop = asyncio.get_running_loop()
         loop.call_later(60.0, _safe_unlink, tmp_path)
         return response
+
+    async def annotations(_request: Any) -> Any:
+        """Return the per-turn verdict sidecar map for a bundle source.
+
+        Bundle-only — live sessions carry no on-disk sidecar.  A missing or
+        corrupt sidecar yields an empty map (``load_annotations`` tolerates
+        both) so the SPA always gets a well-formed response.
+        """
+        annotate_path = source._annotate_path
+        if annotate_path is None:
+            return web.Response(status=405, text="annotations only supported for bundle sources")
+        return web.json_response({"annotations": load_annotations(annotate_path)})
+
+    async def annotate(request: Any) -> Any:
+        """Persist a per-turn pass/fail verdict into the bundle's sidecar.
+
+        Bundle-only; the journal and the bundle ZIP on disk are never
+        touched.  ``_origin_guard`` already enforces JSON content-type and a
+        present, safe Origin on this POST, so we only validate the payload.
+        """
+        annotate_path = source._annotate_path
+        if annotate_path is None:
+            return web.Response(status=405, text="annotate only supported for bundle sources")
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - malformed body → 400, never 500
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be JSON"},
+                status=400,
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be a JSON object"},
+                status=400,
+            )
+        try:
+            turn_id = _safe_turn_id(str(body.get("turn_id", "")))
+        except ValueError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        try:
+            annotation = Annotation(
+                turn_id=turn_id,
+                passed=body.get("passed"),
+                failure_type=body.get("failure_type"),
+                score=body.get("score"),
+                notes=str(body.get("notes") or ""),
+            )
+        except AnnotationError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        try:
+            record = save_annotation(annotate_path, annotation)
+        except OSError:
+            logger.exception("Annotation write failed")
+            return web.Response(status=500, text="annotation write failed")
+        return web.json_response({"turn_id": turn_id, "annotation": record})
 
     async def refresh(_request: Any) -> Any:
         return web.json_response({"snapshot_size": len(source.records())})
@@ -1272,12 +1943,16 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         """Push live updates to the UI.
 
         Sends a snapshot every poll interval (live sources) or once
-        (bundle sources).  Clients can send ``{"action": "ping"}`` to
-        keep the connection alive; we respond with ``pong``.
+        (bundle sources).  On a sequence advance it also pushes a capped,
+        only-new ``{"type": "records"}`` batch so the live-follow playhead
+        can append records without re-fetching the whole journal.  Clients
+        can send ``{"action": "ping"}`` to keep the connection alive; we
+        respond with ``pong``.
         """
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
         last_seq = -1
+        last_pushed_seq = 0
         try:
             while not ws.closed:
                 # Cheap O(1) growth probe — never re-reads or re-serializes
@@ -1294,6 +1969,26 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                             "manifest": source.manifest(),
                         }
                     )
+                # Drain new records independently of the snapshot guard: slice
+                # only the records beyond the last pushed sequence, bounded by a
+                # per-tick cap so a burst can't push a multi-megabyte frame.  A
+                # burst larger than the cap is delivered in capped slices across
+                # successive ticks — keep draining while last_pushed_seq lags
+                # latest_seq, even when latest_seq itself stops advancing, so the
+                # follow-now playhead never permanently loses the tail of a burst.
+                if latest_seq > last_pushed_seq:
+                    new_records, last_pushed_seq = _records_since(
+                        source, last_pushed_seq, _WS_RECORD_BATCH_CAP
+                    )
+                    if new_records:
+                        await ws.send_json(
+                            {
+                                "type": "records",
+                                "records": new_records,
+                                "from_seq": new_records[0].get("sequence"),
+                                "to_seq": last_pushed_seq,
+                            }
+                        )
                 if not source.is_live:
                     break
                 # Poll every 500ms for new records.  WS clients also
@@ -1324,8 +2019,13 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
+    app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
+    app.router.add_get("/api/aec/{turn}", aec_diagnostics)
+    app.router.add_post("/api/aec/{turn}/vad-whatif", aec_vad_whatif)
     app.router.add_post("/api/replay", replay)
     app.router.add_post("/api/export", export)
+    app.router.add_post("/api/annotate", annotate)
+    app.router.add_get("/api/annotations", annotations)
     app.router.add_get("/api/refresh", refresh)
     app.router.add_get("/api/health", healthcheck)
     app.router.add_get("/ws", websocket)
@@ -1397,7 +2097,15 @@ def serve_session(
     source = _session_source(session)
     # Wire up the export-bytes function so /api/export can stream a zip.
     source._export_fn = lambda: _bundle_zip_from_session(session)  # type: ignore[attr-defined]
+    # ``/api/export?turn=<id>`` slices a single replayable turn out of the
+    # live session; loopback-only, so the slice carries raw audio unredacted.
+    source._export_turn_fn = (  # type: ignore[attr-defined]
+        lambda turn_id: _turn_bundle_zip_from_session(session, turn_id)
+    )
     if not in_thread:
+        # Synchronous serve: bind happens inside ``_serve`` → ``run_app`` and a
+        # collision raises here on the calling thread already. The browser opens
+        # only after that bind succeeds (handled inside ``_serve``).
         _serve(
             source,
             host=host,
@@ -1407,13 +2115,22 @@ def serve_session(
         )
         return None
 
+    # Probe-bind on the calling thread *before* starting the daemon so a
+    # port-in-use collision surfaces synchronously to the caller instead of
+    # exploding inside the thread after we've returned. Only after the probe
+    # succeeds do we open the browser — a session whose bind fails must open
+    # no tab.
+    _probe_bind(host, port)
+
     thread = threading.Thread(
         target=_serve,
         args=(source,),
         kwargs={
             "host": host,
             "port": port,
-            "open_browser": open_browser,
+            # The probe above already confirmed the port is free and we open the
+            # browser here; the threaded serve must not open it a second time.
+            "open_browser": False,
             "allow_remote": allow_remote,
             # aiohttp's default signal handling uses ``signal.set_wakeup_fd``,
             # which only works on the main thread — installing it from a
@@ -1425,7 +2142,44 @@ def serve_session(
         name="easycat-debugger",
     )
     thread.start()
+    if open_browser:
+        _open_browser(f"http://{host}:{port}/")
     return thread
+
+
+def _probe_bind(host: str, port: int) -> None:
+    """Bind ``(host, port)`` once and release it so collisions surface here.
+
+    ``serve_session(..., in_thread=True)`` runs ``web.run_app`` on a daemon
+    thread, so a port-already-in-use ``OSError`` would otherwise fire *after*
+    ``serve_session`` has already returned — an unhandled exception in a
+    background thread that the autolaunch try/except can never catch, and a
+    browser tab that was already opened. Probing the bind synchronously before
+    the server thread starts (and before any ``webbrowser.open``) lets the
+    failure propagate to the caller. There is an inherent TOCTOU window between
+    this probe and the server's own bind, but for the loopback dev-debugger the
+    common "second concurrent session, same port" case is caught cleanly.
+
+    The probe only runs for loopback hosts and binds an explicit loopback IP —
+    never all-interfaces (``0.0.0.0``/``""``). A non-loopback bind is an
+    explicit ``allow_remote`` opt-in (already vetted by ``_check_host``); we
+    skip the pre-probe there and let ``run_app`` surface any bind error.
+    """
+    if host not in _LOOPBACK_HOSTS:
+        return
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    # Bind a concrete loopback address (not the caller's string, which static
+    # analysis cannot prove is loopback) so the probe can never bind to all
+    # interfaces; this still detects a same-port collision with another local
+    # server.
+    bind_host = "::1" if family == socket.AF_INET6 else "127.0.0.1"
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        # No SO_REUSEADDR: we want this probe to fail loudly when the port is
+        # already taken by another live server, mirroring what run_app sees.
+        probe.bind((bind_host, port))
+    finally:
+        probe.close()
 
 
 def _check_host(host: str, allow_remote: bool) -> None:
@@ -1449,6 +2203,14 @@ def _check_host(host: str, allow_remote: bool) -> None:
     )
 
 
+def _open_browser(url: str) -> None:
+    """Best-effort ``webbrowser.open`` that never raises into the caller."""
+    try:
+        webbrowser.open(url)
+    except Exception:  # pragma: no cover - depends on env
+        logger.debug("Could not open browser automatically", exc_info=True)
+
+
 def _serve(
     source: DebuggerSource,
     *,
@@ -1463,14 +2225,16 @@ def _serve(
     except ImportError as exc:  # pragma: no cover - optional dep
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
+    # Probe-bind before building the app or opening any browser tab so a port
+    # collision in the synchronous-serve path raises here (before
+    # ``webbrowser.open``) instead of popping a tab that points at a server
+    # that never came up.
+    _probe_bind(host, port)
     app = _make_app(source, allow_remote=allow_remote)
     url = f"http://{host}:{port}/"
     logger.info("EasyCat debugger UI serving on %s (source=%s)", url, source.label)
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:  # pragma: no cover - depends on env
-            logger.debug("Could not open browser automatically", exc_info=True)
+        _open_browser(url)
     web.run_app(app, host=host, port=port, print=None, handle_signals=handle_signals)
 
 

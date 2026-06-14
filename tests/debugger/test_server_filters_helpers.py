@@ -109,8 +109,12 @@ def test_build_issues_surfaces_errors_empty_stt_and_latency():
     out = _build_issues(records)
 
     codes = {issue["code"] for issue in out["issues"]}
-    assert {"record_error", "tool_failure", "empty_stt_final", "slow_turn", "slow_stt"} <= codes
-    assert out["summary"]["error"] >= 2
+    # server._build_issues is the extracted easycat.debug._issues engine, which
+    # uses unified codes (any errored record -> record_error; per-stage latency
+    # -> slow_milestone with the stage in the ``metric`` field).  Its full code
+    # surface (barge-in, audio-health, latency) is covered by tests/debug/.
+    assert {"record_error", "empty_stt_final", "slow_turn"} <= codes
+    assert out["summary"]["error"] >= 1
     assert out["summary"]["warning"] >= 2
     assert out["total"] == len(out["issues"])
 
@@ -219,6 +223,76 @@ def test_cost_rollup_treats_malformed_turn_ids_as_session_level_cost():
     assert out["per_turn"][""]["usd"] == pytest.approx(0.25)
     assert out["per_turn"][""]["tts_chars"] == pytest.approx(10)
     assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.75)
+
+
+def test_build_transcript_delegates_to_shared_helper():
+    """The server transcript projection is the shared dependency-free helper.
+
+    ``_build_transcript`` must be byte-identical to
+    ``debug/_turn_timeline.extract_turn_transcripts`` so the SPA transcript
+    panel and the two-source ``easycat diff`` agree on what each turn said.
+    """
+    import json as _json
+
+    from easycat.debug._turn_timeline import extract_turn_transcripts
+
+    records = [
+        {"sequence": 1, "name": "stt_final", "turn_id": "t1", "data": {"text": "hi there"}},
+        {
+            "sequence": 2,
+            "name": "agent_delta",
+            "turn_id": "t1",
+            "data": {"text": "hello", "type": "TEXT_DELTA"},
+        },
+        {
+            "sequence": 3,
+            "name": "agent_delta",
+            "turn_id": "t1",
+            "data": {"text": " back", "type": "TEXT_DELTA"},
+        },
+        {
+            "sequence": 4,
+            "name": "stage_complete",
+            "turn_id": "t2",
+            "data": {"stage": "agent", "response": "second answer"},
+        },
+        {"sequence": 5, "name": "stt_final", "turn_id": ["bad"], "data": {"text": "dropped"}},
+    ]
+
+    server_out = _build_transcript(records)
+    shared_out = extract_turn_transcripts(records)
+    # Byte-identical JSON serialization confirms the lift preserved the shape.
+    assert _json.dumps(server_out) == _json.dumps(shared_out)
+    assert server_out[0]["agent"] == "hello back"
+
+
+def test_cost_rollup_per_turn_and_totals_match_shared_helper():
+    """The server cost rollup's per-turn/totals halves come from the shared
+    ``turn_cost_rollup`` byte-for-byte; only the budget is layered on top."""
+    import json as _json
+
+    from easycat.debug._turn_timeline import turn_cost_rollup
+
+    records = [
+        {"sequence": 1, "name": "cost", "turn_id": "t1", "data": {"usd": 0.2, "stt_seconds": 1.5}},
+        {
+            "sequence": 2,
+            "name": "cost_record",
+            "turn_id": "t2",
+            "data": {"usd": 0.65, "tts_chars": 120, "llm_tokens": 42},
+        },
+        {"sequence": 3, "name": "cost", "turn_id": ["bad"], "data": {"usd": 0.1}},
+    ]
+
+    server_out = _cost_rollup(records)
+    by_turn, totals = turn_cost_rollup(records)
+    # The per-turn and totals halves are identical (incl. integer-zero counts).
+    assert _json.dumps(server_out["per_turn"]) == _json.dumps(by_turn)
+    assert _json.dumps(server_out["totals"]) == _json.dumps(totals)
+    # Unset counts stay integer 0, not 0.0 (historical JSON shape preserved).
+    assert server_out["per_turn"]["t1"]["tts_chars"] == 0
+    assert isinstance(server_out["per_turn"]["t1"]["tts_chars"], int)
+    assert "budget" in server_out
 
 
 def test_summarise_turns_tracks_audio_bytes():
@@ -395,15 +469,70 @@ async def test_timeline_helpers_are_shared_with_cli(tmp_path):
         assert turn["spans"] == by_turn[turn["turn_id"]]["spans"]
         assert set(turn["milestones"]) == {
             "vad_endpoint_to_stt_final_ms",
-            "stt_final_to_agent_first_token_ms",
+            "stt_final_to_agent_request_ms",
+            "agent_request_to_first_token_ms",
             "agent_first_token_to_tts_first_byte_ms",
             "vad_endpoint_to_tts_first_byte_ms",
+            "user_speech_start_to_bot_stopped_ms",
         }
     # A real voice turn reaches TTS, so at least one turn resolves the
     # full VAD endpoint → TTS first byte delta.
     assert any(
         turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None for turn in waterfall
     )
+
+
+async def test_api_timeline_carries_per_turn_milestones(tmp_path):
+    """``/api/timeline`` now serves ``turn_waterfall``: each turn keeps its
+    stage spans (so the SPA waterfall is unaffected) AND a ``milestones``
+    block the critical-path panel renders."""
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    app = _make_app(_bundle_source(bundle_path))
+
+    async with TestClient(TestServer(app)) as client:
+        body = await (await client.get("/api/timeline")).json()
+
+    assert "timeline" in body
+    assert body["timeline"], "expected at least one turn"
+    for turn in body["timeline"]:
+        assert "spans" in turn
+        assert set(turn["milestones"]) == {
+            "vad_endpoint_to_stt_final_ms",
+            "stt_final_to_agent_request_ms",
+            "agent_request_to_first_token_ms",
+            "agent_first_token_to_tts_first_byte_ms",
+            "vad_endpoint_to_tts_first_byte_ms",
+            "user_speech_start_to_bot_stopped_ms",
+        }
+    assert any(
+        turn["milestones"]["vad_endpoint_to_tts_first_byte_ms"] is not None
+        for turn in body["timeline"]
+    )
+
+
+def test_build_issues_is_shared_with_debug_engine():
+    """The server's ``_build_issues`` re-export is the ``debug/_issues`` engine."""
+    from easycat.debug import _issues
+
+    assert _build_issues is _issues.build_issues
+
+
+def test_build_issues_returns_stable_rollup_shape():
+    """``/api/issues`` serves the ``{issues, summary, total}`` contract."""
+    records = [
+        {"sequence": 1, "name": "error", "turn_id": "t1", "error": {"type": "BoomError"}},
+        {"sequence": 2, "name": "stt_final", "turn_id": "t1", "data": {"text": ""}},
+    ]
+    report = _build_issues(records)
+    assert set(report) == {"issues", "summary", "total"}
+    assert report["total"] == 2
+    assert report["summary"] == {"error": 1, "warning": 1, "info": 0}
+    # Errors sort before warnings.
+    assert [issue["severity"] for issue in report["issues"]] == ["error", "warning"]
 
 
 def test_filter_records_negative_offset_raises():
@@ -434,6 +563,104 @@ def test_filter_records_zero_limit_raises():
             to_seq=None,
             limit=0,
         )
+
+
+def _search_sample_records() -> list[dict]:
+    return [
+        {"sequence": 1, "name": "stt_final", "turn_id": "t1", "data": {"text": "hello world"}},
+        {
+            "sequence": 2,
+            "name": "agent_error",
+            "turn_id": "t1",
+            "data": {},
+            "error": {"type": "TimeoutError", "message": "request timed out"},
+        },
+        {"sequence": 3, "name": "tts_frame", "turn_id": "t2", "data": {"codec": "pcm"}},
+    ]
+
+
+def test_search_records_matches_data_substring():
+    from easycat.debugger.server import _search_records
+
+    matched, truncated = _search_records(_search_sample_records(), query="hello")
+    assert [r["sequence"] for r in matched] == [1]
+    assert matched[0]["_match_fields"] == ["data"]
+    assert truncated is False
+
+
+def test_search_records_matches_error_fields():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="timed out")
+    assert [r["sequence"] for r in matched] == [2]
+    assert matched[0]["_match_fields"] == ["error"]
+
+
+def test_search_records_matches_name_and_turn():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="t1")
+    assert [r["sequence"] for r in matched] == [1, 2]
+    assert all("turn_id" in r["_match_fields"] for r in matched)
+
+
+def test_search_records_regex_matches():
+    from easycat.debugger.server import _search_records
+
+    matched, _ = _search_records(_search_sample_records(), query="timeout|pcm", use_regex=True)
+    assert [r["sequence"] for r in matched] == [2, 3]
+
+
+def test_search_records_invalid_regex_raises():
+    from easycat.debugger.server import _search_records
+
+    with pytest.raises(ValueError, match="invalid regex"):
+        _search_records(_search_sample_records(), query="[", use_regex=True)
+
+
+def test_search_records_rejects_overlong_query():
+    from easycat.debugger.server import _SEARCH_MAX_QUERY_LEN, _search_records
+
+    too_long = "a" * (_SEARCH_MAX_QUERY_LEN + 1)
+    with pytest.raises(ValueError, match="query too long"):
+        _search_records(_search_sample_records(), query=too_long, use_regex=True)
+    with pytest.raises(ValueError, match="query too long"):
+        _search_records(_search_sample_records(), query=too_long)
+
+
+def test_search_records_empty_query_matches_nothing():
+    from easycat.debugger.server import _search_records
+
+    matched, truncated = _search_records(_search_sample_records(), query="")
+    assert matched == []
+    assert truncated is False
+
+
+def test_search_records_errors_only():
+    from easycat.debugger.server import _search_records
+
+    # ``t1`` appears in two records but only the error one survives ``errors_only``.
+    matched, _ = _search_records(_search_sample_records(), query="t1", errors_only=True)
+    assert [r["sequence"] for r in matched] == [2]
+
+
+def test_search_records_does_not_mutate_source():
+    from easycat.debugger.server import _search_records
+
+    records = _search_sample_records()
+    _search_records(records, query="hello")
+    assert all("_match_fields" not in r for r in records)
+
+
+def test_search_records_sets_scan_truncated_past_limit():
+    from easycat.debugger.server import _SEARCH_SCAN_LIMIT, _search_records
+
+    big = [
+        {"sequence": i, "name": "x", "data": {"k": "match"}} for i in range(_SEARCH_SCAN_LIMIT + 5)
+    ]
+    matched, truncated = _search_records(big, query="match")
+    assert truncated is True
+    assert len(matched) == _SEARCH_SCAN_LIMIT
 
 
 def test_summarise_turns_dedupes_t3_8_interrupt_fanout():

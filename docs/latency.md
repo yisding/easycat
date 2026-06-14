@@ -22,6 +22,13 @@ events below. Three surfaces render them:
   per-stage `spans` (`stage`, `offset_ms`, `duration_ms`, `record_count`),
   and `milestones` deltas. The human (no `--json`) output renders the same
   waterfall as a `Per-turn latency` table.
+- **CLI percentiles** — `easycat latency PATH` rolls the milestone deltas
+  up across all turns and reports `count`/`p50`/`p90`/`p95`/`p99` for the
+  five critical-path segments (`vad->stt`, `stt->req`, `req->token`,
+  `token->tts`, `vad->tts`). It reuses the same percentile math as
+  `easycat validate latency`, so use it when one bundle has enough turns to
+  ask "what is my p95 time-to-first-token?" without a full validation run.
+  `easycat latency PATH --json` emits `{turns, percentiles}`.
 - **Debugger UI** — `serve_bundle(...)` / `serve_session(...)` render the
   interactive waterfall (`uv sync --extra debugger --group dev` from this
   repo). The CLI and the UI share one implementation
@@ -32,20 +39,24 @@ events below. Three surfaces render them:
 The milestone chain is the response-latency skeleton of a turn:
 
 ```text
-VAD endpoint ──► STT final ──► agent first token ──► TTS first byte
-   (user stopped     (transcript      (LLM started        (bot started
-    speaking)         committed)       answering)           sounding)
+VAD endpoint ──► STT final ──► agent request ──► agent first token ──► TTS first byte
+   (user stopped     (transcript      (run             (LLM started        (bot started
+    speaking)         committed)       dispatched)      answering)           sounding)
 ```
 
 | Milestone delta | Journal records it is computed from |
 | --- | --- |
 | `vad_endpoint_to_stt_final_ms` | last `vad_stop_speaking` before the turn's first `stt_final` |
-| `stt_final_to_agent_first_token_ms` | first `stt_final` → first `agent_delta` (or `agent_final`) |
+| `stt_final_to_agent_request_ms` | first `stt_final` → first `agent_request_started` (dispatch/queueing overhead) |
+| `agent_request_to_first_token_ms` | first `agent_request_started` → first `agent_delta` (or `agent_final`); the raw LLM time-to-first-token |
 | `agent_first_token_to_tts_first_byte_ms` | first `agent_delta` → first `tts_frame` / `tts_audio` |
 | `vad_endpoint_to_tts_first_byte_ms` | the full voice-to-voice response gap |
+| `user_speech_start_to_bot_stopped_ms` | first `vad_start_speaking` inside a playback window → first `bot_stopped_speaking` / `playback_mark_ack`; the barge-in cutoff (how long the bot kept talking after the user spoke over it) |
 
 A delta is `null` when a turn never reached that milestone — text turns have
-no VAD endpoint, and a turn that errored before synthesis has no TTS byte.
+no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
+`user_speech_start_to_bot_stopped_ms` barge-in delta is `null` for turns the
+user never interrupted.
 
 ## Latency-adding defaults
 
@@ -92,6 +103,7 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
    finalization. That is the configured floor, not a regression.
 3. Enable `smart_turn=True` (or lower `end_of_turn_silence_ms`) and re-run;
    the same delta should drop to roughly the STT finalization cost.
-4. If `stt_final_to_agent_first_token_ms` dominates instead, the time is in
+4. If `agent_request_to_first_token_ms` dominates instead, the time is in
    your agent/LLM — no EasyCat default is involved; check the `agent` span
-   and your model choice.
+   and your model choice. (A large `stt_final_to_agent_request_ms` instead
+   points at dispatch/queueing overhead before the LLM was even called.)

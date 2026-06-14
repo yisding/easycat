@@ -276,7 +276,7 @@ class TestInterruptionApplyFailedEmitted:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("injected")
 
         bridge._apply_planned_mutation = _raise
@@ -294,7 +294,7 @@ class TestInterruptionApplyFailedEmitted:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("injected")
 
         bridge._apply_planned_mutation = _raise
@@ -312,7 +312,7 @@ class TestInterruptionApplyFailedEmitted:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("injected")
 
         bridge._apply_planned_mutation = _raise
@@ -330,7 +330,7 @@ class TestInterruptionApplyFailedEmitted:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("injected")
 
         bridge._apply_planned_mutation = _raise
@@ -476,7 +476,7 @@ class TestAtomicityOnApplyFailure:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("controlled failure")
 
         bridge._apply_planned_mutation = _raise
@@ -516,7 +516,7 @@ class TestAtomicityOnApplyFailure:
         journal = InMemoryRingBuffer(capacity=1000)
         rec = _recorder(journal)
 
-        def _raise(_plan):
+        def _raise(*_args, **_kwargs):
             raise MutationInjectedError("controlled failure")
 
         bridge._apply_planned_mutation = _raise

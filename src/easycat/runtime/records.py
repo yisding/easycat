@@ -10,6 +10,17 @@ import enum
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# ── Record-name constants ────────────────────────────────────────
+# Stage records are journaled under stable string names (``stage_start``,
+# ``tts_frame``, …) read back by replay, the debugger, and the audio-health
+# rollups.  The AEC far-end reference frame — the bot playback fed into the
+# echo canceller — is the newest of these.  Capturing it lets the debugger
+# align mic-in / reference / post-AEC into one view and compute ERLE.  Kept
+# here as a named constant so the live-path producer (``AudioStage`` /
+# ``AudioRouter``) and the diagnostics consumer (``debugger/_aec``) never
+# drift on the literal.
+AEC_REFERENCE_FRAME_NAME = "aec_reference_frame"
+
 
 class JournalRecordKind(enum.Enum):
     """Discriminator for journal record filtering."""

@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from easycat import _observability as observability
 from easycat.events import (
     AgentDelta,
     AgentFinal,
@@ -172,7 +173,7 @@ class SessionJournalSink:
             BotStoppedSpeaking,
             self._make_event_handler(evt, "bot_stopped_speaking"),
         )
-        self._subscribe(Interruption, self._make_event_handler(ctl, "interruption"))
+        self._subscribe(Interruption, self._handle_interruption(ctl))
         self._subscribe(Error, self._make_event_handler(evt, "error"))
         self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))
         self._subscribe(ToolCallDelta, self._make_event_handler(evt, "tool_call_delta"))
@@ -408,6 +409,27 @@ class SessionJournalSink:
                 turn_id=getattr(event, "turn_id", None),
                 data=data or None,
                 error=error,
+            )
+
+        return _handler
+
+    def _handle_interruption(self, kind: JournalRecordKind) -> EventHandler:
+        """Journal the interruption and bump the ``easycat.interruption`` counter.
+
+        The counter carries only the low-cardinality ``easycat.surface`` (``vad``)
+        attribute — never ``turn_id`` / ``transcript``, which the observability
+        sanitizer rejects as forbidden keys.  The cutoff-latency histogram is
+        defined for OTel consumers but not emitted here: the sink sees the
+        barge-in event before the bot has stopped, so the cutoff delta is
+        computed offline by the issues engine.
+        """
+        journal_handler = self._make_event_handler(kind, "interruption")
+
+        def _handler(event: Any) -> None:
+            journal_handler(event)
+            observability.increment_counter(
+                "easycat.interruption.total",
+                attributes={"easycat.surface": "vad"},
             )
 
         return _handler

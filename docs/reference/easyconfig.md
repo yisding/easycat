@@ -93,7 +93,10 @@ Group under `audio_processing=AudioProcessingConfig(...)`:
 Group under `observability=ObservabilityConfig(...)`:
 
 - `debug` — journal mode: `"off"` (no journal), `"light"`, or `"full"`
-  (records audio artifacts too).
+  (default; records audio artifacts too). Durable journaling is on by default
+  so sessions are always recorded; set `debug="off"` to opt out. `"full"`
+  keeps a crash-survivable SQLite journal but never auto-launches the debugger
+  UI on its own — set `debugger_autolaunch` for that.
 - `journal_backend` — `"sqlite"` (default), `"sqlite+litestream"`, or
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
@@ -103,6 +106,19 @@ Group under `observability=ObservabilityConfig(...)`:
 - `warmup` — run provider warmup hooks at session start (default `True`).
 - `max_session_cost_usd` — hard cost ceiling; the session stops when
   estimated provider spend crosses it.
+- `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
+  interactive terminal (default `False`). Durable journaling does not depend
+  on this; the `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.
+- `capture_aec_reference` — opt in to journaling the echo canceller's far-end
+  reference frames so the debugger can align all three AEC tracks and compute
+  ERLE (default `False`). This adds per-frame write pressure on the live audio
+  loop, so `debug="full"` alone never turns it on; the
+  `EASYCAT_CAPTURE_AEC_REFERENCE` env var also enables it.
+- `emergency_export` — opt in to arming a best-effort debug-bundle export on an
+  abnormal process exit (unhandled exception or unexpected shutdown) so a crash
+  leaves a redacted bundle on disk (default `False`). Arming reassigns
+  `sys.excepthook` and registers an `atexit` hook process-wide, so it is never
+  on by default; the `EASYCAT_EMERGENCY_EXPORT` env var also enables it.
 
 ## Session Policy Fields
 

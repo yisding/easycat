@@ -400,9 +400,26 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
         "easycat inspect PATH --json",
         "easycat replay PATH",
         "easycat replay PATH --json",
+        "easycat latency PATH",
+        "easycat latency PATH --json",
         "easycat bundles export PATH",
         "easycat bundles export PATH --output DIR --json",
         "uv sync --extra debugger --group dev",
+    ):
+        documented_command = command.replace("PATH", "<path>")
+        assert f"`{documented_command}`" in cli_section
+        assert command in route_commands
+
+    # The latency/diff/journal/tail commands are registered on cli/_app.py but
+    # were absent from every docs route, so they never reached `docs --json` or
+    # the generated llms.txt. Pin them to the operators observability route and
+    # require their prose to stay visible on the page.
+    for command in (
+        "easycat diff PATH PATH",
+        "easycat journal grep PATH --query TEXT",
+        "easycat journal follow PATH",
+        "easycat journal promote PATH TURN_ID --out FILE",
+        "easycat tail PATH",
     ):
         documented_command = command.replace("PATH", "<path>")
         assert f"`{documented_command}`" in cli_section
@@ -413,6 +430,21 @@ def test_observability_docs_route_matches_journal_cli_entry_points() -> None:
     assert "serve_bundle" in cli_section
     assert "serve_session" in cli_section
     assert "allow_remote=True" in cli_section
+
+
+def test_latency_docs_route_matches_latency_cli_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    latency = (REPO_ROOT / "docs" / "latency.md").read_text(encoding="utf-8")
+    route_commands = entries["docs/latency.md"].get("commands", ())
+
+    # `easycat latency` is the per-bundle percentile command this page exists to
+    # explain; keep it pinned to the route so it stays in `docs --json`.
+    for command in (
+        "easycat latency PATH",
+        "easycat latency PATH --json",
+    ):
+        assert command in route_commands
+        assert command in latency
 
 
 def test_journal_durability_docs_route_matches_inspection_commands() -> None:

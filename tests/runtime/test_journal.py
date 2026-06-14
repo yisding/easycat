@@ -103,6 +103,36 @@ class TestInMemoryRingBuffer:
         assert len(j.slice(session_id="s1")) == 1
         assert len(j.slice(session_id="s2")) == 1
 
+    def test_slice_by_turn_id(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(kind=JournalRecordKind.EVENT, name="e1", session_id="s1", turn_id="t1")
+        j.append(kind=JournalRecordKind.EVENT, name="e2", session_id="s1", turn_id="t2")
+        assert [r.name for r in j.slice(turn_id="t1")] == ["e1"]
+
+    def test_slice_by_name(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(kind=JournalRecordKind.EVENT, name="stt_final", session_id="s1")
+        j.append(kind=JournalRecordKind.EVENT, name="tts_frame", session_id="s1")
+        assert [r.name for r in j.slice(name="stt_final")] == ["stt_final"]
+
+    def test_slice_by_tags_subset(self):
+        j = InMemoryRingBuffer(capacity=100)
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="e1",
+            session_id="s1",
+            tags=frozenset({"a", "b"}),
+        )
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="e2",
+            session_id="s1",
+            tags=frozenset({"a"}),
+        )
+        # ``a`` is a subset of both; ``a+b`` only matches the first record.
+        assert {r.name for r in j.slice(tags=frozenset({"a"}))} == {"e1", "e2"}
+        assert [r.name for r in j.slice(tags=frozenset({"a", "b"}))] == ["e1"]
+
     def test_overflow_drops_oldest(self):
         j = InMemoryRingBuffer(capacity=5)
         for i in range(10):
@@ -397,6 +427,71 @@ class TestJournalView:
         assert "dropped_from" not in first.data
 
 
+class TestReadonlySqliteFollow:
+    """``JournalView.follow`` over a ``ReadonlySqliteJournal`` (the live-tail
+    backend used by ``easycat journal follow`` / ``easycat tail``)."""
+
+    async def test_follow_yields_appended_records(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        writer = SqliteJournal("tail-sess", data_dir=str(tmp_path))
+        try:
+            writer.append(kind=JournalRecordKind.EVENT, name="first", session_id="tail-sess")
+
+            # The readonly view re-opens the file each query, so it observes
+            # records the writer commits after the view was constructed.
+            db_path = tmp_path / "journals" / "tail-sess.sqlite"
+            view = JournalView(ReadonlySqliteJournal(db_path))
+
+            received: list[str] = []
+
+            async def follower() -> None:
+                async for rec in view.follow(from_sequence=0, poll_interval=0.01):
+                    received.append(rec.name)
+                    if len(received) >= 2:
+                        break
+
+            task = asyncio.create_task(follower())
+            await _yield_to_scheduled_tasks()
+            writer.append(kind=JournalRecordKind.EVENT, name="second", session_id="tail-sess")
+            await asyncio.wait_for(task, timeout=3.0)
+
+            assert received == ["first", "second"]
+        finally:
+            writer.close()
+
+    async def test_followed_records_format_with_follow_line(self, tmp_path):
+        # Acceptance: a followed record renders through the CLI formatter and a
+        # tts_frame yields the per-turn milestone landmark + audio bar.
+        from easycat.cli.debug.bundles import _format_follow_line, _record_to_follow_dict
+        from easycat.runtime import SqliteJournal
+        from easycat.runtime.journal_views import ReadonlySqliteJournal
+
+        writer = SqliteJournal("fmt-sess", data_dir=str(tmp_path))
+        try:
+            writer.append(
+                kind=JournalRecordKind.EVENT,
+                name="tts_frame",
+                session_id="fmt-sess",
+                turn_id="t1",
+                data={"audio_bytes": 4096},
+            )
+            db_path = tmp_path / "journals" / "fmt-sess.sqlite"
+            view = JournalView(ReadonlySqliteJournal(db_path))
+
+            gen = view.follow(from_sequence=0, poll_interval=0.01)
+            rec = await asyncio.wait_for(gen.__anext__(), timeout=3.0)
+            await gen.aclose()
+
+            line = _format_follow_line(_record_to_follow_dict(rec))
+            assert "name=tts_frame" in line
+            assert "milestone=tts_first_byte" in line
+            assert "audio=4096B" in line
+        finally:
+            writer.close()
+
+
 class TestCreateJournal:
     def test_returns_ring_buffer(self):
         j = create_journal("test-session")
@@ -416,3 +511,58 @@ class TestCreateJournal:
         j = create_journal("test-session", debug="full", data_dir=str(tmp_path))
         assert isinstance(j, SqliteJournal)
         j.close()
+
+
+class TestSliceFiltersAcrossBackends:
+    """``slice(turn_id=/name=/tags=)`` must WHERE-match on every backend,
+    including the non-inheriting ``LitestreamSqliteJournal`` wrapper (which
+    must forward the new kwargs to its inner SQLite journal without an
+    arg-mismatch)."""
+
+    def _seed(self, j) -> None:
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="stt_final",
+            session_id="sess",
+            turn_id="t1",
+            tags=frozenset({"slow", "stt"}),
+        )
+        j.append(
+            kind=JournalRecordKind.EVENT,
+            name="tts_frame",
+            session_id="sess",
+            turn_id="t2",
+            tags=frozenset({"stt"}),
+        )
+
+    def test_sqlite_slice_filters(self, tmp_path):
+        from easycat.runtime import SqliteJournal
+
+        j = SqliteJournal("sess", data_dir=tmp_path)
+        try:
+            self._seed(j)
+            assert [r.name for r in j.slice(turn_id="t1")] == ["stt_final"]
+            assert [r.name for r in j.slice(name="tts_frame")] == ["tts_frame"]
+            # ``stt`` tags both rows; ``slow`` is unique to the first.
+            assert {r.name for r in j.slice(tags=frozenset({"stt"}))} == {
+                "stt_final",
+                "tts_frame",
+            }
+            assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        finally:
+            j.close()
+
+    def test_litestream_wrapper_slice_forwards_kwargs(self, tmp_path):
+        # No replica URL configured → degrades to plain SQLite, but the
+        # wrapper's slice() signature + forwarding must still accept and pass
+        # the new filters through without an arg mismatch.
+        from easycat.runtime import LitestreamSqliteJournal
+
+        j = LitestreamSqliteJournal("sess", data_dir=tmp_path)
+        try:
+            self._seed(j)
+            assert [r.name for r in j.slice(turn_id="t2")] == ["tts_frame"]
+            assert [r.name for r in j.slice(name="stt_final")] == ["stt_final"]
+            assert [r.name for r in j.slice(tags=frozenset({"slow"}))] == ["stt_final"]
+        finally:
+            j.close()

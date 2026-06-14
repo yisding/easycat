@@ -549,6 +549,15 @@ Options:
   related codes.
 - `easycat explain exit-codes` documents the exit-code contract.
 - `easycat explain init-schema` documents the `--config` schema.
+- `easycat explain troubleshooting` is the symptom-first router: it
+  maps five call symptoms (`didnt-hear-me`, `cut-me-off`, `too-slow`,
+  `said-wrong`, `crashed`) to the command, doc, and concept topic that
+  diagnose each. It is static routing — a pointer surface, not a live
+  issue report.
+- Concept topics `events`, `turn-taking`, `barge-in`, and `journal`
+  summarize a docs page and print its route. `explain` lives in the
+  *Debug with the journal* menu section because it is the entry point
+  for diagnosing a captured call.
 - Unknown code prints fuzzy-match suggestions.
 
 The registry is a single Python dict. Adding a code is a one-file
@@ -689,6 +698,128 @@ comparison layer lands.
 Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat, 6
 replay failed or side effects were blocked.
 
+### `easycat latency`
+
+Summarise critical-path latency across a bundle's turns without opening
+the debugger UI. Rolls up the five milestone deltas (`vad->stt`,
+`stt->req`, `req->token`, `token->tts`, `vad->tts`) per turn and reports
+p50/p90/p95/p99 for each, reusing
+`validation.latency.LatencyPercentileStats`.
+
+```
+Usage: easycat latency [OPTIONS] BUNDLE
+
+Options:
+      --json                    Emit the standard JSON envelope
+      --help                    Show this message and exit
+```
+
+Human output prints a per-turn table plus a percentile summary table
+(`count`/`p50`/`p90`/`p95`/`p99`). `--json` emits
+`{turns: [...], percentiles: {milestone: {count, p50, p90, p95, p99}}}`.
+See `../../docs/latency.md` for how to read the numbers and which
+defaults to tune.
+
+Exit codes: 0 clean, 5 bundle missing/corrupt/too new for this EasyCat.
+
+### `easycat diff`
+
+Compare two recorded bundles (or `.sqlite` crash journals) turn-by-turn so
+you can answer "what changed between this run and the baseline?" without
+opening the debugger UI. Turns are aligned positionally (turn 0 of A vs turn
+0 of B); ragged turn counts pad the missing side and mark the pair
+`unmatched` so a dropped or extra turn is obvious. Milestone keys are read
+dynamically from `debug/_turn_diff.diff_bundles`, which reuses the shared
+`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` /
+`turn_cost_rollup` rollups so the diff never reimplements the math.
+
+```
+Usage: easycat diff [OPTIONS] PATH_A PATH_B
+
+Options:
+      --turn TEXT               Restrict the diff to a single positional turn index
+      --json                    Emit the standard JSON envelope
+      --help                    Show this message and exit
+```
+
+Each milestone cell reports `{a, b, delta_ms, pct, regressed}`; a milestone
+is flagged `regressed` only when the B side is meaningfully slower (>10% AND
+>5 ms). Transcript text is redacted via `redact_text` before any row is
+printed, and the transcript cell carries a `changed` flag. The human table
+renders one row per aligned turn with regressed milestones in red; `--json`
+emits `{a, b, turns: [...], summary: {worst_regression, total_cost_delta}}`.
+See `../../docs/latency.md` for how to read the milestone deltas.
+
+Exit codes: 0 clean, 5 either bundle missing/corrupt/too new for this EasyCat.
+
+### `easycat journal follow` / `easycat tail`
+
+Live-tail a SQLite journal as a session writes it, so you can watch a call
+unfold from the terminal instead of refreshing the debugger UI. `easycat
+journal follow` is the namespaced form; `easycat tail` is the top-level
+shorthand for the same command.
+
+```
+Usage: easycat journal follow [OPTIONS] JOURNAL
+       easycat tail [OPTIONS] JOURNAL
+
+Options:
+      --from-sequence INTEGER  Start at this sequence [default: future only; 0 replays history]
+      --errors                 Only print records that carry an error
+      --turn TEXT              Restrict the tail to a single turn id
+      --json                   Stream newline-delimited JSON, one record per line
+      --help                   Show this message and exit
+```
+
+It wraps a `ReadonlySqliteJournal` in a `JournalView` and drives
+`JournalView.follow(...)`, polling for new records and printing one redacted
+line per record (`[seq] turn=.. name=.. stage=.. detail`). The first TTS byte
+of each turn is flagged as a critical-path milestone, audio frames render a
+compact throughput bar, and a dropped-record gap surfaces as
+`-- gap: N records dropped --`. Transient `FileNotFoundError` /
+`sqlite3.OperationalError` while the writer is mid-rotation are retried rather
+than aborting the tail; Ctrl-C exits cleanly.
+
+`--json` emits newline-delimited JSON (one record per line, not a single
+envelope) so a consumer can read the stream incrementally. Exported ZIP
+bundles are immutable and cannot grow, so a `.zip`/`.bundle` path exits 2 with
+guidance to use `bundles show` or `journal grep` instead.
+
+Exit codes: 0 clean / Ctrl-C, 2 immutable bundle path, 5 journal missing.
+
+### `easycat journal promote`
+
+Promote one captured turn into a self-contained, replayable regression bundle
+so a fixed bug stays fixed. `journal promote` is a subcommand on the `journal`
+group (no separate journey entry); it slices the turn's journal records and the
+artifact blobs they reference into a new bundle, validates it before writing,
+and prints a copy-pasteable pytest stub.
+
+```
+Usage: easycat journal promote [OPTIONS] BUNDLE TURN_ID
+
+Options:
+      --out, -o PATH           Destination .zip for the single-turn bundle [required]
+      --force                  Overwrite the destination if it already exists
+      --json                   Emit the standard JSON envelope (carries the stub)
+      --help                   Show this message and exit
+```
+
+The slice is written via `RunBundle.save`, which mirrors the exported-bundle
+member layout (`manifest.json`, `journal.ndjson`, `artifacts/<sha256>.bin`).
+Before anything reaches `--out`, the slice is replayed twice at ARTIFACT
+fidelity (tools denied, fast timing); the promotion is rejected when the replay
+fails or is non-deterministic, so a flaky turn never lands as a regression
+test. The emitted stub uses the `easycat_bundle` fixture plus `assert_no_error`
+/ `assert_turn_completed` / `assert_exact_match` (filling in the turn's
+`agent_final` reply when captured, else a `TODO`), ready to drop into
+`tests/regressions/`. The `POST /api/export?turn=<id>` debugger route and the
+SPA "Save as test case" button write the same single-turn slice.
+
+Exit codes: 0 clean, 2 invalid turn id, 5 turn missing/bundle unreadable,
+6 the turn does not replay deterministically, 101 destination exists without
+`--force`.
+
 ## Commands NOT in This Plan
 
 Explicit non-goals, with reasoning.
@@ -791,13 +922,17 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
-    explain     Look up errors and CLI schema topics
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
     debugger    Open the browser debugger for a captured call
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
+    latency     Summarise critical-path latency percentiles for a bundle
+    diff        Diff two bundles turn-by-turn for milestone and cost regressions
+    journal     Search and tail captured journals and crash dumps
+    tail        Live-tail a SQLite journal as it grows
+    explain     Route a call problem by symptom, or look up an error code
 
   Validation
     validate    Run validation checks and inspect validation reports

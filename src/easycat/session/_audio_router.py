@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
@@ -57,6 +58,29 @@ if TYPE_CHECKING:
     from easycat.session._wiring import SessionWiringContext
 
 logger = logging.getLogger(__name__)
+
+# AEC reference capture is decimated to roughly one journaled frame per second
+# even when opted in, so a debug session keeps the three-track alignment the
+# debugger needs without the ~50 writes/sec/session fsync + journal pressure of
+# capturing every outbound frame. At 16 kHz / 16-bit / 20 ms frames the
+# pipeline produces ~50 frames/sec, so 1-in-50 lands close to 1 Hz; the exact
+# rate is approximate because real frames vary in size.
+_AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES = 50
+
+
+def _aec_reference_env_override() -> bool | None:
+    """Resolve the ``EASYCAT_CAPTURE_AEC_REFERENCE`` env override.
+
+    Returns ``True``/``False`` when the env var is set to an explicit truthy or
+    falsy value, or ``None`` when it is unset so the config-derived default
+    wins. The env var lets a developer flip per-frame AEC reference capture on
+    (or force it off) without touching code or config — mirroring the
+    ``EASYCAT_DEBUGGER_AUTOLAUNCH`` escape hatch.
+    """
+    raw = os.getenv("EASYCAT_CAPTURE_AEC_REFERENCE")
+    if raw is None:
+        return None
+    return raw.strip().lower() not in ("", "0", "false", "no", "off")
 
 
 class _PipelineTornDown(Exception):
@@ -127,6 +151,7 @@ class AudioRouter:
         # the same instance so external supplies and the TTSSynthesizer
         # keep their references valid.
         outbound_queue: BoundedAudioQueue,
+        capture_aec_reference: bool = False,
     ) -> None:
         self._transport = transport
         self._audio_stage = audio_stage
@@ -145,6 +170,21 @@ class AudioRouter:
         # and stop re-attempting a feed that will keep failing for the rest
         # of the session, rather than spamming the log per outbound chunk.
         self._aec_reference_failed: bool = False
+
+        # Per-frame AEC reference *journaling* is strictly opt-in (config knob
+        # ``observability.capture_aec_reference`` or the
+        # ``EASYCAT_CAPTURE_AEC_REFERENCE`` env override). ``debug="full"`` keeps
+        # a durable journal but must NOT add ~50 artifact writes/sec/session of
+        # fsync + journal pressure to the live audio loop on its own. Feeding
+        # the reference into the canceller (which makes AEC work) is unaffected;
+        # only the optional debugger-track journaling is gated here.
+        env_override = _aec_reference_env_override()
+        self._capture_aec_reference: bool = (
+            env_override if env_override is not None else bool(capture_aec_reference)
+        )
+        # Frame counter used to decimate journaled reference frames to ~1/sec
+        # even when capture is enabled.
+        self._aec_reference_frame_index: int = 0
 
         # Session-derived late-bound accessors.  The loop body reads live
         # values even when Session mutates the enable_* knobs / turn
@@ -697,6 +737,20 @@ class AudioRouter:
                     "the mic rate or resample before AEC.",
                     exc_info=True,
                 )
+            else:
+                # The far-end reference is the one AEC leg the pipeline never
+                # journals on its own (mic-in/post-AEC are already captured by
+                # AudioStage.execute).  Journaling it lets the debugger align
+                # all three tracks and compute ERLE — but it is one artifact +
+                # journal row per frame (~50/sec/session), so it is strictly
+                # opt-in (``_capture_aec_reference``) and decimated to ~1/sec
+                # rather than on by default with ``debug="full"``.  Strictly
+                # additive: gated on the opt-in and an artifact store being
+                # present, and a capture failure here must NEVER raise, never
+                # disable AEC (do not set ``_aec_reference_failed``), and never
+                # be attributed to "Failed to send audio".
+                if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
+                    self._maybe_record_aec_reference(chunk, turn)
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton
@@ -720,6 +774,32 @@ class AudioRouter:
         ):
             turn.bytes_since_last_mark = 0
             await self._send_playback_mark(turn)
+
+    def _maybe_record_aec_reference(
+        self,
+        chunk: AudioChunk,
+        turn: TurnContext | None,
+    ) -> None:
+        """Journal one decimated AEC far-end reference frame, best-effort.
+
+        Only invoked when capture is opted in and an artifact store is present.
+        Decimates to roughly one journaled frame per second so the debugger
+        keeps its three-track alignment without adding a per-frame artifact +
+        journal write to the live audio loop.  A capture failure must never
+        raise, never disable AEC, and never be attributed to the audio send.
+        """
+        index = self._aec_reference_frame_index
+        self._aec_reference_frame_index += 1
+        if index % _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES != 0:
+            return
+        try:
+            self._audio_stage.record_reference(
+                chunk,
+                self._run_ctx,
+                turn or self._no_turn,
+            )
+        except Exception:
+            logger.debug("Failed to record AEC reference frame", exc_info=True)
 
     async def _send_playback_mark(self, turn: TurnContext) -> None:
         if self._playback_ack_transport is None:

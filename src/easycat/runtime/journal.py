@@ -69,8 +69,19 @@ class ExecutionJournal(Protocol):
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        """Return records matching the given filters."""
+        """Return records matching the given filters.
+
+        *kind*/*session_id*/*turn_id*/*name* are exact-match (indexed on the
+        SQL backends).  *tags* is a **subset** match — a record matches when
+        every requested tag is present in its tag set.  On the SQL backends
+        tags are stored as a sorted comma-joined string, so the filter is a
+        best-effort substring scan there; the in-memory backends do an exact
+        subset test.
+        """
         ...
 
     def close(self) -> None: ...
@@ -112,8 +123,17 @@ class JournalView:
         *,
         kind: JournalRecordKind | None = None,
         session_id: str | None = None,
+        turn_id: str | None = None,
+        name: str | None = None,
+        tags: frozenset[str] | None = None,
     ) -> list[JournalRecord]:
-        return self._journal.slice(kind=kind, session_id=session_id)
+        return self._journal.slice(
+            kind=kind,
+            session_id=session_id,
+            turn_id=turn_id,
+            name=name,
+            tags=tags,
+        )
 
     def filter_by_stage(self, stage_name: str) -> list[JournalRecord]:
         """Return records whose ``data['stage']`` or ``data['observed_stage']``

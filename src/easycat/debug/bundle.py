@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -291,6 +292,65 @@ class RunBundle:
         from easycat.runtime.replay import replay_stt_audio as _replay_stt
 
         return _replay_stt(self, turn_id=turn_id, include_preroll=include_preroll)
+
+    def save(self, path: str | Path) -> None:
+        """Write this bundle to ``path`` as a portable ``.zip`` archive.
+
+        Mirrors :func:`easycat.debug.export.export_debug_bundle`'s member
+        layout exactly (``manifest.json``, ``journal.ndjson``,
+        ``artifacts/<sha256>.bin``) so a saved bundle round-trips through
+        :meth:`load` with equal records and artifacts.  Unlike the session
+        exporter, ``save`` is the in-memory writer: it serialises whatever
+        is already on this :class:`RunBundle`, including
+        :attr:`replay_entry_points` (which the session exporter omits).
+
+        Every artifact ref is validated against :data:`_SHA256_REF` and
+        every archive member name against :func:`_reject_traversal` before a
+        single byte is written, so a tampered in-memory bundle can never
+        emit a traversal path or a non-content-addressed artifact.  The
+        write is atomic: a sibling temp file is renamed into place only on
+        success.
+        """
+        path = Path(path)
+
+        manifest_dict: dict[str, Any] = {
+            "format_version": self.format_version,
+            "provider_versions": dict(self.manifest.provider_versions),
+            "config_snapshot": dict(self.manifest.config_snapshot),
+            "env_metadata": dict(self.manifest.env_metadata),
+            "sharing_banner": self.manifest.sharing_banner or self.sharing_banner,
+            "replay_entry_points": [
+                {"sequence": cp.sequence, "stage": cp.stage, "unit_id": cp.unit_id}
+                for cp in self.replay_entry_points
+            ],
+        }
+
+        # Validate artifact refs and member names before opening the archive
+        # so a malformed in-memory bundle fails fast and writes nothing.
+        for ref in self.artifact_blobs:
+            if not _SHA256_REF.match(ref):
+                raise BundleValidationError(
+                    f"Invalid artifact ref: {ref!r}",
+                    reason_code="INVALID_REF",
+                )
+            _reject_traversal(f"artifacts/{ref}.bin")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_name: str | None = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False)
+            tmp_name = tmp.name
+            tmp.close()  # Release the fd; ZipFile reopens the path itself.
+            with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
+                zf.writestr("journal.ndjson", self.journal_ndjson)
+                for ref, data in self.artifact_blobs.items():
+                    zf.writestr(f"artifacts/{ref}.bin", data)
+            Path(tmp_name).rename(path)
+        except Exception:
+            if tmp_name and Path(tmp_name).exists():
+                Path(tmp_name).unlink()
+            raise
 
     @staticmethod
     def load(path: str | Path) -> RunBundle:
@@ -599,12 +659,18 @@ def _read_journal_ndjson(conn: sqlite3.Connection) -> bytes:
 
 
 def discover_bundles(data_dir: str | None = None) -> list[Path]:
-    """Discover bundles in standard directories."""
+    """Discover bundles in standard directories.
+
+    Scans ``recordings/``, ``crash-dumps/``, and ``journals/`` so live and
+    crashed SQLite journals show up alongside exported ZIP bundles.  The
+    list[Path] signature is preserved for back-compat; callers that need a
+    per-path status use :func:`discover_bundles_with_status`.
+    """
     if data_dir is None:
         data_dir = os.environ.get("EASYCAT_DATA_DIR", ".easycat")
     data_path = Path(data_dir)
     bundles: list[Path] = []
-    for subdir in ("recordings", "crash-dumps"):
+    for subdir in ("recordings", "crash-dumps", "journals"):
         search = data_path / subdir
         if search.exists():
             for f in search.iterdir():
@@ -616,3 +682,43 @@ def discover_bundles(data_dir: str | None = None) -> list[Path]:
                 ) or f.name.endswith(".easycat-bundle"):
                     bundles.append(f)
     return sorted(bundles)
+
+
+def discover_bundles_with_status(data_dir: str | None = None) -> list[tuple[Path, str]]:
+    """Discover bundles with a coarse status for each path.
+
+    Status values:
+
+    - ``"bundle"`` — an exported ZIP bundle under ``recordings/``, or a
+      cleanly-closed ``journals/`` SQLite file (an inspectable recording).
+    - ``"crash-dump"`` — a promoted crash dump under ``crash-dumps/``.
+    - ``"crashed (uncommitted)"`` — a ``journals/`` SQLite file with rows
+      but no ``clean_close`` marker whose owning process is gone (a crash
+      not yet swept to ``crash-dumps/``).
+    - ``"live"`` — a ``journals/`` SQLite file held open by a running
+      session (live ``live_pid`` marker or write-locked), or whose state is
+      otherwise unreadable.
+    """
+    results: list[tuple[Path, str]] = []
+    for path in discover_bundles(data_dir):
+        results.append((path, _bundle_status(path)))
+    return results
+
+
+def _bundle_status(path: Path) -> str:
+    parent = path.parent.name
+    if parent == "crash-dumps":
+        return "crash-dump"
+    if parent != "journals" or path.suffix != ".sqlite":
+        return "bundle"
+    # Reuse the crash-sweep classifier so liveness detection (live_pid marker
+    # + write-lock probe) stays a single source of truth.
+    from easycat.runtime.crash_sweep import _read_only_state
+
+    state = _read_only_state(path)
+    if state == "crashed":
+        return "crashed (uncommitted)"
+    if state == "clean":
+        return "bundle"
+    # "skip" (live/locked/unreadable) and "empty" (just-opened) -> live.
+    return "live"

@@ -14,8 +14,8 @@ Three public entry points:
 - :func:`build_timeline` — per-turn, per-stage span timing
   (the debugger ``/api/timeline`` waterfall).
 - :func:`turn_waterfall` — :func:`build_timeline` plus the milestone
-  deltas (VAD endpoint → STT final → agent first token → TTS first
-  byte) the CLI surfaces as the ``turns`` array in
+  deltas (VAD endpoint → STT final → agent request → agent first token
+  → TTS first byte) the CLI surfaces as the ``turns`` array in
   ``bundles show --json`` / ``inspect --json``.
 """
 
@@ -24,16 +24,29 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from easycat.runtime.costs import finite_number
+
 STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "telephony")
 
 # Milestone journal-record names.  ``vad_stop_speaking`` marks the VAD
-# endpoint, ``stt_final`` the committed transcript, ``agent_delta`` (or
-# ``agent_final`` for non-streaming agents) the first agent token, and
-# ``tts_frame`` / ``tts_audio`` the first synthesized audio bytes.
+# endpoint, ``stt_final`` the committed transcript, ``agent_request_started``
+# the moment the agent run is dispatched (request queueing/setup), ``agent_delta``
+# (or ``agent_final`` for non-streaming agents) the first agent token, and
+# ``tts_frame`` / ``tts_audio`` the first synthesized audio bytes.  Splitting at
+# the agent request lets us separate dispatch overhead from raw LLM TTFT.
 _VAD_ENDPOINT = "vad_stop_speaking"
 _STT_FINAL = "stt_final"
+_AGENT_REQUEST = "agent_request_started"
 _AGENT_FIRST = ("agent_delta", "agent_final")
 _TTS_FIRST = ("tts_frame", "tts_audio")
+
+# Barge-in milestone record names.  ``bot_started_speaking`` opens a playback
+# window the user can interrupt; the FIRST ``vad_start_speaking`` at/after that
+# is the user starting to barge in, and the FIRST ``bot_stopped_speaking`` /
+# ``playback_mark_ack`` after the barge-in is the bot actually going quiet.
+_BOT_STARTED = "bot_started_speaking"
+_USER_SPEECH_START = "vad_start_speaking"
+_BOT_STOPPED = ("bot_stopped_speaking", "playback_mark_ack")
 
 
 def record_wall_ns(record: Mapping[str, Any]) -> int | None:
@@ -252,14 +265,21 @@ def _delta_ms(start_ns: int | None, end_ns: int | None) -> float | None:
 def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float | None]]:
     """Compute per-turn milestone deltas from existing journal records.
 
-    The chain is VAD endpoint → STT final → agent first token → TTS
-    first byte.  Each delta is ``None`` when either endpoint is missing
-    (text-only turns have no VAD endpoint; failed turns may never reach
-    TTS).  The VAD endpoint is the *last* ``vad_stop_speaking`` before
-    the turn's first ``stt_final``, since brief pauses can emit several
-    VAD stops within one turn.
+    The chain is VAD endpoint → STT final → agent request → agent first
+    token → TTS first byte.  The ``stt_final`` → ``agent_request_started``
+    delta is dispatch/queueing overhead; ``agent_request_started`` → first
+    agent token is the raw LLM time-to-first-token (TTFT).  Each delta is
+    ``None`` when either endpoint is missing (text-only turns have no VAD
+    endpoint; failed turns may never reach TTS).  The VAD endpoint is the
+    *last* ``vad_stop_speaking`` before the turn's first ``stt_final``,
+    since brief pauses can emit several VAD stops within one turn.
     """
     state: dict[str, dict[str, int | None]] = {}
+    # Per-turn ``(wall_ns, name)`` pairs for the barge-in scan, which depends on
+    # wall-clock ordering rather than the single-pass FSM the response chain
+    # uses.  Records can arrive out of wall order across backends, so we sort
+    # each turn's barge-in markers before walking them.
+    barge_records: dict[str, list[tuple[int, str]]] = {}
     for r in records:
         turn_id = safe_turn_id(r.get("turn_id"))
         if turn_id is None:
@@ -270,30 +290,76 @@ def turn_milestones(records: list[dict[str, Any]]) -> dict[str, dict[str, float 
         name = r.get("name")
         slot = state.setdefault(
             turn_id,
-            {"vad_endpoint": None, "stt_final": None, "agent_first": None, "tts_first": None},
+            {
+                "vad_endpoint": None,
+                "stt_final": None,
+                "agent_request": None,
+                "agent_first": None,
+                "tts_first": None,
+                "user_speech_start": None,
+                "bot_stopped": None,
+            },
         )
         if name == _VAD_ENDPOINT and slot["stt_final"] is None:
             slot["vad_endpoint"] = wall
         elif name == _STT_FINAL and slot["stt_final"] is None:
             slot["stt_final"] = wall
+        elif name == _AGENT_REQUEST and slot["agent_request"] is None:
+            slot["agent_request"] = wall
         elif name in _AGENT_FIRST and slot["agent_first"] is None:
             slot["agent_first"] = wall
         elif name in _TTS_FIRST and slot["tts_first"] is None:
             slot["tts_first"] = wall
+        if name == _BOT_STARTED or name == _USER_SPEECH_START or name in _BOT_STOPPED:
+            barge_records.setdefault(turn_id, []).append((wall, name if name else ""))
+
+    for turn_id, pairs in barge_records.items():
+        slot = state[turn_id]
+        user_speech_start, bot_stopped = _barge_in_walls(pairs)
+        slot["user_speech_start"] = user_speech_start
+        slot["bot_stopped"] = bot_stopped
 
     milestones: dict[str, dict[str, float | None]] = {}
     for turn_id, slot in state.items():
         milestones[turn_id] = {
             "vad_endpoint_to_stt_final_ms": _delta_ms(slot["vad_endpoint"], slot["stt_final"]),
-            "stt_final_to_agent_first_token_ms": _delta_ms(slot["stt_final"], slot["agent_first"]),
+            "stt_final_to_agent_request_ms": _delta_ms(slot["stt_final"], slot["agent_request"]),
+            "agent_request_to_first_token_ms": _delta_ms(
+                slot["agent_request"], slot["agent_first"]
+            ),
             "agent_first_token_to_tts_first_byte_ms": _delta_ms(
                 slot["agent_first"], slot["tts_first"]
             ),
             "vad_endpoint_to_tts_first_byte_ms": _delta_ms(
                 slot["vad_endpoint"], slot["tts_first"]
             ),
+            "user_speech_start_to_bot_stopped_ms": _delta_ms(
+                slot["user_speech_start"], slot["bot_stopped"]
+            ),
         }
     return milestones
+
+
+def _barge_in_walls(pairs: list[tuple[int, str]]) -> tuple[int | None, int | None]:
+    """Find the barge-in user-speech-start and bot-stopped walls for one turn.
+
+    Pure wall-clock ordering: the FIRST ``vad_start_speaking`` at/after a
+    ``bot_started_speaking`` is the user starting to barge in, and the FIRST
+    ``bot_stopped_speaking`` / ``playback_mark_ack`` strictly after that is the
+    bot going quiet.  Returns ``(None, None)`` when the turn never opened a
+    playback window or the user never spoke into it.
+    """
+    ordered = sorted(pairs, key=lambda pair: pair[0])
+    bot_speaking = False
+    user_speech_start: int | None = None
+    for wall, name in ordered:
+        if name == _BOT_STARTED:
+            bot_speaking = True
+        elif name == _USER_SPEECH_START and bot_speaking and user_speech_start is None:
+            user_speech_start = wall
+        elif name in _BOT_STOPPED and user_speech_start is not None:
+            return user_speech_start, wall
+    return user_speech_start, None
 
 
 def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -308,22 +374,148 @@ def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     milestones = turn_milestones(records)
     empty: dict[str, float | None] = {
         "vad_endpoint_to_stt_final_ms": None,
-        "stt_final_to_agent_first_token_ms": None,
+        "stt_final_to_agent_request_ms": None,
+        "agent_request_to_first_token_ms": None,
         "agent_first_token_to_tts_first_byte_ms": None,
         "vad_endpoint_to_tts_first_byte_ms": None,
+        "user_speech_start_to_bot_stopped_ms": None,
+    }
+    # Per-turn deduped interruption counts ride alongside the milestones as a
+    # TOP-LEVEL turn key (never under ``milestones``): the milestone-key-set
+    # guard inspects only ``turn['milestones']`` and would trip on an extra key.
+    interruptions = {
+        turn["turn_id"]: turn.get("interruption_count", 0) for turn in summarise_turns(records)
     }
     turns = build_timeline(records)
     for turn in turns:
         turn["milestones"] = milestones.get(turn["turn_id"], dict(empty))
+        turn["interruption_count"] = interruptions.get(turn["turn_id"], 0)
     return turns
+
+
+# Cost-rollup accumulator keys, in the order the debugger / CLI surface them.
+# ``usd`` / ``stt_seconds`` accumulate seconds and dollars (floats); ``tts_chars``
+# / ``llm_tokens`` are counts that stay integer-zero until a finite value lands,
+# preserving the historical JSON shape (``0`` not ``0.0``).
+_COST_KEYS = ("usd", "stt_seconds", "tts_chars", "llm_tokens")
+
+
+def _empty_cost_bucket() -> dict[str, float]:
+    return {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
+
+
+def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pull per-turn user transcripts and agent responses out of the journal.
+
+    The debugger transcript panel and the two-source ``easycat diff`` both
+    render this, so the projection lives here (dependency-free) rather than in
+    the aiohttp-optional ``debugger/server.py``.  Sources:
+
+    - User text: ``stt_final`` event records (``data.text`` / ``data.transcript``).
+    - Agent reply: AgentStage ``stage_complete`` records (``data.response``) for
+      the basic path; concatenated ``agent_delta`` ``TEXT_DELTA`` records for the
+      streaming path; ``agent_final`` ``data.text`` as the non-streaming fallback.
+
+    Each entry keeps the first sequence each side was observed at so callers can
+    deep-link to the originating record.
+    """
+    by_turn: dict[str, dict[str, Any]] = {}
+    for r in records:
+        turn_id = safe_turn_id(r.get("turn_id"))
+        if turn_id is None:
+            continue
+        bucket = by_turn.setdefault(
+            turn_id,
+            {
+                "turn_id": turn_id,
+                "user": "",
+                "agent": "",
+                "user_seq": None,
+                "agent_seq": None,
+                "agent_delta": [],
+                "agent_delta_seq": None,
+            },
+        )
+        name = r.get("name") or ""
+        data = r.get("data") or {}
+        seq = r.get("sequence")
+        if not isinstance(data, dict):
+            continue
+        if name == "stt_final":
+            txt = data.get("text") or data.get("transcript")
+            if isinstance(txt, str) and txt:
+                bucket["user"] = txt
+                bucket["user_seq"] = seq
+        elif name == "stage_complete" and (
+            data.get("stage") == "agent" or data.get("observed_stage") == "agent"
+        ):
+            resp = data.get("response")
+            if isinstance(resp, str) and resp:
+                bucket["agent"] = resp
+                bucket["agent_seq"] = seq
+        elif name == "agent_delta":
+            txt = data.get("text")
+            if isinstance(txt, str) and txt and data.get("type") == "TEXT_DELTA":
+                bucket["agent_delta"].append(txt)
+                if bucket["agent_delta_seq"] is None:
+                    bucket["agent_delta_seq"] = seq
+        elif name == "agent_final":
+            txt = data.get("text")
+            if isinstance(txt, str) and txt and not bucket["agent"]:
+                bucket["agent"] = txt
+                bucket["agent_seq"] = seq
+
+    transcripts = []
+    for turn_id, bucket in by_turn.items():
+        if not bucket["agent"] and bucket["agent_delta"]:
+            bucket["agent"] = "".join(bucket["agent_delta"])
+            if bucket["agent_seq"] is None:
+                bucket["agent_seq"] = bucket["agent_delta_seq"]
+        bucket.pop("agent_delta", None)
+        bucket.pop("agent_delta_seq", None)
+        transcripts.append(bucket)
+    return transcripts
+
+
+def turn_cost_rollup(
+    records: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    """Aggregate ``CostRecord``-style entries into ``(per_turn, totals)``.
+
+    Cost records (``cost`` / ``cost_record``) are owned by the peripheral
+    observability/cost plan, so they may be absent; this degrades to zeroes
+    rather than raising.  Malformed turn ids roll up under the session-level
+    ``""`` bucket.  Budget evaluation stays with the caller (it needs the
+    config snapshot), so this is the pure number-crunching half shared by the
+    debugger cost panel and the two-source ``easycat diff``.
+    """
+    by_turn: dict[str, dict[str, float]] = {}
+    totals: dict[str, float] = _empty_cost_bucket()
+    for r in records:
+        if r.get("name") not in ("cost", "cost_record"):
+            continue
+        data = r.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        turn_id = safe_turn_id(r.get("turn_id")) or ""
+        bucket = by_turn.setdefault(turn_id, _empty_cost_bucket())
+        for key in _COST_KEYS:
+            value = finite_number(data.get(key))
+            if value is None:
+                continue
+            bucket[key] += value
+            totals[key] += value
+    return by_turn, totals
 
 
 __all__ = [
     "STAGE_ORDER",
     "build_timeline",
+    "extract_turn_transcripts",
     "record_wall_ns",
     "safe_turn_id",
     "summarise_turns",
+    "turn_cost_rollup",
     "turn_milestones",
     "turn_waterfall",
 ]

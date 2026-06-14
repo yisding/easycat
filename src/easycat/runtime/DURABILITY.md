@@ -172,6 +172,26 @@ crash-recovery semantics are required.
 - Directories: created lazily on first write
 - Permissions: files `0600`, directories `0700` (secret-adjacent data)
 
+### Crashed-journal sweep
+
+A session whose process dies before a clean close leaves its journal in
+`journals/` with no `clean_close` marker.  Because the in-session recovery
+path only fires when the **same** `session_id` is reopened, an orphaned id
+would otherwise linger.  Every `SqliteJournal` open first runs
+`runtime/crash_sweep.py::sweep_crashed_journals`, which scans `journals/` and
+**promotes each crashed-but-unswept journal to `crash-dumps/`** (checkpointing
+WAL pages first, then removing the source).  The sweep skips the journal the
+opening session owns, skips locked/live databases, skips cleanly-closed or
+empty files, and never raises into journal startup.  Both the in-session
+promoter and the sweep share `crash_sweep.py::_copy_journal_to_crash_dump`.
+
+Promoted crash dumps surface in `uv run easycat bundles list` with a `status`
+column: a crashed journal still in `journals/` shows `crashed (uncommitted)`,
+a swept one shows `crash-dump`, a live/locked journal shows `live`, and a
+cleanly-closed journal shows `bundle`.  Inspecting an errored crash dump
+(`uv run easycat inspect <path> --json`) reports `error_type` and
+`failing_turn_id` for the first failure.
+
 ## Session teardown contract
 
 EasyCat distinguishes between logical finalization and physical backend

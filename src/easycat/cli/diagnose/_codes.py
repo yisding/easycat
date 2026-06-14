@@ -8,8 +8,10 @@ documentation, not just the CLI.
 Meta-entries — ``exit-codes``, ``init-schema``, ``json-schema`` — are
 also exposed here so the ``explain`` command can render them
 alongside the per-error docs, together with the concept topics
-``events``, ``turn-taking``, and ``journal`` that summarize a docs
-page and print its route.
+``events``, ``turn-taking``, ``barge-in``, and ``journal`` that
+summarize a docs page and print its route, plus the symptom-first
+``troubleshooting`` router that maps a symptom to the command, doc, and
+topic that diagnose it.
 """
 
 from __future__ import annotations
@@ -179,8 +181,9 @@ entry points include:
                          `easycat validate report PATH --json`; `validation`
                          contains the redacted validation report object
   `bundles`, `scanned` - `easycat bundles list --json`
-  `path`, `session_id`, `turn_count`, `turns`, `errors`, `tool_calls`,
-  `records`, `duration_ms`, `provider_versions`, `artifact_count`,
+  `path`, `session_id`, `turn_count`, `turns`, `issues`, `errors`,
+  `error_type`, `failing_turn_id`, `tool_calls`, `records`, `duration_ms`,
+  `annotations`, `provider_versions`, `artifact_count`,
   `replay_entry_points`, `format_version` -
                          `easycat bundles show PATH --json` and
                          `easycat inspect PATH --json`; `turns` is the
@@ -189,7 +192,12 @@ entry points include:
                          (`stage`, `offset_ms`, `duration_ms`,
                          `record_count`), and `milestones` deltas (VAD
                          endpoint → STT final → agent first token →
-                         TTS first byte); see docs/latency.md
+                         TTS first byte); see docs/latency.md.
+                         `issues` is the severity-ranked rollup
+                         (`easycat inspect PATH --issues`); `error_type`
+                         and `failing_turn_id` name the first failure;
+                         `annotations` tallies reviewer verdicts from the
+                         `<bundle>.annotations.json` sidecar
   `source_path`, `output_path`, `target`, `files`, `records`, `artifacts`,
   `format_version`, `summary`, `redaction` -
                          `easycat bundles export PATH --output DIR --json`
@@ -286,6 +294,67 @@ Docs route: docs/reference/session-lifecycle.md (`easycat docs
 docs/observability.md.
 """
 
+_TROUBLESHOOTING_BODY = """\
+Something wrong with a call? Route by symptom. Pick the line that
+matches what you observed, run the command on a captured bundle or
+journal PATH, then read the topic for the why.
+
+didnt-hear-me — the bot ignored what the caller said.
+  Run:   easycat inspect PATH      (filter for `stt_final` records)
+  Read:  docs/latency.md
+  Topic: easycat explain events
+
+cut-me-off — the bot talked over the caller (barge-in misfired).
+  Run:   easycat explain barge-in
+  Read:  docs/teaching/09-interruption/
+  Topic: easycat explain turn-taking
+
+too-slow — the bot took too long to respond.
+  Run:   easycat latency PATH
+         easycat bundles show PATH   (per-turn latency waterfall)
+  Read:  docs/latency.md
+  Topic: easycat explain turn-taking
+
+said-wrong — the bot answered, but the answer was wrong.
+  Run:   easycat replay PATH --turn <id>
+         easycat journal promote PATH TURN_ID --out regression.zip
+                                        (pin a regression as a test)
+  Read:  docs/testing-and-evals.md
+  Topic: easycat explain journal
+
+crashed — the session errored or the agent raised.
+  Run:   easycat inspect PATH --issues
+         easycat journal grep PATH --query . --regex --errors
+         easycat explain <Exxx>      (decode the EASYCAT_Exxx code)
+  Read:  docs/observability.md
+  Topic: easycat explain exit-codes
+
+Start with `easycat inspect PATH` to see errors, turns, and the latency
+waterfall in one place, then drill in with the routed command above.
+"""
+
+_BARGE_IN_BODY = """\
+Barge-in (interruption) lets the caller talk over the bot and have the
+bot stop. When the user starts speaking while the bot is playing audio,
+the turn manager raises an interruption: pending TTS is cancelled
+cooperatively via CancelToken and the journal records what the user
+actually heard before the cut.
+
+The barge-in milestone is the cutoff latency
+(`user_speech_start_to_bot_stopped_ms`): how long the bot kept talking
+after the caller started. `easycat bundles show PATH` and `easycat
+inspect PATH` surface it per turn alongside `interruption_count`; the
+debugger UI flags slow cutoffs as issue cards.
+
+How turn-taking drives it, the 5-state FSM, and the tuning knobs live in
+the turn-taking topic — see `easycat explain turn-taking`. If barge-in
+never fires or fires too eagerly, that topic covers VAD sensitivity and
+the smart-turn endpoint classifier.
+
+Docs route: docs/teaching/09-interruption/ (hands-on chapter); concept:
+`easycat explain turn-taking`.
+"""
+
 
 META_ENTRIES: dict[str, MetaEntry] = {
     "exit-codes": MetaEntry(
@@ -313,9 +382,19 @@ META_ENTRIES: dict[str, MetaEntry] = {
         headline="How turn-taking and barge-in work",
         body=_TURN_TAKING_BODY,
     ),
+    "barge-in": MetaEntry(
+        slug="barge-in",
+        headline="How barge-in (interruption) works",
+        body=_BARGE_IN_BODY,
+    ),
     "journal": MetaEntry(
         slug="journal",
         headline="The execution journal and debug bundles",
         body=_JOURNAL_BODY,
+    ),
+    "troubleshooting": MetaEntry(
+        slug="troubleshooting",
+        headline="Something wrong? Route by symptom",
+        body=_TROUBLESHOOTING_BODY,
     ),
 }

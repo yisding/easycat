@@ -242,6 +242,26 @@
     font-family: var(--mono);
     font-size: 11px;
   }
+  #records-search.invalid {
+    border-color: var(--err, #e5534b);
+    outline: 1px solid var(--err, #e5534b);
+  }
+  .match-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    border-radius: 3px;
+    background: rgba(255, 214, 102, 0.18);
+    color: var(--muted);
+    font-size: 10px;
+    font-family: var(--mono);
+  }
+  mark.search-hit {
+    background: rgba(255, 214, 102, 0.45);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -427,6 +447,71 @@
     font-size: 10px;
   }
 
+  /* Critical-path waterfall: one connected bar made of contiguous
+     segments showing where a turn's latency went, VAD endpoint → TTS
+     first byte.  Built segment-by-segment via el() (no innerHTML). */
+  .critical-path {
+    margin: 4px 0 12px;
+    padding: 10px 0 0;
+    border-top: 1px dashed var(--border);
+  }
+  .critical-path .cp-title {
+    display: flex; align-items: baseline; gap: 10px;
+    font-family: var(--mono); font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+  }
+  .critical-path .cp-title .cp-total {
+    margin-left: auto; color: var(--text); font-size: 11px;
+    text-transform: none; letter-spacing: 0;
+  }
+  .cp-track {
+    display: flex; height: 22px; width: 100%;
+    background: var(--bg-2); border-radius: 3px; overflow: hidden;
+  }
+  .cp-bar {
+    height: 100%; min-width: 2px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 10px; font-weight: 600;
+    color: var(--bg); overflow: hidden; white-space: nowrap;
+    border-right: 1px solid var(--bg);
+  }
+  .cp-bar:last-child { border-right: none; }
+  /* Budget bands — green within budget, amber approaching, red over.
+     Thresholds come from CP_BUDGETS (see validation DEFAULT_BUDGETS). */
+  .cp-bar.ok { background: var(--green); }
+  .cp-bar.warn { background: var(--orange); }
+  .cp-bar.over { background: var(--red); }
+  /* Null/missing segment: a hatched placeholder so the bar stays
+     contiguous even when a milestone delta couldn't be measured. */
+  .cp-bar.cp-gap {
+    background: repeating-linear-gradient(
+      45deg, var(--bg-2), var(--bg-2) 4px, var(--border) 4px, var(--border) 8px);
+    color: var(--muted);
+  }
+  /* The single biggest contributor gets a brighter outline. */
+  .cp-bar.dominant {
+    box-shadow: inset 0 0 0 2px var(--text);
+    filter: brightness(1.12);
+  }
+  .critical-path .legend {
+    display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px;
+    color: var(--muted); font-size: 10px; font-family: var(--mono);
+  }
+  .critical-path .legend span::before {
+    content: ""; display: inline-block; width: 9px; height: 9px;
+    border-radius: 2px; margin-right: 4px; vertical-align: middle;
+  }
+  .critical-path .legend span.ok::before { background: var(--green); }
+  .critical-path .legend span.warn::before { background: var(--orange); }
+  .critical-path .legend span.over::before { background: var(--red); }
+  .critical-path .legend span.gap::before {
+    background: repeating-linear-gradient(
+      45deg, var(--bg-2), var(--bg-2) 3px, var(--border) 3px, var(--border) 6px);
+  }
+  .critical-path .legend span.dominant::before {
+    background: var(--bg-2); box-shadow: inset 0 0 0 2px var(--text);
+  }
+
   /* Pipeline view */
   #pipeline-view { padding: 14px; overflow: auto; }
   #pipeline-svg {
@@ -497,11 +582,58 @@
     margin-bottom: 12px;
     white-space: pre-wrap;
   }
+  .transcript-turn .audio-caption {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 10px;
+    font-weight: 600;
+  }
   .transcript-turn audio {
     width: 100%;
     height: 32px;
     margin-top: 6px;
   }
+  /* Reviewer verdict row */
+  .annotation-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+    font-size: 12px;
+  }
+  .annotation-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+  .annotation-row button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .annotation-pass.active { background: var(--green); color: #0b1a0b; border-color: var(--green); }
+  .annotation-fail.active { background: var(--red); color: #1a0b0b; border-color: var(--red); }
+  .annotation-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--muted);
+  }
+  .annotation-notes-field { flex: 1 1 220px; align-items: flex-start; }
+  .annotation-notes { flex: 1; min-width: 160px; font-family: inherit; font-size: 12px; }
+  .annotation-score-out { font-family: var(--mono); min-width: 1.2em; text-align: center; }
+  .annotation-status { color: var(--muted); font-size: 11px; }
 
   /* Cost view */
   #cost-view, #issues-view { padding: 14px; overflow: auto; }
@@ -549,6 +681,78 @@
     margin-top: 4px;
     overflow-wrap: anywhere;
   }
+
+  /* Issues view */
+  #issues-view { padding: 14px; overflow: auto; }
+  .issues-summary {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .issues-summary .chip {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted);
+  }
+  .issues-summary .chip.error { color: var(--red); border-color: var(--red); }
+  .issues-summary .chip.warning { color: var(--orange); border-color: var(--orange); }
+  .issues-summary .chip.info { color: var(--accent); border-color: var(--accent); }
+  .issue-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 5px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .issue-card.error { border-left-color: var(--red); }
+  .issue-card.warning { border-left-color: var(--orange); }
+  .issue-card.info { border-left-color: var(--accent); }
+  .issue-card .issue-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .issue-card .issue-sev {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .issue-card.error .issue-sev { background: rgba(224,99,90,0.2); color: var(--red); }
+  .issue-card.warning .issue-sev { background: rgba(232,166,75,0.2); color: var(--orange); }
+  .issue-card.info .issue-sev { background: rgba(110,168,254,0.2); color: var(--accent); }
+  .issue-card .issue-title { font-weight: 600; color: var(--text); }
+  .issue-card .issue-code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .issue-card .issue-detail {
+    color: var(--muted);
+    margin-top: 6px;
+    line-height: 1.4;
+  }
+  .issue-card .issue-meta {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .issue-card .issue-meta b { color: var(--text); font-weight: 600; }
+
+  /* AEC view styles live in /static/aec.js (injected at load). */
 
   /* Replay view */
   #replay-view { flex-direction: column; }
@@ -852,7 +1056,31 @@
     position: absolute; top: 0; bottom: 0;
     border-left: 1px solid var(--border); padding: 4px 4px;
   }
+  /* Per-turn waveform strip (Timeline tab). */
+  .turn-waveform-wrap { margin: 6px 0 2px; }
+  .turn-waveform {
+    display: block; width: 100%; height: 80px;
+    background: #12161e; border: 1px solid var(--border);
+    border-radius: 4px; cursor: pointer;
+  }
+  .turn-waveform-wrap audio { width: 100%; margin-top: 4px; height: 28px; }
+  /* Live waveform lane (Live tab). */
+  .live-row.waveform-row .lane-track.waveform-lane { background: #0f1320; }
+  .waveform-lane .waveform-img {
+    position: absolute; top: 3px; bottom: 3px; height: auto;
+    image-rendering: pixelated; border-radius: 2px;
+  }
+  .waveform-lane .waveform-vad {
+    position: absolute; top: 0; bottom: 0;
+    background: rgba(68, 209, 138, 0.16); pointer-events: none;
+  }
+  .waveform-lane .waveform-intr {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: #e0635a; pointer-events: none;
+  }
 </style>
+<script src="/static/waveform.js"></script>
+<script src="/static/aec.js"></script>
 </head>
 <body>
 <header>
@@ -874,6 +1102,7 @@
   <div class="tab" data-tab="records" role="tab">Records</div>
   <div class="tab" data-tab="transcript" role="tab">Transcript</div>
   <div class="tab" data-tab="issues" role="tab">Issues</div>
+  <div class="tab" data-tab="aec" role="tab">AEC</div>
   <div class="tab" data-tab="cost" role="tab">Cost</div>
   <div class="tab" data-tab="replay" role="tab">Replay</div>
 </nav>
@@ -887,6 +1116,7 @@
         style="width: 140px;" />
         <span id="live-zoom-label" style="width: 70px;">100 px/s</span>
       </label>
+      <label><input id="live-follow-toggle" type="checkbox" checked /> follow now</label>
       <span class="spacer"></span>
       <span class="legend">
         <span style="color:#6ea8fe">vad</span>
@@ -924,6 +1154,10 @@
       <div id="records-filters">
         <select id="stage-filter"><option value="">all stages</option></select>
         <input id="name-filter" placeholder="name…" style="width: 180px;" />
+        <input id="records-search" placeholder="search text / regex…" style="width: 200px;" />
+        <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
+          <input type="checkbox" id="records-regex" /> regex
+        </label>
         <input id="from-seq" placeholder="from seq" style="width: 100px;" />
         <input id="to-seq" placeholder="to seq" style="width: 100px;" />
         <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
@@ -958,6 +1192,7 @@
 
   <section id="transcript-view" class="view"></section>
   <section id="issues-view" class="view"></section>
+  <section id="aec-view" class="view"></section>
   <section id="cost-view" class="view"></section>
 
   <section id="replay-view" class="view">
@@ -1134,17 +1369,45 @@ function svg(tag, attrs, children) {
 const $ = sel => document.querySelector(sel);
 function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
+// Build a fragment that wraps every case-insensitive occurrence of the
+// current plain-text search query in <mark>, using textContent only so no
+// markup from journal data is ever interpreted.  Regex queries are not
+// highlighted (we only badge the matched fields) — the cell renders as
+// plain text.  Returns a single text node when there is nothing to mark.
+function _highlightText(text) {
+  text = text == null ? "" : String(text);
+  const query = state.filters.query;
+  if (!query || state.filters.regex) return document.createTextNode(text);
+  const frag = document.createDocumentFragment();
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  let from = 0;
+  let idx = lowerText.indexOf(lowerQuery);
+  while (idx !== -1) {
+    if (idx > from) frag.appendChild(document.createTextNode(text.slice(from, idx)));
+    const hit = el("mark", { class: "search-hit" });
+    hit.textContent = text.slice(idx, idx + lowerQuery.length);
+    frag.appendChild(hit);
+    from = idx + lowerQuery.length;
+    idx = lowerText.indexOf(lowerQuery, from);
+  }
+  if (from < text.length) frag.appendChild(document.createTextNode(text.slice(from)));
+  return frag;
+}
+
 // ── State ────────────────────────────────────────────────────────
 const state = {
   manifest: null,
   records: [],
   liveRecords: [],
+  liveFollow: true,
   turns: [],
   timeline: [],
   transcripts: [],
   cost: null,
+  annotations: {},
   issues: { issues: [], summary: {}, total: 0 },
-  filters: { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false },
+  filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   recordsPage: { limit: 500, offset: 0, total: 0, pageSize: 0 },
   selectedSeq: null,
   ws: null,
@@ -1159,9 +1422,71 @@ const state = {
   },
 };
 
+// ── Shareable deep-link (URL hash) ───────────────────────────────
+// The hash mirrors the minimal view state — active tab, the turn filter,
+// and the selected record sequence — so a URL can be copied and reopened
+// to land on the same record.  Decoded values only ever flow into ``state``
+// and into ``el()``/``textContent`` (never innerHTML or URL attributes), and
+// turn ids are validated against the SAME regex the server enforces
+// (server.py ``_TURN_ID_OK``) before they are trusted.
+const _HASH_TURN_OK = /^[A-Za-z0-9_\-]{1,128}$/;
+// Guards the ``hashchange`` listener against the writes we make ourselves —
+// without it, every state change would re-fire the listener in a loop.
+let _suppressHashWrite = false;
+
+function _serializeHash() {
+  const params = new URLSearchParams();
+  if (state.activeTab) params.set("tab", state.activeTab);
+  if (state.filters.turn) params.set("turn", state.filters.turn);
+  if (Number.isInteger(state.selectedSeq) && state.selectedSeq >= 0) {
+    params.set("seq", String(state.selectedSeq));
+  }
+  return params.toString();
+}
+
+function _writeHash() {
+  if (_suppressHashWrite) return;
+  const next = _serializeHash();
+  const target = next ? `#${next}` : "#";
+  if (location.hash === target || (location.hash === "" && target === "#")) return;
+  history.replaceState(null, "", target);
+}
+
+// Parse ``location.hash`` into ``state`` with strict validation.  Invalid
+// tabs/turns/seqs are dropped silently so a hand-edited URL can never push
+// the SPA into a bad state.  Returns the decoded tab (or null) so the boot
+// path can activate it after data loads.
+function _applyHashToState() {
+  const raw = location.hash.slice(1);
+  if (!raw) return null;
+  const params = new URLSearchParams(raw);
+  let tab = null;
+  const tabParam = params.get("tab");
+  if (tabParam && Object.prototype.hasOwnProperty.call(TAB_LOADERS, tabParam)) {
+    tab = tabParam;
+  }
+  const turnParam = params.get("turn");
+  if (turnParam && _HASH_TURN_OK.test(turnParam)) {
+    state.filters.turn = turnParam;
+  }
+  const seqParam = params.get("seq");
+  if (seqParam != null && /^\d+$/.test(seqParam)) {
+    const seq = Number(seqParam);
+    if (Number.isInteger(seq) && seq >= 0) state.selectedSeq = seq;
+  }
+  return tab;
+}
+
 // Stage names mirrored from runtime/replay.py:_STAGE_NAMES.  Used to
 // render the stage-filter checkbox group and the frame-stage select.
 const REPLAY_STAGE_NAMES = ["stt", "tts", "vad", "agent", "audio", "transport", "telephony", "turn"];
+
+// Failure-type taxonomy mirrored from debug/annotations.py:FAILURE_TYPES.
+// Keep this list in lockstep with the Python tuple (a static-asset parity
+// test enforces the match).  Populates the per-turn annotation <select>.
+const ANNOTATION_FAILURE_TYPES = [
+  "asr_error", "barge_in_miss", "tts_cutoff", "wrong_tool", "hallucination", "self_echo",
+];
 
 const TAB_LOADERS = {
   overview: renderOverviewView,
@@ -1171,6 +1496,8 @@ const TAB_LOADERS = {
   records: () => { renderRecordsView(); loadAndRenderRecords(); },
   transcript: renderTranscriptView,
   issues: renderIssuesView,
+  // The AEC view lives in /static/aec.js (window.EasyCatAec); delegate to it.
+  aec: () => window.EasyCatAec && window.EasyCatAec.renderAecView(),
   cost: renderCostView,
   replay: renderReplayView,
 };
@@ -1235,6 +1562,16 @@ async function loadAllSnapshots() {
   state.transcripts = transcriptResp.transcripts;
   state.cost = costResp;
   state.issues = issuesResp;
+  // Hydrate reviewer verdicts from the bundle's annotation sidecar.  Only
+  // bundle sources advertise ``supports_annotate``; a missing/corrupt
+  // sidecar resolves to an empty map server-side, and any fetch error is
+  // swallowed so annotations never block the rest of the snapshot.
+  if (state.manifest && state.manifest.supports_annotate) {
+    const annResp = await getJSON("/api/annotations").catch(() => ({ annotations: {} }));
+    state.annotations = (annResp && annResp.annotations) || {};
+  } else {
+    state.annotations = {};
+  }
   $("#status-turns").textContent = `${state.turns.length} turns`;
   populateStageFilter();
 }
@@ -1280,6 +1617,7 @@ function activateTab(name) {
   }
   state.activeTab = name;
   TAB_LOADERS[name]?.();
+  _writeHash();
 }
 
 function rerenderActiveTab() {
@@ -1417,6 +1755,113 @@ function renderOverviewView() {
 }
 
 // ── Timeline view ────────────────────────────────────────────────
+// ── Critical-path panel ──────────────────────────────────────────
+// One connected bar made of contiguous segments showing where a turn's
+// latency went, VAD endpoint → TTS first byte.  Each segment is a
+// milestone delta from ``turn.milestones`` (served by /api/timeline via
+// turn_waterfall).  Null deltas render as hatched .cp-gap placeholders so
+// the bar stays connected; the single biggest measured segment is marked
+// .dominant.  Built entirely with el() — no innerHTML.
+//
+// Ordered milestone segments. The budget bands derive from the two
+// validation defaults that have one (see validation/latency.py
+// DEFAULT_BUDGETS: llm_ttft 2500ms, tts_ttfb 1500ms). Stages without a
+// validation budget have a null budget and never colour amber/red.
+const CP_SEGMENTS = [
+  { key: "vad_endpoint_to_stt_final_ms", label: "vad→stt", budget: null },
+  { key: "stt_final_to_agent_request_ms", label: "stt→request", budget: null },
+  { key: "agent_request_to_first_token_ms", label: "request→token", budget: 2500 },
+  { key: "agent_first_token_to_tts_first_byte_ms", label: "token→tts", budget: 1500 },
+];
+// Per-segment budget thresholds; amber once a segment crosses the warn
+// fraction of its budget, red once it exceeds the budget outright.
+const CP_BUDGETS = {
+  agent_request_to_first_token_ms: 2500,
+  agent_first_token_to_tts_first_byte_ms: 1500,
+};
+const CP_WARN_FRACTION = 0.8;
+const CP_END_TO_END_KEY = "vad_endpoint_to_tts_first_byte_ms";
+
+function cpBand(value, budget) {
+  if (budget == null || value == null) return "ok";
+  if (value > budget) return "over";
+  if (value >= budget * CP_WARN_FRACTION) return "warn";
+  return "ok";
+}
+
+function renderCriticalPath(turn) {
+  const milestones = turn.milestones || {};
+  // Gather each segment's measured ms (or null) up front so we can scale
+  // the bar and pick the dominant contributor in one pass.
+  const segs = CP_SEGMENTS.map((spec) => ({
+    label: spec.label,
+    ms: typeof milestones[spec.key] === "number" ? milestones[spec.key] : null,
+    budget: CP_BUDGETS[spec.key] != null ? CP_BUDGETS[spec.key] : null,
+  }));
+  // Nothing to show if every segment is missing.
+  if (!segs.some((s) => s.ms != null)) return null;
+
+  const measured = segs.filter((s) => s.ms != null).map((s) => s.ms);
+  const total = measured.reduce((a, b) => a + b, 0);
+  // Each gap gets a fixed slice so the connected bar stays readable even
+  // when most of the path is measured.
+  const gapCount = segs.filter((s) => s.ms == null).length;
+  const gapSlice = total > 0 ? (total / Math.max(1, measured.length)) * 0.25 : 1;
+  const scaleTotal = total + gapCount * gapSlice || 1;
+  // Dominant = the single biggest measured segment.
+  let dominantIdx = -1;
+  let dominantMs = -1;
+  segs.forEach((s, i) => {
+    if (s.ms != null && s.ms > dominantMs) {
+      dominantMs = s.ms;
+      dominantIdx = i;
+    }
+  });
+
+  const panel = el("div", { class: "critical-path" });
+  const title = el("div", { class: "cp-title" }, "Critical path");
+  const endToEnd =
+    typeof milestones[CP_END_TO_END_KEY] === "number" ? milestones[CP_END_TO_END_KEY] : null;
+  title.appendChild(el("span", { class: "cp-total" },
+    endToEnd != null ? `${endToEnd.toFixed(0)}ms end-to-end` : "end-to-end unmeasured"));
+  panel.appendChild(title);
+
+  const track = el("div", { class: "cp-track" });
+  segs.forEach((s, i) => {
+    if (s.ms == null) {
+      const widthPct = (gapSlice / scaleTotal) * 100;
+      const gap = el("div", {
+        class: "cp-bar cp-gap",
+        style: `width: ${widthPct.toFixed(2)}%`,
+        title: `${s.label}: not measured`,
+      }, "—");
+      track.appendChild(gap);
+      return;
+    }
+    const widthPct = (s.ms / scaleTotal) * 100;
+    const band = cpBand(s.ms, s.budget);
+    const classes = ["cp-bar", band];
+    if (i === dominantIdx) classes.push("dominant");
+    const budgetNote = s.budget != null ? ` (budget ${s.budget}ms)` : "";
+    const bar = el("div", {
+      class: classes.join(" "),
+      style: `width: ${widthPct.toFixed(2)}%`,
+      title: `${s.label}: ${s.ms.toFixed(0)}ms${budgetNote}`,
+    }, widthPct > 6 ? `${s.ms.toFixed(0)}ms` : "");
+    track.appendChild(bar);
+  });
+  panel.appendChild(track);
+
+  const legend = el("div", { class: "legend" });
+  legend.appendChild(el("span", { class: "ok" }, "within budget"));
+  legend.appendChild(el("span", { class: "warn" }, "approaching"));
+  legend.appendChild(el("span", { class: "over" }, "over budget"));
+  legend.appendChild(el("span", { class: "gap" }, "not measured"));
+  legend.appendChild(el("span", { class: "dominant" }, "dominant"));
+  panel.appendChild(legend);
+  return panel;
+}
+
 function renderTimelineView() {
   const root = $("#timeline-view");
   clear(root);
@@ -1443,10 +1888,54 @@ function renderTimelineView() {
       onclick: () => filterRecordsByTurn(turn.turn_id),
     }, "Records"));
     actions.appendChild(el("button", {
-      onclick: () => playConcatAudio(turn.turn_id),
-    }, "▶ Audio"));
+      onclick: () => playConcatAudio(turn.turn_id, "tts"),
+    }, "▶ Bot"));
+    if ((turnSummary.stt_audio_bytes || 0) > 0) {
+      actions.appendChild(el("button", {
+        onclick: () => playConcatAudio(turn.turn_id, "mic"),
+      }, "▶ Caller"));
+    }
+    actions.appendChild(el("button", {
+      title: "Copy an `easycat replay … --turn` command for this turn",
+      onclick: () => _copyReplayCommand(turn.turn_id),
+    }, "⧉ Copy replay cmd"));
+    actions.appendChild(el("button", {
+      title: "Download a single-turn replayable bundle for a regression test",
+      onclick: () => _saveTestCase(turn.turn_id),
+    }, "Save as test case"));
     header.appendChild(actions);
     turnNode.appendChild(header);
+
+    const critical = renderCriticalPath(turn);
+    if (critical) turnNode.appendChild(critical);
+
+    // Waveform strip: prefer the caller (mic) track when present, else the
+    // bot (TTS) track.  VAD bands come from the turn's vad stage spans, and
+    // interruption ticks from the rollup's interruption count (positioned at
+    // turn end as a marker when finer offsets aren't available).
+    if (window.EasyCatWaveform) {
+      const hasMic = (turnSummary.stt_audio_bytes || 0) > 0;
+      const hasTts = (turnSummary.tts_audio_bytes || 0) > 0;
+      if (hasMic || hasTts) {
+        const vadBands = (turn.spans || [])
+          .filter(s => s.stage === "vad")
+          .map(s => ({ offsetMs: s.offset_ms, durationMs: s.duration_ms }));
+        const intrCount = turnSummary.interruption_count || 0;
+        const interruptions = [];
+        for (let k = 0; k < intrCount; k++) {
+          interruptions.push(((turn.wall_ms || 0) * (k + 1)) / (intrCount + 1));
+        }
+        window.EasyCatWaveform.renderTurnWaveform({
+          turn,
+          container: turnNode,
+          track: hasMic ? "mic" : "tts",
+          width: 600,
+          height: 80,
+          vad: vadBands,
+          interruptions,
+        });
+      }
+    }
 
     if (turn.spans.length === 0) {
       turnNode.appendChild(el("div", { class: "empty" }, "No stage spans recorded."));
@@ -1513,6 +2002,14 @@ $("#live-zoom").addEventListener("input", (e) => {
   _liveZoomPxPerSec = parseInt(e.target.value, 10) || 100;
   $("#live-zoom-label").textContent = `${_liveZoomPxPerSec} px/s`;
   if (state.activeTab === "live") renderLiveView();
+});
+$("#live-follow-toggle").addEventListener("change", (e) => {
+  state.liveFollow = e.target.checked;
+  // Snap the playhead to the right edge immediately when follow is enabled.
+  if (state.liveFollow && state.activeTab === "live") {
+    const canvas = $("#live-canvas");
+    if (canvas) canvas.scrollLeft = canvas.scrollWidth;
+  }
 });
 
 function renderLiveView() {
@@ -1625,6 +2122,60 @@ function renderLiveView() {
     row.appendChild(track);
     root.appendChild(row);
   }
+
+  // 11th strip: per-turn waveform images sharing the live t0 / px() zoom.
+  if (window.EasyCatWaveform) {
+    const turnWindows = _liveTurnWindows(records, t0);
+    if (turnWindows.length) {
+      window.EasyCatWaveform.renderLiveWaveform({
+        root,
+        turns: turnWindows,
+        px,
+        trackWidth,
+        track: "tts",
+      });
+    }
+  }
+}
+
+// Derive per-turn {turn_id, startMs, endMs, vad, interruptions} windows from
+// the live records, mapped onto the live ``t0`` origin so the waveform strip
+// lines up with the other lanes.  Turn bounds come from turn_started/_ended
+// (falling back to first/last record for the turn); VAD bands from
+// vad_start/stop pairs; interruption ticks from ``interruption`` events.
+function _liveTurnWindows(records, t0) {
+  const byTurn = new Map();
+  const msOf = (r) => (r.timing.mono_ns - t0) / 1e6;
+  for (const r of records) {
+    if (!r.turn_id) continue;
+    let slot = byTurn.get(r.turn_id);
+    if (!slot) {
+      slot = { turn_id: r.turn_id, startMs: null, endMs: null, vad: [], interruptions: [], _vadOpen: null };
+      byTurn.set(r.turn_id, slot);
+    }
+    const ms = msOf(r);
+    if (slot.startMs == null || ms < slot.startMs) slot.startMs = ms;
+    if (slot.endMs == null || ms > slot.endMs) slot.endMs = ms;
+    if (r.name === "turn_started") slot.startMs = ms;
+    else if (r.name === "turn_ended") slot.endMs = ms;
+    else if (r.name === "vad_start_speaking") slot._vadOpen = ms;
+    else if (r.name === "vad_stop_speaking" && slot._vadOpen != null) {
+      slot.vad.push({ offsetMs: slot._vadOpen - (slot.startMs || 0),
+        durationMs: ms - slot._vadOpen });
+      slot._vadOpen = null;
+    } else if (r.name === "interruption") {
+      slot.interruptions.push(ms - (slot.startMs || 0));
+    }
+  }
+  const out = [];
+  for (const slot of byTurn.values()) {
+    if (slot.startMs == null) continue;
+    if (slot.endMs == null || slot.endMs <= slot.startMs) slot.endMs = slot.startMs + 1;
+    delete slot._vadOpen;
+    out.push(slot);
+  }
+  out.sort((a, b) => a.startMs - b.startMs);
+  return out;
 }
 
 function _liveMarkerLabel(r) {
@@ -1668,13 +2219,17 @@ function _liveSelectRecord(seq) {
     (state.records || []).find((r) => r.sequence === seq) ||
     (state.liveRecords || []).find((r) => r.sequence === seq);
   if (rec) selectRecord(rec);
+  else _writeHash();
 }
 
-async function playConcatAudio(turnId) {
+async function playConcatAudio(turnId, track = "tts") {
   try {
-    const resp = await fetch(`/api/audio/concat/${encodeURIComponent(turnId)}`);
+    let path = `/api/audio/concat/${encodeURIComponent(turnId)}`;
+    if (track !== "tts") path += `?track=${encodeURIComponent(track)}`;
+    const resp = await fetch(path);
     if (!resp.ok) {
-      alert(`No audio for turn ${turnId}`);
+      const who = track === "mic" ? "caller" : "bot";
+      alert(`No ${who} audio for turn ${turnId}`);
       return;
     }
     const blob = await resp.blob();
@@ -1690,6 +2245,26 @@ function filterRecordsByTurn(turnId) {
   resetRecordPager();
   $("#stage-filter").value = "";
   activateTab("records");
+  _writeHash();
+}
+
+// Build and copy an ``easycat replay … --turn <id>`` command for one turn so
+// a reviewer can reproduce it from the shell.  Bundles carry a file name in
+// the manifest; live sessions have no on-disk path yet, so we emit a
+// ``<bundle>`` placeholder for the reader to fill in.  The string only ever
+// reaches the clipboard or ``textContent`` (alert fallback) — never innerHTML
+// or a URL attribute.
+function _copyReplayCommand(turnId) {
+  const name = state.manifest && state.manifest.source === "bundle" && state.manifest.name
+    ? state.manifest.name
+    : "<bundle>";
+  const cmd = `easycat replay ${name} --turn ${turnId}`;
+  const fallback = () => alert(cmd);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 // ── Pipeline view ────────────────────────────────────────────────
@@ -1749,6 +2324,8 @@ function renderRecordsView() {
   // Restore filters into UI when the view is reopened.
   $("#stage-filter").value = state.filters.stage || "";
   $("#name-filter").value = state.filters.name || "";
+  $("#records-search").value = state.filters.query || "";
+  $("#records-regex").checked = !!state.filters.regex;
   $("#from-seq").value = state.filters.from ?? "";
   $("#to-seq").value = state.filters.to ?? "";
   $("#errors-only-toggle").checked = !!state.filters.errorsOnly;
@@ -1759,21 +2336,37 @@ async function loadAndRenderRecords() {
   if (state.filters.stage) params.set("stage", state.filters.stage);
   if (state.filters.turn) params.set("turn", state.filters.turn);
   if (state.filters.name) params.set("name", state.filters.name);
+  if (state.filters.query) params.set("q", state.filters.query);
+  if (state.filters.query && state.filters.regex) params.set("regex", "1");
   if (state.filters.from) params.set("from", state.filters.from);
   if (state.filters.to) params.set("to", state.filters.to);
   if (state.filters.errorsOnly) params.set("errors", "1");
   params.set("limit", String(state.recordsPage.limit));
   params.set("offset", String(state.recordsPage.offset));
-  const r = await getJSON(`/api/records?${params}`);
+  const search = $("#records-search");
+  let r;
+  try {
+    r = await getJSON(`/api/records?${params}`);
+  } catch (e) {
+    // A bad regex returns 400; surface it inline rather than throwing.
+    if (search) search.classList.add("invalid");
+    $("#record-count").textContent = state.filters.regex
+      ? "invalid regex" : "query error";
+    renderRecordRows([]);
+    return;
+  }
+  if (search) search.classList.remove("invalid");
   const shown = r.records.length;
   const total = r.total ?? shown;
   state.recordsPage.total = total;
   state.recordsPage.pageSize = shown;
   const start = total === 0 ? 0 : state.recordsPage.offset + 1;
   const end = state.recordsPage.offset + shown;
-  $("#record-count").textContent = shown === total
+  let label = shown === total
     ? `${total} record${total === 1 ? "" : "s"}`
     : `showing ${start}-${end} of ${total} records`;
+  if (r.scan_truncated) label += " (scan capped)";
+  $("#record-count").textContent = label;
   updateRecordPager();
   renderRecordRows(r.records);
 }
@@ -1807,10 +2400,22 @@ function renderRecordRows(records) {
       ? el("td", null, el("span", { class: `stage-tag ${stage}` }, stage))
       : el("td");
 
+    // Name cell: highlight plain-text query hits and badge which fields
+    // matched so a hit in ``data`` or ``error`` is visible without opening
+    // the record.  ``_match_fields`` is set by the server's full-text scan.
+    const nameCell = el("td", { class: r.error ? "has-error" : "" });
+    nameCell.appendChild(_highlightText(r.name || ""));
+    const matchFields = Array.isArray(r._match_fields) ? r._match_fields : [];
+    for (const field of matchFields) {
+      const badge = el("span", { class: "match-badge" });
+      badge.textContent = field;
+      nameCell.appendChild(badge);
+    }
+
     const tr = el("tr", { dataset: { seq: String(r.sequence) } }, [
       el("td", null, String(r.sequence)),
       el("td", { class: r.kind === "control" ? "kind-control" : "" }, r.kind || ""),
-      el("td", { class: r.error ? "has-error" : "" }, r.name || ""),
+      nameCell,
       stageCell,
       el("td", null, (r.turn_id || "").slice(-12)),
       el("td", null, refSpans.length ? refSpans : ""),
@@ -1863,6 +2468,7 @@ function selectRecord(record) {
       onclick: () => playPCM(record.output_ref, data.sample_rate, data.channels, data.sample_width),
     }, "▶ Play frame"));
   }
+  _writeHash();
 }
 
 // Convert raw PCM bytes to a WAV blob the browser can play.
@@ -1911,7 +2517,13 @@ function renderTranscriptView() {
   }
   for (const turn of state.transcripts) {
     const node = el("div", { class: "transcript-turn" });
-    node.appendChild(el("div", { class: "turn-id" }, turn.turn_id));
+    const turnHeader = el("div", { class: "turn-id" }, turn.turn_id);
+    turnHeader.appendChild(el("button", {
+      class: "save-test-case",
+      title: "Download a single-turn replayable bundle for a regression test",
+      onclick: () => _saveTestCase(turn.turn_id),
+    }, "Save as test case"));
+    node.appendChild(turnHeader);
     if (turn.user) {
       node.appendChild(el("div", { class: "speaker user" }, "User"));
       const userText = el("div", { class: "text" }, turn.user);
@@ -1931,20 +2543,142 @@ function renderTranscriptView() {
         agentText.addEventListener("click", () => _liveSelectRecord(turn.agent_seq));
       }
       node.appendChild(agentText);
-      // Only render the audio element when the rollup says this turn
-      // produced TTS bytes — otherwise the browser shows a broken
-      // player when /api/audio/concat 404s.
-      const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
-      if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
-        node.appendChild(el("audio", {
-          controls: "",
-          src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}`,
-          preload: "none",
-        }));
-      }
+    }
+    // Only render an audio element when the rollup says this turn produced
+    // the matching bytes — otherwise the browser shows a broken player when
+    // /api/audio/concat 404s.  Caller (mic) and Bot (TTS) get separate
+    // labelled players so a developer can A/B the two sides of the turn.
+    const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id);
+    if (turnSummary && (turnSummary.stt_audio_bytes || 0) > 0) {
+      node.appendChild(el("div", { class: "audio-caption" }, "Caller"));
+      node.appendChild(el("audio", {
+        controls: "",
+        src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}?track=mic`,
+        preload: "none",
+      }));
+    }
+    if (turnSummary && (turnSummary.tts_audio_bytes || 0) > 0) {
+      node.appendChild(el("div", { class: "audio-caption" }, "Bot"));
+      node.appendChild(el("audio", {
+        controls: "",
+        src: `/api/audio/concat/${encodeURIComponent(turn.turn_id)}?track=tts`,
+        preload: "none",
+      }));
+    }
+    // Reviewer verdict controls — only when the source advertises a sidecar
+    // (bundle sources).  Live sessions hide the row entirely.
+    if (state.manifest && state.manifest.supports_annotate) {
+      node.appendChild(_annotationRow(turn.turn_id));
     }
     root.appendChild(node);
   }
+}
+
+// Build the per-turn reviewer verdict row: pass/fail toggle, failure-type
+// select, a 1-5 score slider, and a free-text notes field.  Every value is
+// hydrated from ``state.annotations`` into form fields only (never
+// innerHTML), and a debounced/blur save POSTs to ``/api/annotate`` via
+// ``postJSON``.  The whole subtree is built with ``el()`` + textContent.
+function _annotationRow(turnId) {
+  const current = (state.annotations && state.annotations[turnId]) || {};
+  const row = el("div", { class: "annotation-row" });
+  row.appendChild(el("span", { class: "annotation-label" }, "Verdict"));
+
+  // Local draft mirrors the form fields; ``_save`` snapshots it into the
+  // sidecar and refreshes the in-memory map on success.
+  const draft = {
+    passed: typeof current.passed === "boolean" ? current.passed : null,
+    failure_type: current.failure_type || null,
+    score: Number.isInteger(current.score) ? current.score : null,
+    notes: typeof current.notes === "string" ? current.notes : "",
+  };
+
+  const status = el("span", { class: "annotation-status" });
+  function _save() {
+    const payload = {
+      turn_id: turnId,
+      passed: draft.passed,
+      failure_type: draft.failure_type,
+      score: draft.score,
+      notes: draft.notes,
+    };
+    status.textContent = "saving…";
+    postJSON("/api/annotate", payload).then(resp => {
+      if (resp && resp.annotation) {
+        state.annotations[turnId] = resp.annotation;
+      }
+      status.textContent = "saved";
+    }).catch(e => { status.textContent = `save failed: ${e.message}`; });
+  }
+
+  // Pass / fail tri-state toggle.  Clicking the already-active button clears
+  // the verdict back to "no verdict".
+  const passBtn = el("button", { class: "annotation-pass", type: "button" }, "Pass");
+  const failBtn = el("button", { class: "annotation-fail", type: "button" }, "Fail");
+  function _paintToggle() {
+    passBtn.classList.toggle("active", draft.passed === true);
+    failBtn.classList.toggle("active", draft.passed === false);
+  }
+  passBtn.addEventListener("click", () => {
+    draft.passed = draft.passed === true ? null : true;
+    _paintToggle();
+    _save();
+  });
+  failBtn.addEventListener("click", () => {
+    draft.passed = draft.passed === false ? null : false;
+    _paintToggle();
+    _save();
+  });
+  _paintToggle();
+  row.appendChild(passBtn);
+  row.appendChild(failBtn);
+
+  // Failure-type select.  The empty option means "no failure type".
+  const select = el("select", { class: "annotation-failure-type" });
+  select.appendChild(el("option", { value: "" }, "(no failure type)"));
+  for (const ft of ANNOTATION_FAILURE_TYPES) {
+    select.appendChild(el("option", { value: ft }, ft));
+  }
+  select.value = draft.failure_type || "";
+  select.addEventListener("change", () => {
+    draft.failure_type = select.value || null;
+    _save();
+  });
+  row.appendChild(el("label", { class: "annotation-field" }, ["Type", select]));
+
+  // 1-5 score slider plus a live read-out.  Value 0 on the slider maps to
+  // "no score".
+  const score = el("input", {
+    type: "range", min: "0", max: "5", step: "1",
+    class: "annotation-score",
+  });
+  score.value = String(draft.score == null ? 0 : draft.score);
+  const scoreOut = el("span", { class: "annotation-score-out" },
+    draft.score == null ? "–" : String(draft.score));
+  score.addEventListener("input", () => {
+    const v = Number(score.value);
+    draft.score = v === 0 ? null : v;
+    scoreOut.textContent = draft.score == null ? "–" : String(draft.score);
+  });
+  score.addEventListener("change", _save);
+  row.appendChild(el("label", { class: "annotation-field" }, ["Score", score, scoreOut]));
+
+  // Free-text notes; saved on blur to avoid a POST per keystroke.
+  const notes = el("textarea", {
+    class: "annotation-notes", rows: "2", maxlength: "4000",
+    placeholder: "Notes (optional)",
+  });
+  notes.value = draft.notes;
+  notes.addEventListener("blur", () => {
+    if (notes.value === draft.notes) return;
+    draft.notes = notes.value;
+    _save();
+  });
+  row.appendChild(el("label", { class: "annotation-field annotation-notes-field" },
+    ["Notes", notes]));
+
+  row.appendChild(status);
+  return row;
 }
 
 
@@ -2436,6 +3170,34 @@ async function exportBundle() {
   } catch (e) { alert(`Export failed: ${e.message}`); }
 }
 
+// "Save as test case": POST /api/export?turn=<id> to download a single-turn,
+// replayable slice the developer can drop into tests/regressions/.  Reuses the
+// exportBundle blob-download flow; only live sessions support export, so the
+// button is wired wherever a turn is shown.  The download name and the query
+// value are the only places the turn id is used and both go through
+// encodeURIComponent / textContent — never innerHTML or a blessed URL attr.
+async function _saveTestCase(turnId) {
+  try {
+    const r = await fetch(`/api/export?turn=${encodeURIComponent(turnId)}`, { method: "POST" });
+    if (!r.ok) {
+      if (r.status === 405) {
+        alert("Save as test case only works on a live session.");
+      } else if (r.status === 404) {
+        alert(`No records for turn ${turnId}.`);
+      } else {
+        alert(`Save as test case failed: ${r.status}`);
+      }
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: `turn-${turnId}.zip` });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (e) { alert(`Save as test case failed: ${e.message}`); }
+}
+
 // ── WebSocket live updates ───────────────────────────────────────
 let _wsBackoffMs = 1000;
 const _WS_BACKOFF_MAX_MS = 30000;
@@ -2482,9 +3244,37 @@ function connectWS() {
       const msg = JSON.parse(ev.data);
       if (msg.type === "snapshot") {
         _scheduleSnapshotRefresh();
+      } else if (msg.type === "records") {
+        _appendLiveRecords(msg.records);
       }
     } catch { /* ignore malformed */ }
   });
+}
+
+// Append a capped, only-new ``{type:'records'}`` batch to the Live view's
+// dedicated record set.  Dedups by sequence so a snapshot-driven refetch
+// overlapping with a push can't double-render a record, then re-renders the
+// live timeline and (when follow-now is on and the Live tab is active)
+// scrolls the playhead to the right edge so the newest events stay visible.
+function _appendLiveRecords(records) {
+  if (!Array.isArray(records) || records.length === 0) return;
+  const seen = new Set((state.liveRecords || []).map((r) => r.sequence));
+  let added = false;
+  for (const r of records) {
+    if (r == null || seen.has(r.sequence)) continue;
+    seen.add(r.sequence);
+    state.liveRecords.push(r);
+    added = true;
+  }
+  if (!added) return;
+  state.liveRecords.sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
+  if (state.activeTab === "live") {
+    renderLiveView();
+    if (state.liveFollow) {
+      const canvas = $("#live-canvas");
+      if (canvas) canvas.scrollLeft = canvas.scrollWidth;
+    }
+  }
 }
 function setWSStatus(connected) {
   state.wsConnected = connected;
@@ -2517,6 +3307,17 @@ $("#name-filter").addEventListener("input", () => {
     resetRecordPager();
     loadAndRenderRecords();
   }, 200);
+});
+$("#records-search").addEventListener("input", () => {
+  clearTimeout(window._searchDebounce);
+  window._searchDebounce = setTimeout(() => {
+    state.filters.query = $("#records-search").value.trim();
+    loadAndRenderRecords();
+  }, 200);
+});
+$("#records-regex").addEventListener("change", () => {
+  state.filters.regex = $("#records-regex").checked;
+  if (state.filters.query) loadAndRenderRecords();
 });
 for (const id of ["from-seq", "to-seq"]) {
   document.getElementById(id).addEventListener("change", () => {
@@ -2568,10 +3369,45 @@ setInterval(() => {
   $("#status-time").textContent = new Date().toLocaleTimeString();
 }, 1000);
 
-// Boot.
-state.activeTab = "overview";
-refreshAll().catch(e => {
+// Re-open the view the hash points at without writing it back (which would
+// just be a redundant ``replaceState`` and could race the boot load).
+function _onHashChange() {
+  state.filters.turn = null;
+  state.selectedSeq = null;
+  const tab = _applyHashToState();
+  _suppressHashWrite = true;
+  try {
+    activateTab(tab || "overview");
+    if (Number.isInteger(state.selectedSeq)) {
+      const seq = state.selectedSeq;
+      const rec = (state.records || []).find((r) => r.sequence === seq);
+      if (rec) selectRecord(rec);
+    }
+  } finally {
+    _suppressHashWrite = false;
+  }
+}
+window.addEventListener("hashchange", _onHashChange);
+
+// Boot.  Decode the hash into ``state`` first so the tab/turn/seq it names
+// survive the initial data load, then activate the decoded tab and re-select
+// the named record once records are available.  With no hash we open the
+// Overview dashboard (the front door).
+const _bootTab = _applyHashToState() || "overview";
+state.activeTab = _bootTab;
+_suppressHashWrite = true;
+refreshAll().then(() => {
+  activateTab(_bootTab);
+  if (Number.isInteger(state.selectedSeq)) {
+    const seq = state.selectedSeq;
+    const rec = (state.records || []).find((r) => r.sequence === seq);
+    if (rec) selectRecord(rec);
+  }
+}).catch(e => {
   $("#overview-view").appendChild(el("div", { class: "error-msg" }, e.message));
+}).finally(() => {
+  _suppressHashWrite = false;
+  _writeHash();
 });
 connectWS();
 </script>

@@ -115,6 +115,48 @@ class TestFilesystemArtifactStore:
         path = tmp_path / "artifacts" / "sess" / f"{ref}.bin"
         assert path.stat().st_mode & 0o777 == 0o600
 
+    def test_max_bytes_refuses_new_writes_past_cap(self, tmp_path):
+        """Once the byte cap is reached, new artifacts are refused (return "")
+        while prior artifacts still resolve — durable bytes are never evicted."""
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=100)
+        ref1 = store.put(b"a" * 60)
+        assert ref1
+        assert store.get(ref1) == b"a" * 60
+
+        # Second 60-byte write would push the total to 120 > 100: refused.
+        ref2 = store.put(b"b" * 60)
+        assert ref2 == ""
+        assert not store.has(hashlib.sha256(b"b" * 60).hexdigest())
+
+        # The earlier artifact is untouched — the filesystem store never evicts
+        # durable bytes that a journal row may already reference.
+        assert store.get(ref1) == b"a" * 60
+
+    def test_max_bytes_logs_a_single_warning(self, tmp_path, caplog):
+        import logging
+
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=10)
+        store.put(b"under-cap")  # 9 bytes, fits
+        with caplog.at_level(logging.WARNING, logger="easycat.runtime.artifacts"):
+            store.put(b"x" * 50)  # refused
+            store.put(b"y" * 50)  # refused again, but no second warning
+        cap_warnings = [r for r in caplog.records if "reached max_bytes" in r.getMessage()]
+        assert len(cap_warnings) == 1
+
+    def test_dedup_does_not_double_count_against_cap(self, tmp_path):
+        """Re-putting identical content already on disk does not consume cap
+        budget, so a duplicate write never trips the cap on its own."""
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path, max_bytes=70)
+        payload = b"c" * 60
+        ref1 = store.put(payload)
+        assert ref1
+        # Same content: dedup short-circuits before the cap check, so it still
+        # succeeds even though 60 + 60 would exceed 70.
+        ref2 = store.put(payload)
+        assert ref2 == ref1
+        # A genuinely new 60-byte payload would exceed the cap and be refused.
+        assert store.put(b"d" * 60) == ""
+
 
 class TestRingBufferArtifactEviction:
     """Verify that InMemoryRingBuffer evicts orphaned artifacts on overflow."""

@@ -89,12 +89,33 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `easycat bundles show <path>`,
   `easycat debugger serve <path>`,
   `easycat inspect <path>`,
-  `easycat replay <path>`, and
+  `easycat replay <path>`,
+  `easycat latency <path>`, and
   `easycat bundles export <path>`.
+  `easycat latency <path>` rolls the critical-path milestone deltas up across a
+  bundle's turns and reports `count`/`p50`/`p90`/`p95`/`p99` per segment; see
+  [latency](latency.md).
   Add `--json` (`easycat bundles list --json`, `easycat bundles show <path> --json`,
   `easycat inspect <path> --json`, `easycat replay <path> --json`,
+  `easycat latency <path> --json`,
   `easycat bundles export <path> --output DIR --json`) for a
-  parseable summary.
+  parseable summary. Add `--issues` to `easycat bundles show <path>` /
+  `easycat inspect <path>` to render a severity-ranked rollup of detected
+  problems (errors, tool failures, timeouts, empty transcripts, slow
+  milestones, slow/missed barge-ins, and — when the bundle carries stored PCM
+  artifacts — audio-health cards for clipping, near-silent caller capture, and
+  dead air); the `issues` key is always present in the `--json` envelope.
+- More journal CLI entry points:
+  `easycat diff <path> <path>` diffs two bundles or journals turn by turn,
+  surfacing milestone, transcript, and cost deltas between a baseline ("before")
+  and a comparison ("after") run; restrict it with `--turn` and add `--json` for
+  a parseable summary.
+  `easycat journal grep <path> --query TEXT` runs a redacted full-text search
+  over a journal or bundle, `easycat journal follow <path>` live-tails a SQLite
+  journal as it grows (redacting every line), and
+  `easycat journal promote <path> TURN_ID --out FILE` saves one turn as a
+  replayable, self-contained regression bundle.
+  `easycat tail <path>` is the short alias for `easycat journal follow <path>`.
 - Optional debugger UI:
   install the extra with `uv sync --extra debugger --group dev` from this repo,
   or `uv add 'easycat[debugger]'` in an app. For post-call inspection, launch
@@ -196,10 +217,12 @@ There are three independent knobs, and they control different things:
   for log pipelines; `dev` / unset keeps the human renderer. An explicit
   `EASYCAT_LOG_FORMAT` always wins.
 
-- **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`) — controls the
-  journal (C) and the optional debugger UI. It is **orthogonal to log level**:
-  `debug=` decides whether and how much is journaled (and, for `"full"`, whether
-  the debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
+- **`debug=`** (`"off"` / `"light"` / `"full"` on `EasyConfig`, default
+  `"full"`) — controls the journal (C) and the optional debugger UI. Durable
+  journaling is on by default so sessions are always recorded; set
+  `debug="off"` to opt out. It is **orthogonal to log level**: `debug=`
+  decides whether and how much is journaled (and, for `"full"`, whether the
+  debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
   console log is. Turning one up does not turn the other up.
 
 - **Advanced observability knobs** live on `ObservabilityConfig` and keep

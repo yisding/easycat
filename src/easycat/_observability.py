@@ -47,6 +47,8 @@ METRIC_DEFINITIONS: Mapping[str, MetricKind] = {
     "easycat.queue.dropped.total": "counter",
     "easycat.event_loop.lag": "histogram",
     "easycat.journal.degraded": "observable_gauge",
+    "easycat.interruption.total": "counter",
+    "easycat.interruption.cutoff_latency": "histogram",
 }
 
 LOW_CARDINALITY_ATTRIBUTE_KEYS = frozenset(

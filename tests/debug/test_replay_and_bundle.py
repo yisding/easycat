@@ -261,6 +261,156 @@ class TestRunBundleFormat:
         assert loaded.lookup_by_sequence(999) is None
 
 
+# ── TestRunBundleSave ────────────────────────────────────────────
+
+
+class TestRunBundleSave:
+    def test_save_round_trips_records_and_artifacts(self, tmp_path):
+        """RunBundle.save → load preserves records, artifacts, and entry points."""
+        ref = hashlib.sha256(b"audio").hexdigest()
+        src_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                "provider_versions": {"stt": "openai-1.0"},
+                "replay_entry_points": [{"sequence": 1, "stage": "stt", "unit_id": "u1"}],
+            },
+            journal_lines=[
+                json.dumps({"sequence": 1, "turn_id": "t1", "output_ref": ref}),
+                json.dumps({"sequence": 2, "turn_id": "t1"}),
+            ],
+            artifacts={ref: b"audio"},
+            name="src.zip",
+        )
+        original = RunBundle.load(src_path)
+
+        out = tmp_path / "saved.zip"
+        original.save(out)
+        reloaded = RunBundle.load(out)
+
+        assert list(reloaded.records()) == list(original.records())
+        assert reloaded.artifact_blobs == original.artifact_blobs
+        assert reloaded.manifest.provider_versions == {"stt": "openai-1.0"}
+        assert [cp.sequence for cp in reloaded.replay_entry_points] == [1]
+
+    def test_save_mirrors_export_member_layout(self, tmp_path):
+        """The saved zip uses the same member names export_debug_bundle writes."""
+        ref = hashlib.sha256(b"x").hexdigest()
+        src_path = _make_bundle_zip(
+            tmp_path,
+            journal_lines=[json.dumps({"sequence": 1, "input_ref": ref})],
+            artifacts={ref: b"x"},
+            name="src2.zip",
+        )
+        out = tmp_path / "saved2.zip"
+        RunBundle.load(src_path).save(out)
+        with zipfile.ZipFile(out, "r") as zf:
+            names = set(zf.namelist())
+        assert "manifest.json" in names
+        assert "journal.ndjson" in names
+        assert f"artifacts/{ref}.bin" in names
+
+    def test_save_rejects_non_sha256_artifact_ref(self, tmp_path):
+        """A tampered in-memory bundle with a bad ref must not be written."""
+        bundle = RunBundle(journal_ndjson=b"", artifact_blobs={"not-a-sha": b"x"})
+        out = tmp_path / "bad.zip"
+        with pytest.raises(BundleValidationError) as exc_info:
+            bundle.save(out)
+        assert exc_info.value.reason_code == "INVALID_REF"
+        assert not out.exists()
+
+    def test_save_is_atomic_on_failure(self, tmp_path, monkeypatch):
+        """A mid-write failure must not leave the destination or a temp file."""
+        ref = hashlib.sha256(b"x").hexdigest()
+        bundle = RunBundle(journal_ndjson=b"", artifact_blobs={ref: b"x"})
+        out = tmp_path / "atomic.zip"
+
+        real_writestr = zipfile.ZipFile.writestr
+
+        def boom(self, name, data, *a, **kw):
+            if name == "journal.ndjson":
+                raise OSError("disk full")
+            return real_writestr(self, name, data, *a, **kw)
+
+        monkeypatch.setattr(zipfile.ZipFile, "writestr", boom)
+        with pytest.raises(OSError, match="disk full"):
+            bundle.save(out)
+        assert not out.exists()
+        assert list(tmp_path.glob("*.tmp")) == []
+
+
+# ── TestSliceBundleByTurn ────────────────────────────────────────
+
+
+class TestSliceBundleByTurn:
+    def test_slice_keeps_only_target_turn(self, tmp_path):
+        from easycat.debug.export import slice_bundle_by_turn
+
+        ref_a = hashlib.sha256(b"a").hexdigest()
+        ref_b = hashlib.sha256(b"b").hexdigest()
+        src_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                "replay_entry_points": [
+                    {"sequence": 1, "stage": "stt", "unit_id": "u1"},
+                    {"sequence": 9, "stage": "tts", "unit_id": "u9"},
+                ],
+            },
+            journal_lines=[
+                json.dumps({"sequence": 1, "turn_id": "t1", "output_ref": ref_a}),
+                json.dumps({"sequence": 2, "turn_id": "t2", "output_ref": ref_b}),
+                json.dumps({"sequence": 3, "turn_id": "t1"}),
+            ],
+            artifacts={ref_a: b"a", ref_b: b"b"},
+            name="slice-src.zip",
+        )
+        bundle = RunBundle.load(src_path)
+        sliced = slice_bundle_by_turn(bundle, "t1")
+
+        records = list(sliced.records())
+        assert {r["turn_id"] for r in records} == {"t1"}
+        # Only t1's referenced artifact survives; t2's blob is dropped.
+        assert set(sliced.artifact_blobs) == {ref_a}
+        # Entry points are filtered to the sliced sequence set.
+        assert [cp.sequence for cp in sliced.replay_entry_points] == [1]
+
+    def test_slice_missing_turn_raises(self, tmp_path):
+        from easycat.debug.export import slice_bundle_by_turn
+
+        src_path = _make_bundle_zip(
+            tmp_path,
+            journal_lines=[json.dumps({"sequence": 1, "turn_id": "t1"})],
+            name="slice-missing.zip",
+        )
+        bundle = RunBundle.load(src_path)
+        with pytest.raises(ValueError, match="No journal records"):
+            slice_bundle_by_turn(bundle, "nope")
+
+    def test_export_turn_bundle_round_trips(self, tmp_path):
+        from easycat.debug.export import export_turn_bundle
+
+        ref = hashlib.sha256(b"a").hexdigest()
+        src_path = _make_bundle_zip(
+            tmp_path,
+            journal_lines=[
+                json.dumps({"sequence": 1, "turn_id": "t1", "output_ref": ref}),
+                json.dumps({"sequence": 2, "turn_id": "t2"}),
+            ],
+            artifacts={ref: b"a"},
+            name="exp-src.zip",
+        )
+        bundle = RunBundle.load(src_path)
+        out = tmp_path / "t1.zip"
+        export_turn_bundle(bundle, "t1", out)
+
+        reloaded = RunBundle.load(out)
+        records = list(reloaded.records())
+        assert len(records) == 1
+        assert records[0]["turn_id"] == "t1"
+        assert set(reloaded.artifact_blobs) == {ref}
+
+
 # ── TestBundleManifest ───────────────────────────────────────────
 
 

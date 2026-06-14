@@ -455,12 +455,34 @@ class ObservabilityConfig:
     keep working through legacy aliases.
     """
 
-    debug: Literal["off", "light", "full"] = "off"
+    debug: Literal["off", "light", "full"] = "full"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
     latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = ()
     warmup: bool = True
     max_session_cost_usd: float | None = None
+    # Strictly opt-in: ``debug="full"`` keeps a durable journal but never
+    # auto-launches the debugger UI on its own (that would race the port and
+    # pop a browser tab for every concurrent session). Set this — or the
+    # ``EASYCAT_DEBUGGER_AUTOLAUNCH`` env var — to auto-open the UI in an
+    # interactive terminal. Off by default.
+    debugger_autolaunch: bool = False
+    # Strictly opt-in: when AEC is enabled, the bot's far-end playback frame
+    # fed into the echo canceller can be journaled (one artifact + journal row
+    # per frame) so the debugger can align all three AEC tracks and compute
+    # ERLE. That is ~50 writes/sec/session of fsync + journal pressure on the
+    # live audio loop, so ``debug="full"`` alone never turns it on. Set this —
+    # or the ``EASYCAT_CAPTURE_AEC_REFERENCE`` env var — to capture it; the
+    # router still rate-limits the capture to roughly one frame per second.
+    # Off by default.
+    capture_aec_reference: bool = False
+    # Strictly opt-in: arm a best-effort debug-bundle export on an abnormal
+    # process exit (unhandled exception or unexpected ``atexit`` shutdown) so a
+    # crash leaves a redacted bundle on disk. Installing it reassigns
+    # ``sys.excepthook`` and registers an ``atexit`` hook process-wide, so it is
+    # never on by default. Set this — or the ``EASYCAT_EMERGENCY_EXPORT`` env
+    # var — to arm it. Off by default.
+    emergency_export: bool = False
 
     def __post_init__(self) -> None:
         self._normalize_and_validate()
@@ -499,6 +521,9 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "latency_budget",
         "warmup",
         "max_session_cost_usd",
+        "debugger_autolaunch",
+        "capture_aec_reference",
+        "emergency_export",
     }
 )
 
@@ -965,7 +990,7 @@ class TextSessionConfig(_AgentSessionConfig):
         *,
         agent: Any = None,
         session_id: str | None = None,
-        debug: Literal["off", "light", "full"] = "off",
+        debug: Literal["off", "light", "full"] = "full",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
         latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = None,
@@ -992,7 +1017,7 @@ class TextSessionConfig(_AgentSessionConfig):
             loose = {
                 "agent": (agent, None),
                 "session_id": (session_id, None),
-                "debug": (debug, "off"),
+                "debug": (debug, "full"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
                 "latency_budget": (latency_budget, None),

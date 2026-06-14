@@ -697,6 +697,8 @@ Suggested metrics:
 - `easycat.queue.dropped.total`: counter
 - `easycat.event_loop.lag`: histogram or observable gauge
 - `easycat.journal.degraded`: observable gauge
+- `easycat.interruption.total`: counter
+- `easycat.interruption.cutoff_latency`: histogram
 
 Allowed low-cardinality attributes:
 

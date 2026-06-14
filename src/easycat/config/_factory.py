@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import inspect
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -509,6 +510,9 @@ def create_session(config: EasyConfig) -> Session:
                 enable_vad=enable_vad,
                 enable_noise_reduction=config.enable_noise_reduction,
                 enable_echo_cancellation=enable_echo_cancellation,
+                capture_aec_reference=bool(
+                    getattr(config.observability, "capture_aec_reference", False)
+                ),
                 auto_turn_from_stt_final=auto_turn_from_stt_final,
                 strip_markdown=config.strip_markdown,
                 output_processors=config.output_processors,
@@ -575,9 +579,160 @@ def create_session(config: EasyConfig) -> Session:
     if config.debug == "full":
         from easycat.debugger._autolaunch import maybe_launch_debugger_ui
 
-        maybe_launch_debugger_ui(session)
+        # Strictly opt-in: ``debug="full"`` keeps a durable journal but only
+        # auto-launches the UI when explicitly requested via the config knob
+        # (or the EASYCAT_DEBUGGER_AUTOLAUNCH env var, checked inside).
+        observability = getattr(config, "observability", None)
+        config_opt_in = bool(getattr(observability, "debugger_autolaunch", False))
+        maybe_launch_debugger_ui(session, config_opt_in=config_opt_in)
+
+    if config.debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
 
     return session
+
+
+def _emergency_export_enabled(config: Any) -> bool:
+    """Whether opt-in emergency export should be armed for *config*.
+
+    Opt-in only: armed when ``EASYCAT_EMERGENCY_EXPORT=1`` is set in the
+    environment, or an ``observability.emergency_export`` knob is truthy.
+    Defaults off so a normal process never installs ``atexit`` / excepthook
+    hooks.
+    """
+    import os
+
+    if os.environ.get("EASYCAT_EMERGENCY_EXPORT") == "1":
+        return True
+    observability = getattr(config, "observability", None)
+    return bool(getattr(observability, "emergency_export", False))
+
+
+# Module-level registry shared by every armed session. Chaining many
+# sessions through per-session ``sys.excepthook`` closures was un-restorable:
+# the second armed session orphaned the first's hook forever. Instead we keep
+# ONE installed excepthook + atexit hook for the whole process and fan out to
+# the registered exporters; arming adds an exporter and disarming removes just
+# that one, restoring the original ``sys.excepthook``/atexit state only when
+# the registry drains. ``_EXPORT_REGISTRY`` preserves insertion order so
+# exporters fire oldest-first on a crash.
+_EXPORT_REGISTRY: dict[int, Callable[[], None]] = {}
+_EXPORT_INSTALLED = False
+_EXPORT_PREVIOUS_EXCEPTHOOK: Callable[..., None] | None = None
+
+
+def _run_all_exporters() -> None:
+    """Fire every registered exporter best-effort (one bad one can't block the rest)."""
+    for export in list(_EXPORT_REGISTRY.values()):
+        try:
+            export()
+        except Exception:
+            logger.warning("Emergency debug-bundle export failed", exc_info=True)
+
+
+def _shared_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+    _run_all_exporters()
+    if _EXPORT_PREVIOUS_EXCEPTHOOK is not None:
+        _EXPORT_PREVIOUS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
+
+
+def _install_shared_hooks() -> None:
+    """Install the single process-wide excepthook + atexit hook (idempotent)."""
+    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    import atexit
+    import sys
+
+    if _EXPORT_INSTALLED:
+        return
+    _EXPORT_PREVIOUS_EXCEPTHOOK = sys.excepthook
+    sys.excepthook = _shared_excepthook
+    atexit.register(_run_all_exporters)
+    _EXPORT_INSTALLED = True
+
+
+def _uninstall_shared_hooks() -> None:
+    """Remove the shared hooks and restore the original excepthook (idempotent).
+
+    Only restores ``sys.excepthook`` when ours is still the top hook; if a
+    later caller chained on top we leave their hook intact rather than dropping
+    it. ``atexit.unregister`` is always safe to call.
+    """
+    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    import atexit
+    import sys
+
+    if not _EXPORT_INSTALLED:
+        return
+    try:
+        atexit.unregister(_run_all_exporters)
+    except Exception:
+        pass
+    if sys.excepthook is _shared_excepthook:
+        sys.excepthook = _EXPORT_PREVIOUS_EXCEPTHOOK or sys.__excepthook__
+    _EXPORT_PREVIOUS_EXCEPTHOOK = None
+    _EXPORT_INSTALLED = False
+
+
+def install_emergency_export(session: Session) -> Callable[[], None]:
+    """Arm a best-effort debug-bundle export for an abnormal process exit.
+
+    Adds this session's exporter to a process-wide registry behind a SINGLE
+    installed ``sys.excepthook`` + ``atexit`` hook shared across every armed
+    session, so a crash (unhandled exception) or an unexpected interpreter
+    shutdown flushes a redacted debug bundle next to the session's data dir
+    before the process dies.
+
+    Returns an idempotent *unregister* callable that removes only this
+    session's exporter; the shared hook is uninstalled and the original
+    ``sys.excepthook``/atexit state restored only once the registry drains.
+    The unregister is also stored on ``session._emergency_export_unregister``
+    and invoked by the export body once a session has cleanly stopped, so the
+    hook becomes inert for that session after :meth:`Session.stop`.
+
+    Strictly opt-in (see :func:`_emergency_export_enabled`): callers must
+    explicitly arm it. Never raises; the export is wrapped best-effort.
+    """
+    import os
+    from datetime import UTC, datetime
+
+    key = id(session)
+    state = {"done": False, "unregistered": False}
+
+    def _export() -> None:
+        if state["done"]:
+            return
+        # If the session already stopped cleanly, the normal teardown path
+        # (record_to / explicit export) owns the bundle — stay out of it and
+        # drop this exporter so the registry can eventually drain.
+        if getattr(session, "_closed", False):
+            _unregister()
+            return
+        state["done"] = True
+        try:
+            data_dir = getattr(session, "_data_dir", None) or os.environ.get(
+                "EASYCAT_DATA_DIR", ".easycat"
+            )
+            crash_dir = Path(data_dir) / "crash-dumps"
+            crash_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            path = crash_dir / f"{session.session_id}-emergency-{stamp}.zip"
+            session.export_debug_bundle(str(path))
+            logger.info("Emergency debug bundle exported to %s", path)
+        except Exception:
+            logger.warning("Emergency debug-bundle export failed", exc_info=True)
+
+    def _unregister() -> None:
+        if state["unregistered"]:
+            return
+        state["unregistered"] = True
+        _EXPORT_REGISTRY.pop(key, None)
+        if not _EXPORT_REGISTRY:
+            _uninstall_shared_hooks()
+
+    _install_shared_hooks()
+    _EXPORT_REGISTRY[key] = _export
+    session._emergency_export_unregister = _unregister
+    return _unregister
 
 
 def create_text_session(
@@ -585,7 +740,7 @@ def create_text_session(
     *,
     agent: Any = None,
     session_id: str | None = None,
-    debug: Literal["off", "light", "full"] = "off",
+    debug: Literal["off", "light", "full"] = "full",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
     latency_budget: Any = None,

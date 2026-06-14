@@ -139,6 +139,14 @@ def test_journey_sections_cover_command_text_table_once() -> None:
     assert set(command_names) == set(_COMMAND_TEXT)
 
 
+def test_explain_lives_in_debug_section_not_scaffold() -> None:
+    # WP16 re-files ``explain`` from Scaffold into the debug menu so the
+    # symptom-first router sits next to the journal tooling it points at.
+    sections = dict(_JOURNEY_SECTIONS)
+    assert "explain" in sections["Debug with the journal"]
+    assert "explain" not in sections["Scaffold"]
+
+
 def test_cli_app_docstring_tracks_journey_sections() -> None:
     docstring = cli_app.__doc__ or ""
 
@@ -165,6 +173,42 @@ def test_peripheral_cli_plan_tracks_journey_menu() -> None:
     assert "Look up an error code (like `cargo --explain`)" not in help_architecture
     assert "List, inspect, and export RunBundles" not in help_architecture
     assert "Replay a RunBundle against current code" not in help_architecture
+
+
+def test_journal_group_registers_grep_subcommand() -> None:
+    _register_commands()
+    assert "journal" in _registered_top_level_command_names()
+    journal_group = get_command(app).commands["journal"]
+    assert "grep" in journal_group.commands
+
+
+def test_journal_group_registers_follow_subcommand() -> None:
+    # WP9 adds ``journal follow`` as a subcommand only (no duplicate journal
+    # command-text/journey entry) plus a distinct top-level ``tail`` alias.
+    _register_commands()
+    journal_group = get_command(app).commands["journal"]
+    assert "follow" in journal_group.commands
+    assert "tail" in _registered_top_level_command_names()
+    # ``follow`` is a subcommand, not a top-level command name.
+    assert "follow" not in _registered_top_level_command_names()
+
+
+def test_journal_group_registers_promote_subcommand() -> None:
+    # WP14 adds ``journal promote`` as a subcommand only (no duplicate journal
+    # command-text/journey entry and no new top-level command name).
+    _register_commands()
+    journal_group = get_command(app).commands["journal"]
+    assert "promote" in journal_group.commands
+    assert "promote" not in _registered_top_level_command_names()
+    assert "promote" not in _COMMAND_TEXT
+
+
+def test_journal_command_text_registered_exactly_once() -> None:
+    # WP8 owns the single ``journal`` command-surface registration; later
+    # work packages add only subcommands and must not re-add this entry.
+    assert "journal" in _COMMAND_TEXT
+    journey_names = [name for _, section_names in _JOURNEY_SECTIONS for name in section_names]
+    assert journey_names.count("journal") == 1
 
 
 def test_validation_tasks_current_state_tracks_cli_surface() -> None:
@@ -214,7 +258,7 @@ def test_journey_menu(cli: CliRunner) -> None:
     assert "Check environment and provider reachability" not in result.stdout
     assert "Show docs for learning, maintenance, validation, and operations" in result.stdout
     assert "Show documentation entry points" not in result.stdout
-    assert "Look up errors and CLI schema topics" in result.stdout
+    assert "Route a call problem by symptom, or look up an error code" in result.stdout
     assert "cargo --explain" not in result.stdout
     assert "List captured debug bundles and crash dumps" in result.stdout
     assert "Summarise a debug bundle or SQLite journal" in result.stdout

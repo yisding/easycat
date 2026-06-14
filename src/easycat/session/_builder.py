@@ -217,6 +217,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         no_turn=no_turn,
         echo_canceller=session.echo_canceller,
         outbound_queue=outbound_queue,
+        capture_aec_reference=cfg.capture_aec_reference,
     )
     event_bus.subscribe(PlaybackMarkAck, audio_router.on_playback_ack)
     event_bus.subscribe(TransportAudioDelivered, audio_router.on_audio_delivered)
