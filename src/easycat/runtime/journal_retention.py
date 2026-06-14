@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from easycat.runtime._private_files import mkdir_private, private_tar_filter, touch_private_file
+from easycat.runtime.crash_sweep import is_journal_live
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,7 @@ def run_retention(
     max_bytes: int = 2 * 1024 * 1024 * 1024,  # 2 GB
     max_age_days: int = 14,
     mode: Literal["archive", "delete"] = "archive",
+    skip: str | Path | None = None,
 ) -> int:
     """Enforce retention policy on journal files.  Returns number removed.
 
@@ -31,18 +33,33 @@ def run_retention(
     *max_age_days* (an age window that is on by default) so a long-lived
     project's ``.easycat/journals/`` directory does not accumulate stale
     recordings indefinitely.
+
+    A **live** journal (one currently owned by a running session — common on
+    a shared ``journals/`` directory such as telephony, where many sessions
+    write concurrently) is never archived or removed by any pass; archiving
+    or unlinking an in-flight database would lose or corrupt it.  *skip* names
+    the caller's own journal path (threaded in by ``SqliteJournal.close()``)
+    and is likewise never swept, even when it is the oldest file.
     """
     root = Path(data_dir)
     journals_dir = root / "journals"
     if not journals_dir.is_dir():
         return 0
 
+    skip_resolved = None
+    if skip is not None:
+        skip_path = Path(skip)
+        try:
+            skip_resolved = skip_path.resolve()
+        except OSError:
+            skip_resolved = skip_path
+
     # Gather journal files sorted oldest-first by mtime.
     files = sorted(journals_dir.glob("*.sqlite"), key=lambda p: p.stat().st_mtime)
     if not files:
         return 0
 
-    sweep = _RetentionSweep(root, files, mode)
+    sweep = _RetentionSweep(root, files, mode, skip_resolved)
     cutoff = time.time() - max_age_days * 86400
     sweep.prune_older_than(cutoff)
     sweep.prune_to_caps(max_sessions, max_bytes)
@@ -52,19 +69,47 @@ def run_retention(
 class _RetentionSweep:
     """Mutable retention state shared by the age-window and cap passes.
 
-    Files are oldest-first; each pass pops from the front so a single
-    ``removed`` counter stays accurate across both passes.
+    Files are oldest-first.  ``_files`` holds only **prunable** candidates —
+    live journals (owned by a running session) and the caller's own journal
+    are filtered out up front and never archived or removed by either pass.
+    Their bytes still count toward ``_total_bytes`` (they occupy space that
+    cannot be reclaimed), but they never block the cap pass from making
+    progress on the remaining removable journals.
     """
 
-    def __init__(self, root: Path, files: list[Path], mode: str) -> None:
+    def __init__(
+        self,
+        root: Path,
+        files: list[Path],
+        mode: str,
+        skip_resolved: Path | None = None,
+    ) -> None:
         self._root = root
-        self._files = files
         self._mode = mode
+        self._skip_resolved = skip_resolved
+        # Total bytes includes protected journals — they cannot be reclaimed,
+        # so the cap pass must account for the space they hold.
         self._total_bytes = sum(_session_bytes(root, f) for f in files)
+        # Candidate list excludes protected journals so neither pass can ever
+        # archive/checkpoint/unlink a live or caller-owned database.
+        self._files = [f for f in files if not self._is_protected(f)]
+        # Live/own journals we keep but never prune still count toward the
+        # session cap, so the cap pass compares against the full population.
+        self._protected_count = len(files) - len(self._files)
         self.removed = 0
 
+    def _is_protected(self, db_path: Path) -> bool:
+        """True if *db_path* must never be swept (caller-owned or live)."""
+        if self._skip_resolved is not None:
+            try:
+                if db_path.resolve() == self._skip_resolved:
+                    return True
+            except OSError:
+                return True
+        return is_journal_live(db_path)
+
     def prune_older_than(self, cutoff: float) -> None:
-        """Prune any journal older than *cutoff*, regardless of the caps."""
+        """Prune any prunable journal older than *cutoff*, regardless of caps."""
         while self._files:
             oldest = self._files[0]
             try:
@@ -77,12 +122,15 @@ class _RetentionSweep:
             self._prune_oldest()
 
     def prune_to_caps(self, max_sessions: int, max_bytes: int) -> None:
-        """Prune the oldest journal until both the count and byte caps hold."""
-        while self._files and (len(self._files) > max_sessions or self._total_bytes > max_bytes):
+        """Prune the oldest prunable journal until count and byte caps hold."""
+        while self._files and (
+            len(self._files) + self._protected_count > max_sessions
+            or self._total_bytes > max_bytes
+        ):
             self._prune_oldest()
 
     def _prune_oldest(self) -> bool:
-        """Pop and archive/remove the oldest journal; True if it was pruned."""
+        """Pop and archive/remove the oldest prunable journal; True if pruned."""
         oldest = self._files.pop(0)
         fsize = _session_bytes(self._root, oldest)
 

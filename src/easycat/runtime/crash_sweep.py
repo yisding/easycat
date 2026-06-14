@@ -163,6 +163,73 @@ def _has_live_pid(conn: sqlite3.Connection) -> bool:
     return _pid_alive(pid)
 
 
+def is_journal_live(db_path: Path) -> bool:
+    """True if *db_path* is currently owned by a running session.
+
+    A "live" journal must never be archived, checkpointed, or removed by a
+    retention sweep (doing so on a shared ``journals/`` directory — e.g.
+    telephony with many concurrent sessions — would corrupt or lose an
+    in-flight recording).  Liveness mirrors the crash-sweep decision and is
+    decided two complementary ways, both required because an idle WAL journal
+    between turns holds **no** write lock yet is still owned:
+
+    1. A ``live_pid`` marker (written on journal open, cleared on clean
+       close).  If that PID names a running process, the journal is live.
+       This catches the idle-but-live window a lock probe alone would miss.
+    2. A ``BEGIN IMMEDIATE`` write-lock probe as a backstop for an
+       actively-writing session whose ``live_pid`` marker might be stale
+       (PID reuse): if the lock cannot be taken, treat the journal as live.
+
+    Any file we cannot open or read read-only is treated as live (returns
+    ``True``) so retention errs on the side of preservation rather than
+    deleting a database we simply failed to classify.
+
+    Classification is **read-only first** (it never opens a cleanly-closed or
+    foreign journal for writing, which would checkpoint and rewrite its WAL
+    sidecar).  Only a journal that lacks both a clean-close marker and a live
+    PID gets the final ``BEGIN IMMEDIATE`` write-lock probe — the same gate
+    the crash sweep uses — so a kept-but-idle valid journal is never mutated.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        return True  # Unreadable -> preserve rather than risk a live DB.
+    try:
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "session_state" not in tables:
+            return False  # No journal schema -> not one of our live sessions.
+        if _has_live_pid(conn):
+            return True  # Marker names a running process -> live.
+        clean = conn.execute(
+            "SELECT value FROM session_state WHERE key = 'clean_close'"
+        ).fetchone()
+        if clean is not None and clean[0] not in (None, "", "0"):
+            return False  # Cleanly closed -> definitively not live.
+    except sqlite3.OperationalError:
+        return True
+    finally:
+        conn.close()
+
+    # No live-PID marker and no clean-close marker: an actively-writing
+    # session may hold the lock with a stale/absent marker.  Backstop with a
+    # write-lock probe (only reached for would-be-crashed files, so the WAL
+    # rewrite a write connection causes is harmless).
+    try:
+        probe = sqlite3.connect(str(db_path), isolation_level=None, timeout=0)
+    except sqlite3.OperationalError:
+        return True
+    try:
+        probe.execute("BEGIN IMMEDIATE")
+        probe.execute("ROLLBACK")
+        return False  # Lock acquired -> no live writer.
+    except sqlite3.OperationalError:
+        return True  # Lock held by a live writer.
+    finally:
+        probe.close()
+
+
 def sweep_crashed_journals(data_dir: str | Path, *, skip: Path | None = None) -> int:
     """Promote crashed-but-unswept journals from ``journals/`` to ``crash-dumps/``.
 

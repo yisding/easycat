@@ -439,7 +439,7 @@ class SqliteJournal(_SqlJournalBase):
                 pass  # already closed
         # Run retention opportunistically — never block a turn.
         try:
-            run_retention(self._root, mode=self._retention_mode)
+            run_retention(self._root, mode=self._retention_mode, skip=self._db_path)
         except Exception:
             logger.debug("Retention sweep failed", exc_info=True)
 
