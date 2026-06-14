@@ -241,6 +241,48 @@ class TestSqliteJournalBasics:
         rec = journal.read()[0]
         assert rec.tags == frozenset({"a", "b"})
 
+    def test_slice_by_tags_exact_not_substring(self, journal):
+        # SQL tag filtering must match whole tags, not substrings, so it agrees
+        # with the in-memory backend's ``requested <= record.tags`` contract.
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="hit",
+            session_id="test-session",
+            tags=frozenset({"stt"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="miss",
+            session_id="test-session",
+            tags=frozenset({"not_stt"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="multi",
+            session_id="test-session",
+            tags=frozenset({"stt", "vad"}),
+        )
+        # ``stt`` matches the exact-tag records, never the ``not_stt`` substring.
+        assert {r.name for r in journal.slice(tags=frozenset({"stt"}))} == {"hit", "multi"}
+        # Subset semantics: ``stt+vad`` only matches the record carrying both.
+        assert [r.name for r in journal.slice(tags=frozenset({"stt", "vad"}))] == ["multi"]
+
+    def test_slice_by_tags_escapes_like_wildcards(self, journal):
+        # ``_`` / ``%`` in a requested tag are literal, not SQL LIKE wildcards.
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="literal",
+            session_id="test-session",
+            tags=frozenset({"a_b"}),
+        )
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="anychar",
+            session_id="test-session",
+            tags=frozenset({"axb"}),
+        )
+        assert [r.name for r in journal.slice(tags=frozenset({"a_b"}))] == ["literal"]
+
     def test_timing_populated(self, journal):
         journal.append(
             kind=JournalRecordKind.EVENT,

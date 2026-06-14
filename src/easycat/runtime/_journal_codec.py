@@ -73,6 +73,17 @@ _JOURNAL_INSERT_SQL = (
 )
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL ``LIKE`` metacharacters so *value* matches literally.
+
+    Pairs with ``ESCAPE '\\'`` in the predicate.  Backslash is escaped first so
+    the escape character itself is treated literally, then ``%`` and ``_`` (the
+    LIKE wildcards) are neutralised — without this a tag containing ``%`` or
+    ``_`` would match unrelated records.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _build_slice_where(
     *,
     kind: JournalRecordKind | None = None,
@@ -85,9 +96,11 @@ def _build_slice_where(
 
     ``kind``/``session_id``/``turn_id``/``name`` map to indexed equality
     predicates.  ``tags`` is stored as a sorted comma-joined string (see
-    :data:`_SQLITE_SCHEMA`), so each requested tag becomes a best-effort
-    ``tags LIKE '%tag%'`` substring predicate — a coarse filter that the
-    caller can tighten in Python if exact subset semantics are required.
+    :data:`_SQLITE_SCHEMA`), so each requested tag matches the comma-wrapped
+    column exactly — ``(',' || tags || ',') LIKE '%,tag,%'`` with LIKE
+    metacharacters in the tag escaped.  This gives the same exact-subset
+    semantics as the in-memory backend (``requested <= record.tags``) rather
+    than a loose substring match (so ``"stt"`` never matches ``"not_stt"``).
     """
     clauses: list[str] = []
     params: list[Any] = []
@@ -105,8 +118,8 @@ def _build_slice_where(
         params.append(name)
     if tags:
         for tag in sorted(tags):
-            clauses.append("tags LIKE ?")
-            params.append(f"%{tag}%")
+            clauses.append(r"(',' || tags || ',') LIKE ? ESCAPE '\'")
+            params.append(f"%,{_escape_like(tag)},%")
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     return where, params
 
