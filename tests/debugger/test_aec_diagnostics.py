@@ -189,8 +189,10 @@ async def _aec_bundle(tmp_path):
 
     Reuses the shared voice-session doubles (``_server_helpers``); only the
     transport differs — its ``send_audio`` must return a truthy delivered flag
-    so the router's delivery side effect (which feeds the AEC reference and now
-    journals ``aec_reference_frame``) actually runs.
+    so the router's delivery side effect (which feeds the AEC reference and,
+    when ``capture_aec_reference`` is opted in, journals ``aec_reference_frame``)
+    actually runs.  The AEC diagnostics view needs the journaled reference
+    track, so this bundle opts capture in explicitly.
     """
     import asyncio
     from collections.abc import AsyncIterator
@@ -240,6 +242,7 @@ async def _aec_bundle(tmp_path):
             echo_canceller=_PassthroughAEC(),
             enable_noise_reduction=False,
             enable_echo_cancellation=True,
+            capture_aec_reference=True,
             turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
             journal=journal,
             artifact_store=artifact_store,

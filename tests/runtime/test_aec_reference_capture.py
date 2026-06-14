@@ -1,10 +1,17 @@
-"""AEC far-end reference frame capture (WP17 STEP 1).
+"""AEC far-end reference frame capture (WP17 STEP 1; FWP2 opt-in gate).
 
 The bot playback fed to the echo canceller as the far-end reference is the one
 AEC leg the pipeline never journals on its own.  ``AudioStage.record_reference``
 captures it as an ``aec_reference_frame`` record (mirroring ``tts_frame``); the
 router calls it from the outbound delivery side effect, strictly additive and
 never raising.
+
+Per-frame *journaling* of that reference is strictly opt-in
+(``SessionConfig.capture_aec_reference`` / ``observability.capture_aec_reference``
+/ ``EASYCAT_CAPTURE_AEC_REFERENCE``): with defaults, an AEC-enabled session does
+NOT journal ``aec_reference_frame`` records even with ``debug="full"``.  Feeding
+the reference into the canceller (which makes AEC actually work) is unaffected
+by the gate.
 """
 
 from __future__ import annotations
@@ -123,7 +130,12 @@ def _silent_chunk() -> AudioChunk:
     return AudioChunk(data=bytes(320), format=PCM16_MONO_16K)
 
 
-async def _drive_session(*, enable_aec: bool, echo_canceller) -> InMemoryRingBuffer:
+async def _drive_session(
+    *,
+    enable_aec: bool,
+    echo_canceller,
+    capture_aec_reference: bool = False,
+) -> InMemoryRingBuffer:
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(capacity=2048, artifact_store=artifact_store)
     transport = _FakeTransport(chunks_in=[_silent_chunk(), _silent_chunk()])
@@ -138,6 +150,7 @@ async def _drive_session(*, enable_aec: bool, echo_canceller) -> InMemoryRingBuf
             echo_canceller=echo_canceller,
             enable_noise_reduction=False,
             enable_echo_cancellation=enable_aec,
+            capture_aec_reference=capture_aec_reference,
             turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
             journal=journal,
             artifact_store=artifact_store,
@@ -212,18 +225,77 @@ def test_record_reference_skips_when_no_artifact_store():
 # ── End-to-end through a Session ─────────────────────────────────
 
 
-async def test_journal_has_reference_frames_when_aec_enabled():
+async def test_journal_has_reference_frames_when_capture_opted_in():
     aec = _PassthroughAEC()
-    journal = await _drive_session(enable_aec=True, echo_canceller=aec)
+    journal = await _drive_session(
+        enable_aec=True,
+        echo_canceller=aec,
+        capture_aec_reference=True,
+    )
     refs = _reference_records(journal)
-    assert refs, "AEC enabled: journal must contain aec_reference_frame records"
+    assert refs, "capture opted in: journal must contain aec_reference_frame records"
     for rec in refs:
         assert rec.output_ref is not None
         assert rec.data.get("stage") == "audio"
 
 
+async def test_no_reference_frames_when_aec_enabled_but_capture_default_off():
+    """``debug='full'`` keeps a durable journal but must NOT capture per-frame
+    AEC reference rows unless the capture knob is explicitly opted in — even
+    with AEC enabled and the reference fed into the canceller."""
+    aec = _PassthroughAEC()
+    journal = await _drive_session(enable_aec=True, echo_canceller=aec)
+    # Reference still fed into the canceller (AEC keeps working)...
+    assert aec.fed, "AEC enabled: the far-end reference must still be fed to the canceller"
+    # ...but the optional per-frame journaling is off by default.
+    assert _reference_records(journal) == []
+
+
+async def test_capture_opt_in_is_rate_limited():
+    """When opted in, reference journaling is decimated to roughly 1/sec rather
+    than one row per outbound frame."""
+    from easycat.session._audio_router import _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES
+
+    aec = _PassthroughAEC()
+    journal = await _drive_session(
+        enable_aec=True,
+        echo_canceller=aec,
+        capture_aec_reference=True,
+    )
+    fed = len(aec.fed)
+    refs = _reference_records(journal)
+    # Far fewer journaled frames than outbound frames fed to the canceller.
+    if fed > _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES:
+        assert len(refs) < fed
+    # And never more captures than the decimation ceiling allows (+1 for the
+    # always-captured first frame at index 0).
+    assert len(refs) <= fed // _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES + 1
+
+
 async def test_journal_has_no_reference_frames_when_aec_disabled():
     journal = await _drive_session(enable_aec=False, echo_canceller=None)
+    assert _reference_records(journal) == []
+
+
+async def test_env_var_overrides_capture_opt_in(monkeypatch):
+    """``EASYCAT_CAPTURE_AEC_REFERENCE`` turns capture on even when the config
+    knob defaults to off."""
+    monkeypatch.setenv("EASYCAT_CAPTURE_AEC_REFERENCE", "1")
+    aec = _PassthroughAEC()
+    journal = await _drive_session(enable_aec=True, echo_canceller=aec)
+    assert _reference_records(journal), "env override must enable per-frame capture"
+
+
+async def test_env_var_can_force_capture_off(monkeypatch):
+    """``EASYCAT_CAPTURE_AEC_REFERENCE=0`` forces capture off even when the
+    config knob opts in."""
+    monkeypatch.setenv("EASYCAT_CAPTURE_AEC_REFERENCE", "0")
+    aec = _PassthroughAEC()
+    journal = await _drive_session(
+        enable_aec=True,
+        echo_canceller=aec,
+        capture_aec_reference=True,
+    )
     assert _reference_records(journal) == []
 
 

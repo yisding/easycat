@@ -171,12 +171,30 @@ class FilesystemArtifactStore:
 
     Files are ``<sha256>.bin``, permissions ``0o600``.
     Directories are created lazily on first write with ``0o700``.
+
+    Bounded by ``max_bytes`` (default 512 MB) so a long or chatty session
+    cannot fill the disk: once the running total of stored payloads would
+    exceed the cap, *new* artifacts are refused (``put`` returns ``""``) and a
+    single warning is logged.  Already-stored bytes are never deleted to make
+    room — unlike :class:`InMemoryArtifactStore`, the filesystem store is the
+    durable, crash-survivable record, so evicting earlier artifacts would
+    silently break replay of frames that already have a journal row.  Duplicate
+    writes of content already on disk do not count again.
     """
 
-    def __init__(self, session_id: str, *, data_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        *,
+        data_dir: str | Path | None = None,
+        max_bytes: int = 512_000_000,
+    ) -> None:
         root = Path(data_dir) if data_dir else Path(os.environ.get("EASYCAT_DATA_DIR", ".easycat"))
         self._dir = root / "artifacts" / session_id
         self._lock = threading.Lock()
+        self._max_bytes = max_bytes
+        self._current_bytes = 0
+        self._cap_warned = False
 
     def put(
         self,
@@ -191,6 +209,18 @@ class FilesystemArtifactStore:
         with self._lock:
             if path.exists():
                 return ref
+            if self._current_bytes + len(payload) > self._max_bytes:
+                # Refuse the new write rather than delete durable bytes that
+                # may already be referenced by a journal row.  Warn once so the
+                # cap is visible without spamming the log per frame.
+                if not self._cap_warned:
+                    self._cap_warned = True
+                    logger.warning(
+                        "FilesystemArtifactStore reached max_bytes %d; refusing new "
+                        "artifacts (set a larger max_bytes or lower capture volume)",
+                        self._max_bytes,
+                    )
+                return ""
             try:
                 self._dir.mkdir(parents=True, exist_ok=True)
                 os.chmod(self._dir, 0o700)
@@ -201,6 +231,7 @@ class FilesystemArtifactStore:
             except OSError:
                 logger.warning("Artifact write failed for ref=%s", ref, exc_info=True)
                 return ""
+            self._current_bytes += len(payload)
         return ref
 
     def get(self, ref: str) -> bytes | None:

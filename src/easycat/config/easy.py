@@ -468,6 +468,15 @@ class ObservabilityConfig:
     # ``EASYCAT_DEBUGGER_AUTOLAUNCH`` env var — to auto-open the UI in an
     # interactive terminal. Off by default.
     debugger_autolaunch: bool = False
+    # Strictly opt-in: when AEC is enabled, the bot's far-end playback frame
+    # fed into the echo canceller can be journaled (one artifact + journal row
+    # per frame) so the debugger can align all three AEC tracks and compute
+    # ERLE. That is ~50 writes/sec/session of fsync + journal pressure on the
+    # live audio loop, so ``debug="full"`` alone never turns it on. Set this —
+    # or the ``EASYCAT_CAPTURE_AEC_REFERENCE`` env var — to capture it; the
+    # router still rate-limits the capture to roughly one frame per second.
+    # Off by default.
+    capture_aec_reference: bool = False
 
     def __post_init__(self) -> None:
         self._normalize_and_validate()
@@ -509,6 +518,7 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "warmup",
         "max_session_cost_usd",
         "debugger_autolaunch",
+        "capture_aec_reference",
     }
 )
 

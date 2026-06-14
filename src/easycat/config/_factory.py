@@ -510,6 +510,9 @@ def create_session(config: EasyConfig) -> Session:
                 enable_vad=enable_vad,
                 enable_noise_reduction=config.enable_noise_reduction,
                 enable_echo_cancellation=enable_echo_cancellation,
+                capture_aec_reference=bool(
+                    getattr(config.observability, "capture_aec_reference", False)
+                ),
                 auto_turn_from_stt_final=auto_turn_from_stt_final,
                 strip_markdown=config.strip_markdown,
                 output_processors=config.output_processors,
