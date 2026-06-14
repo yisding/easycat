@@ -9,7 +9,7 @@ This module owns ALL collaborator construction that used to be inlined in
 the constructor — the seven pipeline stages, the shared ``RunContext``,
 the ``no-turn`` ``TurnContext``, the journal sink, the outbound audio
 queue, the AudioRouter / STTCommitter / TTSScheduler / CancelOrchestrator
-/ TurnRunner, and the greeting + opt-out collaborators — plus the
+/ TurnRunner, and the greeting collaborator — plus the
 deferred event-bus subscriptions and TurnManager bindings.  Pulling this
 out of ``__init__`` keeps construction and subscription from interleaving
 in the constructor body, and concentrates the dependency order here where
@@ -39,7 +39,6 @@ from easycat.session._cost_budget import CostBudgetEnforcer
 from easycat.session._greeting import GreetingController
 from easycat.session._journal_sink import SessionJournalSink
 from easycat.session._latency_budget import LatencyBudgetMonitor
-from easycat.session._opt_out import OptOutPolicy
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_runner import TurnRunner
@@ -93,7 +92,6 @@ class SessionComponents:
     turn_runner: TurnRunner
 
     greeting: GreetingController
-    opt_out: OptOutPolicy
 
 
 def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
@@ -312,27 +310,15 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
             turn_getter=lambda: session._turn or no_turn,
         )
 
-    # ── Greeting + opt-out collaborators ─────────────────────────
-    # Built last: they only reference Session via callables (synthesize /
-    # caller-id / actions / stop), so they self-subscribe to the bus
-    # without needing anything constructed after them.  ``synthesize``
-    # re-reads ``session.synthesize_bypass`` per call so test patches
+    # ── Greeting collaborator ────────────────────────────────────
+    # Built last: it only references Session via callables (synthesize),
+    # so it self-subscribes to the bus without needing anything
+    # constructed after it.  ``synthesize`` re-reads
+    # ``session.synthesize_bypass`` per call so test patches
     # (``session.synthesize_bypass = AsyncMock()``) stay observable.
     greeting = GreetingController(
         greeting=cfg.greeting,
         synthesize=lambda text: session.synthesize_bypass(text),
-        event_bus=event_bus,
-        runtime_scope=session._runtime_scope,
-        journal_sink=journal_sink,
-    )
-    opt_out = OptOutPolicy(
-        enabled=cfg.opt_out_detection,
-        phrases=(list(cfg.opt_out_phrases) if cfg.opt_out_phrases is not None else None),
-        dnc_list=cfg.dnc_list,
-        caller_id=session._caller_id,
-        session_actions=wiring.session_actions,
-        emit=session._emit,
-        stop=lambda: session.stop(),
         event_bus=event_bus,
         runtime_scope=session._runtime_scope,
         journal_sink=journal_sink,
@@ -358,7 +344,6 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         cancel_orchestrator=cancel_orchestrator,
         turn_runner=turn_runner,
         greeting=greeting,
-        opt_out=opt_out,
     )
 
 

@@ -176,6 +176,7 @@ easycat bundles export PATH --output DIR --json # emit context-pack metadata
 easycat inspect PATH      # summarise a debug bundle or SQLite journal
 easycat inspect PATH --json # emit machine-readable bundle/journal summary
 easycat replay PATH       # replay a debug bundle or SQLite journal
+easycat debugger serve PATH # open the browser debugger UI for a bundle/journal
 easycat replay PATH --json # emit machine-readable replay summary
 easycat latency PATH      # summarise critical-path latency percentiles for a bundle
 easycat diff PATH_A PATH_B # diff two bundles turn-by-turn for milestone and cost regressions
@@ -361,7 +362,7 @@ With the outbound manager enabled you also get:
 - `NumberHealthMonitor` — per-number answer rate, block count, pacing
 - `CallDispositionTracker` — human / voicemail / IVR disposition stats
 - `RetryStrategy` attached to the manager — `manager.retry_strategy.record_attempt(number, reason)` decides RETRY / SMS_FALLBACK / NO_RETRY
-- `DNCList`, `check_calling_hours`, and `detect_opt_out` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
+- `DNCList` and `check_calling_hours` helpers you can hook into `manager.dnc_list` / `manager.compliance_check` for TCPA-friendly calling
 
 Start the session before placing calls, and feed Twilio status callbacks
 back into the same event bus:
@@ -411,22 +412,6 @@ both inbound (stream start) and outbound (callee pickup).  Use this to
 play an AI-disclosure or identification line before the caller's first
 utterance — a requirement under the FCC's 2024 TCPA ruling and TX SB
 140 for outbound AI calls.
-
-### Opt-out auto-detection
-The session listens on every STT final for phrases in
-`easycat.telephony.OPT_OUT_PHRASES` (``"stop calling"``, ``"take me
-off your list"``, ``"opt out"``, …).  On match the session:
-
-1. emits an `OptOutDetected` event carrying the caller number, the
-   matched phrase, and the full transcript text,
-2. adds the caller to `session.dnc_list` when one is attached
-   (pass a shared `DNCList` via `SessionPolicyConfig(dnc_list=...)`),
-3. enqueues an `EndCallAction(reason="opt_out")` so the call
-   terminates after the agent's current utterance finishes.
-
-Set `SessionPolicyConfig(opt_out_detection=False)` to opt out of the
-auto-wiring, or pass `opt_out_phrases=("retire me", …)` to replace the
-built-in phrase list (language packs / industry-specific terminology).
 
 ### Caller-ID exposure policy
 Control whether the LLM sees the caller's number or only tool code
@@ -606,11 +591,17 @@ cross-system traces join cleanly.
 Use `debug="full"` when you need durable inspection. EasyCat writes SQLite
 journals under `.easycat/journals/`; pass `record_to="runs"` on `EasyConfig`
 or `create_text_session(...)` when you also want a timestamped debug bundle
-exported on shutdown. After the run, inspect a journal with:
+exported on shutdown. After the run, inspect a journal from the terminal or open the browser debugger UI:
 
 ```bash
 uv run easycat inspect .easycat/journals/<session_id>.sqlite
+uv run easycat debugger serve .easycat/journals/<session_id>.sqlite --no-open-browser
 ```
+
+The debugger UI is the during-call/post-call workspace: an overview dashboard,
+live event lanes, per-turn latency waterfalls, transcripts with audio playback,
+raw record inspection with paging, deterministic issue cards, cost rollups,
+replay, and live-session bundle export.
 
 ### Hook directly into agent/tool events
 You can subscribe to agent stream events (including tool calls) via the session:

@@ -59,6 +59,66 @@ def test_filter_records_by_multiple_names():
     assert [r["sequence"] for r in out] == [1, 3]
 
 
+def test_build_issues_surfaces_errors_empty_stt_and_latency():
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "data": {"stage": "vad"},
+            "timing": {"wall_ns": 0},
+        },
+        {
+            "sequence": 2,
+            "name": "vad_stop_speaking",
+            "turn_id": "t1",
+            "data": {},
+            "timing": {"wall_ns": 1_000_000_000},
+        },
+        {
+            "sequence": 3,
+            "name": "stt_final",
+            "turn_id": "t1",
+            "data": {"text": ""},
+            "timing": {"wall_ns": 3_000_000_000},
+        },
+        {
+            "sequence": 4,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "data": {"stage": "agent"},
+            "timing": {"wall_ns": 3_100_000_000},
+        },
+        {
+            "sequence": 5,
+            "name": "tool_call_failed",
+            "turn_id": "t1",
+            "data": {"stage": "agent"},
+            "timing": {"wall_ns": 3_200_000_000},
+            "error": {"type": "RuntimeError", "message": "tool exploded"},
+        },
+        {
+            "sequence": 6,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "data": {"stage": "agent"},
+            "timing": {"wall_ns": 12_500_000_000},
+        },
+    ]
+
+    out = _build_issues(records)
+
+    codes = {issue["code"] for issue in out["issues"]}
+    # server._build_issues is the extracted easycat.debug._issues engine, which
+    # uses unified codes (any errored record -> record_error; per-stage latency
+    # -> slow_milestone with the stage in the ``metric`` field).  Its full code
+    # surface (barge-in, audio-health, latency) is covered by tests/debug/.
+    assert {"record_error", "empty_stt_final", "slow_turn"} <= codes
+    assert out["summary"]["error"] >= 1
+    assert out["summary"]["warning"] >= 2
+    assert out["total"] == len(out["issues"])
+
+
 def test_cost_rollup_reports_budget_status_from_snapshot():
     records = [
         {

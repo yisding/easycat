@@ -7,6 +7,26 @@ pytest.importorskip("aiohttp")
 import pathlib
 
 
+def test_static_index_has_first_class_overview_and_record_pager():
+    static_path = (
+        pathlib.Path(__file__).resolve().parent.parent.parent
+        / "src/easycat/debugger/static/index.html"
+    )
+    text = static_path.read_text(encoding="utf-8")
+    assert 'data-tab="overview"' in text
+    assert 'id="overview-view"' in text
+    assert "function renderOverviewView()" in text
+    assert "Recommended next steps" in text
+    assert "Slowest turns" in text
+    assert 'id="records-prev-btn"' in text
+    assert 'id="records-next-btn"' in text
+    assert 'id="records-tail-btn"' in text
+    assert "function selectRecordBySeq(seq)" in text
+    # The boot decodes the URL deep-link hash first and falls back to the
+    # Overview dashboard as the default tab when no hash is present (WP13).
+    assert '_applyHashToState() || "overview"' in text
+
+
 def test_static_index_blocks_protocol_relative_urls():
     """Round-3 follow-up: ``_sanitiseUrl`` in the SPA must reject
     ``//evil.com`` (protocol-relative cross-origin)."""

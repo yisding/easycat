@@ -12,7 +12,6 @@ from easycat import (
     EasyConfig,
     ObservabilityConfig,
     SessionPolicyConfig,
-    create_session,
 )
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.smart_turn import SmartTurnConfig
@@ -29,7 +28,6 @@ from easycat.tts.openai_tts import OpenAITTSConfig
 from easycat.validation import LatencyBudget
 from tests.config._helpers import (
     _CapabilityTransportConfig,
-    _DummyAgent,
     _DummyWebSocket,
 )
 
@@ -150,48 +148,23 @@ def test_easycat_config_uses_transport_echo_preference_capability():
     assert config.echo_cancellation.enabled is True
 
 
-def test_easyconfig_session_policy_passes_opt_out_settings_to_session_config():
-    session = create_session(
-        EasyConfig(
-            stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
-            tts=OpenAITTSConfig(api_key="test-key"),
-            agent=_DummyAgent(),
-            session_policy=SessionPolicyConfig(
-                opt_out_detection=False,
-                opt_out_phrases=("retire me",),
-            ),
-        )
-    )
-
-    assert session._config.opt_out_detection is False
-    assert session._config.opt_out_phrases == ("retire me",)
-
-
 def test_easyconfig_session_policy_keeps_legacy_top_level_aliases():
     config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
         greeting="Hello",
-        opt_out_detection=False,
-        opt_out_phrases=("retire me",),
         caller_id_exposure="system_message",
     )
 
     assert config.session_policy == SessionPolicyConfig(
         greeting="Hello",
-        opt_out_detection=False,
-        opt_out_phrases=("retire me",),
         caller_id_exposure="system_message",
     )
     assert config.greeting == "Hello"
-    assert config.opt_out_detection is False
-    assert config.opt_out_phrases == ("retire me",)
     assert config.caller_id_exposure == "system_message"
 
-    config.opt_out_detection = True
     config.caller_id_exposure = "tools_only"
 
-    assert config.session_policy.opt_out_detection is True
     assert config.session_policy.caller_id_exposure == "tools_only"
 
 

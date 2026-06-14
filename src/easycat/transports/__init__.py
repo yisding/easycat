@@ -36,6 +36,8 @@ _LAZY_ATTR: dict[str, str] = {
     "WebRTCTransportConfig": "easycat.transports.webrtc",
     "webrtc_ice_servers_from_env": "easycat.transports.webrtc",
     "webrtc_transport_config_from_env": "easycat.transports.webrtc",
+    "run_webrtc_config_server": "easycat.transports.webrtc",
+    "serve_webrtc_config_sessions": "easycat.transports.webrtc",
     "WebSocketTransport": "easycat.transports.websocket",
     "WebSocketTransportConfig": "easycat.transports.websocket",
     "WebSocketConnectionTransport": "easycat.transports.websocket",
@@ -71,6 +73,8 @@ if TYPE_CHECKING:
         ICEServer,
         WebRTCTransport,
         WebRTCTransportConfig,
+        run_webrtc_config_server,
+        serve_webrtc_config_sessions,
         webrtc_ice_servers_from_env,
         webrtc_transport_config_from_env,
     )

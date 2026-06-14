@@ -105,6 +105,14 @@ journal_app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 
+debugger_app = typer.Typer(
+    name="debugger",
+    help="Open the browser debugging UI for bundles and journals.",
+    no_args_is_help=True,
+    add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -1009,6 +1017,73 @@ def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
             escape(spans) if spans else "[dim](no stage spans)[/]",
         )
     return table
+
+
+# ── `easycat debugger serve` ─────────────────────────────────────
+
+
+@debugger_app.command("serve")
+@cli_command
+def serve_debugger_ui(
+    bundle_path: Path = typer.Argument(
+        ...,
+        help=(
+            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
+            "``.easycat-bundle``) or a ``.sqlite`` journal."
+        ),
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Host to bind. Non-loopback requires --allow-remote.",
+    ),
+    port: int = typer.Option(8765, "--port", help="Port to bind."),
+    open_browser: bool = typer.Option(
+        True,
+        "--open-browser/--no-open-browser",
+        help="Open the debugger URL in a browser after the server starts.",
+    ),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Allow binding to a non-loopback host. The debugger has no auth.",
+    ),
+) -> None:
+    """Serve the first-class browser debugger for a bundle or SQLite journal."""
+    bundle = _load_bundle_or_journal(
+        bundle_path,
+        command="debugger_serve",
+        json_output=False,
+    )
+    from easycat.debugger import serve_run_bundle
+
+    url = f"http://{host}:{port}"
+    stderr_console.print(
+        f"[bold]EasyCat debugger[/] serving [cyan]{escape(str(bundle_path))}[/] at "
+        f"[cyan]{escape(url)}[/]"
+    )
+    stderr_console.print(
+        "[yellow]Journals can contain transcripts, audio, prompts, and tool payloads; "
+        "keep this server on loopback unless you add your own network controls.[/]"
+    )
+    try:
+        serve_run_bundle(
+            bundle,
+            label=bundle_path.name,
+            host=host,
+            port=port,
+            open_browser=open_browser,
+            allow_remote=allow_remote,
+        )
+    except RuntimeError as exc:
+        emit_command_error(
+            "debugger_serve",
+            str(exc),
+            json_output=False,
+            exit_code=2,
+            path=str(bundle_path),
+        )
+        raise typer.Exit(2) from None
 
 
 # ── `easycat bundles show` / `easycat inspect` ───────────────────

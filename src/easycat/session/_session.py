@@ -243,6 +243,10 @@ class Session:
             identity=cfg.call_identity,
             exposure=cfg.caller_id_exposure,
         )
+        # Do-Not-Call list consulted by outbound telephony pre-dial checks.
+        # Stored here so the public ``Session.dnc_list`` property is a plain
+        # session-owned attribute.
+        self._dnc_list = cfg.dnc_list
         # Telephony helpers behind a single ``session.telephony`` facade.
         self.telephony = TelephonyFacade(list(cfg.telephony_helpers))
 
@@ -269,8 +273,8 @@ class Session:
         # The builder constructs the 7 stages, the shared RunContext, the
         # journal sink, the outbound queue, and every collaborator
         # (AudioRouter, STTCommitter, TTSScheduler, CancelOrchestrator,
-        # TurnRunner, GreetingController, OptOutPolicy), wires their
-        # event-bus subscriptions and TurnManager bindings, and returns the
+        # TurnRunner, GreetingController), wires their event-bus
+        # subscriptions and TurnManager bindings, and returns the
         # assembled bundle for us to unpack onto private fields.
         self._unpack(build_session(self, cfg))
         self._debug_backends = SessionDebugBackends(
@@ -341,7 +345,6 @@ class Session:
         self._cancel = components.cancel_orchestrator
         self._turn_runner = components.turn_runner
         self._greeting = components.greeting
-        self._opt_out = components.opt_out
 
     def _validate_providers(self, cfg: SessionConfig) -> None:
         """Reject noop providers for audio sessions; warn on missing NR backend.
@@ -778,18 +781,20 @@ class Session:
 
     @property
     def dnc_list(self) -> Any | None:
-        """Do-Not-Call list consulted by opt-out auto-detection.
+        """Do-Not-Call list consulted by outbound telephony pre-dial checks.
 
-        Apps that want opt-out flows to persist across sessions
-        assign the same ``DNCList`` instance to every session
-        (or wire a shared store behind a DNC-list-compatible object).
-        Delegates to the :class:`OptOutPolicy` collaborator that owns it.
+        Apps that want DNC state to persist across sessions assign the
+        same ``DNCList`` instance to every session (or wire a shared
+        store behind a DNC-list-compatible object). Agent tools can add or
+        remove numbers at runtime via
+        :meth:`~easycat.session.actions.SessionActions.add_to_dnc` /
+        :meth:`~easycat.session.actions.SessionActions.remove_from_dnc`.
         """
-        return self._opt_out.dnc_list
+        return self._dnc_list
 
     @dnc_list.setter
     def dnc_list(self, value: Any | None) -> None:
-        self._opt_out.dnc_list = value
+        self._dnc_list = value
 
     @property
     def call_identity(self) -> CallIdentity | None:
@@ -800,8 +805,8 @@ class Session:
         :meth:`OutboundCallManager.place_call` for outbound calls.
         Tool code (including agent function tools) reads this directly
         unless :attr:`caller_id_exposure` is ``"off"``.  Internal
-        telephony policy hooks retain the private value so opt-out
-        detection can still update DNC state.  Delegates to the
+        telephony policy hooks retain the private value so DNC checks
+        can still see the number.  Delegates to the
         :class:`CallerIdState` collaborator.
         """
         return self._caller_id.identity

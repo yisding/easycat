@@ -430,6 +430,7 @@ EasyCat — voice bot framework
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
+    debugger    Open the browser debugger for a captured call
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
@@ -505,6 +506,8 @@ Run easycat explain json-schema for CLI JSON.
 - **`uv run easycat bundles list`** / **`uv run easycat bundles show <path>`** —
   list captured bundles and crash dumps, then summarize a debug bundle or
   SQLite journal from the shell.
+- **`uv run easycat debugger serve <path>`** — open the browser debugging UI
+  for a captured bundle or SQLite journal.
 - **`uv run easycat bundles export <path>`** — write a redacted context pack
   that a coding agent can read without copying raw journal payloads.
 - **`uv run easycat inspect <path>`** — friendly alias for

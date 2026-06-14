@@ -107,7 +107,7 @@ same).
 ## Beyond the Top-Level Exports
 
 The full telephony vocabulary (DTMF aggregation, voicemail detection, call
-screening, IVR actions, opt-out detection), reconnect events, transport
+screening, IVR actions), reconnect events, transport
 diagnostics, and session-action events live in `easycat.events` alongside
 bulk-subscription groups such as `STT_EVENTS`, `LIFECYCLE_EVENTS`,
 `TELEPHONY_EVENTS`, and `ALL_EVENTS`. Import them from `easycat.events`

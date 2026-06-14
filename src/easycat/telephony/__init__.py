@@ -25,6 +25,7 @@ _LAZY_ATTR: dict[str, str] = {
     # TwiML helpers
     "compute_twilio_webhook_signature": "easycat.telephony.twiml",
     "parse_gather_webhook": "easycat.telephony.twiml",
+    "reconstruct_public_url": "easycat.telephony.twiml",
     "twilio_form_items_from_request": "easycat.telephony.twiml",
     "twilio_public_url_from_request": "easycat.telephony.twiml",
     "twilio_stream_parameters_from_form": "easycat.telephony.twiml",
@@ -66,11 +67,10 @@ _LAZY_ATTR: dict[str, str] = {
     "AIDisclosureConfig": "easycat.telephony.compliance",
     "CallBlocked": "easycat.telephony.compliance",
     "DNCList": "easycat.telephony.compliance",
-    "OPT_OUT_PHRASES": "easycat.telephony.compliance",
+    "DNCStore": "easycat.telephony.compliance",
+    "SQLiteDNCList": "easycat.telephony.compliance",
     "check_calling_hours": "easycat.telephony.compliance",
-    "detect_opt_out": "easycat.telephony.compliance",
     "lookup_timezone": "easycat.telephony.compliance",
-    "match_opt_out_phrase": "easycat.telephony.compliance",
     # Number health + retries
     "CallDispositionTracker": "easycat.telephony.number_health",
     "NumberHealthMonitor": "easycat.telephony.number_health",
@@ -84,14 +84,13 @@ __all__ = sorted(_LAZY_ATTR)
 
 if TYPE_CHECKING:
     from easycat.telephony.compliance import (
-        OPT_OUT_PHRASES,
         AIDisclosureConfig,
         CallBlocked,
         DNCList,
+        DNCStore,
+        SQLiteDNCList,
         check_calling_hours,
-        detect_opt_out,
         lookup_timezone,
-        match_opt_out_phrase,
     )
     from easycat.telephony.dtmf import (
         DTMFAggregator,
@@ -133,6 +132,7 @@ if TYPE_CHECKING:
         TwilioWebhookSignatureError,
         compute_twilio_webhook_signature,
         parse_gather_webhook,
+        reconstruct_public_url,
         twilio_form_items_from_request,
         twilio_public_url_from_request,
         twilio_stream_parameters_from_form,

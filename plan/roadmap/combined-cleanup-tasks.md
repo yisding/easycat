@@ -46,7 +46,7 @@ context. Several bullets are known stale; use the current-state list above and
 
 - `src/easycat/session/_session.py` is still 2,961 lines and owns lifecycle,
   provider wiring, turn state, STT commit scheduling, TTS playback,
-  journaling, telephony helpers, greeting, opt-out, text mode, and bundle
+  journaling, telephony helpers, greeting, text mode, and bundle
   export. Splitting it remains the highest-leverage cleanup.
 - `src/easycat/__init__.py` is 578 lines and lazily exports 195 symbols. The
   lazy-loading mechanism is reasonable; the public symbol count is the problem.

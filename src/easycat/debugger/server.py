@@ -307,17 +307,16 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
-    """Build an immutable bundle-backed source with cached lookups.
+def _run_bundle_source(
+    bundle: RunBundle, *, label: str, annotate_path: Path | None = None
+) -> DebuggerSource:
+    """Build an immutable bundle-backed source from an already loaded bundle.
 
-    Bundles never change after load, so we cache the records list and
-    artifact-blob view once.  Subsequent ``records()`` calls return the
-    same list without re-decoding NDJSON, which matters when the UI
-    polls and bundles run into the tens of thousands of records.
+    ``annotate_path`` is the real on-disk bundle path used for the reviewer
+    annotation sidecar; pass ``None`` for path-less bundles (e.g. a journal
+    loaded in-memory), which disables the annotation controls.
     """
-    bundle = RunBundle.load(bundle_path)
     cached_records = list(bundle.records())
-    basename = Path(str(bundle_path)).name
 
     def _replay(**kwargs: Any) -> Any:
         from easycat.runtime.replay import (
@@ -357,7 +356,7 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         }
 
     return DebuggerSource(
-        label=basename,
+        label=label,
         _records_fn=lambda: cached_records,
         # Bundles are immutable, so the count is fixed.  Use it as both the
         # change-detection key and the displayed count — the WS loop emits a
@@ -366,7 +365,7 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         _artifact_fn=lambda ref: bundle.artifact_blobs.get(ref),
         _manifest_fn=lambda: {
             "source": "bundle",
-            "name": basename,
+            "name": label,
             "format_version": bundle.format_version,
             "provider_versions": bundle.manifest.provider_versions,
             "config_snapshot": bundle.manifest.config_snapshot,
@@ -377,8 +376,9 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
             "supports_export": False,
             # Bundles are read-only, so reviewer verdicts land in a sidecar
             # next to the bundle rather than the journal.  The SPA shows the
-            # per-turn annotation controls when this is true.
-            "supports_annotate": True,
+            # per-turn annotation controls only when we have a real on-disk
+            # path to write that sidecar to.
+            "supports_annotate": annotate_path is not None,
             "is_live": False,
             "replay_entry_points": [
                 {
@@ -394,8 +394,23 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         _replay_fn=_replay,
         # Real on-disk path for the annotation sidecar; kept off the manifest
         # so it never leaks into the browser.
-        _annotate_path=Path(str(bundle_path)),
+        _annotate_path=annotate_path,
         is_live=False,
+    )
+
+
+def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
+    """Build an immutable bundle-backed source with cached lookups.
+
+    Bundles never change after load, so we cache the records list and
+    artifact-blob view once.  Subsequent ``records()`` calls return the
+    same list without re-decoding NDJSON, which matters when the UI
+    polls and bundles run into the tens of thousands of records.
+    """
+    return _run_bundle_source(
+        RunBundle.load(bundle_path),
+        label=Path(str(bundle_path)).name,
+        annotate_path=Path(str(bundle_path)),
     )
 
 
@@ -2040,6 +2055,26 @@ def serve_bundle(
     """
     _check_host(host, allow_remote)
     source = _bundle_source(bundle_path)
+    _serve(source, host=host, port=port, open_browser=open_browser, allow_remote=allow_remote)
+
+
+def serve_run_bundle(
+    bundle: RunBundle,
+    *,
+    label: str = "bundle",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    allow_remote: bool = False,
+) -> None:
+    """Serve the debugger UI for an already loaded :class:`RunBundle`.
+
+    This is useful for SQLite journals loaded through
+    :meth:`RunBundle.from_partial_journal`, where there is no ZIP bundle path
+    for :func:`serve_bundle` to reopen.
+    """
+    _check_host(host, allow_remote)
+    source = _run_bundle_source(bundle, label=label)
     _serve(source, host=host, port=port, open_browser=open_browser, allow_remote=allow_remote)
 
 

@@ -10,7 +10,7 @@ sees the number:
 - ``"tools_only"`` — hidden from the LLM; tool code reads it via
   ``session.call_identity``.
 - ``"off"`` — hidden from tools too; only internal telephony policy
-  (opt-out / DNC) reads it via :attr:`CallerIdState.private_identity`.
+  (DNC) reads it via :attr:`CallerIdState.private_identity`.
 
 This collaborator owns the raw value and the public read/write
 semantics so Session just delegates its ``call_identity`` /
@@ -88,8 +88,8 @@ class CallerIdState:
         """The raw identity regardless of exposure.
 
         Internal telephony policy (Twilio identity merge in ``easycat.config``,
-        opt-out / DNC) reads this so ``"off"`` exposure still feeds DNC
-        state without leaking the number to tools or the LLM.
+        DNC) reads this so ``"off"`` exposure still feeds DNC state without
+        leaking the number to tools or the LLM.
         """
         return self._identity
 

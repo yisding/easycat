@@ -21,7 +21,7 @@ import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
-from easycat.events import CallInitiated, EventBus, STTFinal
+from easycat.events import CallInitiated, EventBus
 from easycat.integrations.agents._agent_runner import AgentRunner
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -304,8 +304,7 @@ def test_session_caller_id_message_off_returns_none() -> None:
     assert session._caller_id.private_identity.caller_number == "+15550000000"
 
 
-@pytest.mark.asyncio
-async def test_session_caller_id_off_hides_tools_but_keeps_opt_out_internal() -> None:
+def test_session_caller_id_off_hides_from_llm_but_keeps_identity_internal() -> None:
     from easycat import Session, SessionConfig
     from easycat.stubs import NoopAgent
 
@@ -320,9 +319,13 @@ async def test_session_caller_id_off_hides_tools_but_keeps_opt_out_internal() ->
         )
     )
 
+    # "off" exposure hides the identity from the LLM…
     assert session.call_identity is None
-    await session.event_bus.emit(STTFinal(text="Please stop calling me"))
-    assert dnc.is_on_dnc("+15550000000")
+    assert session._caller_id.system_message() is None
+    # …but the raw identity and DNC list remain available for compliance.
+    assert session._caller_id.private_identity is not None
+    assert session._caller_id.private_identity.caller_number == "+15550000000"
+    assert session.dnc_list is dnc
 
 
 def test_session_caller_id_system_message_filters_unsafe_identity_values() -> None:

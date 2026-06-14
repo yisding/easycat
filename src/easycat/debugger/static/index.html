@@ -134,6 +134,73 @@
   }
   .view { display: none; height: 100%; overflow: hidden; }
   .view.active { display: flex; flex-direction: column; }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 2px 8px; font-family: var(--mono); font-size: 10px;
+    color: var(--muted); background: var(--panel-2);
+  }
+  .pill.good { color: var(--green); border-color: rgba(68,209,138,0.35); }
+  .pill.warn { color: var(--orange); border-color: rgba(232,166,75,0.35); }
+  .pill.bad { color: var(--red); border-color: rgba(224,99,90,0.35); }
+  .section-title {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    margin: 0 0 10px;
+  }
+  .section-title h2, .section-title h3 { margin: 0; }
+  .section-title .hint { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+
+  /* Overview */
+  #overview-view { overflow: auto; padding: 18px; gap: 16px; }
+  .hero {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px;
+    align-items: start; background: linear-gradient(135deg, rgba(110,168,254,0.16), rgba(183,141,255,0.08));
+    border: 1px solid rgba(110,168,254,0.30); border-radius: 12px; padding: 18px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.18);
+  }
+  .hero h2 { margin: 0 0 8px; font-size: 20px; letter-spacing: -0.02em; }
+  .hero p { margin: 0; color: var(--muted); line-height: 1.5; max-width: 760px; }
+  .hero-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .overview-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 12px; }
+  .metric-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; min-width: 0;
+  }
+  .metric-card .label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .metric-card .value { font-family: var(--mono); font-size: 24px; color: var(--text); margin-top: 6px; overflow-wrap: anywhere; }
+  .metric-card .sub { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 4px; }
+  .overview-columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr); gap: 16px; min-height: 0; }
+  .panel-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; min-width: 0;
+  }
+  .quick-list { display: grid; gap: 10px; }
+  .quick-item {
+    display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px;
+    align-items: center; border: 1px solid var(--border); background: var(--bg-2);
+    border-radius: 8px; padding: 10px;
+  }
+  .quick-item .icon { font-size: 16px; text-align: center; }
+  .quick-item .title { font-weight: 600; }
+  .quick-item .desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .turn-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; }
+  .turn-card {
+    border: 1px solid var(--border); background: var(--bg-2); border-radius: 8px;
+    padding: 10px; cursor: pointer;
+  }
+  .turn-card:hover { border-color: var(--accent); background: var(--row-hover); }
+  .turn-card .top { display: flex; justify-content: space-between; gap: 8px; font-family: var(--mono); }
+  .turn-card .meta { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 6px; }
+  @media (max-width: 1000px) {
+    .hero, .overview-columns { grid-template-columns: 1fr; }
+    .hero-actions { justify-content: flex-start; }
+    .overview-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); }
+  }
+  @media (max-width: 640px) {
+    .overview-grid { grid-template-columns: 1fr; }
+  }
 
   /* Empty / error states */
   .empty, .error-msg {
@@ -164,6 +231,11 @@
   #records-filters input, #records-filters select {
     height: 28px;
   }
+  .pager {
+    display: flex; gap: 6px; align-items: center; color: var(--muted);
+    font-family: var(--mono); font-size: 11px;
+  }
+  .pager button { padding: 4px 8px; font-family: var(--mono); }
   #records-filters .count {
     color: var(--muted);
     margin-left: auto;
@@ -564,19 +636,22 @@
   .annotation-status { color: var(--muted); font-size: 11px; }
 
   /* Cost view */
-  #cost-view { padding: 14px; overflow: auto; }
+  #cost-view, #issues-view { padding: 14px; overflow: auto; }
+  .issues-summary,
   .cost-totals {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 10px;
     margin-bottom: 16px;
   }
+  .issue-card,
   .cost-card {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 5px;
     padding: 14px;
   }
+  .issue-card .label,
   .cost-card .label {
     font-size: 10px;
     color: var(--muted);
@@ -584,6 +659,7 @@
     letter-spacing: 0.06em;
     margin-bottom: 6px;
   }
+  .issue-card .value,
   .cost-card .value {
     font-family: var(--mono);
     font-size: 22px;
@@ -591,8 +667,13 @@
     overflow-wrap: anywhere;
   }
   .cost-card .value.ok { color: var(--green); }
-  .cost-card .value.warning { color: var(--orange); }
-  .cost-card .value.exceeded { color: var(--red); }
+  .cost-card .value.warning, .issue-card.warning .value { color: var(--orange); }
+  .cost-card .value.exceeded, .issue-card.error .value { color: var(--red); }
+  .issue-list { display: grid; gap: 10px; margin-top: 14px; }
+  .issue-card { cursor: pointer; }
+  .issue-card:hover { border-color: var(--accent); }
+  .issue-card .detail { color: var(--text); font-size: 12px; margin-top: 8px; line-height: 1.45; }
+  .issue-card .meta { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 8px; }
   .cost-card .subvalue {
     color: var(--muted);
     font-family: var(--mono);
@@ -1014,7 +1095,8 @@
   <button id="refresh-btn">⟳ Refresh</button>
 </header>
 <nav class="tabbar" role="tablist">
-  <div class="tab active" data-tab="timeline" role="tab">Timeline</div>
+  <div class="tab active" data-tab="overview" role="tab">Overview</div>
+  <div class="tab" data-tab="timeline" role="tab">Timeline</div>
   <div class="tab" data-tab="live" role="tab">Live</div>
   <div class="tab" data-tab="pipeline" role="tab">Pipeline</div>
   <div class="tab" data-tab="records" role="tab">Records</div>
@@ -1025,7 +1107,8 @@
   <div class="tab" data-tab="replay" role="tab">Replay</div>
 </nav>
 <main>
-  <section id="timeline-view" class="view active"></section>
+  <section id="overview-view" class="view active"></section>
+  <section id="timeline-view" class="view"></section>
 
   <section id="live-view" class="view">
     <div class="live-toolbar">
@@ -1080,6 +1163,11 @@
         <label style="color: var(--muted); display: flex; align-items: center; gap: 4px;">
           <input type="checkbox" id="errors-only-toggle" /> errors only
         </label>
+        <div class="pager" aria-label="Record pagination">
+          <button id="records-prev-btn" type="button">← Prev</button>
+          <button id="records-next-btn" type="button">Next →</button>
+          <button id="records-tail-btn" type="button">Tail</button>
+        </div>
         <span class="count" id="record-count"></span>
       </div>
       <table>
@@ -1318,7 +1406,9 @@ const state = {
   transcripts: [],
   cost: null,
   annotations: {},
+  issues: { issues: [], summary: {}, total: 0 },
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
+  recordsPage: { limit: 500, offset: 0, total: 0, pageSize: 0 },
   selectedSeq: null,
   ws: null,
   wsConnected: false,
@@ -1399,6 +1489,7 @@ const ANNOTATION_FAILURE_TYPES = [
 ];
 
 const TAB_LOADERS = {
+  overview: renderOverviewView,
   timeline: renderTimelineView,
   live: renderLiveView,
   pipeline: renderPipelineView,
@@ -1455,12 +1546,13 @@ async function loadAllSnapshots() {
   // Live view has its own uncapped, name-filtered fetch so that
   // chatty ``tts_audio`` / ``agent_delta`` records in long sessions
   // don't push later VAD/ASR/agent events out of the 1000-record cap.
-  const [recsResp, turnsResp, timelineResp, transcriptResp, costResp] = await Promise.all([
+  const [recsResp, turnsResp, timelineResp, transcriptResp, costResp, issuesResp] = await Promise.all([
     getJSON("/api/records?limit=1000"),
     getJSON("/api/turns"),
     getJSON("/api/timeline"),
     getJSON("/api/transcript"),
     getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
+    getJSON("/api/issues").catch(() => ({ issues: [], summary: {}, total: 0 })),
     loadLiveRecords(),
   ]);
   state.records = recsResp.records;
@@ -1469,6 +1561,7 @@ async function loadAllSnapshots() {
   state.timeline = timelineResp.timeline;
   state.transcripts = transcriptResp.transcripts;
   state.cost = costResp;
+  state.issues = issuesResp;
   // Hydrate reviewer verdicts from the bundle's annotation sidecar.  Only
   // bundle sources advertise ``supports_annotate``; a missing/corrupt
   // sidecar resolves to an empty map server-side, and any fetch error is
@@ -1528,8 +1621,137 @@ function activateTab(name) {
 }
 
 function rerenderActiveTab() {
-  const fn = TAB_LOADERS[state.activeTab || "timeline"];
+  const fn = TAB_LOADERS[state.activeTab || "overview"];
   fn?.();
+}
+
+function fmtMs(value) {
+  return typeof value === "number" ? `${value.toFixed(value >= 100 ? 0 : 1)} ms` : "—";
+}
+function fmtMoney(value) {
+  return typeof value === "number" ? `$${value.toFixed(4)}` : "$0.0000";
+}
+function issueSeverityClass() {
+  const summary = state.issues?.summary || {};
+  if ((summary.error || 0) > 0) return "bad";
+  if ((summary.warning || 0) > 0) return "warn";
+  return "good";
+}
+function sourceTitle() {
+  const m = state.manifest || {};
+  return m.source === "bundle" ? (m.name || "bundle") : (m.session_id || "live session");
+}
+
+// ── Overview view ─────────────────────────────────────────────────
+function renderOverviewView() {
+  const root = $("#overview-view");
+  clear(root);
+  const m = state.manifest || {};
+  const issueCount = state.issues?.total || 0;
+  const issueSummary = state.issues?.summary || {};
+  const costTotals = state.cost?.totals || {};
+  const budget = state.cost?.budget || {};
+  const slowestTurns = [...(state.timeline || [])]
+    .sort((a, b) => (b.wall_ms || 0) - (a.wall_ms || 0))
+    .slice(0, 5);
+  const healthLabel = issueCount
+    ? `${issueSummary.error || 0} errors · ${issueSummary.warning || 0} warnings`
+    : "No deterministic issues";
+
+  root.appendChild(el("div", { class: "hero" }, [
+    el("div", null, [
+      el("div", { class: `pill ${m.is_live ? "good" : ""}` }, m.is_live ? "● live source" : "offline bundle"),
+      el("h2", null, sourceTitle()),
+      el("p", null,
+        "Start here for call health, then jump directly into timeline, live lanes, issues, records, transcript, cost, or replay."),
+    ]),
+    el("div", { class: "hero-actions" }, [
+      el("button", { class: "primary", onclick: () => activateTab(issueCount ? "issues" : "timeline") },
+        issueCount ? "Review issues" : "Open timeline"),
+      el("button", { onclick: () => activateTab("live") }, "Live lanes"),
+      el("button", { onclick: () => activateTab("records") }, "Records"),
+      m.supports_replay ? el("button", { onclick: () => activateTab("replay") }, "Replay") : null,
+      m.supports_export ? el("button", { onclick: exportBundle }, "Export bundle") : null,
+    ]),
+  ]));
+
+  const metricGrid = el("div", { class: "overview-grid" });
+  [
+    ["Health", healthLabel, issueCount ? `${issueCount} triage card${issueCount === 1 ? "" : "s"}` : "ready for forensic review", issueSeverityClass()],
+    ["Turns", String(state.turns.length), `${state.transcripts.length} transcript row${state.transcripts.length === 1 ? "" : "s"}`, ""],
+    ["Records", String(m.record_count ?? state.recordsTotal ?? state.records.length), `${m.artifact_count ?? 0} artifacts`, ""],
+    ["Cost", fmtMoney(costTotals.usd || 0), budget.configured ? `${budget.status} budget` : "no budget configured", budget.status === "exceeded" ? "bad" : budget.status === "warning" ? "warn" : ""],
+  ].forEach(([label, value, sub, cls]) => {
+    metricGrid.appendChild(el("div", { class: "metric-card" }, [
+      el("div", { class: "label" }, label),
+      el("div", { class: "value" }, value),
+      el("div", { class: `sub ${cls || ""}` }, sub),
+    ]));
+  });
+  root.appendChild(metricGrid);
+
+  const columns = el("div", { class: "overview-columns" });
+  const quick = el("div", { class: "panel-card" }, [
+    el("div", { class: "section-title" }, [
+      el("h3", null, "Recommended next steps"),
+      el("span", { class: "hint" }, "click to jump"),
+    ]),
+  ]);
+  const quickList = el("div", { class: "quick-list" });
+  const firstIssue = (state.issues?.issues || [])[0];
+  const quickItems = [];
+  if (firstIssue) {
+    quickItems.push(["⚠", firstIssue.title || "Review top issue", firstIssue.detail || "Open issue triage.", () => activateTab("issues")]);
+  } else {
+    quickItems.push(["✓", "No deterministic issues", "Check the timeline and transcript to validate call quality.", () => activateTab("timeline")]);
+  }
+  quickItems.push(["▤", "Read the conversation", "Open transcript rows and per-turn audio playback.", () => activateTab("transcript")]);
+  quickItems.push(["⌁", "Inspect timing", "Compare VAD, STT, agent, TTS, transport, and turn spans.", () => activateTab("timeline")]);
+  quickItems.push(["{}", "Drill into raw evidence", "Filter by stage, name, sequence, turn, or errors only.", () => activateTab("records")]);
+  if (m.supports_replay) {
+    quickItems.push(["▶", "Replay deterministically", "Run artifact replay before trying live providers.", () => activateTab("replay")]);
+  } else if (m.supports_export) {
+    quickItems.push(["↓", "Freeze live session", "Export a bundle for replay and sharing.", exportBundle]);
+  }
+  for (const [icon, title, desc, action] of quickItems) {
+    quickList.appendChild(el("div", { class: "quick-item" }, [
+      el("div", { class: "icon" }, icon),
+      el("div", null, [el("div", { class: "title" }, title), el("div", { class: "desc" }, desc)]),
+      el("button", { onclick: action }, "Open"),
+    ]));
+  }
+  quick.appendChild(quickList);
+
+  const turns = el("div", { class: "panel-card" }, [
+    el("div", { class: "section-title" }, [
+      el("h3", null, "Slowest turns"),
+      el("span", { class: "hint" }, "wall time"),
+    ]),
+  ]);
+  const turnList = el("div", { class: "turn-list" });
+  if (slowestTurns.length === 0) {
+    turnList.appendChild(el("div", { class: "empty" }, "No turn-scoped records yet."));
+  } else {
+    for (const turn of slowestTurns) {
+      const milestones = turn.milestones || {};
+      const card = el("div", { class: "turn-card" }, [
+        el("div", { class: "top" }, [
+          el("span", null, turn.turn_id || "unknown turn"),
+          el("span", null, fmtMs(turn.wall_ms)),
+        ]),
+        el("div", { class: "meta" },
+          `vad→stt ${fmtMs(milestones.vad_endpoint_to_stt_final_ms)} · ` +
+          `stt→agent ${fmtMs(milestones.stt_final_to_agent_first_token_ms)} · ` +
+          `agent→tts ${fmtMs(milestones.agent_first_token_to_tts_first_byte_ms)}`),
+      ]);
+      card.addEventListener("click", () => filterRecordsByTurn(turn.turn_id));
+      turnList.appendChild(card);
+    }
+  }
+  turns.appendChild(turnList);
+  columns.appendChild(quick);
+  columns.appendChild(turns);
+  root.appendChild(columns);
 }
 
 // ── Timeline view ────────────────────────────────────────────────
@@ -1972,9 +2194,24 @@ function _liveMarkerTitle(r, startMs, endMs) {
   return lines.join("\n");
 }
 
+
+function selectRecordBySeq(seq) {
+  state.selectedSeq = seq;
+  state.filters = { stage: "", turn: null, name: "", from: seq, to: seq, errorsOnly: false };
+  resetRecordPager();
+  $("#stage-filter").value = "";
+  $("#name-filter").value = "";
+  activateTab("records");
+  const rec =
+    (state.records || []).find((r) => r.sequence === seq) ||
+    (state.liveRecords || []).find((r) => r.sequence === seq);
+  if (rec) selectRecord(rec);
+}
+
 function _liveSelectRecord(seq) {
   state.selectedSeq = seq;
   state.filters = { stage: "", turn: null, name: "", from: null, to: null, errorsOnly: false };
+  resetRecordPager();
   $("#stage-filter").value = "";
   $("#name-filter").value = "";
   activateTab("records");
@@ -2005,6 +2242,7 @@ async function playConcatAudio(turnId, track = "tts") {
 
 function filterRecordsByTurn(turnId) {
   state.filters.turn = turnId;
+  resetRecordPager();
   $("#stage-filter").value = "";
   activateTab("records");
   _writeHash();
@@ -2103,9 +2341,8 @@ async function loadAndRenderRecords() {
   if (state.filters.from) params.set("from", state.filters.from);
   if (state.filters.to) params.set("to", state.filters.to);
   if (state.filters.errorsOnly) params.set("errors", "1");
-  // Cap at 500 rows for the table; pager controls below would let the
-  // user step through bigger result sets if we needed to expose more.
-  params.set("limit", "500");
+  params.set("limit", String(state.recordsPage.limit));
+  params.set("offset", String(state.recordsPage.offset));
   const search = $("#records-search");
   let r;
   try {
@@ -2121,12 +2358,28 @@ async function loadAndRenderRecords() {
   if (search) search.classList.remove("invalid");
   const shown = r.records.length;
   const total = r.total ?? shown;
+  state.recordsPage.total = total;
+  state.recordsPage.pageSize = shown;
+  const start = total === 0 ? 0 : state.recordsPage.offset + 1;
+  const end = state.recordsPage.offset + shown;
   let label = shown === total
     ? `${total} record${total === 1 ? "" : "s"}`
-    : `showing ${shown} of ${total} records`;
+    : `showing ${start}-${end} of ${total} records`;
   if (r.scan_truncated) label += " (scan capped)";
   $("#record-count").textContent = label;
+  updateRecordPager();
   renderRecordRows(r.records);
+}
+
+function updateRecordPager() {
+  const { offset, limit, total, pageSize } = state.recordsPage;
+  $("#records-prev-btn").disabled = offset <= 0;
+  $("#records-next-btn").disabled = offset + pageSize >= total;
+  $("#records-tail-btn").disabled = total <= limit || offset + pageSize >= total;
+}
+
+function resetRecordPager() {
+  state.recordsPage.offset = 0;
 }
 
 function renderRecordRows(records) {
@@ -2428,75 +2681,59 @@ function _annotationRow(turnId) {
   return row;
 }
 
-// ── Issues view ──────────────────────────────────────────────────
-const _ISSUE_SEVERITIES = ["error", "warning", "info"];
 
-async function renderIssuesView() {
+// ── Issues view ──────────────────────────────────────────────────
+function renderIssuesView() {
   const root = $("#issues-view");
   clear(root);
-  root.appendChild(el("div", { class: "empty" }, "Loading issues…"));
-  let report;
-  try {
-    report = await getJSON("/api/issues");
-  } catch (e) {
-    clear(root);
-    root.appendChild(el("div", { class: "error-msg" }, `Failed to load issues: ${e.message}`));
-    return;
-  }
-  // The tab may have changed while we awaited the fetch; only paint if we're
-  // still the active view so a stale response can't clobber another tab.
-  if (state.activeTab && state.activeTab !== "issues") return;
-  clear(root);
+  const payload = state.issues || { issues: [], summary: {}, total: 0 };
+  const summary = payload.summary || {};
+  const issues = payload.issues || [];
+  const cards = el("div", { class: "issues-summary" });
+  [
+    ["Errors", summary.error || 0, "error"],
+    ["Warnings", summary.warning || 0, "warning"],
+    ["Info", summary.info || 0, "info"],
+    ["Total", payload.total || issues.length, ""],
+  ].forEach(([label, value, cls]) => {
+    cards.appendChild(el("div", { class: `issue-card ${cls}` }, [
+      el("div", { class: "label" }, label),
+      el("div", { class: "value" }, String(value)),
+    ]));
+  });
+  root.appendChild(cards);
 
-  const summary = report.summary || {};
-  const summaryRow = el("div", { class: "issues-summary" });
-  for (const sev of _ISSUE_SEVERITIES) {
-    summaryRow.appendChild(el("div", { class: `chip ${sev}` }, `${summary[sev] || 0} ${sev}`));
-  }
-  root.appendChild(summaryRow);
-
-  const issues = report.issues || [];
   if (issues.length === 0) {
     root.appendChild(el("div", { class: "empty" },
-      "No issues detected. No errors, tool failures, timeouts, empty transcripts, " +
-      "or slow milestones were found in this session."));
+      "No deterministic issues detected. Use Timeline/Live for latency shape and Records for raw forensic detail."));
     return;
   }
+
+  root.appendChild(el("h3", null, "Triage cards"));
+  const list = el("div", { class: "issue-list" });
   for (const issue of issues) {
-    root.appendChild(_issueCard(issue));
+    const meta = [];
+    if (issue.turn_id) meta.push(`turn ${issue.turn_id}`);
+    if (issue.sequence != null) meta.push(`seq ${issue.sequence}`);
+    if (issue.stage) meta.push(`stage ${issue.stage}`);
+    if (issue.metric) meta.push(`${issue.metric}=${issue.value}`);
+    if (issue.threshold != null) meta.push(`threshold=${issue.threshold}`);
+    const card = el("div", { class: `issue-card ${issue.severity || "info"}` }, [
+      el("div", { class: "label" }, issue.code || "issue"),
+      el("div", { class: "value" }, issue.title || "Issue"),
+      el("div", { class: "detail" }, issue.detail || "Inspect related records."),
+      el("div", { class: "meta" }, meta.join(" · ") || "session-level"),
+    ]);
+    card.addEventListener("click", () => {
+      if (issue.sequence != null) {
+        selectRecordBySeq(issue.sequence);
+      } else if (issue.turn_id) {
+        filterRecordsByTurn(issue.turn_id);
+      }
+    });
+    list.appendChild(card);
   }
-}
-
-function _issueCard(issue) {
-  const sev = _ISSUE_SEVERITIES.includes(issue.severity) ? issue.severity : "info";
-  const card = el("div", { class: `issue-card ${sev}` });
-  const head = el("div", { class: "issue-head" });
-  head.appendChild(el("span", { class: "issue-sev" }, sev));
-  head.appendChild(el("span", { class: "issue-title" }, issue.title || issue.code || "Issue"));
-  if (issue.code) head.appendChild(el("span", { class: "issue-code" }, issue.code));
-  card.appendChild(head);
-  if (issue.detail) card.appendChild(el("div", { class: "issue-detail" }, issue.detail));
-
-  const meta = el("div", { class: "issue-meta" });
-  const fields = [
-    ["turn", issue.turn_id],
-    ["seq", issue.sequence],
-    ["stage", issue.stage],
-    ["metric", issue.metric],
-    ["value", _issueNum(issue.value)],
-    ["threshold", _issueNum(issue.threshold)],
-  ];
-  for (const [label, value] of fields) {
-    if (value === null || value === undefined || value === "") continue;
-    meta.appendChild(el("span", null, [el("b", null, `${label}: `), String(value)]));
-  }
-  if (meta.childNodes.length > 0) card.appendChild(meta);
-  return card;
-}
-
-function _issueNum(value) {
-  if (typeof value !== "number") return null;
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+  root.appendChild(list);
 }
 
 // ── Cost view ────────────────────────────────────────────────────
@@ -3060,12 +3297,14 @@ document.querySelectorAll(".tab").forEach(t => {
 $("#refresh-btn").addEventListener("click", () => refreshAll());
 $("#stage-filter").addEventListener("change", () => {
   state.filters.stage = $("#stage-filter").value;
+  resetRecordPager();
   loadAndRenderRecords();
 });
 $("#name-filter").addEventListener("input", () => {
   clearTimeout(window._nameDebounce);
   window._nameDebounce = setTimeout(() => {
     state.filters.name = $("#name-filter").value.trim();
+    resetRecordPager();
     loadAndRenderRecords();
   }, 200);
 });
@@ -3084,11 +3323,27 @@ for (const id of ["from-seq", "to-seq"]) {
   document.getElementById(id).addEventListener("change", () => {
     const v = document.getElementById(id).value;
     state.filters[id === "from-seq" ? "from" : "to"] = v ? Number(v) : null;
+    resetRecordPager();
     loadAndRenderRecords();
   });
 }
 $("#errors-only-toggle").addEventListener("change", () => {
   state.filters.errorsOnly = $("#errors-only-toggle").checked;
+  resetRecordPager();
+  loadAndRenderRecords();
+});
+$("#records-prev-btn").addEventListener("click", () => {
+  state.recordsPage.offset = Math.max(0, state.recordsPage.offset - state.recordsPage.limit);
+  loadAndRenderRecords();
+});
+$("#records-next-btn").addEventListener("click", () => {
+  state.recordsPage.offset += state.recordsPage.limit;
+  loadAndRenderRecords();
+});
+$("#records-tail-btn").addEventListener("click", () => {
+  const total = state.recordsPage.total || 0;
+  const limit = state.recordsPage.limit;
+  state.recordsPage.offset = Math.max(0, total - limit);
   loadAndRenderRecords();
 });
 $("#run-replay-btn").addEventListener("click", () => runReplay());
@@ -3122,7 +3377,7 @@ function _onHashChange() {
   const tab = _applyHashToState();
   _suppressHashWrite = true;
   try {
-    activateTab(tab || "timeline");
+    activateTab(tab || "overview");
     if (Number.isInteger(state.selectedSeq)) {
       const seq = state.selectedSeq;
       const rec = (state.records || []).find((r) => r.sequence === seq);
@@ -3136,8 +3391,9 @@ window.addEventListener("hashchange", _onHashChange);
 
 // Boot.  Decode the hash into ``state`` first so the tab/turn/seq it names
 // survive the initial data load, then activate the decoded tab and re-select
-// the named record once records are available.
-const _bootTab = _applyHashToState() || "timeline";
+// the named record once records are available.  With no hash we open the
+// Overview dashboard (the front door).
+const _bootTab = _applyHashToState() || "overview";
 state.activeTab = _bootTab;
 _suppressHashWrite = true;
 refreshAll().then(() => {
@@ -3148,7 +3404,7 @@ refreshAll().then(() => {
     if (rec) selectRecord(rec);
   }
 }).catch(e => {
-  $("#timeline-view").appendChild(el("div", { class: "error-msg" }, e.message));
+  $("#overview-view").appendChild(el("div", { class: "error-msg" }, e.message));
 }).finally(() => {
   _suppressHashWrite = false;
   _writeHash();

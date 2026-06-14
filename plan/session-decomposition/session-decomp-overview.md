@@ -204,11 +204,11 @@ in the current snapshot (see as-landed note above). It owns:
 - **User event surface.** `subscribe_event`, `subscribe_events`,
   `unsubscribe_event`, `subscribe_agent_events`, `on`,
   `unsubscribe_handlers`, `get_helper`.
-- **Telephony state.** Nine properties
+- **Telephony state.** Eight properties
   (`outbound_call_manager`, `outbound_call_state_machine`,
   `number_health_monitor`, `call_disposition_tracker`,
   `dnc_list`, `call_identity`, `caller_id_exposure`,
-  `_caller_id_system_message`, `_on_stt_final_opt_out`).
+  `_caller_id_system_message`).
 - **Greeting.** Four small methods inlined; not extracted (see
   Phase 5 rationale).
 - **Action drain.** `register_action_executor`,

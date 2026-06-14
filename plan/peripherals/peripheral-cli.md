@@ -925,6 +925,7 @@ EasyCat — voice bot framework
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
+    debugger    Open the browser debugger for a captured call
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle

@@ -36,7 +36,7 @@ captured mic signal.
   the 7 stages, the shared `RunContext`, the `no-turn` `TurnContext`, the
   journal sink, the outbound audio queue, and every collaborator
   (AudioRouter/STTCommitter/TTSScheduler/CancelOrchestrator/TurnRunner/
-  GreetingController/OptOutPolicy), plus their deferred event-bus
+  GreetingController), plus their deferred event-bus
   subscriptions and TurnManager bindings. Returns a frozen
   `SessionComponents` bundle the constructor unpacks onto private fields.
 - `session/_wiring.py` — `SessionWiringContext`, a typed frozen dataclass of
@@ -49,14 +49,10 @@ captured mic signal.
 - `session/_greeting.py` — `GreetingController`. Subscribes itself to
   `CallAnswered` and speaks the configured greeting once (warm-transfer
   re-answer ignored) via the bypass synth path.
-- `session/_opt_out.py` — `OptOutPolicy`. Subscribes to `STTFinal`; on a TCPA
-  opt-out phrase it adds the caller to the DNC list, emits `OptOutDetected`,
-  and enqueues `EndCallAction` (or falls back to scheduling
-  `Session.stop()`). `Session.dnc_list` delegates here.
 - `session/_caller_id.py` — `CallerIdState`. Holds the caller/callee identity
   + exposure policy and renders the caller-ID system message.
   `Session.call_identity` / `caller_id_exposure` delegate here;
-  `private_identity` is the raw value used by `config/` wiring and opt-out.
+  `private_identity` is the raw value used by `config/` wiring.
 - `session/_telephony_facade.py` — `TelephonyFacade` exposed as
   `session.telephony`. Wraps the helper list with `.get(type)` plus typed
   accessors (`outbound_call_manager`, `outbound_call_state_machine`,

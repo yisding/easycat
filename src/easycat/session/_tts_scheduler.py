@@ -7,7 +7,7 @@ Responsibilities:
 - Drive the underlying :class:`TTSSynthesizer` to produce audio chunks
   and feed them to the outbound audio queue owned by :class:`AudioRouter`.
 - Provide the single-shot :meth:`synthesize_bypass` path used by
-  greeting / opt-out announcements.
+  greeting announcements.
 - Track the in-flight synthesis task so cancellation can target it.
 - Reserve the future :meth:`_synthesize_sentences` private hook for
   sentence-level pipelining.
@@ -218,12 +218,7 @@ class TTSScheduler:
         )
         if turn_still_current:
             await self._audio_router.flush_trailing_playback_mark(turn)
-            turn_still_current = self._current_turn() is turn and (
-                turn_generation is None
-                or (turn is not None and turn.generation == turn_generation)
-            )
-            if turn_still_current:
-                self._clear_turn()
+            self._clear_turn()
         return should_stop
 
     async def synthesize_bypass(self, text: str) -> None:

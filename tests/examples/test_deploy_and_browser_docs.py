@@ -443,10 +443,17 @@ def test_browser_transport_examples_use_run_session_lifecycle():
 
         assert _visible_code_line_count(path) <= budget
         assert "EasyConfig.browser(" in source
-        assert "create_session(" in source
-        assert "from easycat.helpers import run_session" in source
-        assert "run_session(session)" in source
-        assert 'require_env("OPENAI_API_KEY")' not in source
+        if relpath == "examples/webrtc_server.py":
+            assert "run_webrtc_config_server(config, transport)" in source
+            assert "create_session(" not in source
+            assert "from easycat.helpers import run_session" not in source
+            assert "run_session(session)" not in source
+            assert 'require_env("OPENAI_API_KEY")' in source
+        else:
+            assert "create_session(" in source
+            assert "from easycat.helpers import run_session" in source
+            assert "run_session(session)" in source
+            assert 'require_env("OPENAI_API_KEY")' not in source
         assert "attach_runtime_feedback" not in source
         assert "wait_for_shutdown_signal" not in source
         assert "asyncio.run(" not in source

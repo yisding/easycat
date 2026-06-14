@@ -99,6 +99,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Inspect captured debug bundles and crash dumps.",
         journey="List captured debug bundles and crash dumps",
     ),
+    "debugger": _CommandText(
+        help="Open the browser debugging UI for bundles and journals.",
+        journey="Open the browser debugger for a captured call",
+    ),
     "inspect": _CommandText(
         help="Inspect a debug bundle or SQLite journal.",
         journey="Summarise a debug bundle or SQLite journal",
@@ -137,7 +141,17 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scaffold", ("console", "init", "doctor", "serve")),
     (
         "Debug with the journal",
-        ("bundles", "inspect", "replay", "latency", "diff", "journal", "tail", "explain"),
+        (
+            "bundles",
+            "debugger",
+            "inspect",
+            "replay",
+            "latency",
+            "diff",
+            "journal",
+            "tail",
+            "explain",
+        ),
     ),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
@@ -578,6 +592,28 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Production servers",
+        "path": "docs/deployment/production-servers.md",
+        "audience": "operators",
+        "diataxis": "how-to",
+        "description": (
+            "Run multi-client WebSocket, WebRTC, WebTransport, and Twilio servers "
+            "with one isolated EasyCat session per client or call."
+        ),
+        "commands": (
+            "uv run easycat docs --audience operators",
+            "uv run easycat docs --audience operators --json",
+            "uv run python examples/ws_server.py",
+            "uv run python examples/webrtc_server.py",
+            "uv run python examples/webtransport_server.py",
+            "uv run uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0",
+            "uv run pytest tests/transports/test_websocket_session_server.py",
+            "uv run pytest tests/transports/test_webrtc_config.py",
+            "uv run pytest tests/transports/test_webrtc_lifecycle_server.py",
+            "uv run pytest tests/transports/test_webtransport_session.py",
+        ),
+    },
+    {
         "label": "Observability",
         "path": "docs/observability.md",
         "audience": "operators",
@@ -590,6 +626,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat bundles list --json",
             "easycat bundles show PATH",
             "easycat bundles show PATH --json",
+            "easycat debugger serve PATH",
+            "easycat debugger serve PATH --no-open-browser",
             "easycat inspect PATH",
             "easycat inspect PATH --json",
             "easycat replay PATH",
@@ -897,6 +935,7 @@ def _register_commands() -> None:
     from easycat.cli.console import console as console_cmd
     from easycat.cli.debug.bundles import (
         bundles_app,
+        debugger_app,
         diff_command,
         follow_journal,
         inspect_bundle,
@@ -922,6 +961,7 @@ def _register_commands() -> None:
     app.command(name="diff", help=_COMMAND_TEXT["diff"].help)(diff_command)
     app.command(name="tail", help=_COMMAND_TEXT["tail"].help)(follow_journal)
     app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
+    app.add_typer(debugger_app, name="debugger", help=_COMMAND_TEXT["debugger"].help)
     app.add_typer(journal_app, name="journal", help=_COMMAND_TEXT["journal"].help)
     app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
     _COMMANDS_REGISTERED = True

@@ -228,7 +228,7 @@ class TestLangGraphBridgeState:
         because its run id differs from the graph's."""
         scripted = [
             # The graph's outermost chain start (no parent) — without the
-            # LangGraph opt-out this becomes the dedup's root run id.
+            # LangGraph special-casing this becomes the dedup's root run id.
             {
                 "event": "on_chain_start",
                 "name": "LangGraph",
