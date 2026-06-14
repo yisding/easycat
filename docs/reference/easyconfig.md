@@ -114,6 +114,11 @@ Group under `observability=ObservabilityConfig(...)`:
   ERLE (default `False`). This adds per-frame write pressure on the live audio
   loop, so `debug="full"` alone never turns it on; the
   `EASYCAT_CAPTURE_AEC_REFERENCE` env var also enables it.
+- `emergency_export` — opt in to arming a best-effort debug-bundle export on an
+  abnormal process exit (unhandled exception or unexpected shutdown) so a crash
+  leaves a redacted bundle on disk (default `False`). Arming reassigns
+  `sys.excepthook` and registers an `atexit` hook process-wide, so it is never
+  on by default; the `EASYCAT_EMERGENCY_EXPORT` env var also enables it.
 
 ## Session Policy Fields
 
