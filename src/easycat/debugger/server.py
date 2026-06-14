@@ -1402,7 +1402,14 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                     limit=None,
                     offset=0,
                 )
-                matched, scan_truncated = _search_records(subset, query=query, use_regex=use_regex)
+                # Offload the full-text scan to a worker thread: a regex
+                # search compiles a user-supplied pattern (q=...&regex=1) and
+                # runs re.search over up to _SEARCH_SCAN_LIMIT records, so a
+                # catastrophic-backtracking pattern must not block the event
+                # loop. The substring path is offloaded too for uniformity.
+                matched, scan_truncated = await asyncio.to_thread(
+                    _search_records, subset, query=query, use_regex=use_regex
+                )
                 total = len(matched)
                 page = matched[offset:]
                 if limit is not None:

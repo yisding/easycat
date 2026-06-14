@@ -108,6 +108,27 @@ async def test_api_records_full_text_search_filters(tmp_path):
             assert r.get("_match_fields")
 
 
+async def test_api_records_regex_search_matches(tmp_path):
+    """``/api/records?regex=1&q=`` must regex-filter (search runs off the loop)."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        # Plain substring baseline for the same needle.
+        plain = await (await client.get("/api/records?q=tts&limit=10000")).json()
+        # ``t.s`` regex-matches ``tts`` (and any t-?-s run); the offloaded
+        # asyncio.to_thread scan must return the same kind of hits as the
+        # inline path did, with annotated ``_match_fields``.
+        regex = await (await client.get("/api/records?regex=1&q=t.s&limit=10000")).json()
+        assert regex["total"] >= plain["total"] > 0
+        assert regex["scan_truncated"] is False
+        for r in regex["records"]:
+            assert r.get("_match_fields")
+
+
 async def test_api_records_rejects_invalid_regex(tmp_path):
     """``/api/records?regex=1&q=[`` must return 400, not a 500."""
     bundle_path = await _build_voice_bundle(tmp_path)
