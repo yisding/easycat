@@ -477,6 +477,13 @@ class ObservabilityConfig:
     # router still rate-limits the capture to roughly one frame per second.
     # Off by default.
     capture_aec_reference: bool = False
+    # Strictly opt-in: arm a best-effort debug-bundle export on an abnormal
+    # process exit (unhandled exception or unexpected ``atexit`` shutdown) so a
+    # crash leaves a redacted bundle on disk. Installing it reassigns
+    # ``sys.excepthook`` and registers an ``atexit`` hook process-wide, so it is
+    # never on by default. Set this — or the ``EASYCAT_EMERGENCY_EXPORT`` env
+    # var — to arm it. Off by default.
+    emergency_export: bool = False
 
     def __post_init__(self) -> None:
         self._normalize_and_validate()
@@ -519,6 +526,7 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "max_session_cost_usd",
         "debugger_autolaunch",
         "capture_aec_reference",
+        "emergency_export",
     }
 )
 

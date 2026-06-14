@@ -610,34 +610,104 @@ def _emergency_export_enabled(config: Any) -> bool:
     return bool(getattr(observability, "emergency_export", False))
 
 
+# Module-level registry shared by every armed session. Chaining many
+# sessions through per-session ``sys.excepthook`` closures was un-restorable:
+# the second armed session orphaned the first's hook forever. Instead we keep
+# ONE installed excepthook + atexit hook for the whole process and fan out to
+# the registered exporters; arming adds an exporter and disarming removes just
+# that one, restoring the original ``sys.excepthook``/atexit state only when
+# the registry drains. ``_EXPORT_REGISTRY`` preserves insertion order so
+# exporters fire oldest-first on a crash.
+_EXPORT_REGISTRY: dict[int, Callable[[], None]] = {}
+_EXPORT_INSTALLED = False
+_EXPORT_PREVIOUS_EXCEPTHOOK: Callable[..., None] | None = None
+
+
+def _run_all_exporters() -> None:
+    """Fire every registered exporter best-effort (one bad one can't block the rest)."""
+    for export in list(_EXPORT_REGISTRY.values()):
+        try:
+            export()
+        except Exception:
+            logger.warning("Emergency debug-bundle export failed", exc_info=True)
+
+
+def _shared_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+    _run_all_exporters()
+    if _EXPORT_PREVIOUS_EXCEPTHOOK is not None:
+        _EXPORT_PREVIOUS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
+
+
+def _install_shared_hooks() -> None:
+    """Install the single process-wide excepthook + atexit hook (idempotent)."""
+    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    import atexit
+    import sys
+
+    if _EXPORT_INSTALLED:
+        return
+    _EXPORT_PREVIOUS_EXCEPTHOOK = sys.excepthook
+    sys.excepthook = _shared_excepthook
+    atexit.register(_run_all_exporters)
+    _EXPORT_INSTALLED = True
+
+
+def _uninstall_shared_hooks() -> None:
+    """Remove the shared hooks and restore the original excepthook (idempotent).
+
+    Only restores ``sys.excepthook`` when ours is still the top hook; if a
+    later caller chained on top we leave their hook intact rather than dropping
+    it. ``atexit.unregister`` is always safe to call.
+    """
+    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    import atexit
+    import sys
+
+    if not _EXPORT_INSTALLED:
+        return
+    try:
+        atexit.unregister(_run_all_exporters)
+    except Exception:
+        pass
+    if sys.excepthook is _shared_excepthook:
+        sys.excepthook = _EXPORT_PREVIOUS_EXCEPTHOOK or sys.__excepthook__
+    _EXPORT_PREVIOUS_EXCEPTHOOK = None
+    _EXPORT_INSTALLED = False
+
+
 def install_emergency_export(session: Session) -> Callable[[], None]:
     """Arm a best-effort debug-bundle export for an abnormal process exit.
 
-    Registers an ``atexit`` handler and chains ``sys.excepthook`` so a
-    crash (unhandled exception) or an unexpected interpreter shutdown
-    flushes a redacted debug bundle next to the session's data dir before
-    the process dies.  Returns an idempotent *unregister* callable; it is
-    also stored on ``session._emergency_export_unregister`` and invoked by
-    the export hooks themselves once a session has cleanly stopped, so the
-    hooks become inert after :meth:`Session.stop`.
+    Adds this session's exporter to a process-wide registry behind a SINGLE
+    installed ``sys.excepthook`` + ``atexit`` hook shared across every armed
+    session, so a crash (unhandled exception) or an unexpected interpreter
+    shutdown flushes a redacted debug bundle next to the session's data dir
+    before the process dies.
+
+    Returns an idempotent *unregister* callable that removes only this
+    session's exporter; the shared hook is uninstalled and the original
+    ``sys.excepthook``/atexit state restored only once the registry drains.
+    The unregister is also stored on ``session._emergency_export_unregister``
+    and invoked by the export body once a session has cleanly stopped, so the
+    hook becomes inert for that session after :meth:`Session.stop`.
 
     Strictly opt-in (see :func:`_emergency_export_enabled`): callers must
-    explicitly arm it.  Never raises; the export is wrapped best-effort.
+    explicitly arm it. Never raises; the export is wrapped best-effort.
     """
-    import atexit
     import os
-    import sys
     from datetime import UTC, datetime
 
+    key = id(session)
     state = {"done": False, "unregistered": False}
-    previous_excepthook = sys.excepthook
 
     def _export() -> None:
         if state["done"]:
             return
         # If the session already stopped cleanly, the normal teardown path
-        # (record_to / explicit export) owns the bundle — stay out of it.
+        # (record_to / explicit export) owns the bundle — stay out of it and
+        # drop this exporter so the registry can eventually drain.
         if getattr(session, "_closed", False):
+            _unregister()
             return
         state["done"] = True
         try:
@@ -651,27 +721,18 @@ def install_emergency_export(session: Session) -> Callable[[], None]:
             session.export_debug_bundle(str(path))
             logger.info("Emergency debug bundle exported to %s", path)
         except Exception:
-            logger.debug("Emergency debug-bundle export failed", exc_info=True)
-
-    def _excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
-        _export()
-        previous_excepthook(exc_type, exc_value, exc_tb)
+            logger.warning("Emergency debug-bundle export failed", exc_info=True)
 
     def _unregister() -> None:
         if state["unregistered"]:
             return
         state["unregistered"] = True
-        try:
-            atexit.unregister(_export)
-        except Exception:
-            pass
-        # Restore the excepthook only if no one chained on top of ours; if
-        # they did, leave the chain intact rather than dropping their hook.
-        if sys.excepthook is _excepthook:
-            sys.excepthook = previous_excepthook
+        _EXPORT_REGISTRY.pop(key, None)
+        if not _EXPORT_REGISTRY:
+            _uninstall_shared_hooks()
 
-    atexit.register(_export)
-    sys.excepthook = _excepthook
+    _install_shared_hooks()
+    _EXPORT_REGISTRY[key] = _export
     session._emergency_export_unregister = _unregister
     return _unregister
 
