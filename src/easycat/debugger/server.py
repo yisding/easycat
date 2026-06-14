@@ -2159,13 +2159,25 @@ def _probe_bind(host: str, port: int) -> None:
     failure propagate to the caller. There is an inherent TOCTOU window between
     this probe and the server's own bind, but for the loopback dev-debugger the
     common "second concurrent session, same port" case is caught cleanly.
+
+    The probe only runs for loopback hosts and binds an explicit loopback IP —
+    never all-interfaces (``0.0.0.0``/``""``). A non-loopback bind is an
+    explicit ``allow_remote`` opt-in (already vetted by ``_check_host``); we
+    skip the pre-probe there and let ``run_app`` surface any bind error.
     """
+    if host not in _LOOPBACK_HOSTS:
+        return
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    # Bind a concrete loopback address (not the caller's string, which static
+    # analysis cannot prove is loopback) so the probe can never bind to all
+    # interfaces; this still detects a same-port collision with another local
+    # server.
+    bind_host = "::1" if family == socket.AF_INET6 else "127.0.0.1"
     probe = socket.socket(family, socket.SOCK_STREAM)
     try:
         # No SO_REUSEADDR: we want this probe to fail loudly when the port is
         # already taken by another live server, mirroring what run_app sees.
-        probe.bind((host, port))
+        probe.bind((bind_host, port))
     finally:
         probe.close()
 
