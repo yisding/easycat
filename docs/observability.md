@@ -104,6 +104,17 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   milestones, slow/missed barge-ins, and — when the bundle carries stored PCM
   artifacts — audio-health cards for clipping, near-silent caller capture, and
   dead air); the `issues` key is always present in the `--json` envelope.
+- More journal CLI entry points:
+  `easycat diff <path> <path>` diffs two bundles or journals turn by turn,
+  surfacing milestone, transcript, and cost deltas between a baseline ("before")
+  and a comparison ("after") run; restrict it with `--turn` and add `--json` for
+  a parseable summary.
+  `easycat journal grep <path> --query TEXT` runs a redacted full-text search
+  over a journal or bundle, `easycat journal follow <path>` live-tails a SQLite
+  journal as it grows (redacting every line), and
+  `easycat journal promote <path> TURN_ID --out FILE` saves one turn as a
+  replayable, self-contained regression bundle.
+  `easycat tail <path>` is the short alias for `easycat journal follow <path>`.
 - Optional debugger UI:
   install the extra with `uv sync --extra debugger --group dev` from this repo,
   or `uv add 'easycat[debugger]'` in an app. Then import

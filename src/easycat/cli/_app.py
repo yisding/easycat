@@ -594,6 +594,13 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat inspect PATH --json",
             "easycat replay PATH",
             "easycat replay PATH --json",
+            "easycat latency PATH",
+            "easycat latency PATH --json",
+            "easycat diff PATH PATH",
+            "easycat journal grep PATH --query TEXT",
+            "easycat journal follow PATH",
+            "easycat journal promote PATH TURN_ID --out FILE",
+            "easycat tail PATH",
             "easycat bundles export PATH",
             "easycat bundles export PATH --output DIR --json",
             "uv sync --extra debugger --group dev",
@@ -612,6 +619,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run easycat docs --audience operators",
             "easycat bundles show PATH --json",
             "easycat inspect PATH --json",
+            "easycat latency PATH",
+            "easycat latency PATH --json",
             "uv run easycat validate latency --smoke",
         ),
     },
@@ -677,7 +686,7 @@ _DOCS_COMMAND_NOTE = (
     "Commands already starting with uv run are repo-local and should run from the repository "
     "root. just commands are repo-local shortcuts; install just or use the raw command table "
     "in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, "
-    "and <session_id> before running."
+    "TEXT, TURN_ID, FILE, and <session_id> before running."
 )
 _DOCS_AUDIENCE_ALIAS_NOTE = (
     "Multi-word audiences also accept hyphens or underscores, such as app-builders. "

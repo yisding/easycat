@@ -12,7 +12,7 @@ use the installed CLI form; from this repository, prefix them with `uv run`.
 
 Source: https://github.com/yisding/easycat
 
-Command note: Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. Commands already starting with uv run are repo-local and should run from the repository root. just commands are repo-local shortcuts; install just or use the raw command table in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, and <session_id> before running.
+Command note: Bare easycat commands use installed CLI form; from this repo, prefix them with uv run. Commands already starting with uv run are repo-local and should run from the repository root. just commands are repo-local shortcuts; install just or use the raw command table in CONTRIBUTING.md. Replace uppercase or angle-bracket placeholders such as PATH, DIR, TEXT, TURN_ID, FILE, and <session_id> before running.
 
 ## Start here
 
@@ -512,6 +512,13 @@ easycat inspect PATH
 easycat inspect PATH --json
 easycat replay PATH
 easycat replay PATH --json
+easycat latency PATH
+easycat latency PATH --json
+easycat diff PATH PATH
+easycat journal grep PATH --query TEXT
+easycat journal follow PATH
+easycat journal promote PATH TURN_ID --out FILE
+easycat tail PATH
 easycat bundles export PATH
 easycat bundles export PATH --output DIR --json
 uv sync --extra debugger --group dev
@@ -530,6 +537,8 @@ Commands:
 uv run easycat docs --audience operators
 easycat bundles show PATH --json
 easycat inspect PATH --json
+easycat latency PATH
+easycat latency PATH --json
 uv run easycat validate latency --smoke
 ```
 
