@@ -15,6 +15,7 @@ Routes:
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
 - ``GET  /api/cost``                  — cost rollup and budget status
+- ``GET  /api/issues``                — deterministic debugging issue hints
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn
 - ``POST /api/replay``                — run replay against the source
@@ -43,6 +44,7 @@ from urllib.parse import urlsplit
 
 from easycat.debug._turn_timeline import build_timeline as _build_timeline
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
+from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.runtime.costs import (
@@ -209,17 +211,9 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
-    """Build an immutable bundle-backed source with cached lookups.
-
-    Bundles never change after load, so we cache the records list and
-    artifact-blob view once.  Subsequent ``records()`` calls return the
-    same list without re-decoding NDJSON, which matters when the UI
-    polls and bundles run into the tens of thousands of records.
-    """
-    bundle = RunBundle.load(bundle_path)
+def _run_bundle_source(bundle: RunBundle, *, label: str) -> DebuggerSource:
+    """Build an immutable bundle-backed source from an already loaded bundle."""
     cached_records = list(bundle.records())
-    basename = Path(str(bundle_path)).name
 
     def _replay(**kwargs: Any) -> Any:
         from easycat.runtime.replay import (
@@ -259,7 +253,7 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         }
 
     return DebuggerSource(
-        label=basename,
+        label=label,
         _records_fn=lambda: cached_records,
         # Bundles are immutable, so the count is fixed.  Use it as both the
         # change-detection key and the displayed count — the WS loop emits a
@@ -268,7 +262,7 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         _artifact_fn=lambda ref: bundle.artifact_blobs.get(ref),
         _manifest_fn=lambda: {
             "source": "bundle",
-            "name": basename,
+            "name": label,
             "format_version": bundle.format_version,
             "provider_versions": bundle.manifest.provider_versions,
             "config_snapshot": bundle.manifest.config_snapshot,
@@ -292,6 +286,17 @@ def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
         _replay_fn=_replay,
         is_live=False,
     )
+
+
+def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
+    """Build an immutable bundle-backed source with cached lookups.
+
+    Bundles never change after load, so we cache the records list and
+    artifact-blob view once.  Subsequent ``records()`` calls return the
+    same list without re-decoding NDJSON, which matters when the UI
+    polls and bundles run into the tens of thousands of records.
+    """
+    return _run_bundle_source(RunBundle.load(bundle_path), label=Path(str(bundle_path)).name)
 
 
 def _session_source(session: Any) -> DebuggerSource:
@@ -578,6 +583,177 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         bucket.pop("agent_delta_seq", None)
         transcripts.append(bucket)
     return transcripts
+
+
+def _issue(
+    *,
+    code: str,
+    severity: str,
+    title: str,
+    detail: str,
+    turn_id: str | None = None,
+    sequence: int | None = None,
+    stage: str | None = None,
+    metric: str | None = None,
+    value: float | int | str | None = None,
+    threshold: float | int | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "code": code,
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+    }
+    if turn_id:
+        out["turn_id"] = turn_id
+    if sequence is not None:
+        out["sequence"] = sequence
+    if stage:
+        out["stage"] = stage
+    if metric:
+        out["metric"] = metric
+    if value is not None:
+        out["value"] = value
+    if threshold is not None:
+        out["threshold"] = threshold
+    return out
+
+
+def _build_issues(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Surface deterministic call-debugging hints from journal records.
+
+    This is intentionally heuristic and local: it turns the raw journal into
+    first-pass triage cards without sending transcripts or prompts to a model.
+    The UI links every issue back to a sequence/turn so developers can jump
+    into the forensic timeline and raw record inspector.
+    """
+    issues: list[dict[str, Any]] = []
+    severity_rank = {"info": 0, "warning": 1, "error": 2}
+
+    for record in records:
+        seq = record.get("sequence")
+        turn_id = record.get("turn_id")
+        data = record.get("data") or {}
+        data = data if isinstance(data, dict) else {}
+        stage = data.get("stage") or data.get("observed_stage")
+        if record.get("error"):
+            err = record.get("error") or {}
+            msg = err.get("message") if isinstance(err, dict) else None
+            issues.append(
+                _issue(
+                    code="record_error",
+                    severity="error",
+                    title="Journal record captured an error",
+                    detail=str(msg or "Open the record inspector for the captured exception."),
+                    turn_id=str(turn_id) if turn_id else None,
+                    sequence=int(seq) if isinstance(seq, int) else None,
+                    stage=str(stage) if stage else None,
+                )
+            )
+        name = str(record.get("name") or "")
+        if name in {"tool_call_failed", "tool_error", "tool_call_error"}:
+            issues.append(
+                _issue(
+                    code="tool_failure",
+                    severity="error",
+                    title="Tool call failed",
+                    detail="Inspect the tool payload and result/error in the raw record.",
+                    turn_id=str(turn_id) if turn_id else None,
+                    sequence=int(seq) if isinstance(seq, int) else None,
+                    stage="agent",
+                )
+            )
+        if name in {"timeout", "stage_timeout", "provider_timeout"}:
+            issues.append(
+                _issue(
+                    code="timeout",
+                    severity="error",
+                    title="Timeout recorded",
+                    detail="A stage/provider timeout likely interrupted the turn.",
+                    turn_id=str(turn_id) if turn_id else None,
+                    sequence=int(seq) if isinstance(seq, int) else None,
+                    stage=str(stage) if stage else None,
+                )
+            )
+        if name == "stt_final":
+            text = data.get("text")
+            if text is None:
+                text = data.get("transcript")
+            if isinstance(text, str) and not text.strip():
+                issues.append(
+                    _issue(
+                        code="empty_stt_final",
+                        severity="warning",
+                        title="Empty STT final",
+                        detail=(
+                            "Speech ended but ASR committed an empty transcript; "
+                            "check VAD/ASR thresholds and audio quality."
+                        ),
+                        turn_id=str(turn_id) if turn_id else None,
+                        sequence=int(seq) if isinstance(seq, int) else None,
+                        stage="stt",
+                    )
+                )
+
+    for turn in _turn_waterfall(records):
+        turn_id = str(turn.get("turn_id") or "")
+        wall_ms = turn.get("wall_ms")
+        if isinstance(wall_ms, int | float) and wall_ms > 10_000:
+            issues.append(
+                _issue(
+                    code="slow_turn",
+                    severity="warning",
+                    title="Slow conversational turn",
+                    detail=(
+                        "End-to-end turn wall time exceeded 10 seconds; "
+                        "inspect the waterfall for the slowest stage."
+                    ),
+                    turn_id=turn_id,
+                    metric="wall_ms",
+                    value=round(float(wall_ms), 1),
+                    threshold=10_000,
+                )
+            )
+        milestones = turn.get("milestones") or {}
+        if isinstance(milestones, dict):
+            checks = (
+                ("vad_endpoint_to_stt_final_ms", 1500, "stt", "ASR finalization lag"),
+                ("stt_final_to_agent_first_token_ms", 2500, "agent", "Agent first-token lag"),
+                ("agent_first_token_to_tts_first_byte_ms", 1500, "tts", "TTS first-byte lag"),
+            )
+            for metric, threshold, stage, title in checks:
+                value = milestones.get(metric)
+                if isinstance(value, int | float) and value > threshold:
+                    issues.append(
+                        _issue(
+                            code=f"slow_{stage}",
+                            severity="warning",
+                            title=title,
+                            detail=(
+                                f"{title} exceeded {threshold:.0f} ms; "
+                                "inspect provider latency and queueing."
+                            ),
+                            turn_id=turn_id,
+                            stage=stage,
+                            metric=metric,
+                            value=round(float(value), 1),
+                            threshold=threshold,
+                        )
+                    )
+
+    issues.sort(
+        key=lambda item: (
+            -severity_rank.get(str(item.get("severity")), 0),
+            item.get("turn_id") or "",
+            item.get("sequence") or 0,
+            item.get("code") or "",
+        )
+    )
+    summary = {"error": 0, "warning": 0, "info": 0}
+    for item in issues:
+        sev = str(item.get("severity") or "info")
+        summary[sev] = summary.get(sev, 0) + 1
+    return {"issues": issues, "summary": summary, "total": len(issues)}
 
 
 def _cost_rollup(
@@ -897,6 +1073,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         config_snapshot = manifest.get("config_snapshot") if isinstance(manifest, dict) else None
         return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
 
+    async def issues(_request: Any) -> Any:
+        return web.json_response(_build_issues(source.records()))
+
     async def artifact(request: Any) -> Any:
         try:
             ref = _safe_ref(request.match_info["ref"])
@@ -1142,6 +1321,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/timeline", timeline)
     app.router.add_get("/api/transcript", transcript)
     app.router.add_get("/api/cost", cost)
+    app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
     app.router.add_post("/api/replay", replay)
@@ -1175,6 +1355,26 @@ def serve_bundle(
     """
     _check_host(host, allow_remote)
     source = _bundle_source(bundle_path)
+    _serve(source, host=host, port=port, open_browser=open_browser, allow_remote=allow_remote)
+
+
+def serve_run_bundle(
+    bundle: RunBundle,
+    *,
+    label: str = "bundle",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    allow_remote: bool = False,
+) -> None:
+    """Serve the debugger UI for an already loaded :class:`RunBundle`.
+
+    This is useful for SQLite journals loaded through
+    :meth:`RunBundle.from_partial_journal`, where there is no ZIP bundle path
+    for :func:`serve_bundle` to reopen.
+    """
+    _check_host(host, allow_remote)
+    source = _run_bundle_source(bundle, label=label)
     _serve(source, host=host, port=port, open_browser=open_browser, allow_remote=allow_remote)
 
 

@@ -99,6 +99,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Inspect captured debug bundles and crash dumps.",
         journey="List captured debug bundles and crash dumps",
     ),
+    "debugger": _CommandText(
+        help="Open the browser debugging UI for bundles and journals.",
+        journey="Open the browser debugger for a captured call",
+    ),
     "inspect": _CommandText(
         help="Inspect a debug bundle or SQLite journal.",
         journey="Summarise a debug bundle or SQLite journal",
@@ -119,7 +123,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Scaffold", ("console", "init", "doctor", "serve", "explain")),
-    ("Debug with the journal", ("bundles", "inspect", "replay")),
+    ("Debug with the journal", ("bundles", "debugger", "inspect", "replay")),
     ("Validation", ("validate",)),
     ("Docs and guidance", ("docs",)),
 )
@@ -571,6 +575,8 @@ _DOCS_LINKS: list[_DocsLink] = [
             "easycat bundles list --json",
             "easycat bundles show PATH",
             "easycat bundles show PATH --json",
+            "easycat debugger serve PATH",
+            "easycat debugger serve PATH --no-open-browser",
             "easycat inspect PATH",
             "easycat inspect PATH --json",
             "easycat replay PATH",
@@ -867,7 +873,12 @@ def _register_commands() -> None:
         return
 
     from easycat.cli.console import console as console_cmd
-    from easycat.cli.debug.bundles import bundles_app, inspect_bundle, replay_bundle
+    from easycat.cli.debug.bundles import (
+        bundles_app,
+        debugger_app,
+        inspect_bundle,
+        replay_bundle,
+    )
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
     from easycat.cli.scaffold.init import init as init_cmd
@@ -883,6 +894,7 @@ def _register_commands() -> None:
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)
     app.command(name="replay", help=_COMMAND_TEXT["replay"].help)(replay_bundle)
     app.add_typer(bundles_app, name="bundles", help=_COMMAND_TEXT["bundles"].help)
+    app.add_typer(debugger_app, name="debugger", help=_COMMAND_TEXT["debugger"].help)
     app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
     _COMMANDS_REGISTERED = True
 
