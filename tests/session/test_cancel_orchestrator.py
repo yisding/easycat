@@ -171,7 +171,7 @@ async def test_propagate_signal_skips_cause_record_when_cause_missing() -> None:
 
 async def test_for_barge_in_suppressed_when_no_interrupt_action_queued() -> None:
     actions = SessionActions()
-    actions.end_call(reason="opt_out")  # no_interrupt=True by default
+    actions.end_call(reason="caller_request")  # no_interrupt=True by default
     assert actions.no_interrupt is True
 
     calls: list[bool] = []

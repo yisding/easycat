@@ -12,7 +12,6 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -169,91 +168,3 @@ class AIDisclosureConfig:
 
     enabled: bool = True
     text: str = "This call uses AI assistance."
-
-
-# Common opt-out phrases that trigger DNC addition.
-#
-# Under-detection (missing a real opt-out) is the more serious compliance risk
-# than over-detection, so the list errs toward broad coverage of common
-# phrasings.  Matching is anchored on word boundaries (see
-# :func:`match_opt_out_phrase`) so embedded substrings do not produce spurious
-# hits.
-OPT_OUT_PHRASES: list[str] = [
-    "take me off your list",
-    "take my number off",
-    "stop calling",
-    "do not call",
-    "don't call",
-    "remove my number",
-    "remove me from your list",
-    "remove me",
-    "unsubscribe",
-    "opt out",
-]
-
-# Phrases that, when they immediately precede an opt-out phrase, negate it
-# (e.g. "I do not want to opt out").  Kept intentionally small and literal.
-_NEGATION_PREFIXES: tuple[str, ...] = (
-    "do not want to",
-    "don't want to",
-    "do not need to",
-    "don't need to",
-    "no need to",
-    "not going to",
-    "won't",
-    "will not",
-    "please don't",
-    "please do not",
-)
-
-
-def detect_opt_out(text: str) -> bool:
-    """Detect if the callee is requesting to be removed from the calling list."""
-    return match_opt_out_phrase(text) is not None
-
-
-def match_opt_out_phrase(text: str, phrases: list[str] | None = None) -> str | None:
-    """Return the first matching opt-out phrase, or ``None`` when none match.
-
-    Matching is anchored on word boundaries so that an opt-out phrase only
-    matches as a whole word/phrase rather than as an arbitrary substring
-    (``"opt out"`` no longer matches inside ``"options"``, and ``"stop
-    calling"`` no longer fires on unrelated text).  A small set of negation
-    prefixes (e.g. ``"please don't stop calling me"``) is also guarded so an
-    explicit *non*-opt-out does not silently add the number to a DNC list.
-
-    Adding a number to a DNC list is hard to reverse from the callee's side, so
-    this guards against the most common false positives; however it is *not* a
-    substitute for application-level confirmation of ambiguous requests.
-
-    Useful when a caller wants to know *which* phrase the callee used
-    (logging, journal records, compliance audit trails).  ``phrases``
-    defaults to :data:`OPT_OUT_PHRASES` but can be overridden with a
-    localised list.
-    """
-    lower = text.lower()
-    for phrase in phrases or OPT_OUT_PHRASES:
-        # Word-boundary anchored search; the phrase may contain spaces/internal
-        # punctuation so we escape it and rely on \b at the edges.
-        pattern = rf"\b{re.escape(phrase)}\b"
-        match = re.search(pattern, lower)
-        if match is None:
-            continue
-        if _is_negated(lower, match.start()):
-            continue
-        return phrase
-    return None
-
-
-def _is_negated(lower: str, phrase_start: int) -> bool:
-    """Return ``True`` if a negation prefix immediately precedes *phrase_start*.
-
-    Only the text in the short window directly before the matched phrase is
-    considered, so that distant negations elsewhere in the utterance do not
-    suppress a genuine opt-out.
-    """
-    preceding = lower[:phrase_start]
-    # Trim trailing connective words/whitespace between the negation and the
-    # phrase (e.g. "do not want to *opt out*").
-    trimmed = re.sub(r"[\s,]+$", "", preceding)
-    return any(trimmed.endswith(prefix) for prefix in _NEGATION_PREFIXES)

@@ -7,7 +7,7 @@ Responsibilities:
 - Drive the underlying :class:`TTSSynthesizer` to produce audio chunks
   and feed them to the outbound audio queue owned by :class:`AudioRouter`.
 - Provide the single-shot :meth:`synthesize_bypass` path used by
-  greeting / opt-out announcements.
+  greeting announcements.
 - Track the in-flight synthesis task so cancellation can target it.
 - Reserve the future :meth:`_synthesize_sentences` private hook for
   sentence-level pipelining.

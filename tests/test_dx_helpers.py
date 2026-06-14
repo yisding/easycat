@@ -262,8 +262,6 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert {
         "greeting",
         "dnc_list",
-        "opt_out_detection",
-        "opt_out_phrases",
         "caller_id_exposure",
     }.isdisjoint(field_names)
     assert {

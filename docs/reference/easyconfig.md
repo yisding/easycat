@@ -63,7 +63,7 @@ Every keyword `EasyConfig(...)` accepts as a real (stored) field:
   side effects (end call, transfer, …).
 - `action_executors` — extra `SessionActionExecutor` implementations for
   custom session actions.
-- `session_policy` — grouped `SessionPolicyConfig` (greeting, opt-out, DNC,
+- `session_policy` — grouped `SessionPolicyConfig` (greeting, DNC,
   caller-ID exposure); see [Session Policy Fields](#session-policy-fields).
 - `record_to` — directory path; when set, every session exports a
   timestamped debug bundle there on stop/shutdown ("always be recording").
@@ -109,10 +109,7 @@ Group under `observability=ObservabilityConfig(...)`:
 Group under `session_policy=SessionPolicyConfig(...)`:
 
 - `greeting` — text spoken once when the call is answered.
-- `dnc_list` — do-not-call list the opt-out policy appends to.
-- `opt_out_detection` — auto-detect TCPA opt-out phrases in final
-  transcripts (default `True`).
-- `opt_out_phrases` — override the built-in opt-out phrase list.
+- `dnc_list` — do-not-call list checked before placing outbound calls.
 - `caller_id_exposure` — how the callee identity reaches the agent:
   `"off"`, `"system_message"`, or `"tools_only"` (default).
 

@@ -519,8 +519,6 @@ def create_session(config: EasyConfig) -> Session:
                 caller_id_exposure=config.caller_id_exposure,
                 greeting=config.greeting,
                 dnc_list=config.dnc_list,
-                opt_out_detection=config.opt_out_detection,
-                opt_out_phrases=config.opt_out_phrases,
             )
         )
 

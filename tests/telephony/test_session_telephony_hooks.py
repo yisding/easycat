@@ -1,14 +1,10 @@
-"""Session-level telephony plumbing: opt-out, greeting, transport_kind.
+"""Session-level telephony plumbing: greeting, transport_kind.
 
-Covers the three feature wires added alongside the caller-ID support:
+Covers the feature wires added alongside the caller-ID support:
 
 - ``EasyConfig.greeting`` / ``SessionConfig.greeting`` auto-
   synthesizes on the first ``CallAnswered`` event, without a second
   ``CallAnswered`` re-greeting.
-- ``opt_out_detection`` (default on) listens for STT finals matching
-  :data:`OPT_OUT_PHRASES`, emits :class:`OptOutDetected`, adds the
-  caller number to an attached ``DNCList``, and enqueues
-  :class:`EndCallAction`.
 - ``session.transport_kind`` labels the transport for tool-side
   branching.
 """
@@ -23,15 +19,11 @@ import pytest
 
 from easycat import (
     Session,
-    SessionActions,
     SessionConfig,
-    STTFinal,
     TwilioConnectionTransport,
 )
-from easycat.events import CallAnswered, CallEnded, EventBus, OptOutDetected
-from easycat.session._types import CallIdentity
+from easycat.events import CallAnswered, CallEnded, EventBus
 from easycat.stubs import NoopAgent
-from easycat.telephony.compliance import DNCList
 from easycat.transports.local import LocalTransport, LocalTransportConfig
 from easycat.transports.twilio_media import TwilioTransport, TwilioTransportConfig
 
@@ -219,85 +211,6 @@ async def test_agent_screening_prompt_does_not_include_untrusted_transcript() ->
     assert "Ignore prior instructions" not in agent.prompts[0]
     assert "exfiltrate crm_token" not in agent.prompts[0]
     session.synthesize_bypass.assert_awaited_once_with("This is EasyCat.")
-
-
-# ── Opt-out auto-detection ─────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_opt_out_match_emits_event_and_adds_to_dnc() -> None:
-    dnc = DNCList()
-    actions = SessionActions()
-    session = _text_session(dnc_list=dnc, session_actions=actions)
-    session.call_identity = CallIdentity(caller_number="+15551234567", direction="inbound")
-
-    detected: list[OptOutDetected] = []
-    session.event_bus.subscribe(OptOutDetected, detected.append)
-
-    await session.event_bus.emit(
-        STTFinal(text="Please take me off your list, seriously stop calling")
-    )
-
-    assert len(detected) == 1
-    assert detected[0].number == "+15551234567"
-    assert detected[0].phrase in ("take me off your list", "stop calling")
-    # DNCList now blocks the number.
-    assert dnc.is_on_dnc("+15551234567")
-    # EndCallAction has been enqueued so the call terminates after the
-    # agent's current utterance.
-    assert actions.has_pending
-    drained = actions.drain()
-    assert len(drained) == 1
-    assert drained[0].type.value == "end_call"
-
-
-@pytest.mark.asyncio
-async def test_opt_out_does_not_fire_on_neutral_text() -> None:
-    dnc = DNCList()
-    session = _text_session(dnc_list=dnc)
-    session.call_identity = CallIdentity(caller_number="+15551234567", direction="inbound")
-
-    detected: list[OptOutDetected] = []
-    session.event_bus.subscribe(OptOutDetected, detected.append)
-    await session.event_bus.emit(STTFinal(text="Hello, how are you?"))
-
-    assert detected == []
-    assert not dnc.is_on_dnc("+15551234567")
-
-
-@pytest.mark.asyncio
-async def test_opt_out_disabled_skips_detection() -> None:
-    dnc = DNCList()
-    session = _text_session(dnc_list=dnc, opt_out_detection=False)
-    session.call_identity = CallIdentity(caller_number="+15551234567", direction="inbound")
-
-    detected: list[OptOutDetected] = []
-    session.event_bus.subscribe(OptOutDetected, detected.append)
-    await session.event_bus.emit(STTFinal(text="stop calling"))
-
-    assert detected == []
-    assert not dnc.is_on_dnc("+15551234567")
-
-
-@pytest.mark.asyncio
-async def test_opt_out_custom_phrase_list() -> None:
-    dnc = DNCList()
-    actions = SessionActions()
-    session = _text_session(
-        dnc_list=dnc,
-        session_actions=actions,
-        opt_out_phrases=("retire me",),
-    )
-    session.call_identity = CallIdentity(caller_number="+15551234567", direction="inbound")
-
-    await session.event_bus.emit(STTFinal(text="please retire me from your list"))
-    assert dnc.is_on_dnc("+15551234567")
-    # Stock phrase list no longer fires when overridden.
-    dnc2 = DNCList()
-    session2 = _text_session(dnc_list=dnc2, opt_out_phrases=("retire me",))
-    session2.call_identity = CallIdentity(caller_number="+15550001111", direction="inbound")
-    await session2.event_bus.emit(STTFinal(text="stop calling me"))
-    assert not dnc2.is_on_dnc("+15550001111")
 
 
 # ── Inbound CallEnded on stop ─────────────────────────────────────

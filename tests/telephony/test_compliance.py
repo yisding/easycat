@@ -6,9 +6,7 @@ from easycat.telephony.compliance import (
     AIDisclosureConfig,
     DNCList,
     check_calling_hours,
-    detect_opt_out,
     lookup_timezone,
-    match_opt_out_phrase,
 )
 
 
@@ -87,24 +85,3 @@ class TestDNCIntegration:
         dnc = DNCList()
         dnc.add("+15551234567")
         assert dnc.is_on_dnc("+15551234567")
-
-    def test_opt_out_during_call(self) -> None:
-        assert detect_opt_out("Please take me off your list")
-        assert detect_opt_out("stop calling me")
-        assert detect_opt_out("I want to opt out")
-        assert not detect_opt_out("Hello, how are you?")
-
-    def test_opt_out_word_boundaries(self) -> None:
-        # "opt out" must not match inside unrelated words/phrases.
-        assert not detect_opt_out("I am weighing my options out loud")
-        assert match_opt_out_phrase("opt outage report") is None
-
-    def test_opt_out_negation_guard(self) -> None:
-        assert not detect_opt_out("I do not want to opt out of anything else right now")
-        assert not detect_opt_out("please don't stop calling me")
-        assert not detect_opt_out("I won't unsubscribe")
-
-    def test_opt_out_broadened_phrases(self) -> None:
-        assert detect_opt_out("Please remove me from your list")
-        assert detect_opt_out("take my number off")
-        assert detect_opt_out("remove me")

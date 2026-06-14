@@ -416,14 +416,12 @@ class SessionPolicyConfig:
 
     New code should prefer grouping these related conversation and telephony
     behaviors under ``session_policy=...``. The legacy top-level
-    ``EasyConfig(greeting=..., opt_out_detection=..., caller_id_exposure=...)``
+    ``EasyConfig(greeting=..., dnc_list=..., caller_id_exposure=...)``
     aliases still work and forward into this object.
     """
 
     greeting: str | None = None
     dnc_list: Any | None = None
-    opt_out_detection: bool = True
-    opt_out_phrases: tuple[str, ...] | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
 
 
@@ -476,8 +474,6 @@ _SESSION_POLICY_ALIAS_FIELDS = frozenset(
     {
         "greeting",
         "dnc_list",
-        "opt_out_detection",
-        "opt_out_phrases",
         "caller_id_exposure",
     }
 )
@@ -617,7 +613,7 @@ class EasyConfig(_AgentSessionConfig):
             ``debug=``, ``journal_backend=``, and ``journal_retention=``
             aliases remain supported.
         session_policy: Grouped conversation/telephony policies such as
-            greeting, opt-out auto-detection, DNC list, and caller-ID exposure.
+            greeting, DNC list, and caller-ID exposure.
         mcp_servers: Optional list of MCP server URIs to pass through to
             agent bridges.  Accepted schemes: ``stdio://``, ``sse://``,
             ``http://``, ``https://``.  Frozen per session — mid-session
@@ -663,8 +659,6 @@ class EasyConfig(_AgentSessionConfig):
     # one of the nullable policy values to ``None`` explicitly.
     greeting: InitVar[str | None] = None
     dnc_list: InitVar[Any | None] = None
-    opt_out_detection: InitVar[bool | None] = None
-    opt_out_phrases: InitVar[tuple[str, ...] | None] = None
     caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
 
     def __getattribute__(self, name: str) -> Any:
@@ -708,8 +702,6 @@ class EasyConfig(_AgentSessionConfig):
         smart_turn_sensitivity: float | None,
         greeting: str | None,
         dnc_list: Any | None,
-        opt_out_detection: bool | None,
-        opt_out_phrases: tuple[str, ...] | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
         self._apply_observability_aliases(
@@ -738,10 +730,6 @@ class EasyConfig(_AgentSessionConfig):
             self.greeting = greeting
         if dnc_list is not None:
             self.dnc_list = dnc_list
-        if opt_out_detection is not None:
-            self.opt_out_detection = opt_out_detection
-        if opt_out_phrases is not None:
-            self.opt_out_phrases = opt_out_phrases
         if caller_id_exposure is not None:
             self.caller_id_exposure = caller_id_exposure
 

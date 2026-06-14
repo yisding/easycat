@@ -196,26 +196,9 @@ class SessionConfig:
     # read them from ``RecorderContext.mcp_servers``.
     mcp_servers: tuple[str, ...] = ()
 
-    # Opt-out auto-handling on STT finals.
-    #
-    # When enabled, every STT final transcript is checked against
-    # :data:`easycat.telephony.compliance.OPT_OUT_PHRASES`.  On a
-    # match, Session:
-    #   1. Emits an :class:`~easycat.events.OptOutDetected` event
-    #      (with the matched phrase and the caller's number).
-    #   2. If :attr:`dnc_list` is set, adds ``call_identity.caller_number``
-    #      to it so the number is blocked on subsequent ``place_call``
-    #      attempts through ``OutboundCallManager``.
-    #   3. If :attr:`session_actions` is set, enqueues an
-    #      :class:`~easycat.session.actions.EndCallAction` with
-    #      ``reason="opt_out"`` so the call terminates gracefully
-    #      after the agent's current utterance finishes.
-    #
-    # Apps that want a custom policy can set
-    # ``opt_out_detection=False`` and subscribe to ``STTFinal`` /
-    # ``OptOutDetected`` themselves.
-    opt_out_detection: bool = True
-    opt_out_phrases: tuple[str, ...] | None = None
+    # Do-Not-Call list consulted by outbound telephony pre-dial checks.
+    # When set, :class:`OutboundCallManager` blocks ``place_call``
+    # attempts to numbers already on the list.
     dnc_list: Any | None = None
 
     # Greeting synthesized automatically on the first
@@ -247,6 +230,6 @@ class SessionConfig:
     #     Right for PII-sensitive workflows.
     #   - "off" hides it from both layers.
     #     Internal telephony policy hooks still retain the private
-    #     identity for DNC/opt-out handling.
+    #     identity for DNC handling.
     call_identity: CallIdentity | None = None
     caller_id_exposure: CallerIdExposure = "tools_only"
