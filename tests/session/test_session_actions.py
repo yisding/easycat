@@ -20,7 +20,7 @@ from easycat.events import (
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
 from easycat.session._session import Session
-from easycat.session._types import SessionConfig
+from easycat.session._types import CallIdentity, SessionConfig
 from easycat.session.actions import (
     MAX_DTMF_DIGITS,
     MAX_DTMF_INTER_DIGIT_DELAY_MS,
@@ -289,6 +289,61 @@ async def test_drain_remove_from_dnc_applies_to_session_dnc_list() -> None:
     await session._drain_session_actions()
 
     assert not dnc.is_on_dnc("+1 555 123 4567")
+
+
+@pytest.mark.asyncio
+async def test_add_to_dnc_falls_back_to_caller_identity() -> None:
+    # No number passed (caller just says "stop calling me"), and caller-ID is
+    # hidden from tools/LLM — the executor still resolves the private identity.
+    actions = SessionActions()
+    actions.add_to_dnc(reason="caller requested")
+    dnc = DNCList()
+    session = Session(
+        _config(
+            session_actions=actions,
+            dnc_list=dnc,
+            call_identity=CallIdentity(caller_number="+15551234567"),
+            caller_id_exposure="off",
+        )
+    )
+
+    completed: list[SessionActionCompleted] = []
+    session.event_bus.subscribe(SessionActionCompleted, completed.append)
+
+    await session._drain_session_actions()
+
+    assert dnc.is_on_dnc("+15551234567")
+    assert completed[0].result.metadata["applied"] is True
+    assert completed[0].result.metadata["number"] == "+15551234567"
+
+
+@pytest.mark.asyncio
+async def test_dnc_store_write_failure_is_reported_as_failed_action() -> None:
+    class BrokenDNC:
+        def add(self, phone: str) -> None:
+            raise RuntimeError("locked db")
+
+        def remove(self, phone: str) -> None:
+            raise RuntimeError("locked db")
+
+        def is_on_dnc(self, phone: str) -> bool:
+            return False
+
+    actions = SessionActions()
+    actions.add_to_dnc("+15551234567")
+    session = Session(_config(session_actions=actions, dnc_list=BrokenDNC()))
+
+    completed: list[SessionActionCompleted] = []
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionCompleted, completed.append)
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    await session._drain_session_actions()
+
+    # A real store error surfaces as a failed action, not a misleading completion.
+    assert not completed
+    assert len(failed) == 1
+    assert "locked db" in failed[0].error
 
 
 @pytest.mark.asyncio

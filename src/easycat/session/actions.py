@@ -230,19 +230,25 @@ class SessionActions:
 
     def add_to_dnc(
         self,
-        number: str,
+        number: str | None = None,
         *,
         reason: str = "",
         no_interrupt: bool = False,
     ) -> None:
-        """Queue adding ``number`` to the session Do-Not-Call list.
+        """Queue adding a number to the session Do-Not-Call list.
 
         Call this from an agent function tool when the caller asks not to be
-        contacted again. The session applies it after the current turn via the
+        contacted again. ``number`` is optional: when omitted (the common
+        case — the caller just says "stop calling me"), the session resolves
+        it from the live call's caller identity, so the agent does not need to
+        know or repeat the number even under ``caller_id_exposure="off"``.
+
+        The session applies it after the current turn via the
         :class:`CoreSessionActionExecutor`, which mutates ``session.dnc_list``
         and emits ``SessionActionStarted`` / ``SessionActionCompleted`` events
-        so the request is journaled for audit. If the session has no
-        ``dnc_list`` configured the action is a logged no-op.
+        so the request is journaled for audit. If no number can be resolved or
+        the session has no ``dnc_list`` configured, the action is a logged
+        no-op.
 
         Example (OpenAI Agents SDK)::
 
@@ -250,26 +256,29 @@ class SessionActions:
             from easycat import SessionActions
 
             @function_tool
-            def stop_calling(ctx: RunContextWrapper[SessionActions], number: str) -> str:
-                \"\"\"Add the caller to the do-not-call list on request.\"\"\"
-                ctx.context.add_to_dnc(number, reason="caller requested")
+            def stop_calling(ctx: RunContextWrapper[SessionActions]) -> str:
+                \"\"\"Add the current caller to the do-not-call list on request.\"\"\"
+                ctx.context.add_to_dnc(reason="caller requested")
                 return "Understood — you won't be called again."
         """
-        self.enqueue(AddToDNCAction(number=number, reason=reason, no_interrupt=no_interrupt))
+        self.enqueue(AddToDNCAction(number=number or "", reason=reason, no_interrupt=no_interrupt))
 
     def remove_from_dnc(
         self,
-        number: str,
+        number: str | None = None,
         *,
         reason: str = "",
         no_interrupt: bool = False,
     ) -> None:
-        """Queue removing ``number`` from the session Do-Not-Call list.
+        """Queue removing a number from the session Do-Not-Call list.
 
         The complement of :meth:`add_to_dnc`, applied the same way (after the
-        turn, via :class:`CoreSessionActionExecutor`, journaled for audit).
+        turn, via :class:`CoreSessionActionExecutor`, journaled for audit), and
+        with the same caller-identity fallback when ``number`` is omitted.
         """
-        self.enqueue(RemoveFromDNCAction(number=number, reason=reason, no_interrupt=no_interrupt))
+        self.enqueue(
+            RemoveFromDNCAction(number=number or "", reason=reason, no_interrupt=no_interrupt)
+        )
 
     def request(
         self,
@@ -324,6 +333,19 @@ class SessionActions:
             self._no_interrupt = False
 
 
+def _current_caller_number(session: Any) -> str:
+    """Resolve the live call's caller number, ignoring the exposure policy.
+
+    Reads the *private* caller identity (the raw value that
+    ``caller_id_exposure`` may hide from tools/LLM) so DNC actions can target
+    the current caller even under ``"off"`` exposure — matching the behaviour
+    of the removed opt-out policy.  Returns ``""`` when there is no identity.
+    """
+    caller_id = getattr(session, "_caller_id", None)
+    identity = getattr(caller_id, "private_identity", None) if caller_id is not None else None
+    return identity.caller_number if identity is not None else ""
+
+
 @dataclass(slots=True)
 class CoreSessionActionExecutor(SessionActionExecutor):
     """Executor for provider-neutral core session actions.
@@ -349,20 +371,26 @@ class CoreSessionActionExecutor(SessionActionExecutor):
         session: Any,
         action: AddToDNCAction | RemoveFromDNCAction,
     ) -> SessionActionResult:
-        """Add/remove ``action.number`` on ``session.dnc_list``.
+        """Add/remove a number on ``session.dnc_list``.
 
-        Returns a result whose ``metadata`` records whether the change was
-        applied; a missing ``dnc_list`` or empty number is a logged no-op
-        rather than a failure, so a misconfigured app never crashes a turn.
+        The number falls back to the live call's caller identity when the
+        action carries none, so an agent can DNC the current caller without
+        being told the number.  A genuinely-absent number or missing
+        ``dnc_list`` is a logged no-op rather than a failure, so a
+        misconfigured app never crashes a turn.  Store write errors are *not*
+        swallowed — they propagate so the drain loop reports
+        ``SessionActionFailed`` instead of a misleading completed action.
         """
         verb = "add" if isinstance(action, AddToDNCAction) else "remove"
-        number = action.number
+        number = action.number or _current_caller_number(session)
         meta: dict[str, Any] = {"dnc": verb, "number": number, "reason": action.reason}
         if not number:
-            logger.warning("DNC %s requested with an empty number; ignoring", verb)
-            return SessionActionResult(
-                metadata={**meta, "applied": False, "skipped": "empty_number"}
+            logger.warning(
+                "DNC %s requested but no number was given and the call has no caller "
+                "identity; ignoring",
+                verb,
             )
+            return SessionActionResult(metadata={**meta, "applied": False, "skipped": "no_number"})
         dnc_list = getattr(session, "dnc_list", None)
         if dnc_list is None:
             logger.warning(
@@ -371,13 +399,9 @@ class CoreSessionActionExecutor(SessionActionExecutor):
             return SessionActionResult(
                 metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
             )
-        try:
-            if isinstance(action, AddToDNCAction):
-                dnc_list.add(number)
-            else:
-                dnc_list.remove(number)
-        except Exception as exc:
-            logger.exception("DNC %s failed for %s", verb, number)
-            return SessionActionResult(metadata={**meta, "applied": False, "error": str(exc)})
+        if isinstance(action, AddToDNCAction):
+            dnc_list.add(number)
+        else:
+            dnc_list.remove(number)
         logger.info("Agent updated DNC list (%s %s): reason=%s", verb, number, action.reason)
         return SessionActionResult(metadata={**meta, "applied": True})
