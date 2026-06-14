@@ -188,6 +188,73 @@ async def test_websocket_drains_capped_burst_across_ticks(monkeypatch):
     assert {1, 2, 3, 4, 5} <= seen_seqs
 
 
+async def test_websocket_idle_tick_never_materializes_full_journal():
+    """An idle/caught-up live tick must not call the full ``records()``
+    materializer — change detection rides ``progress()`` and the only-new tail
+    is fetched via the bounded ``records_since`` path (journal ``read(start=,
+    limit=)``), never a whole-journal read + serialize per tick."""
+    from easycat.runtime import JournalView
+
+    journal = InMemoryRingBuffer(capacity=64)
+
+    class _StubSession:
+        session_id = "ws-idle"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = None
+
+        @property
+        def journal(self):
+            return JournalView(journal)
+
+    source = _session_source(_StubSession())
+
+    # Count whole-journal materializations vs bounded tail fetches separately.
+    real_records = source._records_fn
+    real_since = source._records_since_fn
+    counts = {"full": 0, "since": 0}
+
+    def _counting_records():
+        counts["full"] += 1
+        return real_records()
+
+    def _counting_since(after_seq, cap):
+        counts["since"] += 1
+        return real_since(after_seq, cap)
+
+    source._records_fn = _counting_records  # type: ignore[attr-defined]
+    source._records_since_fn = _counting_since  # type: ignore[attr-defined]
+
+    journal.append(kind=JournalRecordKind.EVENT, name="seed", session_id="s")
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        async with client.ws_connect("/ws") as ws:
+            # Drain the seed snapshot + records batch.
+            for _ in range(2):
+                await asyncio.wait_for(ws.receive(), timeout=2.0)
+            # Sit through several caught-up (idle) 500ms ticks with no growth.
+            # The loop should keep polling without materializing the journal.
+            for _ in range(3):
+                await ws.send_json({"action": "ping"})
+                saw_pong = False
+                for _ in range(4):
+                    msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+                    if msg.json().get("type") == "pong":
+                        saw_pong = True
+                        break
+                assert saw_pong
+
+    # The full materializer is never used on the live WS path: the only-new
+    # tail rides the bounded ``records_since`` fetch, and idle ticks fetch
+    # nothing at all.
+    assert counts["full"] == 0
+    # The bounded fetch fires only when the cursor lags latest_seq (the seed
+    # batch), not on each caught-up tick.
+    assert counts["since"] <= 1
+
+
 async def test_records_since_caps_and_advances_cursor():
     """``_records_since`` returns only records past the cursor, capped, and
     reports the new high-water mark."""

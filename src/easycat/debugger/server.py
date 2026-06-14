@@ -175,6 +175,13 @@ class DebuggerSource:
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
+    # Bounded tail fetch used by the live WS loop: returns up to ``cap`` records
+    # with ``sequence > after_seq`` *without* materializing the whole journal.
+    # Live sources push this filter down to the journal's bounded
+    # ``read(start=..., limit=...)``; when absent, ``records_since`` falls back to
+    # slicing the (immutable, in-memory) ``records()`` list — correct for bundle
+    # and static sources where the full list is already cached.
+    _records_since_fn: Any | None = field(default=None, repr=False)
     # On-disk bundle path used to read/write the annotation sidecar.  Set only
     # for bundle sources and never surfaced in ``manifest()`` — the browser
     # learns it can annotate via the ``supports_annotate`` flag, never the path.
@@ -183,6 +190,29 @@ class DebuggerSource:
 
     def records(self) -> list[dict[str, Any]]:
         return list(self._records_fn())
+
+    def records_since(self, after_seq: int, cap: int) -> list[dict[str, Any]]:
+        """Return up to *cap* records with ``sequence > after_seq`` (ascending).
+
+        Live sources push the bound down to the journal's
+        ``read(start=after_seq + 1, limit=cap)`` so an idle/caught-up WS tick
+        never re-reads or re-serializes the whole journal.  Sources without a
+        bounded fetch (bundles, static in-memory lists) fall back to slicing the
+        already-cached ``records()`` list — cheap because that list is immutable
+        and never re-decoded.
+        """
+        if cap <= 0:
+            return []
+        if self._records_since_fn is not None:
+            return list(self._records_since_fn(after_seq, cap))
+        out: list[dict[str, Any]] = []
+        for r in self.records():
+            seq = r.get("sequence")
+            if isinstance(seq, int) and seq > after_seq:
+                out.append(r)
+                if len(out) >= cap:
+                    break
+        return out
 
     def progress(self) -> tuple[int, int]:
         """Cheap ``(latest_sequence, record_count)`` without serializing.
@@ -377,6 +407,16 @@ def _session_source(session: Any) -> DebuggerSource:
             return []
         return [_record_to_dict(r) for r in journal.read()]
 
+    def _records_since(after_seq: int, cap: int) -> list[dict[str, Any]]:
+        # Push the tail bound down to the journal: ``read(start=after_seq + 1,
+        # limit=cap)`` returns only records with ``sequence > after_seq`` (the
+        # backend filters/limits in SQL or on the ring buffer), so a live WS
+        # tick serializes at most ``cap`` records instead of the whole journal.
+        journal = getattr(session, "journal", None)
+        if journal is None:
+            return []
+        return [_record_to_dict(r) for r in journal.read(start=after_seq + 1, limit=cap)]
+
     def _progress() -> tuple[int, int]:
         # O(1) growth probe: the backend keeps ``latest_sequence`` as an
         # in-memory counter, so this never re-reads or re-serializes the
@@ -419,6 +459,7 @@ def _session_source(session: Any) -> DebuggerSource:
         label=f"session-{getattr(session, 'session_id', 'unknown')}",
         _records_fn=_records,
         _progress_fn=_progress,
+        _records_since_fn=_records_since,
         _artifact_fn=_artifact,
         _manifest_fn=_manifest,
         _bundle_fn=None,
@@ -1245,18 +1286,15 @@ def _records_since(
     """Return up to *cap* records with ``sequence > after_seq``.
 
     Used by the live WebSocket loop to push only the records that arrived
-    since the last batch.  Records are already ascending by sequence, so we
-    filter then slice; the second return value is the new high-water cursor
-    (the last sequence actually pushed) so the caller advances correctly even
-    when the batch is capped mid-burst.
+    since the last batch.  Delegates to :meth:`DebuggerSource.records_since`,
+    which pushes the bound down to the journal for live sources (so an
+    idle/caught-up tick never re-reads or re-serializes the whole journal) and
+    slices the cached list for bundle/static sources.  Records arrive ascending
+    by sequence, so no re-sort is needed; the second return value is the new
+    high-water cursor (the last sequence actually pushed) so the caller advances
+    correctly even when the batch is capped mid-burst.
     """
-    new_records = [
-        r
-        for r in source.records()
-        if isinstance(r.get("sequence"), int) and r["sequence"] > after_seq
-    ]
-    new_records.sort(key=lambda r: r["sequence"])
-    batch = new_records[:cap]
+    batch = source.records_since(after_seq, cap)
     if not batch:
         return [], after_seq
     return batch, int(batch[-1]["sequence"])
