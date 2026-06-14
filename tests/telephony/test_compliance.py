@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
 from easycat.telephony.compliance import (
     AIDisclosureConfig,
     DNCList,
+    DNCStore,
+    SQLiteDNCList,
     check_calling_hours,
-    detect_opt_out,
     lookup_timezone,
-    match_opt_out_phrase,
 )
 
 
@@ -88,23 +95,100 @@ class TestDNCIntegration:
         dnc.add("+15551234567")
         assert dnc.is_on_dnc("+15551234567")
 
-    def test_opt_out_during_call(self) -> None:
-        assert detect_opt_out("Please take me off your list")
-        assert detect_opt_out("stop calling me")
-        assert detect_opt_out("I want to opt out")
-        assert not detect_opt_out("Hello, how are you?")
 
-    def test_opt_out_word_boundaries(self) -> None:
-        # "opt out" must not match inside unrelated words/phrases.
-        assert not detect_opt_out("I am weighing my options out loud")
-        assert match_opt_out_phrase("opt outage report") is None
+class TestDNCStoreProtocol:
+    def test_dnclist_satisfies_protocol(self) -> None:
+        assert isinstance(DNCList(), DNCStore)
 
-    def test_opt_out_negation_guard(self) -> None:
-        assert not detect_opt_out("I do not want to opt out of anything else right now")
-        assert not detect_opt_out("please don't stop calling me")
-        assert not detect_opt_out("I won't unsubscribe")
+    def test_sqlite_dnclist_satisfies_protocol(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        assert isinstance(store, DNCStore)
+        store.close()
 
-    def test_opt_out_broadened_phrases(self) -> None:
-        assert detect_opt_out("Please remove me from your list")
-        assert detect_opt_out("take my number off")
-        assert detect_opt_out("remove me")
+
+class TestSQLiteDNCList:
+    def test_add_remove_and_check(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        assert not store.is_on_dnc("+15551234567")
+        store.add("+15551234567")
+        assert store.is_on_dnc("+15551234567")
+        assert len(store) == 1
+        store.remove("+15551234567")
+        assert not store.is_on_dnc("+15551234567")
+        assert len(store) == 0
+        store.close()
+
+    def test_add_is_idempotent_and_normalizes(self) -> None:
+        # Same number, different formatting → one normalized entry. A region is
+        # set so a bare-national form also canonicalizes when phonenumbers is
+        # installed (without it, the digit fallback already collapses these).
+        store = SQLiteDNCList(":memory:", default_region="US")
+        store.add("+1 (555) 123-4567")
+        store.add("15551234567")
+        assert len(store) == 1
+        assert store.is_on_dnc("+1 (555) 123-4567")
+        store.close()
+
+    def test_persists_across_instances(self, tmp_path: Path) -> None:
+        db = tmp_path / "dnc.sqlite"
+        first = SQLiteDNCList(db)
+        first.add("+15551234567")
+        first.close()
+
+        # A fresh instance at the same path (e.g. after a restart) sees it.
+        second = SQLiteDNCList(db)
+        assert second.is_on_dnc("+15551234567")
+        second.close()
+
+    def test_db_and_sidecars_are_owner_only(self, tmp_path: Path) -> None:
+        # Phone-number PII must not be world-readable (mirrors the journal).
+        db = tmp_path / "dnc.sqlite"
+        store = SQLiteDNCList(db)
+        store.add("+15551234567")  # forces WAL/SHM sidecars to appear
+        for p in (db, Path(str(db) + "-wal"), Path(str(db) + "-shm")):
+            if p.exists():
+                mode = stat.S_IMODE(os.stat(p).st_mode)
+                assert mode == 0o600, f"{p.name} is {oct(mode)}, expected 0o600"
+        store.close()
+
+    def test_creates_missing_parent_directory(self, tmp_path: Path) -> None:
+        # A fresh first run with a nested path must not crash.
+        db = tmp_path / "nested" / "sub" / "dnc.sqlite"
+        store = SQLiteDNCList(db)
+        store.add("+15551234567")
+        assert store.is_on_dnc("+15551234567")
+        store.close()
+
+    def test_concurrent_adds_are_threadsafe(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        numbers = [f"+1555{i:07d}" for i in range(50)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(store.add, numbers))
+        assert len(store) == 50
+        store.close()
+
+
+class TestDNCNormalization:
+    def test_nanp_cross_format_matches(self) -> None:
+        # Added as E.164, queried as bare national (and vice versa) — must match.
+        dnc = DNCList(default_region="US")
+        dnc.add("+1 (555) 123-4567")
+        assert dnc.is_on_dnc("5551234567")
+        assert dnc.is_on_dnc("+15551234567")
+
+        other = DNCList(default_region="US")
+        other.add("5551234567")
+        assert other.is_on_dnc("+15551234567")
+
+    def test_sqlite_nanp_cross_format_matches(self) -> None:
+        store = SQLiteDNCList(":memory:", default_region="US")
+        store.add("5551234567")
+        assert store.is_on_dnc("+15551234567")
+        store.close()
+
+    def test_international_e164_normalization(self) -> None:
+        pytest.importorskip("phonenumbers")
+        dnc = DNCList()
+        dnc.add("+44 20 7946 0958")  # UK, various formatting
+        assert dnc.is_on_dnc("+442079460958")
+        assert not dnc.is_on_dnc("+15551234567")

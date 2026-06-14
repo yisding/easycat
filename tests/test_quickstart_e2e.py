@@ -329,15 +329,6 @@ def test_readme_webrtc_browser_fast_path_runs_doctor_preflight() -> None:
     assert "uv run --env-file .env python examples/webrtc_server.py" in section
 
 
-def test_readme_telephony_opt_out_uses_easyconfig_surface() -> None:
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Opt-out auto-detection", 1)[1].split("### ", 1)[0]
-
-    assert "SessionPolicyConfig(dnc_list=...)" in section
-    assert "SessionPolicyConfig(opt_out_detection=False)" in section
-    assert "SessionConfig.opt_out_detection=False" not in section
-
-
 def test_readme_pydantic_ai_v2_beta_pin_matches_pyproject() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]

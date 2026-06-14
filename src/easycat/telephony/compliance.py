@@ -12,8 +12,16 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 from __future__ import annotations
 
 import logging
-import re
+import sqlite3
+import threading
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
+    import phonenumbers as _phonenumbers
+except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
+    _phonenumbers = None
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +70,50 @@ def _extract_area_code(phone: str) -> str | None:
     if len(digits) == 10:
         return digits[:3]
     return None
+
+
+def _normalize_dnc_number(phone: str, *, region: str | None = None) -> str:
+    """Normalize a phone number to a canonical DNC-matching key.
+
+    When the optional ``phonenumbers`` library (Google libphonenumber, pulled in
+    by the ``telephony`` extra via ``phonenumberslite``) is installed, the
+    number is parsed and rendered as **E.164**, so the same physical number
+    matches regardless of formatting or country.  ``region`` (an ISO 3166-1
+    alpha-2 code such as ``"US"``) is used to interpret numbers supplied without
+    a ``+`` country code; E.164 inputs need no region.
+
+    Falls back to a digit-only heuristic (see :func:`_normalize_digits_fallback`)
+    when ``phonenumbers`` is unavailable or the number cannot be parsed, so DNC
+    matching still works — just without global canonicalization.
+
+    Keep a single deployment consistent: a list written while ``phonenumbers``
+    is installed (E.164 keys) and later read without it (digit keys) will not
+    match.  Likewise, mixing E.164 and bare-national inputs requires setting a
+    ``region`` so both canonicalize the same way.
+    """
+    if _phonenumbers is None:
+        return _normalize_digits_fallback(phone)
+    try:
+        parsed = _phonenumbers.parse(phone, region)
+    except _phonenumbers.NumberParseException:
+        return _normalize_digits_fallback(phone)
+    return _phonenumbers.format_number(parsed, _phonenumbers.PhoneNumberFormat.E164)
+
+
+def _normalize_digits_fallback(phone: str) -> str:
+    """Digit-only DNC key used when ``phonenumbers`` is unavailable.
+
+    Strips to digits, then collapses a plausibly-NANP number to its 10-digit
+    national form so ``+1XXXXXXXXXX``, ``1XXXXXXXXXX`` and ``XXXXXXXXXX`` all
+    key to the same entry (mirroring :func:`_extract_area_code`).  Without this
+    a number added from an E.164 caller-id (``+1…``) would not match a bare
+    10-digit ``place_call`` target, silently letting a do-not-call through.
+    Non-NANP numbers keep their stripped-digit form (best effort).
+    """
+    digits = _strip_to_digits(phone)
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
 
 
 def lookup_timezone(phone: str) -> str | None:
@@ -134,18 +186,45 @@ class CallBlocked:
     reason: str
 
 
-class DNCList:
-    """Internal Do Not Call list.
+@runtime_checkable
+class DNCStore(Protocol):
+    """Structural interface for a Do-Not-Call list.
 
-    Maintains a set of phone numbers that should not be called.
+    The outbound pre-dial check and the ``add_to_dnc`` / ``remove_from_dnc``
+    agent actions depend only on these three methods, so any object that
+    implements them can be passed as ``EasyConfig(dnc_list=...)``.  Both the
+    in-memory :class:`DNCList` and the durable :class:`SQLiteDNCList` satisfy
+    it; apps needing a shared/clustered backend (Redis, Postgres, a DNC
+    vendor API) can implement their own.
     """
 
-    def __init__(self) -> None:
-        self._numbers: set[str] = set()
+    def add(self, phone: str) -> None: ...
 
-    @staticmethod
-    def _normalize(phone: str) -> str:
-        return _strip_to_digits(phone)
+    def remove(self, phone: str) -> None: ...
+
+    def is_on_dnc(self, phone: str) -> bool: ...
+
+
+class DNCList:
+    """In-memory Do Not Call list.
+
+    Maintains a set of phone numbers that should not be called.  This is the
+    default :class:`DNCStore` and lives only in process memory — it is **not**
+    persisted anywhere, so do-not-call state is lost on restart and is not
+    shared across worker processes.  For durable, cross-restart DNC state use
+    :class:`SQLiteDNCList` (or another :class:`DNCStore` implementation).
+
+    ``default_region`` (an ISO 3166-1 alpha-2 code such as ``"US"``) is used to
+    canonicalize numbers supplied without a ``+`` country code; see
+    :func:`_normalize_dnc_number`.
+    """
+
+    def __init__(self, *, default_region: str | None = None) -> None:
+        self._numbers: set[str] = set()
+        self._default_region = default_region
+
+    def _normalize(self, phone: str) -> str:
+        return _normalize_dnc_number(phone, region=self._default_region)
 
     def add(self, phone: str) -> None:
         """Add a number to the DNC list."""
@@ -163,97 +242,112 @@ class DNCList:
         return len(self._numbers)
 
 
+class SQLiteDNCList:
+    """Durable, SQLite-backed Do-Not-Call list.
+
+    A drop-in replacement for :class:`DNCList` (same :class:`DNCStore`
+    surface) that persists numbers to a SQLite file, so do-not-call state
+    survives process restarts and is shared by every session/worker that
+    points at the same ``path``.  Numbers are normalized (matching
+    :class:`DNCList`, see :func:`_normalize_dnc_number`) before storage.
+
+    Pass the same ``path`` to every session to share one list; pass
+    ``":memory:"`` for an ephemeral instance (e.g. in tests).  The single
+    WAL-mode connection is guarded by a lock so it is safe to share across
+    threads.  The methods are synchronous and do blocking disk I/O, so async
+    callers (the action executor, the outbound pre-dial check) must offload
+    them with :func:`asyncio.to_thread` rather than call them on the event
+    loop.
+
+    Phone numbers tied to do-not-call status are PII, so an on-disk database
+    (and its WAL/SHM sidecars) is created owner-only (``0o600``), matching the
+    SQLite journal's private-file handling.  A missing parent directory is
+    created.
+
+    ``default_region`` (an ISO 3166-1 alpha-2 code such as ``"US"``) is used to
+    canonicalize numbers supplied without a ``+`` country code; see
+    :func:`_normalize_dnc_number`.
+    """
+
+    def __init__(self, path: str | Path, *, default_region: str | None = None) -> None:
+        self._path = str(path)
+        self._default_region = default_region
+        self._lock = threading.Lock()
+        self._persistent = self._path not in (":memory:", "")
+        db_path = Path(self._path)
+        if self._persistent:
+            # Create a missing parent (so a fresh first run does not crash) and
+            # the DB file itself owner-only before SQLite opens it.
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            from easycat.runtime._private_files import touch_private_file
+
+            touch_private_file(db_path)
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("CREATE TABLE IF NOT EXISTS dnc_numbers (number TEXT PRIMARY KEY)")
+            self._conn.commit()
+            self._harden()
+        except Exception:
+            # Don't leak the connection if PRAGMA/CREATE fails (read-only DB, etc.).
+            self._conn.close()
+            raise
+
+    def _normalize(self, phone: str) -> str:
+        return _normalize_dnc_number(phone, region=self._default_region)
+
+    def _harden(self) -> None:
+        """Force owner-only perms on the DB and any WAL/SHM sidecars."""
+        if not self._persistent:
+            return
+        from easycat.runtime._private_files import harden_sqlite_files
+
+        harden_sqlite_files(Path(self._path))
+
+    def add(self, phone: str) -> None:
+        """Add a number to the DNC list (idempotent)."""
+        number = self._normalize(phone)
+        with self._lock:
+            self._conn.execute("INSERT OR IGNORE INTO dnc_numbers (number) VALUES (?)", (number,))
+            self._conn.commit()
+            self._harden()
+
+    def remove(self, phone: str) -> None:
+        """Remove a number from the DNC list (no-op if absent)."""
+        number = self._normalize(phone)
+        with self._lock:
+            self._conn.execute("DELETE FROM dnc_numbers WHERE number = ?", (number,))
+            self._conn.commit()
+            self._harden()
+
+    def is_on_dnc(self, phone: str) -> bool:
+        """Check if a number is on the DNC list."""
+        number = self._normalize(phone)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM dnc_numbers WHERE number = ? LIMIT 1", (number,)
+            ).fetchone()
+        return row is not None
+
+    def __len__(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM dnc_numbers").fetchone()
+        return int(row[0]) if row else 0
+
+    def close(self) -> None:
+        """Checkpoint the WAL into the main DB and close the connection."""
+        with self._lock:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                logger.debug("DNC store WAL checkpoint on close failed", exc_info=True)
+            self._conn.close()
+
+
 @dataclass
 class AIDisclosureConfig:
     """Configuration for AI disclosure at the start of calls."""
 
     enabled: bool = True
     text: str = "This call uses AI assistance."
-
-
-# Common opt-out phrases that trigger DNC addition.
-#
-# Under-detection (missing a real opt-out) is the more serious compliance risk
-# than over-detection, so the list errs toward broad coverage of common
-# phrasings.  Matching is anchored on word boundaries (see
-# :func:`match_opt_out_phrase`) so embedded substrings do not produce spurious
-# hits.
-OPT_OUT_PHRASES: list[str] = [
-    "take me off your list",
-    "take my number off",
-    "stop calling",
-    "do not call",
-    "don't call",
-    "remove my number",
-    "remove me from your list",
-    "remove me",
-    "unsubscribe",
-    "opt out",
-]
-
-# Phrases that, when they immediately precede an opt-out phrase, negate it
-# (e.g. "I do not want to opt out").  Kept intentionally small and literal.
-_NEGATION_PREFIXES: tuple[str, ...] = (
-    "do not want to",
-    "don't want to",
-    "do not need to",
-    "don't need to",
-    "no need to",
-    "not going to",
-    "won't",
-    "will not",
-    "please don't",
-    "please do not",
-)
-
-
-def detect_opt_out(text: str) -> bool:
-    """Detect if the callee is requesting to be removed from the calling list."""
-    return match_opt_out_phrase(text) is not None
-
-
-def match_opt_out_phrase(text: str, phrases: list[str] | None = None) -> str | None:
-    """Return the first matching opt-out phrase, or ``None`` when none match.
-
-    Matching is anchored on word boundaries so that an opt-out phrase only
-    matches as a whole word/phrase rather than as an arbitrary substring
-    (``"opt out"`` no longer matches inside ``"options"``, and ``"stop
-    calling"`` no longer fires on unrelated text).  A small set of negation
-    prefixes (e.g. ``"please don't stop calling me"``) is also guarded so an
-    explicit *non*-opt-out does not silently add the number to a DNC list.
-
-    Adding a number to a DNC list is hard to reverse from the callee's side, so
-    this guards against the most common false positives; however it is *not* a
-    substitute for application-level confirmation of ambiguous requests.
-
-    Useful when a caller wants to know *which* phrase the callee used
-    (logging, journal records, compliance audit trails).  ``phrases``
-    defaults to :data:`OPT_OUT_PHRASES` but can be overridden with a
-    localised list.
-    """
-    lower = text.lower()
-    for phrase in phrases or OPT_OUT_PHRASES:
-        # Word-boundary anchored search; the phrase may contain spaces/internal
-        # punctuation so we escape it and rely on \b at the edges.
-        pattern = rf"\b{re.escape(phrase)}\b"
-        match = re.search(pattern, lower)
-        if match is None:
-            continue
-        if _is_negated(lower, match.start()):
-            continue
-        return phrase
-    return None
-
-
-def _is_negated(lower: str, phrase_start: int) -> bool:
-    """Return ``True`` if a negation prefix immediately precedes *phrase_start*.
-
-    Only the text in the short window directly before the matched phrase is
-    considered, so that distant negations elsewhere in the utterance do not
-    suppress a genuine opt-out.
-    """
-    preceding = lower[:phrase_start]
-    # Trim trailing connective words/whitespace between the negation and the
-    # phrase (e.g. "do not want to *opt out*").
-    trimmed = re.sub(r"[\s,]+$", "", preceding)
-    return any(trimmed.endswith(prefix) for prefix in _NEGATION_PREFIXES)

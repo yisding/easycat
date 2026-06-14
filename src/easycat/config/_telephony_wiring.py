@@ -27,6 +27,7 @@ from easycat.session.actions import SessionActionExecutor
 if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.telephony.call_state import OutboundCallStateMachine
+    from easycat.telephony.compliance import DNCStore
     from easycat.telephony.screening import CallScreeningDetector
 
     from .easy import OutboundCallConfig, TelephonyConfig
@@ -53,7 +54,7 @@ def create_telephony_helpers(
     event_bus: EventBus,
     config: TelephonyConfig | None,
     *,
-    dnc_list: Any | None = None,
+    dnc_list: DNCStore | None = None,
 ) -> TelephonyHelpers:
     result = TelephonyHelpers()
     if config is None:
@@ -91,7 +92,7 @@ def _build_outbound_helpers(
     oc: OutboundCallConfig,
     result: TelephonyHelpers,
     *,
-    dnc_list: Any | None = None,
+    dnc_list: DNCStore | None = None,
 ) -> None:
     """Build and wire the outbound call pipeline helpers."""
     # Telephony runtime classes are imported here (not at module scope) so a
