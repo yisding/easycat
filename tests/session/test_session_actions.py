@@ -24,8 +24,10 @@ from easycat.session._types import SessionConfig
 from easycat.session.actions import (
     MAX_DTMF_DIGITS,
     MAX_DTMF_INTER_DIGIT_DELAY_MS,
+    AddToDNCAction,
     CustomAction,
     EndCallAction,
+    RemoveFromDNCAction,
     SendDTMFAction,
     SessionAction,
     SessionActionExecutor,
@@ -34,6 +36,7 @@ from easycat.session.actions import (
     TransferCallAction,
     TransferPlan,
 )
+from easycat.telephony.compliance import DNCList
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig
 
@@ -191,6 +194,27 @@ class TestSessionActionsQueue:
         assert drained[0].name == "play_hold_music"
         assert drained[0].payload == {"track": "jazz"}
 
+    def test_add_to_dnc_enqueues_typed_action(self) -> None:
+        actions = SessionActions()
+        actions.add_to_dnc("+15551234567", reason="caller requested")
+
+        drained = actions.drain()
+
+        assert len(drained) == 1
+        assert isinstance(drained[0], AddToDNCAction)
+        assert drained[0].number == "+15551234567"
+        assert drained[0].reason == "caller requested"
+
+    def test_remove_from_dnc_enqueues_typed_action(self) -> None:
+        actions = SessionActions()
+        actions.remove_from_dnc("+15551234567")
+
+        drained = actions.drain()
+
+        assert len(drained) == 1
+        assert isinstance(drained[0], RemoveFromDNCAction)
+        assert drained[0].number == "+15551234567"
+
     def test_no_interrupt_tracks_any_queued_action(self) -> None:
         actions = SessionActions()
         actions.send_dtmf("1")
@@ -228,6 +252,64 @@ async def test_drain_session_actions_uses_executor_and_emits_lifecycle_events() 
     assert len(completed) == 1
     assert not failed
     assert completed[0].result.metadata == {"handled": True}
+
+
+@pytest.mark.asyncio
+async def test_drain_add_to_dnc_applies_to_session_dnc_list() -> None:
+    actions = SessionActions()
+    actions.add_to_dnc("+1 (555) 123-4567", reason="caller requested")
+    dnc = DNCList()
+    session = Session(_config(session_actions=actions, dnc_list=dnc))
+
+    completed: list[SessionActionCompleted] = []
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionCompleted, completed.append)
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    should_stop = await session._drain_session_actions()
+
+    # Adding to the DNC list must not end the call.
+    assert should_stop is False
+    # DNCList normalizes to digits, so query with the same formatting it was added with.
+    assert dnc.is_on_dnc("+1 (555) 123-4567")
+    assert not failed
+    assert len(completed) == 1
+    assert completed[0].result.metadata["dnc"] == "add"
+    assert completed[0].result.metadata["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_drain_remove_from_dnc_applies_to_session_dnc_list() -> None:
+    dnc = DNCList()
+    dnc.add("+1 555 123 4567")
+    actions = SessionActions()
+    actions.remove_from_dnc("+1 555 123 4567")
+    session = Session(_config(session_actions=actions, dnc_list=dnc))
+
+    await session._drain_session_actions()
+
+    assert not dnc.is_on_dnc("+1 555 123 4567")
+
+
+@pytest.mark.asyncio
+async def test_drain_add_to_dnc_without_list_is_graceful_noop() -> None:
+    actions = SessionActions()
+    actions.add_to_dnc("+15551234567")
+    session = Session(_config(session_actions=actions))  # no dnc_list configured
+
+    completed: list[SessionActionCompleted] = []
+    failed: list[SessionActionFailed] = []
+    session.event_bus.subscribe(SessionActionCompleted, completed.append)
+    session.event_bus.subscribe(SessionActionFailed, failed.append)
+
+    should_stop = await session._drain_session_actions()
+
+    # A missing dnc_list is a logged no-op, not a turn-crashing failure.
+    assert should_stop is False
+    assert not failed
+    assert len(completed) == 1
+    assert completed[0].result.metadata["applied"] is False
+    assert completed[0].result.metadata["skipped"] == "no_dnc_list"
 
 
 @pytest.mark.asyncio

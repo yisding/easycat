@@ -35,6 +35,8 @@ class SessionActionType(enum.StrEnum):
     TRANSFER_CALL = "transfer_call"
     SEND_DTMF = "send_dtmf"
     SEND_SMS = "send_sms"
+    ADD_TO_DNC = "add_to_dnc"
+    REMOVE_FROM_DNC = "remove_from_dnc"
     CUSTOM = "custom"
 
 
@@ -109,6 +111,26 @@ class SendSMSAction(SessionAction):
 
     to: str = ""
     body: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AddToDNCAction(SessionAction):
+    """Request that a phone number be added to the session Do-Not-Call list."""
+
+    action_type: ClassVar[SessionActionType] = SessionActionType.ADD_TO_DNC
+
+    number: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveFromDNCAction(SessionAction):
+    """Request that a phone number be removed from the session Do-Not-Call list."""
+
+    action_type: ClassVar[SessionActionType] = SessionActionType.REMOVE_FROM_DNC
+
+    number: str = ""
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +228,49 @@ class SessionActions:
     ) -> None:
         self.enqueue(SendSMSAction(to=to, body=body, no_interrupt=no_interrupt))
 
+    def add_to_dnc(
+        self,
+        number: str,
+        *,
+        reason: str = "",
+        no_interrupt: bool = False,
+    ) -> None:
+        """Queue adding ``number`` to the session Do-Not-Call list.
+
+        Call this from an agent function tool when the caller asks not to be
+        contacted again. The session applies it after the current turn via the
+        :class:`CoreSessionActionExecutor`, which mutates ``session.dnc_list``
+        and emits ``SessionActionStarted`` / ``SessionActionCompleted`` events
+        so the request is journaled for audit. If the session has no
+        ``dnc_list`` configured the action is a logged no-op.
+
+        Example (OpenAI Agents SDK)::
+
+            from agents import RunContextWrapper, function_tool
+            from easycat import SessionActions
+
+            @function_tool
+            def stop_calling(ctx: RunContextWrapper[SessionActions], number: str) -> str:
+                \"\"\"Add the caller to the do-not-call list on request.\"\"\"
+                ctx.context.add_to_dnc(number, reason="caller requested")
+                return "Understood — you won't be called again."
+        """
+        self.enqueue(AddToDNCAction(number=number, reason=reason, no_interrupt=no_interrupt))
+
+    def remove_from_dnc(
+        self,
+        number: str,
+        *,
+        reason: str = "",
+        no_interrupt: bool = False,
+    ) -> None:
+        """Queue removing ``number`` from the session Do-Not-Call list.
+
+        The complement of :meth:`add_to_dnc`, applied the same way (after the
+        turn, via :class:`CoreSessionActionExecutor`, journaled for audit).
+        """
+        self.enqueue(RemoveFromDNCAction(number=number, reason=reason, no_interrupt=no_interrupt))
+
     def request(
         self,
         name: str,
@@ -261,13 +326,58 @@ class SessionActions:
 
 @dataclass(slots=True)
 class CoreSessionActionExecutor(SessionActionExecutor):
-    """Executor for provider-neutral core session actions."""
+    """Executor for provider-neutral core session actions.
+
+    Always registered on every session, so :meth:`SessionActions.end_call`,
+    :meth:`SessionActions.add_to_dnc`, and :meth:`SessionActions.remove_from_dnc`
+    work without any extra wiring.
+    """
 
     def supports(self, action: SessionAction) -> bool:
-        return isinstance(action, EndCallAction)
+        return isinstance(action, EndCallAction | AddToDNCAction | RemoveFromDNCAction)
 
     async def execute(self, session: Any, action: SessionAction) -> SessionActionResult:
-        if not isinstance(action, EndCallAction):
-            raise TypeError(f"Expected EndCallAction, got {type(action).__name__}")
-        logger.info("Agent requested end_call: reason=%s", action.reason)
-        return SessionActionResult(stop_session=True, metadata={"reason": action.reason})
+        if isinstance(action, EndCallAction):
+            logger.info("Agent requested end_call: reason=%s", action.reason)
+            return SessionActionResult(stop_session=True, metadata={"reason": action.reason})
+        if isinstance(action, AddToDNCAction | RemoveFromDNCAction):
+            return self._apply_dnc(session, action)
+        raise TypeError(f"CoreSessionActionExecutor cannot handle {type(action).__name__}")
+
+    def _apply_dnc(
+        self,
+        session: Any,
+        action: AddToDNCAction | RemoveFromDNCAction,
+    ) -> SessionActionResult:
+        """Add/remove ``action.number`` on ``session.dnc_list``.
+
+        Returns a result whose ``metadata`` records whether the change was
+        applied; a missing ``dnc_list`` or empty number is a logged no-op
+        rather than a failure, so a misconfigured app never crashes a turn.
+        """
+        verb = "add" if isinstance(action, AddToDNCAction) else "remove"
+        number = action.number
+        meta: dict[str, Any] = {"dnc": verb, "number": number, "reason": action.reason}
+        if not number:
+            logger.warning("DNC %s requested with an empty number; ignoring", verb)
+            return SessionActionResult(
+                metadata={**meta, "applied": False, "skipped": "empty_number"}
+            )
+        dnc_list = getattr(session, "dnc_list", None)
+        if dnc_list is None:
+            logger.warning(
+                "DNC %s requested for %s but no dnc_list is configured; ignoring", verb, number
+            )
+            return SessionActionResult(
+                metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
+            )
+        try:
+            if isinstance(action, AddToDNCAction):
+                dnc_list.add(number)
+            else:
+                dnc_list.remove(number)
+        except Exception as exc:
+            logger.exception("DNC %s failed for %s", verb, number)
+            return SessionActionResult(metadata={**meta, "applied": False, "error": str(exc)})
+        logger.info("Agent updated DNC list (%s %s): reason=%s", verb, number, action.reason)
+        return SessionActionResult(metadata={**meta, "applied": True})
