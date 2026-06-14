@@ -12,7 +12,6 @@ from easycat.debug.annotations import (
     Annotation,
     AnnotationError,
     load_annotations,
-    merged_tags,
     save_annotation,
     sidecar_path,
 )
@@ -156,10 +155,3 @@ def test_save_does_not_touch_the_bundle(tmp_path: Path) -> None:
     before = bundle.read_bytes()
     save_annotation(bundle, Annotation(turn_id="t1", passed=True))
     assert bundle.read_bytes() == before
-
-
-def test_merged_tags_returns_record_tags_stub() -> None:
-    # Stub until the WP8 tag-slice CLI wires annotation-derived tags in.
-    assert merged_tags({"tags": ["a", "b"]}, None) == ["a", "b"]
-    assert merged_tags({}, {"passed": False}) == []
-    assert merged_tags({"tags": "not-a-list"}, None) == []

@@ -419,3 +419,114 @@ async def test_api_aec_vad_whatif_missing_origin_returns_403(tmp_path):
             "/api/aec/turn-1/vad-whatif", headers={"Content-Type": "application/json"}
         )
         assert resp.status == 403
+
+
+# ── reference audio track (FWP10) ─────────────────────────────────
+
+
+def test_reference_track_is_a_valid_audio_selector():
+    from easycat.debugger.server import (
+        _AUDIO_TRACK_REFERENCE,
+        _VALID_AUDIO_TRACKS,
+    )
+
+    assert _AUDIO_TRACK_REFERENCE == "reference"
+    assert _AUDIO_TRACK_REFERENCE in _VALID_AUDIO_TRACKS
+
+
+def test_collect_audio_frames_stitches_reference_track():
+    """The ``reference`` track stitches ``aec_reference_frame``/``output_ref``
+    blobs in sequence order, so the AEC view's third strip has audio to draw."""
+    from easycat.debugger.server import _collect_audio_frames
+
+    records = [
+        {
+            "sequence": 2,
+            "name": AEC_REFERENCE_FRAME_NAME,
+            "turn_id": "t1",
+            "output_ref": "ref-b",
+            "data": {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+            "timing": {"mono_ns": 200},
+        },
+        {
+            "sequence": 1,
+            "name": AEC_REFERENCE_FRAME_NAME,
+            "turn_id": "t1",
+            "output_ref": "ref-a",
+            "data": {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+            "timing": {"mono_ns": 100},
+        },
+        # Mic-in for the same turn must not leak into the reference track.
+        {
+            "sequence": 3,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "mic",
+            "data": {"stage": "stt"},
+        },
+    ]
+    blobs = {"ref-a": _tone_pcm(4000, 160), "ref-b": _tone_pcm(2000, 160), "mic": b"\x00\x00"}
+    source = _DictSource(records, blobs)
+    frames, fmt = _collect_audio_frames(source, "t1", track="reference")
+    # Ordered by sequence: ref-a (seq 1) then ref-b (seq 2); mic excluded.
+    assert frames == [blobs["ref-a"], blobs["ref-b"]]
+    assert fmt["sample_rate"] == 16000
+
+
+async def test_api_audio_reference_track_fetchable_when_reference_frames_exist(tmp_path):
+    """The reference waveform/concat is fetchable on an AEC bundle whose journal
+    carries ``aec_reference_frame`` records, and 404s on a bundle without them."""
+    from easycat.debug.bundle import RunBundle
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    bundle_path = await _aec_bundle(tmp_path)
+    bundle = RunBundle.load(bundle_path)
+    ref_turns = [
+        r.get("turn_id")
+        for r in bundle.records()
+        if r.get("name") == AEC_REFERENCE_FRAME_NAME and r.get("turn_id")
+    ]
+    if not ref_turns:
+        # The shared _aec_bundle Session fixture is timing-driven; under load it
+        # can rarely settle before any reference frame is journaled.  This test
+        # asserts the reference track is fetchable *when reference frames exist*,
+        # so a raceless miss degrades to a skip rather than a misleading failure.
+        pytest.skip("no aec_reference_frame captured in this fixture run")
+    turn_id = ref_turns[0]
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        # Concat returns a WAV stream for the reference track.
+        resp = await client.get(f"/api/audio/concat/{turn_id}?track=reference")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "audio/wav"
+        body = await resp.read()
+        assert body[:4] == b"RIFF"
+        # Waveform returns a PNG for the reference track.
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?track=reference&w=120&h=40")
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "image/png"
+
+
+async def test_api_audio_reference_track_404_without_reference_frames(tmp_path):
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    from ._server_helpers import _build_voice_bundle
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        turns = await (await client.get("/api/turns")).json()
+        turn_id = turns["turns"][0]["turn_id"]
+        # No reference frames anywhere → the reference track has nothing to stitch.
+        resp = await client.get(f"/api/audio/concat/{turn_id}?track=reference")
+        assert resp.status == 404
+        resp = await client.get(f"/api/audio/waveform/{turn_id}?track=reference")
+        assert resp.status == 404

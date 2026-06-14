@@ -178,18 +178,3 @@ def save_annotation(bundle_path: str | Path, annotation: Annotation) -> dict[str
             Path(tmp_name).unlink()
         raise
     return record
-
-
-def merged_tags(record: dict[str, Any], annotation: dict[str, Any] | None) -> list[str]:
-    """Union a journal record's tags with an annotation-derived tag set.
-
-    Stub for the ``bundles list --tag`` / ``journal --tag`` union filter,
-    which is gated on the WP8 tag-slice work.  Currently returns only the
-    record's own ``tags`` so callers wire against a stable signature; the
-    annotation-derived tags (e.g. ``fail``, ``failure:<type>``) are folded
-    in once the tag-slice CLI lands.
-    """
-    tags = record.get("tags")
-    if isinstance(tags, list):
-        return [str(t) for t in tags]
-    return []

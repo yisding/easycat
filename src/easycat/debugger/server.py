@@ -84,6 +84,7 @@ from easycat.runtime.costs import (
     cost_budget_status,
     max_session_cost_usd_from_snapshot,
 )
+from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
 # ``audioop`` was removed from the stdlib in Python 3.13.  Mic-track audio
 # stitching uses it for best-effort resample/downmix, but the debugger must
@@ -125,12 +126,17 @@ _SEARCH_MAX_QUERY_LEN = 500
 # polls rather than serializing a megabyte at once.
 _WS_RECORD_BATCH_CAP = 200
 
-# Audio-track selectors for ``/api/audio/concat``.  ``tts`` stitches the bot's
-# synthesized output (``tts_frame``/``output_ref``); ``mic`` stitches the
-# caller's captured input (the STT stage's ``stage_start``/``input_ref``).
+# Audio-track selectors for ``/api/audio/concat`` and ``/api/audio/waveform``.
+# ``tts`` stitches the bot's synthesized output (``tts_frame``/``output_ref``);
+# ``mic`` stitches the caller's captured input (the STT stage's
+# ``stage_start``/``input_ref``); ``reference`` stitches the AEC far-end
+# reference (the bot playback fed to the echo canceller, journaled as
+# ``aec_reference_frame``/``output_ref``) so the AEC view can draw it as the
+# third aligned waveform strip alongside mic-in and post-AEC.
 _AUDIO_TRACK_TTS = "tts"
 _AUDIO_TRACK_MIC = "mic"
-_VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC})
+_AUDIO_TRACK_REFERENCE = "reference"
+_VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
 
 
 def _safe_ref(ref: str) -> str:
@@ -857,11 +863,18 @@ def _collect_audio_frames(
     *leniently* — mismatched blobs are best-effort converted or skipped so a
     ragged caller capture never aborts the response.
 
+    ``track == "reference"`` stitches the AEC far-end reference: the bot
+    playback fed to the echo canceller, journaled as ``aec_reference_frame``
+    records carrying an ``output_ref`` artifact, ordered by sequence.  It is
+    reconciled *leniently* (like ``mic``) so a ragged reference capture never
+    aborts the AEC waveform strip.
+
     Streaming concat reads this and writes the WAV header up-front, then
     pushes each PCM blob to the response without buffering the whole stream in
     memory.
     """
     is_tts = track == _AUDIO_TRACK_TTS
+    is_reference = track == _AUDIO_TRACK_REFERENCE
     frames: list[tuple[int, bytes, dict[str, Any]]] = []
     for r in source.records():
         if r.get("turn_id") != turn_id:
@@ -871,6 +884,10 @@ def _collect_audio_frames(
             continue
         if is_tts:
             if r.get("name") != "tts_frame":
+                continue
+            ref = r.get("output_ref")
+        elif is_reference:
+            if r.get("name") != AEC_REFERENCE_FRAME_NAME:
                 continue
             ref = r.get("output_ref")
         else:
@@ -916,8 +933,8 @@ def _collect_concat_pcm(
 
     Reuses :func:`_collect_audio_frames` and joins the per-frame blobs so
     the waveform endpoint can decode peaks without rebuilding a WAV.  The
-    TTS track raises ``ValueError`` on inconsistent PCM formats; the mic
-    track is lenient (mismatched frames are dropped upstream).
+    TTS track raises ``ValueError`` on inconsistent PCM formats; the mic and
+    reference tracks are lenient (mismatched frames are dropped upstream).
     """
     frames, fmt = _collect_audio_frames(source, turn_id, track=track)
     return b"".join(frames), fmt

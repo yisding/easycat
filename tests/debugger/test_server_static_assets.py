@@ -162,13 +162,14 @@ def test_static_index_has_annotation_controls_in_parity_with_python():
         assert forbidden not in text, f"SPA must never use {forbidden}"
 
 
-def test_static_index_has_aec_view_without_innerhtml():
-    """The AEC tab must exist and render the three-track view, ERLE canvas, FSM
-    swimlane, and VAD what-if controls with safe DOM helpers only.
+def test_static_index_wires_aec_tab_to_external_module():
+    """The AEC tab and view shell live in index.html, but the render layer was
+    extracted to ``/static/aec.js`` (FWP10).
 
-    ``renderAecView`` fetches ``/api/aec/<turn>`` and the VAD what-if posts to
-    ``/api/aec/<turn>/vad-whatif``; everything is built via ``el()``/canvas so
-    untrusted bundle content can never inject markup.
+    index.html keeps the tab strip entry, the ``#aec-view`` section, loads the
+    external script, and delegates the TAB_LOADERS slot to
+    ``window.EasyCatAec.renderAecView`` — the heavy render functions no longer
+    live inline.  The whole SPA still never reaches for innerHTML-family DOM.
     """
     static_path = (
         pathlib.Path(__file__).resolve().parent.parent.parent
@@ -177,8 +178,32 @@ def test_static_index_has_aec_view_without_innerhtml():
     text = static_path.read_text(encoding="utf-8")
     assert 'data-tab="aec"' in text, "AEC tab missing from the tab strip"
     assert 'id="aec-view"' in text, "AEC view section missing"
+    assert '<script src="/static/aec.js"></script>' in text, "aec.js not loaded"
+    assert "window.EasyCatAec" in text, "AEC tab not delegated to the external module"
+    assert "renderAecView" in text, "AEC tab not wired into TAB_LOADERS"
+    # The render functions moved out of index.html into aec.js.
+    assert "function renderAecView" not in text, "renderAecView must move to aec.js"
+    assert "function _aecTrackStrip" not in text, "_aecTrackStrip must move to aec.js"
+    assert "function _paintAecErle" not in text, "_paintAecErle must move to aec.js"
+    assert "function _aecSwimlane" not in text, "_aecSwimlane must move to aec.js"
+    # No unsafe DOM anywhere in the SPA shell.
+    for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
+        assert forbidden not in text, f"SPA must never use {forbidden}"
+
+
+def test_static_aec_js_has_view_without_innerhtml():
+    """``aec.js`` must hold the three-track AEC render layer with safe DOM only.
+
+    It builds the three aligned strips (mic-in / reference / post-AEC), the
+    ERLE canvas painter, the FSM swimlane, and the VAD what-if controls via
+    ``el()``/canvas; it fetches ``/api/aec/<turn>`` and posts to
+    ``/api/aec/<turn>/vad-whatif``; and it exposes the ``EasyCatAec`` namespace.
+    Like the rest of the SPA it never touches innerHTML-family DOM.
+    """
+    text = (_static_dir() / "aec.js").read_text(encoding="utf-8")
+    assert "EasyCatAec" in text
     assert "function renderAecView" in text
-    assert "aec: renderAecView" in text, "AEC tab not wired into TAB_LOADERS"
+    assert "renderAecView: renderAecView" in text, "EasyCatAec must export renderAecView"
     assert '"/api/aec/"' in text, "renderAecView must fetch /api/aec/<turn>"
     assert "/vad-whatif?threshold=" in text, "VAD what-if POST missing"
     # The three aligned strips, the ERLE canvas painter, and the FSM swimlane.
@@ -186,9 +211,41 @@ def test_static_index_has_aec_view_without_innerhtml():
     assert "function _paintAecErle" in text
     assert "function _aecSwimlane" in text
     assert "turn_state_changed" in text, "FSM swimlane must read turn_state_changed records"
-    # No unsafe DOM anywhere in the SPA, including the new view.
+    # The third (reference) strip is rendered when reference frames exist.
+    assert '"reference", "reference"' in text, "reference track strip missing"
     for forbidden in (".innerHTML", ".outerHTML", ".insertAdjacentHTML"):
-        assert forbidden not in text, f"SPA must never use {forbidden}"
+        assert forbidden not in text, f"aec.js must never use {forbidden}"
+
+
+def test_index_html_loads_aec_script():
+    """The SPA must load ``/static/aec.js`` so the namespace is present before
+    the inline TAB_LOADERS delegates the AEC tab to it."""
+    text = (_static_dir() / "index.html").read_text(encoding="utf-8")
+    assert '<script src="/static/aec.js"></script>' in text
+    assert "window.EasyCatAec" in text
+
+
+async def test_static_aec_js_served_with_correct_content_type(tmp_path):
+    """The static route serves ``aec.js`` as JavaScript."""
+    from easycat.debug.bundle import RunBundle
+    from easycat.debugger.server import _bundle_source, _make_app
+
+    from ._server_helpers import _build_voice_bundle
+
+    bundle_path = await _build_voice_bundle(tmp_path)
+    RunBundle.load(bundle_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/static/aec.js")
+        assert resp.status == 200
+        ctype = resp.headers["Content-Type"]
+        assert "javascript" in ctype or "ecmascript" in ctype, ctype
+        body = await resp.text()
+        assert "EasyCatAec" in body
 
 
 def _static_dir() -> pathlib.Path:
