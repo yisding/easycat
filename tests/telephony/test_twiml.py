@@ -10,6 +10,7 @@ from easycat.events import DTMF, EventBus
 from easycat.telephony import (
     TwilioWebhookSignatureError,
     compute_twilio_webhook_signature,
+    reconstruct_public_url,
     twilio_app_settings_from_env,
     twilio_form_items_from_request,
     twilio_public_url_from_request,
@@ -18,7 +19,6 @@ from easycat.telephony import (
 )
 from easycat.telephony.twiml import (
     parse_gather_webhook,
-    reconstruct_public_url,
     sanitize_dtmf_digits,
     twiml_dial_number,
     twiml_dial_send_digits,
@@ -64,6 +64,9 @@ def test_twilio_webhook_helpers_are_public_telephony_exports() -> None:
         "Direction": "inbound",
         "From": "+15551234567",
     }
+    assert reconstruct_public_url({"Host": "voice.example.com"}, "/twiml") == (
+        "https://voice.example.com/twiml"
+    )
     assert issubclass(TwilioWebhookSignatureError, ValueError)
 
 

@@ -122,7 +122,12 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import TwilioSessionActionConfig
     from easycat.transports.local import LocalTransportConfig
     from easycat.transports.twilio_media import TwilioConnectionTransport
-    from easycat.transports.webrtc import ICEServer, WebRTCTransportConfig
+    from easycat.transports.webrtc import (
+        ICEServer,
+        WebRTCTransportConfig,
+        run_webrtc_config_server,
+        serve_webrtc_config_sessions,
+    )
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,
         WebSocketTransportConfig,

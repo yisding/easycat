@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.util
 from collections.abc import Callable
 
@@ -200,6 +201,8 @@ def _install_fake_webrtc_modules(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_require_module(name: str, **_: object) -> object:
         if name == "aiortc":
             return _FakeAiortc
+        if name == "aiohttp.web":
+            return importlib.import_module(name)
         raise AssertionError(f"unexpected module request: {name}")
 
     monkeypatch.setattr(webrtc_mod, "require_module", fake_require_module)

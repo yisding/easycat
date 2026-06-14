@@ -126,7 +126,8 @@ them. Multi-word audience filters accept hyphens or underscores, so
   provider-addition checklist. If `just` is not installed, use its raw command
   table for the equivalent `uv run pytest ...` commands.
 - Operating sessions in production: read
-  [deployment with Docker](deployment/docker.md) and
+  [deployment with Docker](deployment/docker.md), the
+  [production multi-client server guide](deployment/production-servers.md), and
   [observability](observability.md) for journal CLI commands, the debugger UI,
   metrics, and traces. Start with `easycat bundles list`; from this repo, add
   `uv sync --extra debugger --group dev` when you need the UI. When a turn

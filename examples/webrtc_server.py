@@ -1,8 +1,8 @@
-"""WebRTC voice chat server — deployable on EC2.
+"""Multi-client WebRTC voice chat server — deployable on EC2.
 
 A bundled HTML client is served automatically from the signaling server.
-A browser connects via WebRTC, sending microphone audio and receiving the
-agent's TTS response as a real-time Opus stream.
+Each browser offer creates its own EasyCat session, so multiple browser tabs
+or users can talk to isolated agents in one server process.
 
 Setup (local):
     export OPENAI_API_KEY="..."
@@ -29,6 +29,7 @@ Environment variables:
     SIGNALING_HOST        — Optional.  Bind address (default 127.0.0.1).
     SIGNALING_PORT        — Optional.  Listen port (default 8080).
     WEBRTC_SIGNALING_TOKEN — Optional on localhost; required for public binds.
+    WEBRTC_MAX_SESSIONS   — Optional.  Concurrent browser sessions (default 64).
 
 Then open http://localhost:8080 in your browser.
 The bundled client is same-origin with the signaling server. If you host a
@@ -42,23 +43,23 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 
 from __future__ import annotations
 
-from easycat import EasyConfig, create_session
-from easycat.helpers import run_session
-from easycat.transports import webrtc_transport_config_from_env
+from easycat import EasyConfig, require_env
+from easycat.transports import run_webrtc_config_server, webrtc_transport_config_from_env
 
 
 def main() -> None:
-    from agents import Agent  # type: ignore[import-untyped]
+    require_env("OPENAI_API_KEY")
 
-    agent = Agent(
-        name="assistant",
-        instructions="You are a helpful voice assistant. Keep responses concise.",
-    )
+    def config(transport):
+        from agents import Agent  # type: ignore[import-untyped]
+
+        agent = Agent(
+            name="assistant",
+            instructions="You are a helpful voice assistant. Keep responses concise.",
+        )
+        return EasyConfig.browser(transport=transport, agent=agent)
 
     transport = webrtc_transport_config_from_env()
-    config = EasyConfig.browser(transport=transport, agent=agent)
-    session = create_session(config)
-
     token_hint = "?token=<WEBRTC_SIGNALING_TOKEN>" if transport.auth_token else ""
     print(f"Open http://localhost:{transport.port}/webrtc_client.html{token_hint} in your browser")
     if any(any("turn:" in u for u in s.urls) for s in transport.ice_servers):
@@ -70,7 +71,7 @@ def main() -> None:
     else:
         print("TURN server:  not configured (STUN only — NAT traversal may fail)")
 
-    run_session(session)
+    run_webrtc_config_server(config, transport)
 
 
 if __name__ == "__main__":
