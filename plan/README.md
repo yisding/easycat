@@ -7,6 +7,9 @@ subdirectory README for the area you are working on.
 
 ## Current Entry Points
 
+- [neo/README.md](neo/README.md): active next-major planning packet for
+  `VoiceApp`, `VoiceServer`, browser-first development, production manifests,
+  evals, replay-as-tests, and budgets.
 - [roadmap/current-code-status.md](roadmap/current-code-status.md): latest
   static code inspection snapshot used to judge which plans are still current.
 - [validation/README.md](validation/README.md): active validation strategy,
@@ -23,6 +26,7 @@ subdirectory README for the area you are working on.
 
 | Directory | Purpose |
 |---|---|
+| [neo/](neo/README.md) | Active next-major product/platform plan for app-first APIs, production server runtime, and feedback loops. |
 | [validation/](validation/README.md) | Validation strategy, recurring checks, latency/provider coverage, and implementation tasks. |
 | [roadmap/](roadmap/README.md) | Cross-cutting product and architecture plans. |
 | [workstreams/](workstreams/README.md) | Historical workstream records for the debug-first runtime redesign. |
