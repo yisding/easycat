@@ -34,14 +34,10 @@ ships only ``aiohttp``).  Everything here is pure stdlib (``array``,
 from __future__ import annotations
 
 import math
-import struct
-from array import array
 from typing import Any
 
+from easycat.debug._pcm import decode_pcm_mono
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
-
-# ``array`` typecodes for signed-integer PCM keyed by sample width in bytes.
-_WIDTH_TYPECODE = {1: "b", 2: "h", 4: "i"}
 
 # Track keys in the aligned view returned by :func:`align_tracks`.
 _MIC_IN = "mic_in"
@@ -112,25 +108,6 @@ def align_tracks(
     return tracks
 
 
-def _pcm_to_samples(pcm: bytes, *, sample_width: int, channels: int) -> list[int]:
-    """Decode ``pcm`` to a flat mono list of signed ints (channels averaged)."""
-    typecode = _WIDTH_TYPECODE.get(int(sample_width))
-    channels = max(1, int(channels))
-    if typecode is None or not pcm:
-        return []
-    samples = array(typecode)
-    frame_bytes = sample_width * channels
-    usable = (len(pcm) // frame_bytes) * frame_bytes
-    if usable <= 0:
-        return []
-    samples.frombytes(pcm[:usable])
-    if struct.pack("=h", 1) != struct.pack("<h", 1):  # pragma: no cover - rare BE host
-        samples.byteswap()
-    if channels == 1:
-        return list(samples)
-    return [sum(samples[i : i + channels]) // channels for i in range(0, len(samples), channels)]
-
-
 def _frame_rms(samples: list[int], start: int, end: int) -> float:
     """Root-mean-square magnitude of ``samples[start:end]`` (0.0 when empty)."""
     if end <= start:
@@ -150,8 +127,13 @@ def frame_rms_series(
     sample_rate: int = 16000,
     frame_ms: int = 20,
 ) -> list[float]:
-    """Per-frame RMS magnitudes for ``pcm`` at a fixed ``frame_ms`` window."""
-    samples = _pcm_to_samples(pcm, sample_width=sample_width, channels=channels)
+    """Per-frame RMS magnitudes for ``pcm`` at a fixed ``frame_ms`` window.
+
+    Unsupported widths (notably 8-bit mu-law) decode to an empty sample list
+    and therefore yield no frames, so the caller never sees mis-decoded
+    garbage.
+    """
+    samples = decode_pcm_mono(pcm, sample_width=sample_width, channels=channels)
     if not samples:
         return []
     frame_len = max(1, int(sample_rate * frame_ms / 1000))

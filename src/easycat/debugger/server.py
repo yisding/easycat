@@ -49,6 +49,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from easycat.debug._issues import build_issues as _build_issues
+from easycat.debug._pcm import full_scale as _full_scale
+from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
@@ -968,6 +970,26 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
     has_reference = bool(reference)
 
     fmt = _aec_track_format(post_aec or mic_in)
+    # 8-bit mu-law (sample_width == 1) can't be linearly decoded for the energy
+    # math below; surface a clear unsupported result rather than mis-decoded
+    # garbage ERLE/self-echo numbers.
+    if not _is_supported_width(fmt["sample_width"]):
+        return {
+            "turn_id": turn_id,
+            "has_reference": has_reference,
+            "unsupported": True,
+            "reason": (
+                "unsupported audio format for AEC diagnostics: "
+                f"sample_width={fmt['sample_width']} "
+                "(8-bit/mu-law telephony audio is not decodable here)"
+            ),
+            "format": fmt,
+            "tracks": {
+                "mic_in": {"frame_count": len(mic_in)},
+                "reference": {"frame_count": len(reference)},
+                "post_aec": {"frame_count": len(post_aec)},
+            },
+        }
     frame_ms = _AEC_FRAME_MS
     mic_pcm = b"".join(entry["pcm"] for entry in mic_in)
     ref_pcm = b"".join(entry["pcm"] for entry in reference)
@@ -1453,6 +1475,22 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.Response(status=409, text="cannot assemble audio for this turn")
         if not frames:
             return web.Response(status=404, text=f"no {track} frames for turn")
+        # 8-bit mu-law telephony (sample_width == 1) can't be losslessly
+        # wrapped as linear PCM WAV here — decoding it as int8 would emit
+        # garbage.  Surface a clear unsupported result instead.
+        if not _is_supported_width(fmt.get("sample_width", 2)):
+            return web.json_response(
+                {
+                    "unsupported": True,
+                    "reason": (
+                        "unsupported audio format for concat: "
+                        f"sample_width={fmt.get('sample_width')} "
+                        "(8-bit/mu-law telephony audio is not decodable here)"
+                    ),
+                    "format": fmt,
+                },
+                status=415,
+            )
         # Stream the WAV out incrementally.  Whole-file response would
         # buffer tens of MB for long turns; StreamResponse lets aiohttp
         # backpressure the client and avoids the heap spike.
@@ -1510,13 +1548,35 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.Response(status=409, text="cannot assemble audio for this turn")
         if not pcm:
             return web.Response(status=404, text=f"no {track} frames for turn")
+        sample_width = int(fmt.get("sample_width", 2) or 2)
+        # 8-bit mu-law (sample_width == 1) decodes to nothing in the shared PCM
+        # decoder; rather than paint a misleading flat/garbage strip, return a
+        # clear unsupported result so the SPA can show a placeholder.
+        if not _is_supported_width(sample_width):
+            return web.json_response(
+                {
+                    "unsupported": True,
+                    "reason": (
+                        "unsupported audio format for waveform: "
+                        f"sample_width={sample_width} "
+                        "(8-bit/mu-law telephony audio is not decodable here)"
+                    ),
+                    "format": fmt,
+                },
+                status=415,
+            )
         peaks = decode_pcm_peaks(
             pcm,
-            sample_width=fmt.get("sample_width", 2),
+            sample_width=sample_width,
             channels=fmt.get("channels", 1),
             buckets=width,
         )
-        png = encode_peaks_png(peaks, width=width, height=height)
+        png = encode_peaks_png(
+            peaks,
+            width=width,
+            height=height,
+            full_scale_value=_full_scale(sample_width),
+        )
         return web.Response(
             body=png,
             content_type="image/png",

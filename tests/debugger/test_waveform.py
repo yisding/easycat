@@ -4,7 +4,22 @@ import struct
 import zlib
 from array import array
 
+from easycat.debug._pcm import full_scale, is_supported_width
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
+
+_CLIP_RGB = bytes((224, 99, 90))
+_WAVE_RGB = bytes((110, 168, 254))
+
+
+def _scanline_pixel(raw: bytes, *, x: int, y: int, width: int) -> bytes:
+    """Extract the RGB triple at column ``x`` / row ``y`` from raw scanlines."""
+    row_stride = 1 + width * 3
+    base = y * row_stride + 1 + x * 3
+    return raw[base : base + 3]
+
+
+def _column_has_colour(raw: bytes, *, x: int, height: int, width: int, colour: bytes) -> bool:
+    return any(_scanline_pixel(raw, x=x, y=y, width=width) == colour for y in range(height))
 
 
 def _parse_png_chunks(png: bytes) -> list[tuple[bytes, bytes]]:
@@ -77,19 +92,68 @@ def test_encode_peaks_png_emits_valid_truecolour_png():
 def test_encode_peaks_png_marks_clipped_columns_red():
     # One non-clipped column, one full-scale (clipped) column.
     peaks = [(0, 1000), (-32768, 32767)]
-    png = encode_peaks_png(peaks, width=2, height=4, clipped_threshold=0.99)
+    png = encode_peaks_png(
+        peaks,
+        width=2,
+        height=4,
+        full_scale_value=full_scale(2),
+        clipped_threshold=0.99,
+    )
     raw = zlib.decompress(_parse_png_chunks(png)[1][1])
-    clip_rgb = bytes((224, 99, 90))
-    # The clipped column maps to x=1; scan every scanline's second pixel.
-    row_stride = 1 + 2 * 3
-    found_red = False
-    for y in range(4):
-        px1 = raw[y * row_stride + 1 + 3 : y * row_stride + 1 + 6]
-        if px1 == clip_rgb:
-            found_red = True
-    assert found_red, "clipped column should contain red pixels"
+    # The clipped column maps to x=1; the quiet column (x=0) must stay non-red.
+    assert _column_has_colour(raw, x=1, height=4, width=2, colour=_CLIP_RGB), (
+        "near-full-scale column should contain red pixels"
+    )
+    assert not _column_has_colour(raw, x=0, height=4, width=2, colour=_CLIP_RGB), (
+        "quiet column must not be tinted red"
+    )
+
+
+def test_encode_peaks_png_clean_audio_has_no_red_columns():
+    # Clean, well-below-full-scale audio: the loudest column is far from the
+    # format ceiling, so NO column should be painted red.  This is the bug
+    # the full-scale clip floor fixes — the old per-strip-max floor always
+    # tinted the loudest column even on clean audio.
+    pcm = array("h", [int(4000 * (1 if i % 2 else -1)) for i in range(64)]).tobytes()
+    peaks = decode_pcm_peaks(pcm, sample_width=2, channels=1, buckets=16)
+    png = encode_peaks_png(peaks, width=32, height=16, full_scale_value=full_scale(2))
+    raw = zlib.decompress(_parse_png_chunks(png)[1][1])
+    for x in range(32):
+        assert not _column_has_colour(raw, x=x, height=16, width=32, colour=_CLIP_RGB), (
+            f"clean audio column {x} must not be tinted red"
+        )
+    # ...but the waveform itself is still drawn (light-grey wave pixels present).
+    assert any(
+        _column_has_colour(raw, x=x, height=16, width=32, colour=_WAVE_RGB) for x in range(32)
+    ), "clean audio should still render a (non-red) waveform"
+
+
+def test_encode_peaks_png_only_near_full_scale_is_tinted():
+    # A loud-but-not-clipping column (90% of full scale) next to a true
+    # full-scale column: only the latter is tinted at the default 0.99 floor.
+    near = int(0.90 * full_scale(2))
+    peaks = [(-near, near), (-32768, 32767)]
+    png = encode_peaks_png(peaks, width=2, height=8, full_scale_value=full_scale(2))
+    raw = zlib.decompress(_parse_png_chunks(png)[1][1])
+    assert not _column_has_colour(raw, x=0, height=8, width=2, colour=_CLIP_RGB), (
+        "90%-of-full-scale column must not be tinted"
+    )
+    assert _column_has_colour(raw, x=1, height=8, width=2, colour=_CLIP_RGB), (
+        "full-scale column must be tinted"
+    )
+
+
+def test_decode_pcm_peaks_mulaw_width_one_is_unsupported():
+    # 8-bit / mu-law telephony audio (sample_width == 1) is unsupported: it must
+    # NOT be decoded as linear int8 garbage.  The shared support check reports
+    # it, and decoding yields only silence pads (no spurious peaks).
+    assert is_supported_width(1) is False
+    assert is_supported_width(2) is True
+    blob = bytes(range(0, 256)) * 4  # arbitrary mu-law-ish bytes
+    peaks = decode_pcm_peaks(blob, sample_width=1, channels=1, buckets=8)
+    assert peaks == [(0, 0)] * 8
 
 
 def test_encode_peaks_png_handles_silence_without_crashing():
-    png = encode_peaks_png([(0, 0)] * 10, width=10, height=8)
+    png = encode_peaks_png([(0, 0)] * 10, width=10, height=8, full_scale_value=full_scale(2))
     assert _parse_png_chunks(png)[0][0] == b"IHDR"

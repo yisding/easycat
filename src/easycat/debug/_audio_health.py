@@ -24,11 +24,11 @@ them as int16 would be meaningless.
 
 from __future__ import annotations
 
-import sys
 from array import array
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from easycat.debug._pcm import decode_pcm_mono
 from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id
 
 # Per-blob byte cap for analysis.  We scan at most the first and last
@@ -53,6 +53,11 @@ def _iter_int16(blob: bytes | bytearray, *, stride: int) -> array[int]:
     stays bounded for large blobs.  ``stride`` keeps every ``stride``-th
     sample.  Trailing odd bytes (a half sample) are dropped.  Returns an
     empty ``array('h')`` for empty input.
+
+    The per-chunk byte→sample decode is delegated to the shared
+    :func:`easycat.debug._pcm.decode_pcm_mono` (mono int16, byte-order
+    normalised); the byte-cap windowing and stride-subsampling stay here
+    because they are specific to the bounded issues scan.
     """
     view = memoryview(blob)
     if len(view) > 2 * _BYTE_CAP:
@@ -64,15 +69,9 @@ def _iter_int16(blob: bytes | bytearray, *, stride: int) -> array[int]:
 
     samples: array[int] = array("h")
     for chunk in (head, tail):
-        usable = len(chunk) - (len(chunk) % 2)
-        if usable <= 0:
+        decoded = decode_pcm_mono(bytes(chunk), sample_width=2, channels=1)
+        if not decoded:
             continue
-        decoded = array("h")
-        decoded.frombytes(bytes(chunk[:usable]))
-        # array('h') is native-endian; normalize to little-endian on big-endian
-        # hosts so detection is byte-order independent.
-        if sys.byteorder == "big":
-            decoded.byteswap()
         if stride > 1:
             samples.extend(decoded[::stride])
         else:

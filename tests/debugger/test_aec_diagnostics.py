@@ -165,6 +165,46 @@ def test_align_tracks_groups_by_track_and_orders_by_mono_ns():
     assert all(e["ref"] != "ref-other" for e in tracks["reference"])
 
 
+def test_frame_rms_series_mulaw_width_one_yields_no_frames():
+    # 8-bit mu-law (sample_width == 1) is unsupported by the shared decoder, so
+    # the RMS series is empty rather than mis-decoded int8 garbage.
+    blob = bytes(range(0, 256)) * 4
+    assert frame_rms_series(blob, sample_width=1, frame_ms=20) == []
+    # The supported int16 path still produces frames from the same byte count.
+    assert frame_rms_series(_tone_pcm(4000, 320), sample_width=2, frame_ms=20)
+
+
+def test_aec_diagnostics_unsupported_for_mulaw_width():
+    from easycat.debugger.server import _aec_diagnostics_for_turn
+
+    # Mic-in + post-AEC tracks carrying sample_width == 1 (mu-law) must degrade
+    # to an unsupported result instead of emitting garbage ERLE numbers.
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "mic",
+            "data": {"stage": "audio", "sample_width": 1, "channels": 1},
+            "timing": {"mono_ns": 100},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "output_ref": "post",
+            "data": {"stage": "audio", "sample_width": 1, "channels": 1},
+            "timing": {"mono_ns": 200},
+        },
+    ]
+    blobs = {"mic": bytes(range(64)), "post": bytes(range(64))}
+    source = _DictSource(records, blobs)
+    out = _aec_diagnostics_for_turn(source, "t1")
+    assert out["unsupported"] is True
+    assert "erle" not in out
+    assert out["format"]["sample_width"] == 1
+
+
 # ── Server endpoints ─────────────────────────────────────────────
 
 
