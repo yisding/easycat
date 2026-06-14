@@ -317,12 +317,14 @@ too-slow — the bot took too long to respond.
 
 said-wrong — the bot answered, but the answer was wrong.
   Run:   easycat replay PATH --turn <id>
-         easycat journal promote PATH   (pin a regression as a test)
+         easycat journal promote PATH TURN_ID --out regression.zip
+                                        (pin a regression as a test)
   Read:  docs/testing-and-evals.md
   Topic: easycat explain journal
 
 crashed — the session errored or the agent raised.
-  Run:   easycat inspect PATH --json --errors
+  Run:   easycat inspect PATH --issues
+         easycat journal grep PATH --query . --regex --errors
          easycat explain <Exxx>      (decode the EASYCAT_Exxx code)
   Read:  docs/observability.md
   Topic: easycat explain exit-codes
