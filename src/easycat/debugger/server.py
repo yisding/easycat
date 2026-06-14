@@ -36,6 +36,7 @@ import io
 import json
 import logging
 import re
+import socket
 import struct
 import threading
 import wave
@@ -1945,6 +1946,9 @@ def serve_session(
         lambda turn_id: _turn_bundle_zip_from_session(session, turn_id)
     )
     if not in_thread:
+        # Synchronous serve: bind happens inside ``_serve`` → ``run_app`` and a
+        # collision raises here on the calling thread already. The browser opens
+        # only after that bind succeeds (handled inside ``_serve``).
         _serve(
             source,
             host=host,
@@ -1954,13 +1958,22 @@ def serve_session(
         )
         return None
 
+    # Probe-bind on the calling thread *before* starting the daemon so a
+    # port-in-use collision surfaces synchronously to the caller instead of
+    # exploding inside the thread after we've returned. Only after the probe
+    # succeeds do we open the browser — a session whose bind fails must open
+    # no tab.
+    _probe_bind(host, port)
+
     thread = threading.Thread(
         target=_serve,
         args=(source,),
         kwargs={
             "host": host,
             "port": port,
-            "open_browser": open_browser,
+            # The probe above already confirmed the port is free and we open the
+            # browser here; the threaded serve must not open it a second time.
+            "open_browser": False,
             "allow_remote": allow_remote,
             # aiohttp's default signal handling uses ``signal.set_wakeup_fd``,
             # which only works on the main thread — installing it from a
@@ -1972,7 +1985,32 @@ def serve_session(
         name="easycat-debugger",
     )
     thread.start()
+    if open_browser:
+        _open_browser(f"http://{host}:{port}/")
     return thread
+
+
+def _probe_bind(host: str, port: int) -> None:
+    """Bind ``(host, port)`` once and release it so collisions surface here.
+
+    ``serve_session(..., in_thread=True)`` runs ``web.run_app`` on a daemon
+    thread, so a port-already-in-use ``OSError`` would otherwise fire *after*
+    ``serve_session`` has already returned — an unhandled exception in a
+    background thread that the autolaunch try/except can never catch, and a
+    browser tab that was already opened. Probing the bind synchronously before
+    the server thread starts (and before any ``webbrowser.open``) lets the
+    failure propagate to the caller. There is an inherent TOCTOU window between
+    this probe and the server's own bind, but for the loopback dev-debugger the
+    common "second concurrent session, same port" case is caught cleanly.
+    """
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    probe = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        # No SO_REUSEADDR: we want this probe to fail loudly when the port is
+        # already taken by another live server, mirroring what run_app sees.
+        probe.bind((host, port))
+    finally:
+        probe.close()
 
 
 def _check_host(host: str, allow_remote: bool) -> None:
@@ -1996,6 +2034,14 @@ def _check_host(host: str, allow_remote: bool) -> None:
     )
 
 
+def _open_browser(url: str) -> None:
+    """Best-effort ``webbrowser.open`` that never raises into the caller."""
+    try:
+        webbrowser.open(url)
+    except Exception:  # pragma: no cover - depends on env
+        logger.debug("Could not open browser automatically", exc_info=True)
+
+
 def _serve(
     source: DebuggerSource,
     *,
@@ -2010,14 +2056,16 @@ def _serve(
     except ImportError as exc:  # pragma: no cover - optional dep
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
+    # Probe-bind before building the app or opening any browser tab so a port
+    # collision in the synchronous-serve path raises here (before
+    # ``webbrowser.open``) instead of popping a tab that points at a server
+    # that never came up.
+    _probe_bind(host, port)
     app = _make_app(source, allow_remote=allow_remote)
     url = f"http://{host}:{port}/"
     logger.info("EasyCat debugger UI serving on %s (source=%s)", url, source.label)
     if open_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:  # pragma: no cover - depends on env
-            logger.debug("Could not open browser automatically", exc_info=True)
+        _open_browser(url)
     web.run_app(app, host=host, port=port, print=None, handle_signals=handle_signals)
 
 

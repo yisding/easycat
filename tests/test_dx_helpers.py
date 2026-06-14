@@ -593,8 +593,106 @@ def test_debug_full_skips_auto_launch_under_pytest(monkeypatch: pytest.MonkeyPat
     assert calls == []
 
 
+def _opt_in_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear guards and fake an interactive, opted-in terminal context."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_AUTOLAUNCH", "1")
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+
+
+def test_debug_full_does_not_auto_launch_without_opt_in(monkeypatch: pytest.MonkeyPatch):
+    """``debug='full'`` alone must NOT launch the debugger UI.
+
+    Keeping a durable journal is the default; auto-launch is strictly
+    opt-in so concurrent sessions never race a port bind or pop a tab.
+    """
+    from easycat.debugger._autolaunch import maybe_launch_debugger_ui
+
+    calls: list[object] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append(session)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_AUTOLAUNCH", raising=False)
+    # Even with an interactive terminal, no opt-in means no launch.
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+
+    maybe_launch_debugger_ui(session=object())
+    assert calls == []
+
+
+def test_opted_in_no_ops_when_ci_set(monkeypatch: pytest.MonkeyPatch):
+    """An opted-in launch still no-ops under CI even with a TTY."""
+    from easycat.debugger._autolaunch import maybe_launch_debugger_ui
+
+    calls: list[object] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append(session)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_AUTOLAUNCH", "1")
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+
+    maybe_launch_debugger_ui(session=object())
+    assert calls == []
+
+
+def test_opted_in_no_ops_when_not_a_tty(monkeypatch: pytest.MonkeyPatch):
+    """An opted-in launch no-ops when stderr is not a TTY (daemonised server)."""
+    from easycat.debugger._autolaunch import maybe_launch_debugger_ui
+
+    calls: list[object] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append(session)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_AUTOLAUNCH", "1")
+    monkeypatch.setattr("sys.stderr.isatty", lambda: False, raising=False)
+
+    maybe_launch_debugger_ui(session=object())
+    assert calls == []
+
+
+def test_config_knob_opt_in_attempts_launch(monkeypatch: pytest.MonkeyPatch):
+    """``config_opt_in=True`` arms the launch even without the env var."""
+    pytest.importorskip("aiohttp")
+
+    from easycat.debugger._autolaunch import maybe_launch_debugger_ui
+
+    calls: list[object] = []
+
+    def _fake_serve(session, **kwargs):
+        calls.append(session)
+
+    monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_AUTOLAUNCH", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "0")
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+
+    sentinel = object()
+    maybe_launch_debugger_ui(session=sentinel, config_opt_in=True)
+    assert calls == [sentinel]
+
+
 def test_debug_full_auto_launches_happy_path(monkeypatch: pytest.MonkeyPatch):
-    """``_maybe_launch_debugger_ui`` forwards to ``serve_session`` when aiohttp is available."""
+    """``maybe_launch_debugger_ui`` forwards to ``serve_session`` when opted in."""
     pytest.importorskip("aiohttp")
 
     from easycat.debugger._autolaunch import maybe_launch_debugger_ui
@@ -605,8 +703,7 @@ def test_debug_full_auto_launches_happy_path(monkeypatch: pytest.MonkeyPatch):
         calls.append({"session": session, **kwargs})
 
     monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
     monkeypatch.delenv("EASYCAT_DEBUGGER_PORT", raising=False)
     monkeypatch.setenv("EASYCAT_DEBUGGER_OPEN_BROWSER", "0")
 
@@ -632,8 +729,7 @@ def test_debug_full_bad_port_env_falls_back_to_default(monkeypatch: pytest.Monke
         captured.update(kwargs)
 
     monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
     monkeypatch.setenv("EASYCAT_DEBUGGER_PORT", "not-a-number")
 
     maybe_launch_debugger_ui(session=object())
@@ -653,8 +749,7 @@ def test_debug_full_skips_when_aiohttp_missing(monkeypatch: pytest.MonkeyPatch):
         calls.append(session)
 
     monkeypatch.setattr("easycat.debugger.serve_session", _fake_serve, raising=False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
     # Block ``import aiohttp`` even if the debugger extra is installed —
     # ``sys.modules[name] = None`` is the documented way to force a
     # future ``import`` to raise ``ImportError``.

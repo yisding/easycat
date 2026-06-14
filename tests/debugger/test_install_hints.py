@@ -59,13 +59,21 @@ def test_debugger_app_missing_aiohttp_install_hint(monkeypatch: pytest.MonkeyPat
     _assert_debugger_hint(str(exc_info.value))
 
 
+def _opt_in_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the guards and fake an interactive opted-in terminal context."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("EASYCAT_DEBUGGER_AUTOLAUNCH", "1")
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True, raising=False)
+
+
 def test_debugger_auto_launch_missing_aiohttp_install_hint(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     _block_aiohttp(monkeypatch)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
 
     with caplog.at_level(logging.INFO, logger="easycat.debugger"):
         maybe_launch_debugger_ui(session=object())
@@ -82,8 +90,7 @@ def test_debugger_auto_launch_logs_warning_when_serve_session_raises_oserror(
     import easycat.debugger as debugger_pkg
 
     _allow_aiohttp_import(monkeypatch)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
     monkeypatch.delenv("EASYCAT_DEBUGGER_PORT", raising=False)
 
     def fail_serve_session(*args: Any, **kwargs: Any) -> None:
@@ -108,8 +115,7 @@ def test_debugger_auto_launch_logs_exception_when_serve_session_raises_runtimeer
     import easycat.debugger as debugger_pkg
 
     _allow_aiohttp_import(monkeypatch)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("EASYCAT_DEBUGGER_DISABLE", raising=False)
+    _opt_in_interactive(monkeypatch)
     monkeypatch.delenv("EASYCAT_DEBUGGER_PORT", raising=False)
 
     def fail_serve_session(*args: Any, **kwargs: Any) -> None:

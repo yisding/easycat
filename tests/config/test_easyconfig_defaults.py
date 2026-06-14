@@ -53,6 +53,26 @@ def test_easycat_config_defaults_debug_to_full():
     assert ObservabilityConfig().debug == "full"
 
 
+def test_debugger_autolaunch_defaults_off_even_with_debug_full():
+    # ``debug="full"`` keeps a durable journal but must NOT arm debugger
+    # auto-launch on its own — that is strictly opt-in.
+    assert ObservabilityConfig().debugger_autolaunch is False
+    config = EasyConfig(openai_api_key="test-key")
+    assert config.observability.debug == "full"
+    assert config.observability.debugger_autolaunch is False
+    # Reachable through the observability alias proxy.
+    assert config.debugger_autolaunch is False
+
+
+def test_debugger_autolaunch_opt_in_via_observability_knob():
+    config = EasyConfig(
+        openai_api_key="test-key",
+        observability=ObservabilityConfig(debugger_autolaunch=True),
+    )
+    assert config.observability.debugger_autolaunch is True
+    assert config.debugger_autolaunch is True
+
+
 def test_easycat_config_programmatic_openai_key_parses_string_shortcuts_without_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

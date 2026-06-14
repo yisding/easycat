@@ -578,7 +578,12 @@ def create_session(config: EasyConfig) -> Session:
     if config.debug == "full":
         from easycat.debugger._autolaunch import maybe_launch_debugger_ui
 
-        maybe_launch_debugger_ui(session)
+        # Strictly opt-in: ``debug="full"`` keeps a durable journal but only
+        # auto-launches the UI when explicitly requested via the config knob
+        # (or the EASYCAT_DEBUGGER_AUTOLAUNCH env var, checked inside).
+        observability = getattr(config, "observability", None)
+        config_opt_in = bool(getattr(observability, "debugger_autolaunch", False))
+        maybe_launch_debugger_ui(session, config_opt_in=config_opt_in)
 
     if config.debug != "off" and _emergency_export_enabled(config):
         install_emergency_export(session)

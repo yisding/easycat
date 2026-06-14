@@ -462,6 +462,12 @@ class ObservabilityConfig:
     latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = ()
     warmup: bool = True
     max_session_cost_usd: float | None = None
+    # Strictly opt-in: ``debug="full"`` keeps a durable journal but never
+    # auto-launches the debugger UI on its own (that would race the port and
+    # pop a browser tab for every concurrent session). Set this — or the
+    # ``EASYCAT_DEBUGGER_AUTOLAUNCH`` env var — to auto-open the UI in an
+    # interactive terminal. Off by default.
+    debugger_autolaunch: bool = False
 
     def __post_init__(self) -> None:
         self._normalize_and_validate()
@@ -502,6 +508,7 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "latency_budget",
         "warmup",
         "max_session_cost_usd",
+        "debugger_autolaunch",
     }
 )
 
