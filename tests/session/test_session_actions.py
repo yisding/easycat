@@ -318,6 +318,63 @@ async def test_add_to_dnc_falls_back_to_caller_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_to_dnc_explicit_number_takes_precedence_over_caller_identity() -> None:
+    # An explicit number wins over the caller fallback (e.g. DNC a third party).
+    actions = SessionActions()
+    actions.add_to_dnc("+15559999999")
+    dnc = DNCList()
+    session = Session(
+        _config(
+            session_actions=actions,
+            dnc_list=dnc,
+            call_identity=CallIdentity(caller_number="+15551234567"),
+        )
+    )
+
+    await session._drain_session_actions()
+
+    assert dnc.is_on_dnc("+15559999999")
+    assert not dnc.is_on_dnc("+15551234567")
+
+
+@pytest.mark.asyncio
+async def test_remove_from_dnc_falls_back_to_caller_identity() -> None:
+    dnc = DNCList()
+    dnc.add("+15551234567")
+    actions = SessionActions()
+    actions.remove_from_dnc()  # no number → resolve from the live caller
+    session = Session(
+        _config(
+            session_actions=actions,
+            dnc_list=dnc,
+            call_identity=CallIdentity(caller_number="+15551234567"),
+            caller_id_exposure="off",
+        )
+    )
+
+    await session._drain_session_actions()
+
+    assert not dnc.is_on_dnc("+15551234567")
+
+
+@pytest.mark.asyncio
+async def test_add_to_dnc_no_number_and_no_identity_is_noop() -> None:
+    actions = SessionActions()
+    actions.add_to_dnc()  # no number, and the session has no caller identity
+    dnc = DNCList()
+    session = Session(_config(session_actions=actions, dnc_list=dnc))
+
+    completed: list[SessionActionCompleted] = []
+    session.event_bus.subscribe(SessionActionCompleted, completed.append)
+
+    await session._drain_session_actions()
+
+    assert len(dnc) == 0
+    assert completed[0].result.metadata["applied"] is False
+    assert completed[0].result.metadata["skipped"] == "no_number"
+
+
+@pytest.mark.asyncio
 async def test_dnc_store_write_failure_is_reported_as_failed_action() -> None:
     class BrokenDNC:
         def add(self, phone: str) -> None:

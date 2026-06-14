@@ -114,7 +114,10 @@ Group under `session_policy=SessionPolicyConfig(...)`:
   `SessionActions.add_to_dnc()` / `remove_from_dnc()`. The default
   `DNCList` is in-memory only (lost on restart); use `SQLiteDNCList(path)`
   for durable, cross-restart state shared across sessions, or any object
-  satisfying the `DNCStore` protocol.
+  satisfying the `DNCStore` protocol. With the `telephony` extra installed,
+  numbers are normalized to E.164 (Google libphonenumber) so formats match
+  across countries; pass `default_region="US"` (etc.) for numbers given
+  without a `+` country code.
 - `caller_id_exposure` — how the callee identity reaches the agent:
   `"off"`, `"system_message"`, or `"tools_only"` (default).
 

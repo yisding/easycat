@@ -9,6 +9,7 @@ executors.
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import threading
@@ -245,10 +246,12 @@ class SessionActions:
 
         The session applies it after the current turn via the
         :class:`CoreSessionActionExecutor`, which mutates ``session.dnc_list``
-        and emits ``SessionActionStarted`` / ``SessionActionCompleted`` events
-        so the request is journaled for audit. If no number can be resolved or
-        the session has no ``dnc_list`` configured, the action is a logged
-        no-op.
+        and emits ``SessionActionStarted`` / ``SessionActionCompleted`` (or
+        ``SessionActionFailed``) events that observers can subscribe to for an
+        audit trail. If no number can be resolved or the session has no
+        ``dnc_list`` configured, the action is a logged no-op. The durable
+        record of who is on the list is the ``dnc_list`` itself (e.g.
+        :class:`~easycat.telephony.compliance.SQLiteDNCList`).
 
         Example (OpenAI Agents SDK)::
 
@@ -273,8 +276,9 @@ class SessionActions:
         """Queue removing a number from the session Do-Not-Call list.
 
         The complement of :meth:`add_to_dnc`, applied the same way (after the
-        turn, via :class:`CoreSessionActionExecutor`, journaled for audit), and
-        with the same caller-identity fallback when ``number`` is omitted.
+        turn, via :class:`CoreSessionActionExecutor`, emitting the same
+        auditable ``SessionAction*`` events), and with the same caller-identity
+        fallback when ``number`` is omitted.
         """
         self.enqueue(
             RemoveFromDNCAction(number=number or "", reason=reason, no_interrupt=no_interrupt)
@@ -363,10 +367,10 @@ class CoreSessionActionExecutor(SessionActionExecutor):
             logger.info("Agent requested end_call: reason=%s", action.reason)
             return SessionActionResult(stop_session=True, metadata={"reason": action.reason})
         if isinstance(action, AddToDNCAction | RemoveFromDNCAction):
-            return self._apply_dnc(session, action)
+            return await self._apply_dnc(session, action)
         raise TypeError(f"CoreSessionActionExecutor cannot handle {type(action).__name__}")
 
-    def _apply_dnc(
+    async def _apply_dnc(
         self,
         session: Any,
         action: AddToDNCAction | RemoveFromDNCAction,
@@ -380,6 +384,10 @@ class CoreSessionActionExecutor(SessionActionExecutor):
         misconfigured app never crashes a turn.  Store write errors are *not*
         swallowed — they propagate so the drain loop reports
         ``SessionActionFailed`` instead of a misleading completed action.
+
+        The store write runs via :func:`asyncio.to_thread`: a ``dnc_list`` may
+        do blocking disk I/O (e.g. :class:`SQLiteDNCList`), which must not run
+        on the session event loop.
         """
         verb = "add" if isinstance(action, AddToDNCAction) else "remove"
         number = action.number or _current_caller_number(session)
@@ -400,8 +408,8 @@ class CoreSessionActionExecutor(SessionActionExecutor):
                 metadata={**meta, "applied": False, "skipped": "no_dnc_list"}
             )
         if isinstance(action, AddToDNCAction):
-            dnc_list.add(number)
+            await asyncio.to_thread(dnc_list.add, number)
         else:
-            dnc_list.remove(number)
+            await asyncio.to_thread(dnc_list.remove, number)
         logger.info("Agent updated DNC list (%s %s): reason=%s", verb, number, action.reason)
         return SessionActionResult(metadata={**meta, "applied": True})

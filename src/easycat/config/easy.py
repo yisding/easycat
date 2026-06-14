@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     # Annotation-only references to telephony runtime types. Kept out of the
     # module-level import set (which would re-trigger the telephony fan-out)
     # because ``from __future__ import annotations`` makes these lazy strings.
+    from easycat.telephony.compliance import DNCStore
     from easycat.telephony.ivr import AgentCallback, DTMFDelivery
     from easycat.telephony.retry import RetryStrategyConfig
     from easycat.telephony.session_actions import TwilioSessionActionConfig
@@ -421,7 +422,7 @@ class SessionPolicyConfig:
     """
 
     greeting: str | None = None
-    dnc_list: Any | None = None
+    dnc_list: DNCStore | None = None
     caller_id_exposure: Literal["off", "system_message", "tools_only"] = "tools_only"
 
 
@@ -658,7 +659,7 @@ class EasyConfig(_AgentSessionConfig):
     # pass ``session_policy=SessionPolicyConfig(...)`` when you need to set
     # one of the nullable policy values to ``None`` explicitly.
     greeting: InitVar[str | None] = None
-    dnc_list: InitVar[Any | None] = None
+    dnc_list: InitVar[DNCStore | None] = None
     caller_id_exposure: InitVar[Literal["off", "system_message", "tools_only"] | None] = None
 
     def __getattribute__(self, name: str) -> Any:
@@ -701,7 +702,7 @@ class EasyConfig(_AgentSessionConfig):
         smart_turn: SmartTurnConfig | bool | None,
         smart_turn_sensitivity: float | None,
         greeting: str | None,
-        dnc_list: Any | None,
+        dnc_list: DNCStore | None,
         caller_id_exposure: Literal["off", "system_message", "tools_only"] | None,
     ) -> None:
         self._apply_observability_aliases(

@@ -18,6 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+try:  # Optional; provided by the ``telephony`` extra (phonenumberslite).
+    import phonenumbers as _phonenumbers
+except ModuleNotFoundError:  # pragma: no cover - exercised via the fallback path
+    _phonenumbers = None
+
 logger = logging.getLogger(__name__)
 
 # US area code to timezone mapping (simplified — covers major codes).
@@ -65,6 +70,50 @@ def _extract_area_code(phone: str) -> str | None:
     if len(digits) == 10:
         return digits[:3]
     return None
+
+
+def _normalize_dnc_number(phone: str, *, region: str | None = None) -> str:
+    """Normalize a phone number to a canonical DNC-matching key.
+
+    When the optional ``phonenumbers`` library (Google libphonenumber, pulled in
+    by the ``telephony`` extra via ``phonenumberslite``) is installed, the
+    number is parsed and rendered as **E.164**, so the same physical number
+    matches regardless of formatting or country.  ``region`` (an ISO 3166-1
+    alpha-2 code such as ``"US"``) is used to interpret numbers supplied without
+    a ``+`` country code; E.164 inputs need no region.
+
+    Falls back to a digit-only heuristic (see :func:`_normalize_digits_fallback`)
+    when ``phonenumbers`` is unavailable or the number cannot be parsed, so DNC
+    matching still works — just without global canonicalization.
+
+    Keep a single deployment consistent: a list written while ``phonenumbers``
+    is installed (E.164 keys) and later read without it (digit keys) will not
+    match.  Likewise, mixing E.164 and bare-national inputs requires setting a
+    ``region`` so both canonicalize the same way.
+    """
+    if _phonenumbers is None:
+        return _normalize_digits_fallback(phone)
+    try:
+        parsed = _phonenumbers.parse(phone, region)
+    except _phonenumbers.NumberParseException:
+        return _normalize_digits_fallback(phone)
+    return _phonenumbers.format_number(parsed, _phonenumbers.PhoneNumberFormat.E164)
+
+
+def _normalize_digits_fallback(phone: str) -> str:
+    """Digit-only DNC key used when ``phonenumbers`` is unavailable.
+
+    Strips to digits, then collapses a plausibly-NANP number to its 10-digit
+    national form so ``+1XXXXXXXXXX``, ``1XXXXXXXXXX`` and ``XXXXXXXXXX`` all
+    key to the same entry (mirroring :func:`_extract_area_code`).  Without this
+    a number added from an E.164 caller-id (``+1…``) would not match a bare
+    10-digit ``place_call`` target, silently letting a do-not-call through.
+    Non-NANP numbers keep their stripped-digit form (best effort).
+    """
+    digits = _strip_to_digits(phone)
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
 
 
 def lookup_timezone(phone: str) -> str | None:
@@ -164,14 +213,18 @@ class DNCList:
     persisted anywhere, so do-not-call state is lost on restart and is not
     shared across worker processes.  For durable, cross-restart DNC state use
     :class:`SQLiteDNCList` (or another :class:`DNCStore` implementation).
+
+    ``default_region`` (an ISO 3166-1 alpha-2 code such as ``"US"``) is used to
+    canonicalize numbers supplied without a ``+`` country code; see
+    :func:`_normalize_dnc_number`.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, default_region: str | None = None) -> None:
         self._numbers: set[str] = set()
+        self._default_region = default_region
 
-    @staticmethod
-    def _normalize(phone: str) -> str:
-        return _strip_to_digits(phone)
+    def _normalize(self, phone: str) -> str:
+        return _normalize_dnc_number(phone, region=self._default_region)
 
     def add(self, phone: str) -> None:
         """Add a number to the DNC list."""
@@ -195,27 +248,62 @@ class SQLiteDNCList:
     A drop-in replacement for :class:`DNCList` (same :class:`DNCStore`
     surface) that persists numbers to a SQLite file, so do-not-call state
     survives process restarts and is shared by every session/worker that
-    points at the same ``path``.  Numbers are normalized to digits (matching
-    :class:`DNCList`) before storage.
+    points at the same ``path``.  Numbers are normalized (matching
+    :class:`DNCList`, see :func:`_normalize_dnc_number`) before storage.
 
     Pass the same ``path`` to every session to share one list; pass
     ``":memory:"`` for an ephemeral instance (e.g. in tests).  The single
-    WAL-mode connection is guarded by a lock so the async action executor and
-    the outbound pre-dial check may touch it from different threads.
+    WAL-mode connection is guarded by a lock so it is safe to share across
+    threads.  The methods are synchronous and do blocking disk I/O, so async
+    callers (the action executor, the outbound pre-dial check) must offload
+    them with :func:`asyncio.to_thread` rather than call them on the event
+    loop.
+
+    Phone numbers tied to do-not-call status are PII, so an on-disk database
+    (and its WAL/SHM sidecars) is created owner-only (``0o600``), matching the
+    SQLite journal's private-file handling.  A missing parent directory is
+    created.
+
+    ``default_region`` (an ISO 3166-1 alpha-2 code such as ``"US"``) is used to
+    canonicalize numbers supplied without a ``+`` country code; see
+    :func:`_normalize_dnc_number`.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, default_region: str | None = None) -> None:
         self._path = str(path)
+        self._default_region = default_region
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("CREATE TABLE IF NOT EXISTS dnc_numbers (number TEXT PRIMARY KEY)")
-        self._conn.commit()
+        self._persistent = self._path not in (":memory:", "")
+        db_path = Path(self._path)
+        if self._persistent:
+            # Create a missing parent (so a fresh first run does not crash) and
+            # the DB file itself owner-only before SQLite opens it.
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            from easycat.runtime._private_files import touch_private_file
 
-    @staticmethod
-    def _normalize(phone: str) -> str:
-        return _strip_to_digits(phone)
+            touch_private_file(db_path)
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("CREATE TABLE IF NOT EXISTS dnc_numbers (number TEXT PRIMARY KEY)")
+            self._conn.commit()
+            self._harden()
+        except Exception:
+            # Don't leak the connection if PRAGMA/CREATE fails (read-only DB, etc.).
+            self._conn.close()
+            raise
+
+    def _normalize(self, phone: str) -> str:
+        return _normalize_dnc_number(phone, region=self._default_region)
+
+    def _harden(self) -> None:
+        """Force owner-only perms on the DB and any WAL/SHM sidecars."""
+        if not self._persistent:
+            return
+        from easycat.runtime._private_files import harden_sqlite_files
+
+        harden_sqlite_files(Path(self._path))
 
     def add(self, phone: str) -> None:
         """Add a number to the DNC list (idempotent)."""
@@ -223,6 +311,7 @@ class SQLiteDNCList:
         with self._lock:
             self._conn.execute("INSERT OR IGNORE INTO dnc_numbers (number) VALUES (?)", (number,))
             self._conn.commit()
+            self._harden()
 
     def remove(self, phone: str) -> None:
         """Remove a number from the DNC list (no-op if absent)."""
@@ -230,6 +319,7 @@ class SQLiteDNCList:
         with self._lock:
             self._conn.execute("DELETE FROM dnc_numbers WHERE number = ?", (number,))
             self._conn.commit()
+            self._harden()
 
     def is_on_dnc(self, phone: str) -> bool:
         """Check if a number is on the DNC list."""
@@ -246,8 +336,12 @@ class SQLiteDNCList:
         return int(row[0]) if row else 0
 
     def close(self) -> None:
-        """Close the underlying SQLite connection."""
+        """Checkpoint the WAL into the main DB and close the connection."""
         with self._lock:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                logger.debug("DNC store WAL checkpoint on close failed", exc_info=True)
             self._conn.close()
 
 

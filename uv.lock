@@ -1139,6 +1139,7 @@ all = [
     { name = "onnxruntime" },
     { name = "openai" },
     { name = "openai-agents" },
+    { name = "phonenumberslite" },
     { name = "pyrnnoise" },
     { name = "python-multipart" },
     { name = "requests" },
@@ -1207,6 +1208,7 @@ smart-turn = [
 ]
 telephony = [
     { name = "fastapi" },
+    { name = "phonenumberslite" },
     { name = "python-multipart" },
     { name = "twilio" },
     { name = "uvicorn" },
@@ -1281,6 +1283,8 @@ requires-dist = [
     { name = "openai-agents", marker = "extra == 'all'", specifier = ">=0.6.2" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.6.2" },
     { name = "openai-agents", marker = "extra == 'quickstart'", specifier = ">=0.6.2" },
+    { name = "phonenumberslite", marker = "extra == 'all'", specifier = ">=9.0.32" },
+    { name = "phonenumberslite", marker = "extra == 'telephony'", specifier = ">=9.0.32" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.99.0,<2.0.0" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
     { name = "pydantic-ai-slim", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
@@ -3954,6 +3958,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/82/42f767fc1c1143d6fd36efb827202a2d997a375e160a71eb2888a925aac1/pathspec-1.1.1.tar.gz", hash = "sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a", size = 135180, upload-time = "2026-04-27T01:46:08.907Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3bddbc499654a07f151cba08f6153988714/pathspec-1.1.1-py3-none-any.whl", hash = "sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189", size = 57328, upload-time = "2026-04-27T01:46:07.06Z" },
+]
+
+[[package]]
+name = "phonenumberslite"
+version = "9.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/72/840fb0a587ddbc2aff23e9415ca9d86394aa13343a3d9ea4db185f749796/phonenumberslite-9.0.32.tar.gz", hash = "sha256:d1bbdbc81356f98737cd0e342c84f9abb325b7342c70cad3519c7e2cd478f8c5", size = 288616, upload-time = "2026-06-05T05:48:22.319Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/0d/c7ab9feff3cb55e9743e8b56b05dd23564dfc4b0c1e395f396e384f39db0/phonenumberslite-9.0.32-py2.py3-none-any.whl", hash = "sha256:e129943437cb1f7b0b7dc9d3aee482fae04871a47604064fb4c912c97ae53826", size = 473221, upload-time = "2026-06-05T05:48:20.557Z" },
 ]
 
 [[package]]

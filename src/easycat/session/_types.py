@@ -26,6 +26,7 @@ from easycat.turn_manager import TurnManager, TurnManagerConfig, TurnManagerStat
 if TYPE_CHECKING:
     from easycat.runtime.artifacts import ArtifactStore
     from easycat.runtime.journal import ExecutionJournal
+    from easycat.telephony.compliance import DNCStore
 
 # ── Agent protocol (lightweight — agent adapters provide real implementations) ──
 
@@ -199,7 +200,7 @@ class SessionConfig:
     # Do-Not-Call list consulted by outbound telephony pre-dial checks.
     # When set, :class:`OutboundCallManager` blocks ``place_call``
     # attempts to numbers already on the list.
-    dnc_list: Any | None = None
+    dnc_list: DNCStore | None = None
 
     # Greeting synthesized automatically on the first
     # :class:`~easycat.events.CallAnswered` so the bot speaks first —
