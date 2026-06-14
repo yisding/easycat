@@ -1800,6 +1800,19 @@ def promote_turn(
         )
         raise typer.Exit(101)
 
+    if out.exists() and out.is_dir() and not out.is_symlink():
+        # --force overwrites a destination *file*; refuse to recursively delete
+        # a directory (e.g. the regressions dir passed in place of a .zip name).
+        emit_command_error(
+            "journal_promote",
+            f"Output path is a directory: {out}. Pass a .zip file path, not a directory.",
+            json_output=json_output,
+            exit_code=2,
+            path=str(bundle_path),
+            out=str(out),
+        )
+        raise typer.Exit(2)
+
     bundle = _load_bundle_or_journal(
         bundle_path, command="journal_promote", json_output=json_output
     )
@@ -1847,10 +1860,9 @@ def promote_turn(
         raise typer.Exit(6)
 
     if out.exists():
-        if out.is_symlink() or not out.is_dir():
-            out.unlink()
-        else:
-            shutil.rmtree(out)
+        # A directory destination was rejected up front, so only a file or
+        # symlink can be here — replace it without ever deleting a tree.
+        out.unlink()
     tmp_path.rename(out)
 
     expected = _promoted_agent_text(turn_records)

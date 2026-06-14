@@ -2014,6 +2014,24 @@ def test_promote_force_overwrites_existing_out(cli: CliRunner, tmp_path: Path) -
     assert all(r.get("turn_id") == "t1" for r in promoted.records())
 
 
+def test_promote_force_rejects_directory_out(cli: CliRunner, tmp_path: Path) -> None:
+    # --force overwrites a destination file; it must never recursively delete a
+    # directory passed in place of a .zip filename.
+    src = tmp_path / "src.zip"
+    _make_promotable_bundle(src)
+    out = tmp_path / "regressions"
+    out.mkdir()
+    sentinel = out / "keep.txt"
+    sentinel.write_text("do not delete")
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out), "--force"])
+    assert result.exit_code == 2
+    assert "directory" in result.stderr.lower()
+    # The directory and its contents are untouched.
+    assert out.is_dir()
+    assert sentinel.read_text() == "do not delete"
+
+
 def test_promoted_stub_is_a_runnable_regression_test(cli: CliRunner, tmp_path: Path) -> None:
     """The emitted stub's assertions actually pass against the promoted bundle."""
     from easycat.debug.testing import (
