@@ -12,7 +12,11 @@ third-party API (e.g. libphonenumber, Twilio Lookup), or always pass
 from __future__ import annotations
 
 import logging
+import sqlite3
+import threading
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +137,33 @@ class CallBlocked:
     reason: str
 
 
-class DNCList:
-    """Internal Do Not Call list.
+@runtime_checkable
+class DNCStore(Protocol):
+    """Structural interface for a Do-Not-Call list.
 
-    Maintains a set of phone numbers that should not be called.
+    The outbound pre-dial check and the ``add_to_dnc`` / ``remove_from_dnc``
+    agent actions depend only on these three methods, so any object that
+    implements them can be passed as ``EasyConfig(dnc_list=...)``.  Both the
+    in-memory :class:`DNCList` and the durable :class:`SQLiteDNCList` satisfy
+    it; apps needing a shared/clustered backend (Redis, Postgres, a DNC
+    vendor API) can implement their own.
+    """
+
+    def add(self, phone: str) -> None: ...
+
+    def remove(self, phone: str) -> None: ...
+
+    def is_on_dnc(self, phone: str) -> bool: ...
+
+
+class DNCList:
+    """In-memory Do Not Call list.
+
+    Maintains a set of phone numbers that should not be called.  This is the
+    default :class:`DNCStore` and lives only in process memory — it is **not**
+    persisted anywhere, so do-not-call state is lost on restart and is not
+    shared across worker processes.  For durable, cross-restart DNC state use
+    :class:`SQLiteDNCList` (or another :class:`DNCStore` implementation).
     """
 
     def __init__(self) -> None:
@@ -160,6 +187,68 @@ class DNCList:
 
     def __len__(self) -> int:
         return len(self._numbers)
+
+
+class SQLiteDNCList:
+    """Durable, SQLite-backed Do-Not-Call list.
+
+    A drop-in replacement for :class:`DNCList` (same :class:`DNCStore`
+    surface) that persists numbers to a SQLite file, so do-not-call state
+    survives process restarts and is shared by every session/worker that
+    points at the same ``path``.  Numbers are normalized to digits (matching
+    :class:`DNCList`) before storage.
+
+    Pass the same ``path`` to every session to share one list; pass
+    ``":memory:"`` for an ephemeral instance (e.g. in tests).  The single
+    WAL-mode connection is guarded by a lock so the async action executor and
+    the outbound pre-dial check may touch it from different threads.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = str(path)
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS dnc_numbers (number TEXT PRIMARY KEY)")
+        self._conn.commit()
+
+    @staticmethod
+    def _normalize(phone: str) -> str:
+        return _strip_to_digits(phone)
+
+    def add(self, phone: str) -> None:
+        """Add a number to the DNC list (idempotent)."""
+        number = self._normalize(phone)
+        with self._lock:
+            self._conn.execute("INSERT OR IGNORE INTO dnc_numbers (number) VALUES (?)", (number,))
+            self._conn.commit()
+
+    def remove(self, phone: str) -> None:
+        """Remove a number from the DNC list (no-op if absent)."""
+        number = self._normalize(phone)
+        with self._lock:
+            self._conn.execute("DELETE FROM dnc_numbers WHERE number = ?", (number,))
+            self._conn.commit()
+
+    def is_on_dnc(self, phone: str) -> bool:
+        """Check if a number is on the DNC list."""
+        number = self._normalize(phone)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM dnc_numbers WHERE number = ? LIMIT 1", (number,)
+            ).fetchone()
+        return row is not None
+
+    def __len__(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) FROM dnc_numbers").fetchone()
+        return int(row[0]) if row else 0
+
+    def close(self) -> None:
+        """Close the underlying SQLite connection."""
+        with self._lock:
+            self._conn.close()
 
 
 @dataclass

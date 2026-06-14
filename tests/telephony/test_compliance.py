@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from easycat.telephony.compliance import (
     AIDisclosureConfig,
     DNCList,
+    DNCStore,
+    SQLiteDNCList,
     check_calling_hours,
     lookup_timezone,
 )
@@ -85,3 +89,46 @@ class TestDNCIntegration:
         dnc = DNCList()
         dnc.add("+15551234567")
         assert dnc.is_on_dnc("+15551234567")
+
+
+class TestDNCStoreProtocol:
+    def test_dnclist_satisfies_protocol(self) -> None:
+        assert isinstance(DNCList(), DNCStore)
+
+    def test_sqlite_dnclist_satisfies_protocol(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        assert isinstance(store, DNCStore)
+        store.close()
+
+
+class TestSQLiteDNCList:
+    def test_add_remove_and_check(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        assert not store.is_on_dnc("+15551234567")
+        store.add("+15551234567")
+        assert store.is_on_dnc("+15551234567")
+        assert len(store) == 1
+        store.remove("+15551234567")
+        assert not store.is_on_dnc("+15551234567")
+        assert len(store) == 0
+        store.close()
+
+    def test_add_is_idempotent_and_normalizes(self) -> None:
+        store = SQLiteDNCList(":memory:")
+        # Same number, different formatting → one normalized entry.
+        store.add("+1 (555) 123-4567")
+        store.add("15551234567")
+        assert len(store) == 1
+        assert store.is_on_dnc("+1 (555) 123-4567")
+        store.close()
+
+    def test_persists_across_instances(self, tmp_path: Path) -> None:
+        db = tmp_path / "dnc.sqlite"
+        first = SQLiteDNCList(db)
+        first.add("+15551234567")
+        first.close()
+
+        # A fresh instance at the same path (e.g. after a restart) sees it.
+        second = SQLiteDNCList(db)
+        assert second.is_on_dnc("+15551234567")
+        second.close()

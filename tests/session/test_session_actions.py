@@ -292,6 +292,25 @@ async def test_drain_remove_from_dnc_applies_to_session_dnc_list() -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_to_dnc_persists_through_sqlite_store(tmp_path) -> None:
+    from easycat.telephony.compliance import SQLiteDNCList
+
+    db = tmp_path / "dnc.sqlite"
+    store = SQLiteDNCList(db)
+    actions = SessionActions()
+    actions.add_to_dnc("+15551234567", reason="caller requested")
+    session = Session(_config(session_actions=actions, dnc_list=store))
+
+    await session._drain_session_actions()
+    store.close()
+
+    # A fresh store at the same path (i.e. a later call / after restart) sees it.
+    reopened = SQLiteDNCList(db)
+    assert reopened.is_on_dnc("+15551234567")
+    reopened.close()
+
+
+@pytest.mark.asyncio
 async def test_drain_add_to_dnc_without_list_is_graceful_noop() -> None:
     actions = SessionActions()
     actions.add_to_dnc("+15551234567")

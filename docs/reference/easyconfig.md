@@ -110,6 +110,11 @@ Group under `session_policy=SessionPolicyConfig(...)`:
 
 - `greeting` — text spoken once when the call is answered.
 - `dnc_list` — do-not-call list checked before placing outbound calls.
+  Agent tools can add or remove numbers at runtime via
+  `SessionActions.add_to_dnc()` / `remove_from_dnc()`. The default
+  `DNCList` is in-memory only (lost on restart); use `SQLiteDNCList(path)`
+  for durable, cross-restart state shared across sessions, or any object
+  satisfying the `DNCStore` protocol.
 - `caller_id_exposure` — how the callee identity reaches the agent:
   `"off"`, `"system_message"`, or `"tools_only"` (default).
 

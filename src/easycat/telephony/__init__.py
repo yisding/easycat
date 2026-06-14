@@ -66,6 +66,8 @@ _LAZY_ATTR: dict[str, str] = {
     "AIDisclosureConfig": "easycat.telephony.compliance",
     "CallBlocked": "easycat.telephony.compliance",
     "DNCList": "easycat.telephony.compliance",
+    "DNCStore": "easycat.telephony.compliance",
+    "SQLiteDNCList": "easycat.telephony.compliance",
     "check_calling_hours": "easycat.telephony.compliance",
     "lookup_timezone": "easycat.telephony.compliance",
     # Number health + retries
@@ -84,6 +86,8 @@ if TYPE_CHECKING:
         AIDisclosureConfig,
         CallBlocked,
         DNCList,
+        DNCStore,
+        SQLiteDNCList,
         check_calling_hours,
         lookup_timezone,
     )
