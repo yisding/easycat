@@ -558,6 +558,16 @@ def test_search_records_invalid_regex_raises():
         _search_records(_search_sample_records(), query="[", use_regex=True)
 
 
+def test_search_records_rejects_overlong_query():
+    from easycat.debugger.server import _SEARCH_MAX_QUERY_LEN, _search_records
+
+    too_long = "a" * (_SEARCH_MAX_QUERY_LEN + 1)
+    with pytest.raises(ValueError, match="query too long"):
+        _search_records(_search_sample_records(), query=too_long, use_regex=True)
+    with pytest.raises(ValueError, match="query too long"):
+        _search_records(_search_sample_records(), query=too_long)
+
+
 def test_search_records_empty_query_matches_nothing():
     from easycat.debugger.server import _search_records
 

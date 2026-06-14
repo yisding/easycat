@@ -136,6 +136,58 @@ async def test_websocket_pushes_only_new_records_batch_on_growth():
             assert next_batch["to_seq"] == 3
 
 
+async def test_websocket_drains_capped_burst_across_ticks(monkeypatch):
+    """A burst larger than the per-tick cap is delivered across subsequent
+    ticks even after ``latest_seq`` stops advancing — the follow-now playhead
+    must never permanently lose the tail of a burst."""
+    import easycat.debugger.server as srv
+    from easycat.runtime import JournalView
+
+    # Shrink the cap so a 4-record burst cannot fit in one tick.
+    monkeypatch.setattr(srv, "_WS_RECORD_BATCH_CAP", 2)
+
+    journal = InMemoryRingBuffer(capacity=64)
+
+    class _StubSession:
+        session_id = "ws-burst"
+        is_running = True
+        turn_state = "IDLE"
+        _artifact_store = None
+
+        @property
+        def journal(self):
+            return JournalView(journal)
+
+    source = srv._session_source(_StubSession())
+    journal.append(kind=JournalRecordKind.EVENT, name="seed", session_id="s")
+    app = srv._make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    seen_seqs: set[int] = set()
+    async with TestClient(TestServer(app)) as client:
+        async with client.ws_connect("/ws") as ws:
+            # Drain the seed snapshot + batch (sequence 1).
+            for _ in range(2):
+                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+                if frame["type"] == "records":
+                    seen_seqs.update(r["sequence"] for r in frame["records"])
+
+            # Burst of four records at once (sequences 2..5). With cap=2 the
+            # first tick can only carry two; the remainder must still arrive on
+            # later ticks even though latest_seq no longer changes.
+            for name in ("a", "b", "c", "d"):
+                journal.append(kind=JournalRecordKind.EVENT, name=name, session_id="s")
+
+            for _ in range(12):
+                if {2, 3, 4, 5} <= seen_seqs:
+                    break
+                frame = (await asyncio.wait_for(ws.receive(), timeout=2.0)).json()
+                if frame["type"] == "records":
+                    seen_seqs.update(r["sequence"] for r in frame["records"])
+
+    assert {1, 2, 3, 4, 5} <= seen_seqs
+
+
 async def test_records_since_caps_and_advances_cursor():
     """``_records_since`` returns only records past the cursor, capped, and
     reports the new high-water mark."""

@@ -110,6 +110,12 @@ _REPLAY_FRAME_LIMIT = 5000
 # callers see ``scan_truncated`` so the cap is visible rather than silent.
 _SEARCH_SCAN_LIMIT = 50000
 
+# Upper bound on the search query string. The debugger binds loopback-only and
+# the query comes from the developer searching their own journal (no privilege
+# boundary), but bounding the length is cheap defense-in-depth that keeps a
+# pathological user-supplied regex from compiling into a huge automaton.
+_SEARCH_MAX_QUERY_LEN = 500
+
 # Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
 # batch.  A burst can advance the sequence by thousands in one poll; capping
 # the slice keeps each frame small and lets the cursor catch up over a few
@@ -661,6 +667,8 @@ def _search_records(
     mutated.  The scan stops after :data:`_SEARCH_SCAN_LIMIT` records and the
     second tuple element reports whether that cap was hit.
     """
+    if len(query) > _SEARCH_MAX_QUERY_LEN:
+        raise ValueError("search query too long")
     needle: Any
     if use_regex:
         try:
@@ -1823,24 +1831,26 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                             "manifest": source.manifest(),
                         }
                     )
-                    # On growth, slice only the new records (sequence beyond
-                    # the last pushed) bounded by a per-tick cap so a burst
-                    # can't push a multi-megabyte frame.  The snapshot above
-                    # stays for back-compat; the batch feeds the follow-now
-                    # playhead directly.
-                    if latest_seq > last_pushed_seq:
-                        new_records, last_pushed_seq = _records_since(
-                            source, last_pushed_seq, _WS_RECORD_BATCH_CAP
+                # Drain new records independently of the snapshot guard: slice
+                # only the records beyond the last pushed sequence, bounded by a
+                # per-tick cap so a burst can't push a multi-megabyte frame.  A
+                # burst larger than the cap is delivered in capped slices across
+                # successive ticks — keep draining while last_pushed_seq lags
+                # latest_seq, even when latest_seq itself stops advancing, so the
+                # follow-now playhead never permanently loses the tail of a burst.
+                if latest_seq > last_pushed_seq:
+                    new_records, last_pushed_seq = _records_since(
+                        source, last_pushed_seq, _WS_RECORD_BATCH_CAP
+                    )
+                    if new_records:
+                        await ws.send_json(
+                            {
+                                "type": "records",
+                                "records": new_records,
+                                "from_seq": new_records[0].get("sequence"),
+                                "to_seq": last_pushed_seq,
+                            }
                         )
-                        if new_records:
-                            await ws.send_json(
-                                {
-                                    "type": "records",
-                                    "records": new_records,
-                                    "from_seq": new_records[0].get("sequence"),
-                                    "to_seq": last_pushed_seq,
-                                }
-                            )
                 if not source.is_live:
                     break
                 # Poll every 500ms for new records.  WS clients also
