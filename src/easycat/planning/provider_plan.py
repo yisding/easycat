@@ -449,9 +449,26 @@ def _select_from_profile(
 
 
 def _is_voice_profile(config: Any) -> bool:
+    """Whether ``config`` is a manifest :class:`VoiceProfile` (duck-typed).
+
+    Deliberately structural rather than ``isinstance``: a sibling test may delete
+    and re-import ``easycat.project.schema`` (the M6a import-boundary guard does
+    exactly this), which mints a fresh ``VoiceProfile`` class object. An identity
+    check would then misclassify a ``VoiceProfile`` instance built from the other
+    copy of the class and fall through to the ``EasyConfig`` branch. A
+    ``VoiceProfile`` carries a ``name`` and a STRING ``transport`` and never the
+    ``enable_noise_reduction`` knob ``EasyConfig`` owns, so that shape is the
+    stable discriminator.
+    """
     from easycat.project.schema import VoiceProfile
 
-    return isinstance(config, VoiceProfile)
+    if isinstance(config, VoiceProfile):
+        return True
+    return (
+        hasattr(config, "name")
+        and isinstance(getattr(config, "transport", None), str)
+        and not hasattr(config, "enable_noise_reduction")
+    )
 
 
 __all__ = [
