@@ -19,17 +19,24 @@ Milestone boundaries (Phase 2 "Neo"):
   :class:`~easycat.server.transports.CapacityGate` (capacity + draining) out of
   the transport serve helpers, and implements graceful shutdown with force
   escalation. The unified bind guard closes the ``0.0.0.0`` unauthenticated
-  WebSocket gap. Metrics are a SKELETON ONLY (``server/metrics.py``) — no
-  ``easycat.server.*`` name is registered or emitted yet.
+  WebSocket gap. (M5 shipped a metrics SKELETON in ``server/metrics.py``; M8
+  registers and emits the metrics — see below.)
 * M6a/M6b add the manifest loader and provider planner.
-* M7 (this milestone) mounts the WebRTC routes under ``/webrtc/*`` via the
+* M7 mounts the WebRTC routes under ``/webrtc/*`` via the
   lifted transport-instance-free :class:`~easycat.server.webrtc_routes.WebRTCRoutes`
   unit (the route handlers no longer require a throwaway ``WebRTCTransport``
   shim). Capacity / draining now span WebRTC offers AND ``/ws`` connections
   through the SAME shared :class:`CapacityGate`. The standalone serve helpers
   (``serve_webrtc_config_sessions`` / ``run_webrtc_config_server``) delegate to
   the same unit with flat (``""``) routes.
-* M8 registers and emits ``easycat.server.*`` metrics.
+* M8 (this milestone) registers the five ``easycat.server.*`` metrics in
+  ``METRIC_DEFINITIONS`` and the three new labels in
+  ``LOW_CARDINALITY_ATTRIBUTE_KEYS`` (in ``_observability.py``, in the SAME
+  change that emits them), wires emission through ``server/metrics.py`` (the
+  ``sanitize_attributes`` path; ``easycat.route`` asserted in an enumerated
+  route-template set), and completes the read-only endpoints ``GET /metrics``,
+  ``/manifest``, ``/plan``, and ``/capabilities``. No resolved token ever
+  appears in a ``/manifest`` or ``/plan`` dump.
 
 These are *submodule* exports (``easycat.server.*``); they do NOT count against
 the top-level ``easycat.__all__`` cap. Imports here stay light: aiohttp is gated

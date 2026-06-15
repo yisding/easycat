@@ -31,7 +31,14 @@ from easycat._signals import create_shutdown_event
 from easycat.server.auth import from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
-from easycat.server.routes import register_health_routes, register_plan_route
+from easycat.server.routes import (
+    metrics_middleware,
+    register_capabilities_route,
+    register_health_routes,
+    register_manifest_route,
+    register_metrics_route,
+    register_plan_route,
+)
 from easycat.server.transports import CapacityGate
 from easycat.session_manager import SessionManager
 
@@ -101,6 +108,14 @@ class VoiceServer:
         # ``SessionManager`` has no draining state).
         self._active_session_objs: dict[int, Any] = {}
 
+        # In-process metric snapshot for ``GET /metrics`` (M8). The
+        # ``easycat._observability`` instruments are write-only and no-op without
+        # an OTel SDK, so they cannot be read back; these process-side counters
+        # give ``/metrics`` stable numbers in CI independent of any SDK. They are
+        # incremented alongside the OTel emission, never instead of it.
+        self._requests_total = 0
+        self._sessions_rejected_total = 0
+
         # Route-stack references spanning BOTH listener kinds: the aiohttp
         # runner/site and the raw ``websockets.serve`` listener.
         self._runner: Any = None
@@ -164,7 +179,11 @@ class VoiceServer:
 
         web = require_module("aiohttp.web", extra="webrtc", purpose="VoiceServer")
 
-        app = web.Application()
+        # The metrics middleware records per-request server metrics keyed by the
+        # matched route TEMPLATE (M8). It is a no-op when ``enable_metrics`` is
+        # off; installing it always keeps the wiring simple and the count covers
+        # whatever read-only routes are mounted below.
+        app = web.Application(middlewares=[metrics_middleware(self)])
         if self.config.enable_health:
             register_health_routes(app, self)
         # The read-only ``/plan`` route (M6b). Registered unconditionally with
@@ -172,6 +191,15 @@ class VoiceServer:
         # plan; the handler imports the planner LAZILY so registration pulls no
         # planner at module load.
         register_plan_route(app, self)
+        # The M8 read-only endpoints. All three are registered unconditionally
+        # (gating them on a manifest would 404 a factory-only server): each
+        # degrades to a documented empty/absent shape. ``/metrics`` reads the
+        # in-process snapshot; ``/manifest`` dumps the redacted manifest (no
+        # resolved token); ``/capabilities`` aggregates the parity-gated planner
+        # (imported lazily inside the payload method, preserving the M4 boundary).
+        register_metrics_route(app, self)
+        register_manifest_route(app, self)
+        register_capabilities_route(app, self)
 
         # Mount the WebRTC routes (M7) on the SAME aiohttp app under ``/webrtc/*``
         # — they are aiohttp routes on the health listener, NOT a separate
@@ -281,6 +309,9 @@ class VoiceServer:
         """
         # (1) draining flag.
         self._gate.start_draining()
+        # Reflect the state transition on the draining gauge (M8). A no-op
+        # without an OTel SDK; the registered name cannot raise in sanitize.
+        self._emit_draining(True)
 
         # (3) close the listeners so no new handler task can start AND in-flight
         # ``/ws`` connections are closed (each handler's ``ws.wait_closed()``
@@ -428,6 +459,70 @@ class VoiceServer:
             "blocking_errors": list(plan.blocking_errors()),
             "has_blocking_errors": plan.has_blocking_errors,
             "manifest_loaded": True,
+        }
+
+    def metrics_payload(self) -> dict[str, Any]:
+        """Return the read-only ``GET /metrics`` JSON payload (M8).
+
+        A PII-safe snapshot of the in-process server-side counters/gauges
+        (stable in CI independent of any OTel SDK, which the
+        ``easycat._observability`` instruments require to read back). The shape
+        is a stable key set; it never includes session IDs, IPs, tokens, or raw
+        paths.
+        """
+        return {
+            "active_sessions": self._gate.reserved_count,
+            "max_sessions": self.config.max_sessions,
+            "draining": self._gate.is_draining,
+            "requests_total": self._requests_total,
+            "sessions_rejected_total": self._sessions_rejected_total,
+        }
+
+    def manifest_payload(self) -> dict[str, Any]:
+        """Return the read-only ``GET /manifest`` JSON payload (M8).
+
+        For a ``from_manifest`` server returns ``{"loaded": True, "manifest":
+        <redacted>}`` where the redacted dump
+        (:meth:`ProjectManifest.to_redacted_dict`) carries only the
+        ``bearer-env:NAME`` reference under ``*_ref`` keys and routes every value
+        through ``redact_value`` — so no resolved token can appear. For a
+        factory-only server (no manifest) returns the documented absent shape
+        ``{"loaded": False, "manifest": None}``. This NEVER calls
+        :meth:`resolve_auth` (which reads the env token).
+        """
+        if self._manifest is None:
+            return {"loaded": False, "manifest": None}
+        return {"loaded": True, "manifest": self._manifest.to_redacted_dict()}
+
+    def capabilities_payload(self) -> dict[str, Any]:
+        """Return the read-only ``GET /capabilities`` JSON payload (M8).
+
+        For a ``from_manifest`` server, aggregates the parity-gated planner's
+        declared capability strings across the seven roles into ``{"profile",
+        "roles": {role: sorted(capabilities)}, "all_capabilities":
+        sorted(union)}``. For a factory-only server returns the documented empty
+        shape ``{"profile", "roles": {}, "all_capabilities": []}``.
+
+        The planner reads only provider metadata (names / extras / env-var NAMES
+        / declared capability strings) — never secret values — so no token can
+        appear. ``build_provider_plan`` is imported LAZILY here (like
+        :meth:`plan_payload`) so this method does not pull the planner at module
+        load (the M4 import boundary).
+        """
+        if self._manifest is None:
+            return {"profile": self.config.profile, "roles": {}, "all_capabilities": []}
+        from easycat.planning import build_provider_plan
+
+        profile = self.config.profile
+        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        roles = {role: sorted(selection.capabilities) for role, selection in plan.selected.items()}
+        union: set[str] = set()
+        for caps in roles.values():
+            union.update(caps)
+        return {
+            "profile": plan.profile,
+            "roles": roles,
+            "all_capabilities": sorted(union),
         }
 
     # ── Constructors ─────────────────────────────────────────────────
@@ -583,10 +678,13 @@ class VoiceServer:
         from easycat.transports.websocket import WebSocketConnectionTransport
 
         if self._gate.is_draining:
+            self._emit_session_rejected(server_state="draining")
             await ws.close(code=_WS_OVER_CAPACITY_CLOSE_CODE, reason=_WS_DRAINING_CLOSE_REASON)
             return
 
-        if not self._authorize_websocket(ws):
+        auth_reason = self._websocket_auth_reason(ws)
+        if auth_reason != "allowed":
+            self._emit_session_rejected(server_state="serving", auth_result=auth_reason)
             await ws.close(
                 code=_WS_UNAUTHORIZED_CLOSE_CODE,
                 reason=_WS_UNAUTHORIZED_CLOSE_REASON,
@@ -596,6 +694,7 @@ class VoiceServer:
         if self._session_factory is None:
             # No factory configured (e.g. a health-only server); reject cleanly
             # rather than crashing the listener task.
+            self._emit_session_rejected(server_state="serving")
             await ws.close(
                 code=_WS_OVER_CAPACITY_CLOSE_CODE,
                 reason="No session factory configured",
@@ -603,6 +702,7 @@ class VoiceServer:
             return
 
         if not self._gate.try_acquire():
+            self._emit_session_rejected(server_state="serving")
             await ws.close(
                 code=_WS_OVER_CAPACITY_CLOSE_CODE,
                 reason=_WS_OVER_CAPACITY_CLOSE_REASON,
@@ -615,29 +715,70 @@ class VoiceServer:
             session = self._build_session(transport)
             self._gate.track(key)
             self._active_session_objs[key] = session
+            self._emit_connections_active()
             async with self._manager.connection(key, session, runtime_feedback=False):
                 await ws.wait_closed()
         finally:
             self._gate.untrack(key)
             self._active_session_objs.pop(key, None)
             self._gate.release()
+            self._emit_connections_active()
 
     def _authorize_websocket(self, ws: Any) -> bool:
+        """Return whether a ``/ws`` handshake is authorized (bool shim)."""
+        return self._websocket_auth_reason(ws) == "allowed"
+
+    def _websocket_auth_reason(self, ws: Any) -> str:
         """Authorize a ``/ws`` handshake through the unified ``AuthPolicy``.
 
-        Returns ``True`` when no auth policy is configured (the loopback/dev
-        default). When a policy is set, the handshake ``Authorization`` header
-        and ``?token=`` query are read from the accepted ``ServerConnection``'s
-        request and run through :meth:`AuthPolicy.authorize`. Never logs tokens.
+        Returns the ``AuthReason`` Literal: ``"allowed"`` when no auth policy is
+        configured (the loopback/dev default) or the credential is valid;
+        otherwise ``"missing"`` / ``"invalid"`` so the rejection metric can carry
+        the right ``easycat.auth_result`` label. When a policy is set, the
+        handshake ``Authorization`` header and ``?token=`` query are read from the
+        accepted ``ServerConnection``'s request and run through
+        :meth:`AuthPolicy.authorize`. Never logs tokens.
         """
         auth = self.config.auth
         if auth is None:
-            return True
+            return "allowed"
         request = getattr(ws, "request", None)
         headers = getattr(request, "headers", None)
         path = getattr(request, "path", "") or ""
         result = auth.authorize(from_websocket(headers, path))
-        return result.allowed
+        return result.reason
+
+    # ── Metric emission (M8) ─────────────────────────────────────────
+    # Each helper bumps the in-process snapshot (read back by ``/metrics``) AND
+    # emits the registered OTel metric (a no-op without an SDK, never raising on
+    # the registered names/labels). Emission lives in the real lifecycle paths so
+    # the same-PR registration is genuine, not test-only.
+
+    def _server_state(self) -> str:
+        """Return the ``ServerState`` Literal for the current draining flag."""
+        return "draining" if self._gate.is_draining else "serving"
+
+    def _emit_draining(self, is_draining: bool) -> None:
+        from easycat.server import metrics as server_metrics
+
+        server_metrics.observe_draining(is_draining)
+
+    def _emit_connections_active(self) -> None:
+        from easycat.server import metrics as server_metrics
+
+        server_metrics.observe_connections_active(
+            self._gate.reserved_count,
+            server_state=self._server_state(),
+        )
+
+    def _emit_session_rejected(self, *, server_state: str, auth_result: str | None = None) -> None:
+        from easycat.server import metrics as server_metrics
+
+        self._sessions_rejected_total += 1
+        server_metrics.record_session_rejected(
+            server_state=server_state,  # type: ignore[arg-type]
+            auth_result=auth_result,  # type: ignore[arg-type]
+        )
 
     def _build_session(self, transport: Any) -> Session:
         """Build a :class:`Session` from the per-transport ``session_factory``.

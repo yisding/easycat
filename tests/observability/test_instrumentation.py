@@ -168,6 +168,11 @@ def test_metric_definitions_match_validation_reference() -> None:
         "easycat.journal.degraded": "observable_gauge",
         "easycat.interruption.total": "counter",
         "easycat.interruption.cutoff_latency": "histogram",
+        "easycat.server.requests.total": "counter",
+        "easycat.server.request.duration": "histogram",
+        "easycat.server.sessions.rejected.total": "counter",
+        "easycat.server.connections.active": "observable_gauge",
+        "easycat.server.draining": "observable_gauge",
     }
 
 

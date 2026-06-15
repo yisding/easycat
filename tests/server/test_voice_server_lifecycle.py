@@ -217,19 +217,30 @@ def test_importing_server_does_not_import_planner_or_project() -> None:
     assert result.stdout.strip() == "[]", result.stdout
 
 
-def test_importing_server_registers_no_server_metric_names() -> None:
-    # M4 ships ZERO metric emission and must not register any ``easycat.server.*``
-    # name. Importing the package must not mutate the frozen allow-list.
+def test_observability_registers_the_five_server_metric_names() -> None:
+    # M8 crosses the M4 boundary: ``easycat._observability`` now registers exactly
+    # the five ``easycat.server.*`` names (with their expected kinds) and the three
+    # new low-cardinality labels. Registration lives at module level in
+    # ``_observability.py`` (imported regardless of ``import easycat.server``), so
+    # the names/labels are present after import.
     import easycat._observability as observability
     import easycat.server  # noqa: F401
 
-    server_metric_names = [
-        name for name in observability.METRIC_DEFINITIONS if name.startswith("easycat.server.")
-    ]
-    assert server_metric_names == []
-    server_labels = [
+    server_metric_names = {
+        name: kind
+        for name, kind in observability.METRIC_DEFINITIONS.items()
+        if name.startswith("easycat.server.")
+    }
+    assert server_metric_names == {
+        "easycat.server.requests.total": "counter",
+        "easycat.server.request.duration": "histogram",
+        "easycat.server.sessions.rejected.total": "counter",
+        "easycat.server.connections.active": "observable_gauge",
+        "easycat.server.draining": "observable_gauge",
+    }
+    server_labels = {
         key
         for key in observability.LOW_CARDINALITY_ATTRIBUTE_KEYS
         if key in {"easycat.server_state", "easycat.auth_result", "easycat.route"}
-    ]
-    assert server_labels == []
+    }
+    assert server_labels == {"easycat.server_state", "easycat.auth_result", "easycat.route"}
