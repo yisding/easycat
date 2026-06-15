@@ -17,7 +17,11 @@ import pytest
 import easycat.telephony.server as server_module
 from easycat.config import EasyConfig, TelephonyConfig
 from easycat.telephony import twilio_stream_parameters_from_form
-from easycat.telephony.server import TwilioVoiceServerConfig, serve_twilio_voice_app
+from easycat.telephony.server import (
+    TwilioVoiceServerConfig,
+    run_twilio_voice_app,
+    serve_twilio_voice_app,
+)
 from easycat.transports import TwilioStreamTokenStore
 from easycat.transports.twilio_media import TWILIO_STREAM_TOKEN_PARAMETER, twiml_connect_stream
 from easycat.voice_app import VoiceApp
@@ -186,6 +190,46 @@ def test_phone_alias_delegates_to_twilio(captured_twilio: dict[str, Any]) -> Non
     VoiceApp(agent="a").run("phone", stream_url="wss://example/media")
     assert captured_twilio["asyncio_run_called"] is True
     assert isinstance(captured_twilio["config"], TwilioVoiceServerConfig)
+
+
+def test_run_twilio_voice_app_drives_async_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sync wrapper owns ``asyncio.run`` and drives ``serve_twilio_voice_app``.
+
+    Mirrors ``run_webrtc_config_server`` / ``run_websocket_config_server``: the
+    loop ownership lives next to the async server, so ``VoiceApp._run_twilio``
+    no longer calls ``asyncio.run`` itself.
+    """
+    captured: dict[str, Any] = {}
+
+    async def _fake_serve(factory: Any, config: Any) -> None:
+        captured["factory"] = factory
+        captured["config"] = config
+
+    def _fake_asyncio_run(coro: Any) -> None:
+        captured["asyncio_run_called"] = True
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    monkeypatch.setattr(server_module, "serve_twilio_voice_app", _fake_serve)
+    monkeypatch.setattr("asyncio.run", _fake_asyncio_run)
+
+    def factory(transport: Any) -> EasyConfig:
+        return EasyConfig.phone(transport=transport, agent="a")
+
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media")
+    run_twilio_voice_app(factory, config)
+
+    assert captured["asyncio_run_called"] is True
+    assert captured["factory"] is factory
+    assert captured["config"] is config
+
+
+def test_run_twilio_voice_app_is_module_export() -> None:
+    """The sync wrapper is part of the telephony.server public surface."""
+    assert "run_twilio_voice_app" in server_module.__all__
 
 
 def test_twilio_serve_does_not_call_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:

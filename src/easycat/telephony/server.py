@@ -27,6 +27,7 @@ These symbols are internal-module imports (like
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["TwilioVoiceServerConfig", "serve_twilio_voice_app"]
+__all__ = ["TwilioVoiceServerConfig", "run_twilio_voice_app", "serve_twilio_voice_app"]
 
 
 @dataclass(frozen=True)
@@ -146,3 +147,17 @@ async def serve_twilio_voice_app(
         await site.stop()
         await runner.cleanup()
         await manager.stop_all()
+
+
+def run_twilio_voice_app(
+    config_factory: Callable[[Any], EasyConfig],
+    config: TwilioVoiceServerConfig,
+) -> None:
+    """Run a Twilio voice app from a synchronous entry point.
+
+    Thin ``asyncio.run`` wrapper around :func:`serve_twilio_voice_app`,
+    mirroring :func:`~easycat.transports.webrtc.run_webrtc_config_server` and
+    :func:`~easycat.transports.websocket.run_websocket_config_server` so the
+    loop ownership lives next to the async server rather than in the caller.
+    """
+    asyncio.run(serve_twilio_voice_app(config_factory, config))

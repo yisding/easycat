@@ -257,8 +257,13 @@ class VoiceApp:
         from easycat.helpers import wait_for_shutdown_signal
 
         session = self._build_local_session(**kwargs)
-        async with session:
-            await wait_for_shutdown_signal(session)
+        # ``wait_for_shutdown_signal`` already calls ``session.stop()`` once the
+        # signal fires (and on its KeyboardInterrupt fallback), so it owns
+        # teardown. Starting explicitly here — rather than wrapping in
+        # ``async with session:`` — keeps ``stop()`` from running twice (once via
+        # the helper, once via ``__aexit__``).
+        await session.start()
+        await wait_for_shutdown_signal(session)
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
@@ -306,20 +311,29 @@ class VoiceApp:
 
     # ── WebSocket mode ───────────────────────────────────────────────
 
-    def _websocket_server_config(self, **kwargs: Any) -> Any:
+    def _websocket_server_config(self, **kwargs: Any) -> tuple[Any, bool]:
+        """Build the server config plus the resolved ``unsafe_allow_no_auth`` flag.
+
+        The flag is returned (not just consumed by the pre-check) so the
+        run/serve methods can forward it to the shared websocket serve helper,
+        whose own non-loopback guard would otherwise re-reject an intentionally
+        unauthenticated bind.
+        """
         from easycat.transports.websocket import WebSocketSessionServerConfig
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8765))
         max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 10))
+        unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
             kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
             host=host,
-            unsafe_allow_no_auth=kwargs.pop("unsafe_allow_no_auth", False),
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
-        return WebSocketSessionServerConfig(
+        server_config = WebSocketSessionServerConfig(
             host=host, port=port, auth_token=token, max_sessions=max_sessions
         )
+        return server_config, unsafe_allow_no_auth
 
     def _websocket_factory(self) -> Callable[[WebSocketConnectionTransport], EasyConfig]:
         return self._per_connection_factory("websocket")
@@ -327,14 +341,22 @@ class VoiceApp:
     def _run_websocket(self, **kwargs: Any) -> None:
         from easycat.transports.websocket import run_websocket_config_server
 
-        server_config = self._websocket_server_config(**kwargs)
-        run_websocket_config_server(self._websocket_factory(), server_config)
+        server_config, unsafe_allow_no_auth = self._websocket_server_config(**kwargs)
+        run_websocket_config_server(
+            self._websocket_factory(),
+            server_config,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     async def _serve_websocket(self, **kwargs: Any) -> None:
         from easycat.transports.websocket import serve_websocket_config_sessions
 
-        server_config = self._websocket_server_config(**kwargs)
-        await serve_websocket_config_sessions(self._websocket_factory(), server_config)
+        server_config, unsafe_allow_no_auth = self._websocket_server_config(**kwargs)
+        await serve_websocket_config_sessions(
+            self._websocket_factory(),
+            server_config,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     # ── Twilio mode ──────────────────────────────────────────────────
 
@@ -373,13 +395,11 @@ class VoiceApp:
         return self._per_connection_factory("twilio")
 
     def _run_twilio(self, **kwargs: Any) -> None:
-        import asyncio
-
-        from easycat.telephony.server import serve_twilio_voice_app
+        from easycat.telephony.server import run_twilio_voice_app
 
         factory = self._twilio_factory()
         server_config = self._twilio_server_config(**kwargs)
-        asyncio.run(serve_twilio_voice_app(factory, server_config))
+        run_twilio_voice_app(factory, server_config)
 
     async def _serve_twilio(self, **kwargs: Any) -> None:
         from easycat.telephony.server import serve_twilio_voice_app

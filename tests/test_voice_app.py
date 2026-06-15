@@ -34,6 +34,28 @@ class _FakeSession:
         self.config = config
 
 
+class _LifecycleSession:
+    """Fake session that counts ``start``/``stop`` calls for lifecycle tests."""
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+        self.start_calls = 0
+        self.stop_calls = 0
+
+    async def start(self) -> None:
+        self.start_calls += 1
+
+    async def stop(self, *, force: bool = False) -> None:
+        self.stop_calls += 1
+
+    async def __aenter__(self) -> _LifecycleSession:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.stop(force=True)
+
+
 @pytest.fixture
 def fake_create_session(monkeypatch: pytest.MonkeyPatch) -> list[EasyConfig]:
     """Record configs passed to ``create_session`` and return fake sessions."""
@@ -232,6 +254,96 @@ def test_twilio_run_delegates_to_server_helper(monkeypatch: pytest.MonkeyPatch) 
     factory, config = calls[0]
     assert callable(factory)
     assert config.stream_url == "wss://example/media"
+
+
+# ── Local serve(): single clean stop ─────────────────────────────────
+
+
+async def test_serve_local_stops_session_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``serve('local')`` must start the session and stop it exactly once.
+
+    ``wait_for_shutdown_signal`` already owns teardown (it calls
+    ``session.stop()``), so ``_serve_local`` must not also wrap the session in
+    ``async with`` — that would run ``stop()`` a second time on shutdown.
+    """
+    session = _LifecycleSession(config=object())
+
+    monkeypatch.setattr(config_module, "create_session", lambda _config: session)
+
+    async def _fake_wait(passed_session: Any) -> None:
+        # Mirror the real helper: the shutdown path calls stop() exactly once.
+        assert passed_session is session
+        await passed_session.stop()
+
+    monkeypatch.setattr(helpers_module, "wait_for_shutdown_signal", _fake_wait)
+
+    await VoiceApp(agent="a").serve("local")
+
+    assert session.start_calls == 1
+    assert session.stop_calls == 1
+
+
+# ── Local config_factory path (F4) ───────────────────────────────────
+
+
+def test_local_config_factory_receives_local_transport_instance(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    """``VoiceApp(config_factory=...).session('local')`` invokes the factory with
+    a ``LocalTransport`` instance and feeds the resulting config to
+    ``create_session``.
+
+    ``EasyConfig`` accepts a transport *instance* for its ``transport`` field
+    (``create_session`` discriminates pre-built transports from transport
+    configs), so passing ``LocalTransport()`` is the supported local path.
+    """
+    from easycat.transports import LocalTransport
+
+    seen_transports: list[Any] = []
+
+    def factory(transport: Any) -> EasyConfig:
+        seen_transports.append(transport)
+        return EasyConfig(transport=transport, agent="fac-agent")
+
+    session = VoiceApp(config_factory=factory).session("local")
+
+    assert isinstance(session, _FakeSession)
+    # The factory was invoked once with a real LocalTransport instance.
+    assert len(seen_transports) == 1
+    assert isinstance(seen_transports[0], LocalTransport)
+    # create_session received the factory-built config, transport unchanged.
+    assert len(fake_create_session) == 1
+    config = fake_create_session[0]
+    assert config.transport is seen_transports[0]
+    assert config.agent == "fac-agent"
+
+
+def test_run_local_config_factory_path(
+    monkeypatch: pytest.MonkeyPatch, fake_create_session: list[EasyConfig]
+) -> None:
+    """``run('local')`` with a ``config_factory`` builds the local session via the
+    factory and hands it to ``run_session``."""
+    from easycat.transports import LocalTransport
+
+    ran: list[Any] = []
+    monkeypatch.setattr(helpers_module, "run_session", lambda s: ran.append(s))
+
+    seen_transports: list[Any] = []
+
+    def factory(transport: Any) -> EasyConfig:
+        seen_transports.append(transport)
+        return EasyConfig(transport=transport, agent="fac-agent")
+
+    VoiceApp(config_factory=factory).run("local")
+
+    assert len(seen_transports) == 1
+    assert isinstance(seen_transports[0], LocalTransport)
+    assert len(fake_create_session) == 1
+    assert fake_create_session[0].transport is seen_transports[0]
+    assert len(ran) == 1
+    assert isinstance(ran[0], _FakeSession)
 
 
 # ── Top-level public export + lazy-import guard ──────────────────────
