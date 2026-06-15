@@ -1,11 +1,13 @@
-"""``VoiceServer`` — the M4 production process skeleton (aiohttp + raw WS).
+"""``VoiceServer`` — the M5 production process layer (aiohttp + raw WS).
 
-M4 scope: lifecycle (``start`` / ``serve`` / ``stop`` / ``run`` / ``health``),
+Scope: lifecycle (``start`` / ``serve`` / ``stop`` / ``run`` / ``health``),
 the three health endpoints, and a WebSocket ``/ws`` route co-hosted as a raw
-:func:`websockets.serve` listener on its own port. Capacity is a MINIMAL
-inline active-session counter (M5 lifts the shared ``Semaphore``/draining
-collaborator out of the serve helpers). There is NO planner import and NO
-metric emission in M4.
+:func:`websockets.serve` listener on its own port. M5 replaces the M4 minimal
+inline counter with the shared :class:`~easycat.server.transports.CapacityGate`
+collaborator (capacity + draining), applies the unified ``AuthPolicy`` to the
+``/ws`` path (closing the ``0.0.0.0`` unauthenticated gap), and implements
+graceful shutdown with force escalation. There is NO planner import and NO
+metric emission yet (M6b / M8 respectively).
 
 Event-loop ownership (one rule across ``VoiceApp`` and ``VoiceServer``):
 
@@ -26,9 +28,11 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
+from easycat.server.auth import from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
 from easycat.server.routes import register_health_routes
+from easycat.server.transports import CapacityGate
 from easycat.session_manager import SessionManager
 
 if TYPE_CHECKING:
@@ -53,15 +57,20 @@ SessionFactory = Callable[[Any], "EasyConfig | Session"]
 _WS_OVER_CAPACITY_CLOSE_CODE = 1013
 _WS_OVER_CAPACITY_CLOSE_REASON = "Server is at the configured session limit"
 _WS_DRAINING_CLOSE_REASON = "Server is draining"
+# Auth rejection uses 1008 (RFC 6455 "Policy Violation").
+_WS_UNAUTHORIZED_CLOSE_CODE = 1008
+_WS_UNAUTHORIZED_CLOSE_REASON = "Missing or invalid bearer token"
 
 
 class VoiceServer:
     """A production process layer over one or more per-connection factories.
 
-    M4 supports a single WebSocket ``/ws`` route built from a per-transport
+    M5 supports a single WebSocket ``/ws`` route built from a per-transport
     ``session_factory`` and co-hosts the aiohttp health endpoints. Capacity and
-    draining are tracked by a minimal inline counter + flag (the M5 deliverable
-    replaces them with the lifted shared collaborator).
+    draining are owned by the shared
+    :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
+    the transport serve helpers); the unified ``AuthPolicy`` guards the bind and
+    each ``/ws`` connection.
     """
 
     def __init__(
@@ -77,11 +86,14 @@ class VoiceServer:
         # and draining are NOT attributed to it (it has neither).
         self._manager: SessionManager[int] = SessionManager()
 
-        # Minimal capacity counter + draining flag held INLINE (the M5
-        # collaborator lifts the real Semaphore/active-set/draining here).
-        self._active_sessions = 0
-        self._active_lock = asyncio.Lock()
-        self._draining = False
+        # Shared capacity + draining collaborator (the M5 lift). It owns the
+        # reservation counter, the active-connection set, and the draining flag
+        # — identical to the WebRTC/WebSocket serve helpers.
+        self._gate: CapacityGate[int] = CapacityGate(self.config.max_sessions)
+        # Map active gate keys -> live session objects so the drain step can call
+        # ``session.stop(force=True)`` directly (the collaborator drives this;
+        # ``SessionManager`` has no draining state).
+        self._active_session_objs: dict[int, Any] = {}
 
         # Route-stack references spanning BOTH listener kinds: the aiohttp
         # runner/site and the raw ``websockets.serve`` listener.
@@ -89,6 +101,27 @@ class VoiceServer:
         self._site: Any = None
         self._ws_server: Any = None
         self._started = False
+
+    # ── Compatibility accessors (minimal-counter shims) ──────────────
+    # The M4 minimal counter is replaced by the shared ``CapacityGate``; these
+    # thin shims preserve the names the M4 tests read so the readiness contract
+    # and accessors are unchanged.
+
+    @property
+    def _active_sessions(self) -> int:
+        """Active-connection count (reads the shared gate's reservation count)."""
+        return self._gate.reserved_count
+
+    @property
+    def _draining(self) -> bool:
+        return self._gate.is_draining
+
+    @_draining.setter
+    def _draining(self, value: bool) -> None:
+        # Tests flip this directly; route it onto the shared gate so the
+        # readiness check and the ``/ws`` handler observe it identically.
+        if value:
+            self._gate.start_draining()
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -102,6 +135,20 @@ class VoiceServer:
         """
         if self._started:
             return
+
+        # Apply the unified non-loopback bind guard BEFORE binding any listener
+        # (the same structured guard the transport serve helpers use). This is
+        # the property that closes the ``0.0.0.0`` unauthenticated WebSocket gap:
+        # a non-loopback bind with no token raises unless
+        # ``unsafe_allow_no_auth=True``.
+        from easycat.server.auth import enforce_bind_guard
+
+        enforce_bind_guard(
+            self.config.host,
+            auth=self.config.auth,
+            unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
+        )
+
         web = require_module("aiohttp.web", extra="webrtc", purpose="VoiceServer")
 
         app = web.Application()
@@ -150,24 +197,40 @@ class VoiceServer:
         asyncio.run(self.serve())
 
     async def stop(self, *, force: bool = False) -> None:
-        """Stop accepting connections and tear down both listener kinds.
+        """Gracefully drain, then tear down both listener kinds.
 
-        M4 minimal teardown: set the draining flag (so the readiness check and
-        the ``/ws`` handler reject new connections), close the raw-ws listener
-        AND the aiohttp site/runner (spanning both listeners), then run
-        ``SessionManager.stop_all()`` as the final hard sweep. The full
-        graceful drain/escalation (``drain_timeout_s`` + ``force=True``
-        escalation through the lifted active set) is the M5 deliverable.
+        The graceful sequence (spanning the aiohttp listeners AND the raw-ws
+        listener), driven by the shared :class:`CapacityGate`, NOT by
+        ``SessionManager`` (which has no draining state):
+
+        1. Set the draining flag (``gate.start_draining()``) so the readiness
+           check and the ``/ws`` handler reject new connections.
+        2. Stop accepting — ``gate.try_acquire()`` already rejects while
+           draining and ``_handle_websocket_connection`` checks draining.
+        3. Close the raw-ws listener AND the aiohttp site/runner (both kinds).
+        4. Wait for active connection tasks up to ``drain_timeout_s``; each
+           handler that ends in time calls ``session.stop()`` itself.
+        5. Escalate any session still active after the grace window with
+           ``session.stop(force=True)`` (driven by the gate's active set).
+        6. ``SessionManager.stop_all()`` ONLY as the final hard sweep, once the
+           listeners are closed and no handler can still add/remove sessions.
+
+        ``force=True`` collapses the grace window to zero so remaining sessions
+        are force-stopped immediately.
         """
-        self._draining = True
+        # (1) draining flag.
+        self._gate.start_draining()
 
-        if self._ws_server is not None:
-            self._ws_server.close()
-            try:
-                await self._ws_server.wait_closed()
-            finally:
-                self._ws_server = None
-
+        # (3) close the listeners so no new handler task can start AND in-flight
+        # ``/ws`` connections are closed (each handler's ``ws.wait_closed()``
+        # returns). Do NOT ``await ws_server.wait_closed()`` yet: a hung handler
+        # (graceful ``session.stop()`` that blocks) would deadlock it before the
+        # drain can force-escalate. The aiohttp site/runner are torn down now;
+        # the raw-ws server is closed now and awaited AFTER the drain.
+        ws_server = self._ws_server
+        if ws_server is not None:
+            ws_server.close()
+            self._ws_server = None
         if self._site is not None:
             await self._site.stop()
             self._site = None
@@ -175,21 +238,43 @@ class VoiceServer:
             await self._runner.cleanup()
             self._runner = None
 
-        # SessionManager is a bare registry; ``stop_all`` is the final hard
-        # sweep once no connection handler can still add/remove sessions (the
-        # raw-ws listener is closed above).
+        # (4)+(5) wait for active connection tasks up to ``drain_timeout_s``,
+        # then force-escalate the remainder. ``force=True`` skips the grace
+        # window entirely. Running BEFORE ``ws_server.wait_closed()`` lets the
+        # force-stop unblock any handler whose graceful stop is hung.
+        drain_timeout = 0.0 if force else self.config.drain_timeout_s
+        await self._gate.drain(
+            self._active_session_pairs,
+            drain_timeout_s=drain_timeout,
+            force_after=True,
+        )
+
+        # Now all handlers can return (closed connections + forced sessions), so
+        # awaiting the raw-ws server completes promptly.
+        if ws_server is not None:
+            await ws_server.wait_closed()
+
+        # (6) final hard sweep of the bare registry.
         await self._manager.stop_all()
+        self._active_session_objs.clear()
         self._started = False
+
+    def _active_session_pairs(self) -> list[tuple[int, Any]]:
+        """Return the ``(key, session)`` pairs still active (for the drain step)."""
+        return [
+            (key, self._active_session_objs[key])
+            for key in self._gate.active_keys()
+            if key in self._active_session_objs
+        ]
 
     async def health(self) -> VoiceServerHealth:
         """Build a :class:`VoiceServerHealth` snapshot from live state."""
-        async with self._active_lock:
-            active = self._active_sessions
+        draining = self._gate.is_draining
         return VoiceServerHealth(
-            state="draining" if self._draining else "serving",
-            active_sessions=active,
+            state="draining" if draining else "serving",
+            active_sessions=self._gate.reserved_count,
             max_sessions=self.config.max_sessions,
-            draining=self._draining,
+            draining=draining,
             route_stack_ready=self._route_stack_ready(),
         )
 
@@ -300,20 +385,27 @@ class VoiceServer:
         return host, port
 
     async def _handle_websocket_connection(self, ws: Any) -> None:
-        """Accept one ``/ws`` connection, gated by the minimal capacity counter.
+        """Accept one ``/ws`` connection, gated by auth + the shared capacity gate.
 
-        Reject new connections when draining or when the minimal counter is at
-        ``max_sessions`` (the M4 stand-in that M5 replaces with the lifted
-        ``Semaphore`` without changing the readiness contract). On accept, build
-        a per-connection ``WebSocketConnectionTransport`` + session via the
-        ``session_factory`` and drive it through ``SessionManager.connection``;
-        the counter is incremented on accept and decremented in cleanup so
-        ``/health/ready`` reads an accurate count.
+        Reject when draining or at ``max_sessions`` (both owned by the shared
+        :class:`CapacityGate`), and authorize via the unified ``AuthPolicy`` so
+        the ``/ws`` path is no longer unauthenticated (closing the ``0.0.0.0``
+        gap). On accept, build a per-connection ``WebSocketConnectionTransport``
+        + session via the ``session_factory`` and drive it through
+        ``SessionManager.connection``; the gate tracks the key + session so the
+        graceful-drain step can force-stop it if the handler hangs.
         """
         from easycat.transports.websocket import WebSocketConnectionTransport
 
-        if self._draining:
+        if self._gate.is_draining:
             await ws.close(code=_WS_OVER_CAPACITY_CLOSE_CODE, reason=_WS_DRAINING_CLOSE_REASON)
+            return
+
+        if not self._authorize_websocket(ws):
+            await ws.close(
+                code=_WS_UNAUTHORIZED_CLOSE_CODE,
+                reason=_WS_UNAUTHORIZED_CLOSE_REASON,
+            )
             return
 
         if self._session_factory is None:
@@ -325,20 +417,42 @@ class VoiceServer:
             )
             return
 
-        if not await self._try_acquire_slot():
+        if not self._gate.try_acquire():
             await ws.close(
                 code=_WS_OVER_CAPACITY_CLOSE_CODE,
                 reason=_WS_OVER_CAPACITY_CLOSE_REASON,
             )
             return
 
+        key = id(ws)
         try:
             transport = WebSocketConnectionTransport(ws)
             session = self._build_session(transport)
-            async with self._manager.connection(id(ws), session, runtime_feedback=False):
+            self._gate.track(key)
+            self._active_session_objs[key] = session
+            async with self._manager.connection(key, session, runtime_feedback=False):
                 await ws.wait_closed()
         finally:
-            await self._release_slot()
+            self._gate.untrack(key)
+            self._active_session_objs.pop(key, None)
+            self._gate.release()
+
+    def _authorize_websocket(self, ws: Any) -> bool:
+        """Authorize a ``/ws`` handshake through the unified ``AuthPolicy``.
+
+        Returns ``True`` when no auth policy is configured (the loopback/dev
+        default). When a policy is set, the handshake ``Authorization`` header
+        and ``?token=`` query are read from the accepted ``ServerConnection``'s
+        request and run through :meth:`AuthPolicy.authorize`. Never logs tokens.
+        """
+        auth = self.config.auth
+        if auth is None:
+            return True
+        request = getattr(ws, "request", None)
+        headers = getattr(request, "headers", None)
+        path = getattr(request, "path", "") or ""
+        result = auth.authorize(from_websocket(headers, path))
+        return result.allowed
 
     def _build_session(self, transport: Any) -> Session:
         """Build a :class:`Session` from the per-transport ``session_factory``.
@@ -356,15 +470,14 @@ class VoiceServer:
         return create_session(result)  # type: ignore[arg-type]
 
     async def _try_acquire_slot(self) -> bool:
-        """Increment the minimal counter if below capacity; else return False."""
-        async with self._active_lock:
-            if self._draining or self._active_sessions >= self.config.max_sessions:
-                return False
-            self._active_sessions += 1
-            return True
+        """Reserve a capacity slot via the shared gate; ``False`` when full/draining.
+
+        Kept as a thin compatibility shim over :meth:`CapacityGate.try_acquire`
+        so existing callers/tests that drive readiness through the slot API stay
+        green after the lift.
+        """
+        return self._gate.try_acquire()
 
     async def _release_slot(self) -> None:
-        """Decrement the minimal counter, never below zero."""
-        async with self._active_lock:
-            if self._active_sessions > 0:
-                self._active_sessions -= 1
+        """Return a reserved capacity slot via the shared gate."""
+        self._gate.release()

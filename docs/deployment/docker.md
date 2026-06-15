@@ -41,6 +41,15 @@ Then open
 The page derives the WebSocket host from `localhost` and connects to
 `ws://localhost:8765` automatically.
 
+> **`?token=` query auth is off by default (breaking change).** Browsers cannot
+> set headers on the WebSocket handshake, so the bundled
+> `ws_browser_client.html` authenticates with a `?token=` query parameter. Query
+> tokens are now gated behind `allow_query_token` (default `False`). To keep the
+> bundled browser client working locally, start the server with
+> `run_websocket_config_server(config, allow_query_token=True)` (a loopback/dev
+> opt-in). Production non-browser clients should send
+> `Authorization: Bearer $EASYCAT_WS_TOKEN` and leave query auth off.
+
 To stop:
 
 ```bash

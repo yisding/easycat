@@ -1139,6 +1139,43 @@ class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
             stop_event.set()
             await asyncio.wait_for(task, timeout=2)
 
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_non_loopback_requires_token(self) -> None:
+        # The serve helper now routes through the shared structured bind guard
+        # (closing the asymmetry: it previously raised unconditionally with no
+        # escape hatch). A non-loopback bind with no token raises with the
+        # unified wording (host + ``unsafe_allow_no_auth``).
+        with pytest.raises(ValueError) as exc:
+            await serve_webrtc_config_sessions(
+                lambda _t: {"agent": object()},
+                WebRTCTransportConfig(host="0.0.0.0", auth_token=None),
+                runtime_feedback=False,
+                announce=False,
+            )
+        message = str(exc.value)
+        assert "0.0.0.0" in message
+        assert "unsafe_allow_no_auth" in message
+
+    @pytest.mark.asyncio
+    async def test_serve_webrtc_config_sessions_non_loopback_unsafe_escape_hatch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ``unsafe_allow_no_auth=True`` lets a non-loopback unauthenticated bind
+        # through (mirrors the WebSocket serve helper's escape hatch).
+        _install_fake_webrtc_modules(monkeypatch)
+        stop_event = asyncio.Event()
+        stop_event.set()
+
+        # Should not raise even though host is non-loopback and there is no token.
+        await serve_webrtc_config_sessions(
+            lambda _t: {"agent": object()},
+            WebRTCTransportConfig(host="0.0.0.0", port=0, static_dir=None, auth_token=None),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+            unsafe_allow_no_auth=True,
+        )
+
 
 class TestWebRTCDegradedEvents:
     """SDP negotiation failure and inbound-track crash must surface a

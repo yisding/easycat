@@ -122,3 +122,21 @@ async def test_stop_closes_ws_listener_and_stops_active_sessions() -> None:
         await asyncio.wait_for(client.wait_closed(), timeout=1)
     assert server.websocket_address is None
     assert sessions[0].stopped.is_set()
+
+
+@pytest.mark.integration_socket
+async def test_counter_is_backed_by_the_shared_capacity_gate() -> None:
+    # After the M5 lift, ``_active_sessions`` / ``_draining`` read the shared
+    # ``CapacityGate``; the inline counter no longer exists.
+    server, _sessions = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, max_sessions=2)
+    )
+    try:
+        assert server._gate.max_sessions == 2
+        async with websockets.connect(_ws_url(server)):
+            await _wait_until(lambda: server._gate.reserved_count == 1)
+            assert server._active_sessions == server._gate.reserved_count
+            assert server._gate.active_count == 1
+        await _wait_until(lambda: server._gate.reserved_count == 0)
+    finally:
+        await server.stop()

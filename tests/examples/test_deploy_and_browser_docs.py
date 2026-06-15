@@ -221,8 +221,14 @@ def test_ws_server_authorizes_bearer_or_query_token():
 
     headers = Headers([("Authorization", "Bearer expected-token")])
 
+    # Bearer-header auth works regardless of allow_query_token.
     assert websocket_server_authorized(headers, "/", "expected-token")
-    assert websocket_server_authorized(Headers(), "/?token=expected-token", "expected-token")
+    # ?token= query auth is OFF by default (breaking change) and ON only when
+    # allow_query_token=True (the loopback/dev opt-in for the browser client).
+    assert not websocket_server_authorized(Headers(), "/?token=expected-token", "expected-token")
+    assert websocket_server_authorized(
+        Headers(), "/?token=expected-token", "expected-token", allow_query_token=True
+    )
     assert not websocket_server_authorized(Headers(), "/", "expected-token")
     assert not websocket_server_authorized(
         Headers([("Authorization", "Bearer wrong")]), "/", "expected-token"

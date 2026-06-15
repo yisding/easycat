@@ -191,10 +191,52 @@ async def test_serve_websocket_sessions_accepts_bearer_token(
 
 @pytest.mark.asyncio
 @pytest.mark.integration_socket
-async def test_serve_websocket_sessions_accepts_query_token(
+async def test_serve_websocket_sessions_accepts_query_token_when_opted_in(
     monkeypatch: pytest.MonkeyPatch,
     unused_tcp_port_factory: Callable[[], int],
 ) -> None:
+    # ``allow_query_token=True`` is the loopback/dev opt-in that keeps the
+    # bundled browser client working (browsers cannot set handshake headers).
+    port = unused_tcp_port_factory()
+    stop_event = asyncio.Event()
+    sessions: list[_FakeSession] = []
+
+    def session_factory(_ws) -> _FakeSession:
+        session = _FakeSession()
+        sessions.append(session)
+        return session
+
+    server_started = _patch_serve_started(monkeypatch)
+    task = asyncio.create_task(
+        serve_websocket_sessions(
+            session_factory,
+            WebSocketSessionServerConfig(port=port, auth_token="secret-token"),
+            stop_event=stop_event,
+            runtime_feedback=False,
+            announce=False,
+            allow_query_token=True,
+        )
+    )
+    try:
+        await asyncio.wait_for(server_started.wait(), timeout=1)
+        async with websockets.connect(f"ws://127.0.0.1:{port}/voice?token=secret-token"):
+            assert sessions
+            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
+        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+    finally:
+        stop_event.set()
+        await asyncio.wait_for(task, timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration_socket
+async def test_serve_websocket_sessions_rejects_query_token_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    unused_tcp_port_factory: Callable[[], int],
+) -> None:
+    # Default-OFF (the documented breaking change): a ``?token=`` query value is
+    # NOT accepted, so the handshake is rejected with 401 even though the token
+    # value is correct. Only ``Authorization: Bearer`` authenticates by default.
     port = unused_tcp_port_factory()
     stop_event = asyncio.Event()
     sessions: list[_FakeSession] = []
@@ -216,10 +258,11 @@ async def test_serve_websocket_sessions_accepts_query_token(
     )
     try:
         await asyncio.wait_for(server_started.wait(), timeout=1)
-        async with websockets.connect(f"ws://127.0.0.1:{port}/voice?token=secret-token"):
-            assert sessions
-            await asyncio.wait_for(sessions[0].started.wait(), timeout=1)
-        await asyncio.wait_for(sessions[0].stopped.wait(), timeout=1)
+        with pytest.raises(websockets.exceptions.InvalidStatus) as exc:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/voice?token=secret-token"):
+                pass
+        assert exc.value.response.status_code == HTTPStatus.UNAUTHORIZED
+        assert sessions == []
     finally:
         stop_event.set()
         await asyncio.wait_for(task, timeout=1)
@@ -435,6 +478,7 @@ def test_run_websocket_config_server_delegates_with_env_settings(
         runtime_feedback: bool = True,
         announce: bool = True,
         unsafe_allow_no_auth: bool = False,
+        allow_query_token: bool = False,
     ) -> None:
         calls.append(
             {
@@ -444,6 +488,7 @@ def test_run_websocket_config_server_delegates_with_env_settings(
                 "runtime_feedback": runtime_feedback,
                 "announce": announce,
                 "unsafe_allow_no_auth": unsafe_allow_no_auth,
+                "allow_query_token": allow_query_token,
             }
         )
 
@@ -477,5 +522,6 @@ def test_run_websocket_config_server_delegates_with_env_settings(
             "runtime_feedback": False,
             "announce": False,
             "unsafe_allow_no_auth": False,
+            "allow_query_token": False,
         }
     ]
