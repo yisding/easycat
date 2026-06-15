@@ -34,7 +34,10 @@ class VoiceServerConfig:
 
     * ``auth`` / ``unsafe_allow_no_auth`` / ``allow_query_token`` — LIVE in M5
       (the unified guard + ``/ws`` authorization consume them).
-    * ``enable_webrtc`` — WebRTC mounting is M7.
+    * ``enable_webrtc`` — LIVE in M7: when ``True`` and a ``session_factory`` is
+      configured, ``VoiceServer`` mounts the WebRTC routes under ``/webrtc/*`` on
+      the health listener, sharing the capacity gate and active-session set with
+      ``/ws``.
     * ``enable_metrics`` — metric emission/registration is M8.
     * ``manifest_path`` / ``profile`` — the manifest loader is M6a.
     """
@@ -60,6 +63,8 @@ class VoiceServerConfig:
     allow_query_token: bool = False
     cors_allowed_origins: tuple[str, ...] = ()
     enable_websocket: bool = True
+    # LIVE in M7: mount the WebRTC routes under ``/webrtc/*`` (requires a
+    # ``session_factory``).
     enable_webrtc: bool = True
     enable_health: bool = True
     enable_metrics: bool = True

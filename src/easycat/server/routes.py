@@ -29,6 +29,14 @@ ROUTE_TEMPLATES: frozenset[str] = frozenset(
         "/health",
         "/plan",
         "/ws",
+        # M7: the namespaced WebRTC routes mounted by ``VoiceServer`` (the
+        # Endpoint Set strings). These are aiohttp routes on the health listener,
+        # never raw paths. M8 asserts a value is in this set before recording
+        # ``easycat.route``.
+        "/webrtc/offer",
+        "/webrtc/config",
+        "/webrtc/stats",
+        "/webrtc/health",
     }
 )
 

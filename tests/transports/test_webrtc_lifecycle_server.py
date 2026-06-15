@@ -386,7 +386,10 @@ class TestWebRTCStatsArtifact:
         html_path = Path(webrtc_mod.__file__).with_name("static") / "webrtc_client.html"
         html = html_path.read_text(encoding="utf-8")
 
-        assert 'fetch(baseUrl + "/stats"' in html
+        # M7: the client paths are templated through a ``?webrtc=`` base so the
+        # SAME page serves both the flat helper and the namespaced VoiceServer.
+        assert 'fetch(baseUrl + WEBRTC_BASE + "/stats"' in html
+        assert 'new URLSearchParams(location.search).get("webrtc")' in html
         for label in (
             "before_speech",
             "client_speech_end",

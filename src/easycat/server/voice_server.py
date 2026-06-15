@@ -108,6 +108,13 @@ class VoiceServer:
         self._ws_server: Any = None
         self._started = False
 
+        # The mounted WebRTC route unit (M7). WebRTC ``/offer`` reserve through
+        # the SAME shared ``_gate`` and register into the SAME
+        # ``_active_session_objs`` as ``/ws`` so capacity / draining /
+        # drain-on-stop span both transports uniformly. ``None`` until ``start``
+        # mounts it (gated on ``enable_webrtc`` + a configured factory).
+        self._webrtc_routes: Any = None
+
     # ── Compatibility accessors (minimal-counter shims) ──────────────
     # The M4 minimal counter is replaced by the shared ``CapacityGate``; these
     # thin shims preserve the names the M4 tests read so the readiness contract
@@ -166,6 +173,15 @@ class VoiceServer:
         # planner at module load.
         register_plan_route(app, self)
 
+        # Mount the WebRTC routes (M7) on the SAME aiohttp app under ``/webrtc/*``
+        # — they are aiohttp routes on the health listener, NOT a separate
+        # listener like ``/ws``. They share ``self._gate`` / ``self._manager`` /
+        # ``self._active_session_objs`` so capacity, draining, and drain-on-stop
+        # span WebRTC offers AND ``/ws`` connections uniformly.
+        if self.config.enable_webrtc and self._session_factory is not None:
+            self._webrtc_routes = self._build_webrtc_routes()
+            self._webrtc_routes.register(app, prefix="/webrtc", web=web)
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, self.config.host, self.config.port)
@@ -178,10 +194,44 @@ class VoiceServer:
 
         self._started = True
         logger.info(
-            "VoiceServer ready: http://%s:%s (websocket=%s)",
+            "VoiceServer ready: http://%s:%s (websocket=%s, webrtc=%s)",
             self.config.host,
             self.config.port,
             self.config.enable_websocket,
+            self._webrtc_routes is not None,
+        )
+
+    def _build_webrtc_routes(self) -> Any:
+        """Build the mounted :class:`WebRTCRoutes` from process policy.
+
+        Derives a :class:`WebRTCTransportConfig` from :class:`VoiceServerConfig`:
+        host/port are NOT used for binding here (the aiohttp site already bound),
+        but ``cors_allowed_origins`` and the unified auth carry over. The shared
+        ``_gate`` / ``_manager`` / ``_active_session_objs`` are injected so the
+        WebRTC offers and ``/ws`` connections drain through one collaborator.
+        """
+        from easycat.server.webrtc_routes import WebRTCRoutes
+        from easycat.transports.webrtc import WebRTCTransportConfig
+
+        # ``max_sessions`` keeps the gate cap consistent in the ``/webrtc/health``
+        # JSON; the actual reservation is the shared gate's. A non-loopback host
+        # is fine here: the bind guard already ran in ``start`` against the
+        # process policy, and these routes bind no socket.
+        webrtc_config = WebRTCTransportConfig(
+            host=self.config.host,
+            port=self.config.port,
+            cors_allowed_origins=self.config.cors_allowed_origins,
+            max_sessions=self.config.max_sessions,
+        )
+        assert self._session_factory is not None  # guarded by the caller
+        return WebRTCRoutes(
+            webrtc_config,
+            auth=self.config.auth,
+            config_factory=self._session_factory,
+            gate=self._gate,
+            manager=self._manager,
+            runtime_feedback=False,
+            active_session_objs=self._active_session_objs,
         )
 
     async def serve(self, stop_event: asyncio.Event | None = None) -> None:
@@ -264,6 +314,15 @@ class VoiceServer:
         # awaiting the raw-ws server completes promptly.
         if ws_server is not None:
             await ws_server.wait_closed()
+
+        # Cancel the per-offer WebRTC ``wait_closed`` cleanup tasks. The drain
+        # step already force-stopped the sessions via the shared active set;
+        # their cleanup tasks (each awaiting ``transport.wait_closed``) would
+        # otherwise outlive ``stop`` and leak. Mirrors the serve helper's
+        # ``cancel_cleanup_tasks``.
+        if self._webrtc_routes is not None:
+            await self._webrtc_routes.cancel_cleanup_tasks()
+            self._webrtc_routes = None
 
         # (6) final hard sweep of the bare registry.
         await self._manager.stop_all()

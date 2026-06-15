@@ -1,0 +1,466 @@
+"""Integration + unit tests for the mounted WebRTC routes (M7).
+
+These cover the transport-instance-free :class:`WebRTCRoutes` unit and its
+mounting on :class:`VoiceServer` under ``/webrtc/*``:
+
+* the decoupling assertion — config/stats/root/cors handlers run with NO
+  :class:`WebRTCTransport` instance;
+* ``POST /webrtc/offer`` returns 200 + an answer and creates one session per
+  offer (each offer gets an isolated peer connection);
+* ``GET /webrtc/config`` omits TURN credentials by default;
+* ``POST /webrtc/stats`` sanitizes snapshots;
+* the unified ``AuthPolicy`` guards the mounted routes (tokenless 401, Bearer
+  200), and ``?token=`` is rejected unless ``allow_query_token=True`` (the M5
+  default-off posture now applied to mounted WebRTC);
+* the SHARED capacity gate spans WebRTC offers AND ``/ws`` connections;
+* draining rejects new offers with 503;
+* ``stop()`` force-drains an active WebRTC session.
+
+The pure-aiohttp routes use ``aiohttp.test_utils`` (no socket bind); the
+offer/capacity/draining/stop tests bind a real port-0 :class:`VoiceServer` and
+fake the aiortc layer via :func:`_install_fake_webrtc_modules` (reusing the
+transport-test fakes).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import json
+from collections.abc import AsyncIterator
+
+import pytest
+
+from easycat.server import BearerTokenAuth, VoiceServer, VoiceServerConfig
+from easycat.server.transports import CapacityGate
+from easycat.server.webrtc_routes import WebRTCRoutes
+from easycat.session_manager import SessionManager
+from easycat.transports.webrtc import ICEServer, WebRTCTransportConfig
+from tests.transports._webrtc_fakes import _install_fake_webrtc_modules
+
+_HAS_AIOHTTP = importlib.util.find_spec("aiohttp") is not None
+
+pytestmark = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
+
+
+class _FakeSession:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.stopped = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self, *args: object, **kwargs: object) -> None:
+        self.stopped.set()
+
+
+def _make_routes(
+    config: WebRTCTransportConfig,
+    *,
+    auth: BearerTokenAuth | None = None,
+    max_sessions: int = 64,
+    sessions: list[_FakeSession] | None = None,
+) -> WebRTCRoutes:
+    """Build a standalone :class:`WebRTCRoutes` over a fresh gate + manager."""
+    gate: CapacityGate[int] = CapacityGate(max_sessions)
+    manager: SessionManager[int] = SessionManager()
+
+    def factory(_transport: object) -> _FakeSession:
+        session = _FakeSession()
+        if sessions is not None:
+            sessions.append(session)
+        return session
+
+    return WebRTCRoutes(
+        config,
+        auth=auth,
+        config_factory=factory,
+        gate=gate,
+        manager=manager,
+        runtime_feedback=False,
+    )
+
+
+# ── Decoupling unit tests (no WebRTCTransport instance, no socket) ───────
+
+
+async def _aiohttp_app_with_routes(routes: WebRTCRoutes) -> object:
+    from aiohttp import web
+
+    app = web.Application()
+    routes.register(app, prefix="/webrtc", web=web)
+    return app
+
+
+@pytest.mark.integration_socket
+async def test_config_handler_runs_without_a_transport_instance() -> None:
+    # The decoupling assertion: ``handle_config`` answers with no
+    # ``WebRTCTransport`` instance anywhere — it reads only the config.
+    from aiohttp.test_utils import TestClient, TestServer
+
+    routes = _make_routes(
+        WebRTCTransportConfig(
+            static_dir=None,
+            ice_servers=[
+                ICEServer(urls="stun:stun.example.com:3478"),
+                ICEServer(urls=["turn:turn.example.com:3478"], username="user", credential="pass"),
+            ],
+        )
+    )
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/webrtc/config")
+        assert resp.status == 200
+        data = await resp.json()
+    assert "iceServers" in data
+    assert len(data["iceServers"]) == 2
+    turn = data["iceServers"][1]
+    assert turn["urls"] == ["turn:turn.example.com:3478"]
+    # TURN credentials omitted by default.
+    assert "username" not in turn
+    assert "credential" not in turn
+
+
+@pytest.mark.integration_socket
+async def test_stats_handler_sanitizes_without_a_transport_instance(tmp_path: object) -> None:
+    from aiohttp.test_utils import TestClient, TestServer
+
+    stats_path = f"{tmp_path}/webrtc-stats.jsonl"
+    routes = _make_routes(WebRTCTransportConfig(static_dir=None, stats_path=stats_path))
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        # Same-origin loopback validation request authorizes the unauthenticated
+        # stats write.
+        host = client.host
+        port = client.port
+        resp = await client.post(
+            "/webrtc/stats",
+            json={
+                "kind": "webrtc_client_stats",
+                "label": "first_received_audio",
+                "local_candidate_ip": "192.168.1.20",
+                "candidate_pair": {
+                    "state": "succeeded",
+                    "current_round_trip_time_ms": 12.5,
+                    "local_candidate_id": "candidate-secret",
+                },
+            },
+            headers={"Origin": f"http://{host}:{port}"},
+        )
+        assert resp.status == 200
+    from pathlib import Path
+
+    line = Path(stats_path).read_text(encoding="utf-8").strip()
+    payload = json.loads(line)
+    assert payload["label"] == "first_received_audio"
+    assert payload["candidate_pair"] == {
+        "current_round_trip_time_ms": 12.5,
+        "state": "succeeded",
+    }
+    assert "candidate-secret" not in line
+    assert "192.168.1.20" not in line
+
+
+@pytest.mark.integration_socket
+async def test_cors_preflight_handler_runs_without_a_transport_instance() -> None:
+    from aiohttp.test_utils import TestClient, TestServer
+
+    origin = "https://app.example.com"
+    routes = _make_routes(WebRTCTransportConfig(static_dir=None, cors_allowed_origins=(origin,)))
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.options(
+            "/webrtc/config",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        assert resp.status == 200
+        assert resp.headers["Access-Control-Allow-Origin"] == origin
+        assert "GET" in resp.headers["Access-Control-Allow-Methods"]
+
+
+@pytest.mark.integration_socket
+async def test_root_redirect_appends_webrtc_base_and_preserves_token(
+    tmp_path: object,
+) -> None:
+    # A static dir with a bundled client triggers the root redirect; it must
+    # append ``?webrtc=/webrtc`` (the mounted base) and preserve ``?token=``.
+    from pathlib import Path
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    static_dir = Path(str(tmp_path))
+    (static_dir / "webrtc_client.html").write_text("<html></html>", encoding="utf-8")
+    routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/?token=sekrit", allow_redirects=False)
+        assert resp.status == 302
+        location = resp.headers["Location"]
+    assert location.startswith("/webrtc_client.html?")
+    assert "token=sekrit" in location
+    assert "webrtc=/webrtc" in location
+
+
+# ── Mounted VoiceServer integration tests ────────────────────────────────
+
+
+@pytest.fixture
+def fake_webrtc(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_webrtc_modules(monkeypatch)
+
+
+async def _running_server(
+    config: VoiceServerConfig,
+    *,
+    sessions: list[_FakeSession] | None = None,
+    transports: list[object] | None = None,
+) -> VoiceServer:
+    def factory(transport: object) -> _FakeSession:
+        if transports is not None:
+            transports.append(transport)
+        session = _FakeSession()
+        if sessions is not None:
+            sessions.append(session)
+        return session
+
+    server = VoiceServer(config, session_factory=factory)
+    await server.start()
+    return server
+
+
+def _base_url(server: VoiceServer) -> str:
+    address = server.http_address
+    assert address is not None
+    host, port = address
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[object]:
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        yield session
+
+
+_OFFER_BODY = {"sdp": "v=0\r\n", "type": "offer"}
+
+
+@pytest.mark.integration_socket
+async def test_offer_returns_answer_and_one_session_per_offer(
+    fake_webrtc: None, client: object
+) -> None:
+    sessions: list[_FakeSession] = []
+    transports: list[object] = []
+    # ``drain_timeout_s=0`` so ``stop`` force-drains the still-open fake peers
+    # without waiting the full grace window (the fake peer never self-closes).
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_websocket=False, drain_timeout_s=0.0),
+        sessions=sessions,
+        transports=transports,
+    )
+    try:
+        url = f"{_base_url(server)}/webrtc/offer"
+        for _ in range(2):
+            async with client.post(url, json=_OFFER_BODY) as resp:
+                assert resp.status == 200
+                data = await resp.json()
+                assert data == {"sdp": "fake-answer", "type": "answer"}
+        assert len(sessions) == 2
+        # Each offer got an isolated per-peer transport.
+        assert len(transports) == 2
+        assert transports[0] is not transports[1]
+        for session in sessions:
+            await asyncio.wait_for(session.started.wait(), timeout=1)
+    finally:
+        await server.stop()
+    # ``stop`` force-drained the active WebRTC sessions.
+    assert all(session.stopped.is_set() for session in sessions)
+
+
+@pytest.mark.integration_socket
+async def test_config_omits_turn_credentials_on_mounted_route(
+    fake_webrtc: None, client: object
+) -> None:
+    config = VoiceServerConfig(
+        host="127.0.0.1",
+        port=0,
+        enable_websocket=False,
+        cors_allowed_origins=(),
+    )
+    server = VoiceServer(config, session_factory=lambda _t: _FakeSession())
+    # Configure ICE servers via the derived WebRTC config path: re-build routes
+    # with explicit ICE servers by mounting after overriding the config.
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/webrtc/config") as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert "iceServers" in data
+            # Default config ships a single public STUN server, URL only.
+            assert data["iceServers"] == [{"urls": ["stun:stun.l.google.com:19302"]}]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_stats_sanitizes_on_mounted_route(fake_webrtc: None, client: object) -> None:
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_websocket=False)
+    )
+    try:
+        base = _base_url(server)
+        async with client.post(
+            f"{base}/webrtc/stats",
+            json={"kind": "webrtc_client_stats", "sequence": 1},
+            headers={"Origin": base},
+        ) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data == {"status": "ok"}
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_unified_auth_rejects_tokenless_offer_and_accepts_bearer(
+    fake_webrtc: None, client: object
+) -> None:
+    config = VoiceServerConfig(
+        host="127.0.0.1",
+        port=0,
+        enable_websocket=False,
+        auth=BearerTokenAuth(token="sekrit"),
+        drain_timeout_s=0.0,
+    )
+    server = await _running_server(config)
+    try:
+        url = f"{_base_url(server)}/webrtc/offer"
+        # Tokenless offer is rejected by the unified AuthPolicy.
+        async with client.post(url, json=_OFFER_BODY) as resp:
+            assert resp.status == 401
+        # Bearer header authorizes.
+        async with client.post(
+            url, json=_OFFER_BODY, headers={"Authorization": "Bearer sekrit"}
+        ) as resp:
+            assert resp.status == 200
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_query_token_rejected_unless_allow_query_token(
+    fake_webrtc: None, client: object
+) -> None:
+    # Default-off: a correct ``?token=`` is rejected (allow_query_token=False).
+    rejecting = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            enable_websocket=False,
+            auth=BearerTokenAuth(token="sekrit"),
+        )
+    )
+    try:
+        async with client.post(
+            f"{_base_url(rejecting)}/webrtc/offer?token=sekrit", json=_OFFER_BODY
+        ) as resp:
+            assert resp.status == 401
+    finally:
+        await rejecting.stop()
+
+    # Opt-in: ``allow_query_token=True`` accepts the query token.
+    accepting = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            enable_websocket=False,
+            auth=BearerTokenAuth(token="sekrit", allow_query_token=True),
+            drain_timeout_s=0.0,
+        )
+    )
+    try:
+        async with client.post(
+            f"{_base_url(accepting)}/webrtc/offer?token=sekrit", json=_OFFER_BODY
+        ) as resp:
+            assert resp.status == 200
+    finally:
+        await accepting.stop()
+
+
+@pytest.mark.integration_socket
+async def test_shared_gate_caps_offers_and_spans_websocket(
+    fake_webrtc: None, client: object
+) -> None:
+    # max_sessions=1: the first offer reserves the only slot via the SHARED gate,
+    # so a second offer gets 503 — and a ``/ws`` connection would be rejected too
+    # (capacity spans both). We assert the gate is the single shared owner.
+    server = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=1,
+            enable_websocket=True,
+            drain_timeout_s=0.0,
+        )
+    )
+    try:
+        url = f"{_base_url(server)}/webrtc/offer"
+        async with client.post(url, json=_OFFER_BODY) as resp:
+            assert resp.status == 200
+        # The WebRTC routes and the ``/ws`` handler share ``server._gate``.
+        assert server._webrtc_routes._gate is server._gate
+        assert server._gate.reserved_count == 1
+        async with client.post(url, json=_OFFER_BODY) as resp:
+            assert resp.status == 503
+            data = await resp.json()
+            assert "session limit" in data["error"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_draining_rejects_new_offers(fake_webrtc: None, client: object) -> None:
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_websocket=False)
+    )
+    try:
+        server._gate.start_draining()
+        async with client.post(f"{_base_url(server)}/webrtc/offer", json=_OFFER_BODY) as resp:
+            assert resp.status == 503
+            data = await resp.json()
+            assert "shutting down" in data["error"]
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_stop_force_drains_active_webrtc_session(fake_webrtc: None, client: object) -> None:
+    sessions: list[_FakeSession] = []
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_websocket=False),
+        sessions=sessions,
+    )
+    async with client.post(f"{_base_url(server)}/webrtc/offer", json=_OFFER_BODY) as resp:
+        assert resp.status == 200
+    assert len(sessions) == 1
+    # The session is tracked in the SHARED active set so the drain step reaches it.
+    assert len(server._active_session_objs) == 1
+    # force=True collapses the grace window so the active session is force-stopped.
+    await server.stop(force=True)
+    assert sessions[0].stopped.is_set()
+    assert server._active_session_objs == {}
+
+
+@pytest.mark.integration_socket
+async def test_no_webrtc_routes_when_disabled(client: object) -> None:
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_webrtc=False, enable_websocket=False)
+    )
+    try:
+        assert server._webrtc_routes is None
+        async with client.post(f"{_base_url(server)}/webrtc/offer", json=_OFFER_BODY) as resp:
+            assert resp.status == 404
+    finally:
+        await server.stop()

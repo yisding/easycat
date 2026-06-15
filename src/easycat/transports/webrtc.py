@@ -29,7 +29,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
@@ -356,11 +356,19 @@ async def serve_webrtc_config_sessions(
     :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
     the inline ``Semaphore``/active-set/``shutting_down`` state) so they behave
     identically to the WebSocket helper.
+
+    M7 note: the route handlers (``/offer``, ``/config``, ``/stats``, ``/health``,
+    root, CORS) are no longer bound to a throwaway ``WebRTCTransport`` shim. They
+    are lifted into the transport-instance-free
+    :class:`~easycat.server.webrtc_routes.WebRTCRoutes` unit that the shared
+    :class:`~easycat.server.voice_server.VoiceServer` also mounts. This helper
+    delegates to it with ``prefix=""`` so it keeps serving the FLAT
+    ``/offer`` / ``/config`` / ``/stats`` paths the out-of-tree helper API and the
+    bundled client rely on.
     """
-    from easycat.config import create_session
-    from easycat.helpers import attach_runtime_feedback
     from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
     from easycat.server.transports import CapacityGate
+    from easycat.server.webrtc_routes import WebRTCRoutes
     from easycat.session_manager import SessionManager
 
     settings = config or WebRTCTransportConfig()
@@ -381,109 +389,20 @@ async def serve_webrtc_config_sessions(
     web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
     manager: SessionManager[int] = SessionManager()
     gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
-    cleanup_tasks: set[asyncio.Task[None]] = set()
 
-    shim = WebRTCTransport(settings)
-    shim._web = web
-    shim._has_bundled_client = False
+    routes = WebRTCRoutes(
+        settings,
+        auth=bind_auth,
+        config_factory=config_factory,
+        gate=gate,
+        manager=manager,
+        runtime_feedback=runtime_feedback,
+    )
 
     app = web.Application()
-
-    async def cleanup_session(key: int, transport: WebRTCTransport) -> None:
-        try:
-            await transport.wait_closed()
-        finally:
-            try:
-                await asyncio.shield(manager.remove(key))
-                gate.untrack(key)
-            finally:
-                gate.release()
-
-    async def handle_offer(request: Any) -> Any:
-        if gate.is_draining:
-            return web.Response(
-                status=503,
-                text=json.dumps({"error": "Server is shutting down"}),
-                content_type="application/json",
-                headers=shim._cors_headers(request),
-            )
-        if not gate.try_acquire():
-            return web.Response(
-                status=503,
-                text=json.dumps({"error": "Server is at the configured session limit"}),
-                content_type="application/json",
-                headers=shim._cors_headers(request),
-            )
-        transport = WebRTCTransport(replace(settings, static_dir=None))
-        transport._prepare_external_signaling(web)
-        key = id(transport)
-        session_started = False
-        try:
-            response = await transport._handle_offer(request)
-            if getattr(response, "status", 200) >= 400:
-                await transport.disconnect()
-                gate.release()
-                return response
-
-            session = create_session(config_factory(transport))
-            if runtime_feedback:
-                attach_runtime_feedback(session)
-            await manager.add(key, session)
-            session_started = True
-            gate.track(key)
-            transport._ensure_browser_event_forwarder()
-            task = asyncio.create_task(cleanup_session(key, transport))
-            cleanup_tasks.add(task)
-            task.add_done_callback(cleanup_tasks.discard)
-            return response
-        except Exception:
-            if session_started:
-                await manager.remove(key)
-                gate.untrack(key)
-            await transport.disconnect()
-            gate.release()
-            raise
-
-    async def handle_health(request: Any) -> Any:
-        status = "draining" if gate.is_draining else "ok"
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {
-                    "status": status,
-                    "active_sessions": gate.active_count,
-                    "max_sessions": settings.max_sessions,
-                }
-            ),
-            headers=shim._cors_headers(request),
-        )
-
-    app.router.add_post("/offer", handle_offer)
-    app.router.add_post("/stats", shim._handle_stats)
-    app.router.add_get("/config", shim._handle_config)
-    app.router.add_get("/health", handle_health)
-    app.router.add_get("/", shim._handle_root)
-    app.router.add_options("/offer", shim._handle_cors_preflight)
-    app.router.add_options("/stats", shim._handle_cors_preflight)
-    app.router.add_options("/config", shim._handle_cors_preflight)
-
-    static_dir = settings.static_dir
-    if static_dir == WebRTCTransportConfig._USE_BUNDLED:
-        static_dir = WebRTCTransportConfig._BUNDLED_STATIC_DIR
-    if static_dir is not None:
-        static_path = Path(static_dir)
-        if static_path.is_dir():
-            default_client = static_path / "webrtc_client.html"
-            if default_client.is_file():
-                shim._has_bundled_client = True
-            app.router.add_static("/", static_path)
-            logger.info("Serving static files from %s", static_path)
-        else:
-            logger.warning(
-                "Configured static_dir '%s' does not exist or is not a directory; "
-                "static file serving is disabled",
-                static_path,
-            )
+    # ``prefix=""`` keeps the FLAT routes (``/offer`` / ``/config`` / ``/stats``)
+    # the bundled client and the out-of-tree helper API depend on.
+    routes.register(app, prefix="", web=web)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -500,10 +419,7 @@ async def serve_webrtc_config_sessions(
         gate.start_draining()
         await site.stop()
         await runner.cleanup()
-        for task in list(cleanup_tasks):
-            task.cancel()
-        if cleanup_tasks:
-            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        await routes.cancel_cleanup_tasks()
         await manager.stop_all()
 
 

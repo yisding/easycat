@@ -140,6 +140,28 @@ For public deployments, put the signaling server behind HTTPS so
 and `/stats` require a bearer/query token, and tune `WEBRTC_MAX_SESSIONS` from
 load-test data before raising the default cap.
 
+### Flat routes vs. the `VoiceServer` `/webrtc/*` namespace
+
+The route paths differ by surface, but the handlers are one shared
+implementation (`easycat.server.webrtc_routes.WebRTCRoutes`):
+
+- **Standalone `run_webrtc_config_server()`** keeps the **flat** routes
+  `/offer`, `/config`, `/stats` (and root + bundled client at `/`).
+- **`VoiceServer`** mounts the **namespaced** routes `/webrtc/offer`,
+  `/webrtc/config`, `/webrtc/stats` on the same aiohttp listener as
+  `/health/*`. WebRTC offers reserve through the SAME capacity gate as `/ws`,
+  so capacity, draining, and `stop()` drain span both transports. Enable it via
+  `VoiceServerConfig(enable_webrtc=True)` (the default) with a configured
+  `session_factory`; the unified `AuthPolicy` guards the mounted routes, and the
+  `allow_query_token` default-off posture applies (the WebRTC client uses the
+  `Authorization` header, so it is unaffected).
+
+The SAME bundled client HTML serves both. It resolves its route base from a
+`?webrtc=<prefix>` query parameter (defaulting to `""` for the flat helper);
+`VoiceServer`'s root redirect appends `?webrtc=/webrtc` (preserving any
+`?token=`) so the served client targets the namespaced routes. A custom client
+can target either surface by setting `?webrtc=` (or its own base) accordingly.
+
 ## WebTransport servers
 
 Use `run_webtransport_config_server()` when the client needs HTTP/3 + QUIC
