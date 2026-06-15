@@ -154,6 +154,23 @@ def test_session_defaults_to_local(fake_create_session: list[EasyConfig]) -> Non
     assert isinstance(session, _FakeSession)
 
 
+def test_session_local_with_server_policy_field_succeeds(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    """A server-policy field (e.g. ``port``) is accepted but never forwarded
+    into ``EasyConfig.mic`` — which has no such field — so local construction
+    must not raise ``TypeError``.
+    """
+    app = VoiceApp(agent="a", port=9001)
+    session = app.session("local")
+    assert isinstance(session, _FakeSession)
+    assert len(fake_create_session) == 1
+    config = fake_create_session[0]
+    assert config.agent == "a"
+    # The server-policy field stayed out of the preset.
+    assert not hasattr(config, "port")
+
+
 @pytest.mark.parametrize("mode", ["browser", "websocket", "twilio", "ws", "phone"])
 def test_session_rejects_multi_session_modes(mode: str) -> None:
     app = VoiceApp(agent="a")

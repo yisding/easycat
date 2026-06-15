@@ -43,9 +43,9 @@ _MODE_ALIASES: dict[str, VoiceMode] = {
 _CANONICAL_MODES: frozenset[str] = frozenset({"local", "browser", "websocket", "twilio"})
 
 # High-level ``EasyConfig`` fields ``VoiceApp`` forwards into the chosen preset.
-# ``dev`` is owned by ``VoiceApp`` (controls the dev/debugger opt-in) and is
-# NEVER forwarded. Any ``**config_kwargs`` key outside this allow-list raises a
-# ``ValueError`` so a typo or a misplaced server-policy field fails loudly.
+# These are the ONLY keys forwarded into ``mic()`` / ``browser()`` / ``phone()``
+# / ``EasyConfig(...)`` — ``EasyConfig`` and its presets have no host/port/auth
+# fields, so forwarding a server-policy key would crash the preset constructor.
 _FORWARDED_CONFIG_FIELDS: frozenset[str] = frozenset(
     {
         "agent",
@@ -53,13 +53,28 @@ _FORWARDED_CONFIG_FIELDS: frozenset[str] = frozenset(
         "tts",
         "vad",
         "debug",
-        # Mode-appropriate transport / auth fields for the server modes.
+    }
+)
+
+# Server-policy fields ``VoiceApp`` accepts at construction for the server modes
+# but NEVER forwards into an ``EasyConfig`` preset. They are read directly by the
+# transport-config builders (``_browser_transport_config`` /
+# ``_websocket_server_config``). ``EasyConfig`` has no such fields, so forwarding
+# them into a preset would raise ``TypeError`` per connection.
+_SERVER_POLICY_FIELDS: frozenset[str] = frozenset(
+    {
         "host",
         "port",
         "auth_token",
         "max_sessions",
     }
 )
+
+# The full set of keys the constructor accepts via ``**config_kwargs``. ``dev``
+# is owned by ``VoiceApp`` (controls the dev/debugger opt-in) and is NEVER
+# accepted here. Any key outside this allow-list raises a ``ValueError`` so a
+# typo or a misplaced field fails loudly.
+_ALLOWED_CONFIG_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS | _SERVER_POLICY_FIELDS
 
 # Environment variable for the shared serve token (shipped name — do NOT rename
 # to ``EASYCAT_SERVER_TOKEN`` while migrating ``serve`` through ``VoiceApp``).
@@ -110,9 +125,9 @@ class VoiceApp:
         if agent is not None:
             config_kwargs["agent"] = agent
 
-        unknown = set(config_kwargs) - _FORWARDED_CONFIG_FIELDS
+        unknown = set(config_kwargs) - _ALLOWED_CONFIG_FIELDS
         if unknown:
-            allowed = sorted(_FORWARDED_CONFIG_FIELDS)
+            allowed = sorted(_ALLOWED_CONFIG_FIELDS)
             raise ValueError(
                 f"Unknown VoiceApp field(s): {sorted(unknown)}. "
                 f"Allowed high-level fields: {allowed} (and `dev`, which VoiceApp "
@@ -141,6 +156,20 @@ class VoiceApp:
         self._config_factory = config_factory
         self._config_kwargs = config_kwargs
         self.dev = dev
+
+    def _forwardable_config_kwargs(self) -> dict[str, Any]:
+        """Return only the keys safe to forward into an ``EasyConfig`` preset.
+
+        Server-policy fields (``host`` / ``port`` / ``auth_token`` /
+        ``max_sessions``) live in ``_config_kwargs`` for the transport-config
+        builders, but ``EasyConfig`` and its presets have no such fields —
+        forwarding them would crash the preset constructor per connection.
+        """
+        return {
+            key: value
+            for key, value in self._config_kwargs.items()
+            if key in _FORWARDED_CONFIG_FIELDS
+        }
 
     # ── Public entry points ──────────────────────────────────────────
 
@@ -216,7 +245,7 @@ class VoiceApp:
             from easycat.transports import LocalTransport
 
             return self._config_factory(LocalTransport())
-        return EasyConfig.mic(**{**self._config_kwargs, **kwargs})
+        return EasyConfig.mic(**{**self._forwardable_config_kwargs(), **kwargs})
 
     def _run_local(self, **kwargs: Any) -> None:
         from easycat.helpers import run_session
@@ -382,24 +411,28 @@ class VoiceApp:
 
         from easycat.config import EasyConfig
 
+        # Only EasyConfig-forwardable fields reach the preset; server-policy
+        # fields stay with the transport-config builders.
+        forwarded = self._forwardable_config_kwargs()
+
         if mode == "browser":
 
             def _browser_config(transport: Any) -> EasyConfig:
-                return EasyConfig.browser(transport=transport, **self._config_kwargs)
+                return EasyConfig.browser(transport=transport, **forwarded)
 
             return _browser_config
 
         if mode == "twilio":
 
             def _phone_config(transport: Any) -> EasyConfig:
-                return EasyConfig.phone(transport=transport, **self._config_kwargs)
+                return EasyConfig.phone(transport=transport, **forwarded)
 
             return _phone_config
 
         # WebSocket has no dedicated preset; build EasyConfig with the
         # per-connection transport directly.
         def _ws_config(transport: Any) -> EasyConfig:
-            return EasyConfig(transport=transport, **self._config_kwargs)
+            return EasyConfig(transport=transport, **forwarded)
 
         return _ws_config
 

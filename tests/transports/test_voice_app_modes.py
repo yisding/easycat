@@ -159,6 +159,54 @@ def test_browser_forwards_host_port_token(
     assert config.auth_token == "secret"
 
 
+def test_browser_factory_does_not_leak_server_policy_fields(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """Server-policy fields land on the transport config, NOT the EasyConfig.
+
+    Invoking the captured per-connection factory is what catches the leak:
+    ``EasyConfig.browser`` has no ``host`` / ``port`` / ``auth_token`` field, so
+    forwarding any of them would raise ``TypeError`` here (which previously only
+    surfaced on the first real connection, after a clean startup).
+    """
+    VoiceApp(agent="a", host="127.0.0.1", port=9001, auth_token="secret").run("browser")
+
+    # Server-policy fields reached the transport config.
+    transport_config = captured_webrtc["config"]
+    assert transport_config.port == 9001
+    assert transport_config.auth_token == "secret"
+
+    # Invoking the factory must succeed and produce a clean EasyConfig.
+    factory = captured_webrtc["factory"]
+    config = factory(_FakeWebRTCTransport())
+    assert isinstance(config, EasyConfig)
+    assert config.agent == "a"
+    # None of the server-policy fields leaked into the EasyConfig.
+    for leaked in ("host", "port", "auth_token", "max_sessions"):
+        assert not hasattr(config, leaked)
+
+
+def test_websocket_factory_does_not_leak_server_policy_fields(
+    captured_websocket: dict[str, Any],
+) -> None:
+    """The WebSocket per-connection factory must also stay leak-free."""
+    VoiceApp(agent="a", host="127.0.0.1", port=9001, auth_token="secret", max_sessions=3).run(
+        "websocket"
+    )
+
+    server_config = captured_websocket["config"]
+    assert server_config.port == 9001
+    assert server_config.auth_token == "secret"
+    assert server_config.max_sessions == 3
+
+    factory = captured_websocket["factory"]
+    config = factory(_FakeWebSocketTransport())
+    assert isinstance(config, EasyConfig)
+    assert config.agent == "a"
+    for leaked in ("host", "port", "auth_token", "max_sessions"):
+        assert not hasattr(config, leaked)
+
+
 # ── WebSocket mode delegation ────────────────────────────────────────
 
 
