@@ -31,7 +31,7 @@ from easycat._signals import create_shutdown_event
 from easycat.server.auth import from_websocket
 from easycat.server.config import VoiceServerConfig
 from easycat.server.health import VoiceServerHealth
-from easycat.server.routes import register_health_routes
+from easycat.server.routes import register_health_routes, register_plan_route
 from easycat.server.transports import CapacityGate
 from easycat.session_manager import SessionManager
 
@@ -81,6 +81,12 @@ class VoiceServer:
     ) -> None:
         self.config = config or VoiceServerConfig()
         self._session_factory = session_factory
+
+        # Optional manifest source for the read-only ``/plan`` route and the M6b
+        # readiness checks (the ``from_manifest`` path sets these; a factory-only
+        # server leaves them ``None`` and reports an empty plan / skipped checks).
+        self._manifest: Any = None
+        self._manifest_load_error: str | None = None
 
         # Bare session registry only: add/remove/stop_all/connection. Capacity
         # and draining are NOT attributed to it (it has neither).
@@ -154,6 +160,11 @@ class VoiceServer:
         app = web.Application()
         if self.config.enable_health:
             register_health_routes(app, self)
+        # The read-only ``/plan`` route (M6b). Registered unconditionally with
+        # health so a factory-only server still answers with a documented empty
+        # plan; the handler imports the planner LAZILY so registration pulls no
+        # planner at module load.
+        register_plan_route(app, self)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -268,15 +279,97 @@ class VoiceServer:
         ]
 
     async def health(self) -> VoiceServerHealth:
-        """Build a :class:`VoiceServerHealth` snapshot from live state."""
+        """Build a :class:`VoiceServerHealth` snapshot from live state.
+
+        M4 owns the serving/draining/capacity/route-ready half. The M6b
+        manifest-loaded + plan-no-blocking-errors checks are layered on ONLY for
+        a ``from_manifest`` server (a factory-only server keeps the M4 ``skipped``
+        placeholders). The planner (``easycat.planning``) is imported LAZILY
+        inside :meth:`_manifest_readiness` — never at module load — so the M4
+        boundary (``import easycat.server`` pulls no planner) is preserved.
+        """
         draining = self._gate.is_draining
+        manifest_loaded, plan_blocking_errors = self._manifest_readiness()
         return VoiceServerHealth(
             state="draining" if draining else "serving",
             active_sessions=self._gate.reserved_count,
             max_sessions=self.config.max_sessions,
             draining=draining,
             route_stack_ready=self._route_stack_ready(),
+            manifest_loaded=manifest_loaded,
+            plan_blocking_errors=plan_blocking_errors,
         )
+
+    def _manifest_readiness(self) -> tuple[bool | None, tuple[str, ...] | None]:
+        """Compute the M6b readiness sub-checks (manifest-loaded + plan blocking).
+
+        Returns ``(None, None)`` for a factory-only server (no manifest/profile)
+        so :class:`VoiceServerHealth` keeps the M4 ``skipped`` placeholders.
+        Otherwise returns ``(manifest_loaded, plan_blocking_errors)``: a manifest
+        that failed to load is ``(False, None)``; a loaded manifest returns its
+        plan's blocking-error reasons (empty tuple when the plan is clean).
+
+        The planner is imported LAZILY here so ``import easycat.server`` never
+        pulls it (the M4/M6b boundary). This is the parity-gated wiring: it only
+        ever trusts a planner verdict because the planner-vs-``create_session``
+        parity test is green.
+        """
+        if self._manifest is None:
+            if self._manifest_load_error is not None:
+                # A manifest was configured but failed to load.
+                return False, None
+            return None, None
+        from easycat.planning import build_provider_plan
+
+        profile = self.config.profile
+        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        return True, plan.blocking_errors()
+
+    def plan_payload(self) -> dict[str, Any]:
+        """Return the read-only ``/plan`` JSON payload (redacted, no token).
+
+        For a ``from_manifest`` server, resolves the selected profile's provider
+        plan across all seven roles. For a factory-only server, returns a
+        documented empty plan (``selected={}``) — there is no manifest profile to
+        plan. No resolved token can appear: the planner reads only provider
+        metadata (names/extras/env-var NAMES), never secret values.
+        """
+        if self._manifest is None:
+            return {
+                "profile": self.config.profile,
+                "selected": {},
+                "missing_env": [],
+                "missing_extras": [],
+                "warnings": [],
+                "blocking_errors": [],
+                "has_blocking_errors": False,
+                "manifest_loaded": self._manifest_load_error is None,
+            }
+        from easycat.planning import build_provider_plan
+
+        profile = self.config.profile
+        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        return {
+            "profile": plan.profile,
+            "selected": {
+                role: {
+                    "role": selection.role,
+                    "provider": selection.provider,
+                    "model": selection.model,
+                    "config_type": selection.config_type,
+                    "extra": selection.extra,
+                    "required_env": selection.required_env,
+                    "capabilities": sorted(selection.capabilities),
+                }
+                for role, selection in plan.selected.items()
+            },
+            "missing_env": list(plan.missing_env),
+            "missing_extras": list(plan.missing_extras),
+            "warnings": list(plan.warnings),
+            "blocking_errors": list(plan.blocking_errors()),
+            "has_blocking_errors": plan.has_blocking_errors,
+            "manifest_loaded": True,
+        }
 
     # ── Constructors ─────────────────────────────────────────────────
 
@@ -337,7 +430,12 @@ class VoiceServer:
             # A fresh EasyConfig per connection (no shared grouped sub-configs).
             return manifest.to_easyconfig(profile)
 
-        return cls(config, session_factory=_factory)
+        server = cls(config, session_factory=_factory)
+        # Retain the loaded manifest so the read-only ``/plan`` route and the M6b
+        # readiness checks can build the plan from the selected profile. The
+        # resolved token never lives on the manifest, so retaining it leaks nothing.
+        server._manifest = manifest
+        return server
 
     # ── Internals ────────────────────────────────────────────────────
 

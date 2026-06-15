@@ -922,6 +922,7 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
+    plan        Show the provider/capability plan for a manifest profile
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps

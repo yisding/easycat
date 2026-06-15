@@ -27,6 +27,7 @@ ROUTE_TEMPLATES: frozenset[str] = frozenset(
         "/health/live",
         "/health/ready",
         "/health",
+        "/plan",
         "/ws",
     }
 )
@@ -75,3 +76,32 @@ def register_health_routes(app: Any, server: VoiceServer) -> None:
     app.router.add_get("/health/live", _handle_health_live)
     app.router.add_get("/health/ready", _make_health_ready_handler(server))
     app.router.add_get("/health", _make_health_handler(server))
+
+
+def _make_plan_handler(server: VoiceServer) -> Any:
+    """Build the ``GET /plan`` handler (read-only, redacted, side-effect-free).
+
+    The planner (``easycat.planning``) is imported LAZILY inside the handler so
+    the route registration — and ``import easycat.server`` — never pulls the
+    planner at module load (the M4/M6b boundary). For a factory-only server with
+    no manifest/profile, returns a documented empty plan (``selected={}``).
+    """
+
+    async def _handle_plan(_request: Any) -> Any:
+        from aiohttp import web
+
+        payload = server.plan_payload()
+        return web.json_response(payload)
+
+    return _handle_plan
+
+
+def register_plan_route(app: Any, server: VoiceServer) -> None:
+    """Wire the read-only ``GET /plan`` route (M6b).
+
+    ``/plan`` is part of the logical surface and is a member of
+    :data:`ROUTE_TEMPLATES` (so M8 may assert it before recording
+    ``easycat.route``). This module records NO metric — there is no
+    ``_record_metric`` / ``sanitize_attributes`` call here.
+    """
+    app.router.add_get("/plan", _make_plan_handler(server))

@@ -172,6 +172,8 @@ easycat doctor           # check API keys, optional extras, provider reachabilit
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat serve            # serve the browser voice playground on localhost
+easycat plan             # show the provider/capability plan for a manifest profile
+easycat plan --json      # emit the machine-readable provider/capability plan
 easycat docs             # show docs for learning, maintenance, validation, operations
 easycat docs --audience learners # filter docs by reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners

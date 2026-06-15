@@ -1,0 +1,225 @@
+"""M6b ``/plan`` endpoint + parity-gated ``/health/ready`` readiness wiring.
+
+Covers: the read-only ``/plan`` route (manifest-backed and factory-only), the
+M6b ``/health/ready`` manifest-loaded + plan-no-blocking-errors checks (503 when
+the plan has blocking errors), the factory-only server keeping the M4
+``"skipped"`` placeholders, and the M4 boundary that ``health.py`` never imports
+the planner at module load.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import aiohttp
+import pytest
+
+from easycat.server import VoiceServer, VoiceServerConfig
+
+
+class _FakeSession:
+    async def start(self) -> None:  # noqa: D401 - test stub
+        pass
+
+    async def stop(self, *, force: bool = False) -> None:  # noqa: D401 - test stub
+        pass
+
+
+def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime") -> Path:
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "plan-endpoint-test"',
+                "",
+                "[server]",
+                'host = "127.0.0.1"',
+                "port = 0",
+                'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
+                "",
+                "[voice.default]",
+                'transport = "webrtc"',
+                f'stt = "{stt}"',
+                'tts = "openai"',
+                'vad = "silero"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[aiohttp.ClientSession]:
+    async with aiohttp.ClientSession() as session:
+        yield session
+
+
+def _base_url(server: VoiceServer) -> str:
+    address = server.http_address
+    assert address is not None
+    host, port = address
+    return f"http://{host}:{port}"
+
+
+# ── /plan endpoint ───────────────────────────────────────────────────
+
+
+def test_health_module_does_not_import_planner() -> None:
+    # The M4 boundary: importing health.py must NOT pull the planner. The planner
+    # is imported lazily inside VoiceServer.health()/plan_payload(), never here.
+    import subprocess
+    import sys
+
+    code = "import sys; import easycat.server.health; print('easycat.planning' in sys.modules)"
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "False", result.stdout
+
+
+def test_plan_payload_factory_only_server_is_empty() -> None:
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0),
+        session_factory=lambda _t: _FakeSession(),
+    )
+    payload = server.plan_payload()
+    assert payload["selected"] == {}
+    assert payload["has_blocking_errors"] is False
+
+
+def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path))
+    payload = server.plan_payload()
+    assert set(payload["selected"]) == {
+        "stt",
+        "tts",
+        "vad",
+        "transport",
+        "agent",
+        "noise_reducer",
+        "echo_canceller",
+    }
+    assert payload["selected"]["transport"]["provider"] == "webrtc"
+    assert payload["has_blocking_errors"] is False
+    # No resolved token appears anywhere in the payload.
+    import json
+
+    assert "tok" not in json.dumps(payload)
+
+
+@pytest.mark.integration_socket
+async def test_plan_route_returns_200(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path))
+    # Override host/port to ephemeral loopback so the test binds safely.
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 200
+            body = await resp.json()
+        assert body["profile"] == "default"
+        assert "stt" in body["selected"]
+        assert "tok" not in await _text_of(client, f"{_base_url(server)}/plan")
+    finally:
+        await server.stop()
+
+
+async def _text_of(client: aiohttp.ClientSession, url: str) -> str:
+    async with client.get(url) as resp:
+        return await resp.text()
+
+
+@pytest.mark.integration_socket
+async def test_plan_route_factory_only_returns_empty(
+    client: aiohttp.ClientSession,
+) -> None:
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0),
+        session_factory=lambda _t: _FakeSession(),
+    )
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 200
+            body = await resp.json()
+        assert body["selected"] == {}
+    finally:
+        await server.stop()
+
+
+# ── /health/ready M6b wiring ─────────────────────────────────────────
+
+
+@pytest.mark.integration_socket
+async def test_ready_200_when_manifest_plan_clean(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/health/ready") as resp:
+            assert resp.status == 200
+        # The /health payload now reports live manifest/providers sub-checks.
+        async with client.get(f"{_base_url(server)}/health") as resp:
+            health = await resp.json()
+        assert health["checks"]["manifest"] == {"status": "ok"}
+        assert health["checks"]["providers"] == {"status": "ok"}
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_ready_503_when_plan_has_blocking_errors(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    # deepgram STT but NO DEEPGRAM_API_KEY -> the plan has a blocking error.
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, stt="deepgram"))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/health/ready") as resp:
+            assert resp.status == 503
+            body = await resp.json()
+            assert "plan_has_blocking_errors" in body["reasons"]
+        async with client.get(f"{_base_url(server)}/health") as resp:
+            health = await resp.json()
+        assert health["checks"]["providers"] == {"status": "degraded"}
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_factory_only_keeps_m4_skipped_placeholders(
+    client: aiohttp.ClientSession,
+) -> None:
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0),
+        session_factory=lambda _t: _FakeSession(),
+    )
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/health") as resp:
+            health = await resp.json()
+        # A factory-only server keeps the M4 placeholders (M6b not evaluated).
+        assert health["checks"]["manifest"] == {"status": "skipped"}
+        assert health["checks"]["providers"] == {"status": "skipped"}
+        async with client.get(f"{_base_url(server)}/health/ready") as resp:
+            assert resp.status == 200
+    finally:
+        await server.stop()

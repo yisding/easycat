@@ -14,7 +14,12 @@ def test_importing_project_does_not_import_planner() -> None:
     for name in list(sys.modules):
         if name == "easycat.project" or name.startswith("easycat.project."):
             del sys.modules[name]
-    sys.modules.pop("easycat.planning", None)
+    # Drop ALL planning modules (top-level AND submodules) so leftover state from
+    # a sibling test cannot make a fresh ``easycat.project`` import look like it
+    # pulled the planner. M6b adds ``easycat.planning.*`` submodules, so popping
+    # only the top-level name is no longer enough.
+    for name in [n for n in sys.modules if n.startswith("easycat.planning")]:
+        del sys.modules[name]
 
     import easycat.project  # noqa: F401
 

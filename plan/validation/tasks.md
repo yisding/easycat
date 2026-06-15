@@ -424,8 +424,8 @@ Dependencies:
 Current verified state:
 
 - `src/easycat/cli/_app.py` registers top-level `console`, `init`, `doctor`,
-  `serve`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`, `tail`,
-  plus the `bundles`, `debugger`, `journal`, and `validate` groups.
+  `serve`, `plan`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`,
+  `tail`, plus the `bundles`, `debugger`, `journal`, and `validate` groups.
 - The bare `easycat` journey menu includes `Scaffold`,
   `Debug with the journal`, `Validation`, and `Docs and guidance`; the
   `Validation` section points at `easycat validate`.

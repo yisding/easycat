@@ -149,6 +149,57 @@ def test_to_easyconfig_browser_profile_uses_preset(monkeypatch: pytest.MonkeyPat
     assert config.tts is not None  # forwarded + normalized by EasyConfig
 
 
+def test_to_easyconfig_coerces_vad_shortcut_to_vad_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # REGRESSION: EasyConfig stores a ``vad`` shortcut string verbatim (it never
+    # coerces it like stt/tts), so forwarding it raw would make create_session ->
+    # create_vad('silero') raise AttributeError("'str' object has no attribute
+    # 'backend'"). The manifest converter coerces it into a VADConfig.
+    from easycat.vad import VADConfig
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest({"voice": {"default": {"transport": "webrtc", "vad": "silero"}}})
+    config = manifest.to_easyconfig("default", resolve_agent=False)
+    assert isinstance(config.vad, VADConfig)
+    assert config.vad.backend == "silero"
+
+
+def test_to_easyconfig_coerced_vad_drives_create_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The coerced VADConfig must let create_session build without the str-backend
+    # crash that the raw shortcut caused.
+    from easycat.config import create_session
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+
+    class _Agent:
+        async def run(self, text: str) -> str:
+            return "ok"
+
+    manifest = parse_manifest({"voice": {"default": {"transport": "websocket", "vad": "silero"}}})
+    config = manifest.to_easyconfig("default", resolve_agent=False)
+    config.agent = _Agent()
+    config.debug = "off"
+    session = create_session(config)
+    assert session is not None
+
+
+def test_to_easyconfig_unknown_vad_backend_raises_e602(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.errors import EasyCatError
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    manifest = parse_manifest(
+        {"voice": {"default": {"transport": "websocket", "vad": "not-a-backend"}}}
+    )
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.to_easyconfig("default", resolve_agent=False)
+    assert excinfo.value.code == "EASYCAT_E602"
+
+
 def test_to_easyconfig_resolves_python_agent(
     _agent_module: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:

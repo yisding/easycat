@@ -142,10 +142,19 @@ class ProjectManifest:
         kwargs: dict[str, Any] = {}
         if spec.agent is not None and resolve_agent:
             kwargs["agent"] = self.resolve_agent(profile)
-        for field_name in ("stt", "tts", "vad", "debug"):
+        for field_name in ("stt", "tts", "debug"):
             value = getattr(spec, field_name)
             if value is not None:
                 kwargs[field_name] = value
+        # ``vad`` is special: ``EasyConfig`` stores a ``vad`` shortcut STRING
+        # verbatim (it never coerces it like ``stt``/``tts``), so forwarding the
+        # raw shortcut would make ``create_session`` -> ``create_vad('silero')``
+        # raise ``AttributeError("'str' object has no attribute 'backend'")``.
+        # Coerce the shortcut into a ``VADConfig(backend=<shortcut>)`` here
+        # (validating the backend against ``VADBackend``) so the manifest ``vad``
+        # role round-trips through ``create_session`` and matches the planner.
+        if spec.vad is not None:
+            kwargs["vad"] = self._coerce_vad(spec.vad, profile)
 
         preset = TRANSPORT_PRESET[spec.transport]
         if preset == "browser":
@@ -158,6 +167,28 @@ class ProjectManifest:
         from easycat.transports.websocket import WebSocketTransportConfig
 
         return EasyConfig(transport=WebSocketTransportConfig(), **kwargs)
+
+    @staticmethod
+    def _coerce_vad(shortcut: str, profile: str) -> Any:
+        """Coerce a ``vad`` shortcut string into a validated ``VADConfig``.
+
+        ``EasyConfig`` forwards a ``vad`` shortcut string verbatim (it does not
+        coerce it like ``stt``/``tts``), so a raw shortcut would crash
+        ``create_session`` -> ``create_vad('silero')``. Building a
+        ``VADConfig(backend=<shortcut>)`` here (whose ``__post_init__`` validates
+        the backend against :data:`~easycat.vad._base.VADBackend`) is the
+        manifest-scoped fix that keeps the planner verdict == ``create_session``
+        outcome. An unknown backend RAISES :data:`EASYCAT_E602`.
+        """
+        from easycat.vad import VADConfig
+
+        try:
+            return VADConfig(backend=shortcut)  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise EASYCAT_E602(
+                path=f"[voice.{profile}]",
+                problem=f"vad {shortcut!r} is not a known backend: {exc}",
+            )
 
     def resolve_agent(self, profile: str = "default") -> Any:
         """Resolve the profile's ``python:module:function`` agent reference."""
