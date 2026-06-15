@@ -68,6 +68,16 @@ result = await EvalRunner(agent=agent).run(scenario)
 result.assert_passed()
 ```
 
+The north-star `VoiceApp(agent=Agent(...)).run("browser")` is feasible exactly
+as written today (`agent=` accepts a raw OpenAI Agents SDK `Agent`; `import
+easycat` is lazy). The server and eval symbols above, however, are **net-new
+and not yet in the tree**: `VoiceServer` is imported from `easycat.server`, and
+`EvalRunner`/`EvalScenario`/`EvalTurn` from `easycat.evals`. These are
+**submodule exports** (`easycat.server`, `easycat.evals`, alongside
+`easycat.budgets`) and do **not** count against the top-level `easycat.__all__`
+cap — only the new top-level `VoiceApp` does, which forces a deliberate cap bump
+(94 → 95; see R13 and Phase 1).
+
 ## Product Pillars
 
 ### 1. App-first developer experience
@@ -106,7 +116,16 @@ production bundle should become a pytest regression with one command.
 - Do not make `Session` multi-client. Keep one `Session` per call/client.
 - Do not make durable debugging imply browser autolaunch in production.
 - Do not execute external tools during replay by default.
-- Do not hide PII risks in journals, bundles, or promoted fixtures.
+- Do not hide PII risks in journals, bundles, or promoted fixtures. This is
+  **net-new work**, not an already-satisfied invariant: the existing
+  `journal promote` path (`cli/debug/bundles.py:1819-1962` →
+  `slice_bundle_by_turn` → `debug/export.py:154-170`) ships **unredacted
+  transcripts plus every raw audio blob by default** and embeds the verbatim
+  agent reply into the committed stub. Neo's promotion workstream
+  (`eval promote`) MUST redact by default (route records through
+  `redact_value`, default to `--no-audio`, assert on a hash/regex over the
+  reply rather than embedding raw text) — see R8/Q14 and Phase 3. The non-goal
+  is a requirement to harden, not a description of current behavior.
 - Do not require live provider API keys for baseline eval/scenario tests.
 
 ## Success Criteria

@@ -19,11 +19,16 @@ The plan is organized around three phases:
 
 1. **VoiceApp** — a product-level app surface with browser-first development
    and unified local/browser/WebSocket/Twilio modes.
-2. **VoiceServer** — a production process layer with manifest-first projects,
-   health/readiness, auth, metrics, graceful shutdown, and provider planning.
+2. **VoiceServer** — a production process layer with health/readiness, auth,
+   metrics, and graceful shutdown, plus two separately-deliverable foundations:
+   a manifest loader (M6a) and a declarative provider planner (M6b). M6 is split
+   into M6a/M6b and is the highest-risk milestone. WebRTC keeps the number 7; a
+   new M8 (server metrics + read-only endpoints) is inserted after M7, so only
+   old M8–M12 shift to M9–M13 (see [roadmap.md](roadmap.md)).
 3. **Feedback Loop** — always-available dev timelines, native evals,
-   replay-as-tests, and latency/cost budgets across runtime, debugger, CLI,
-   validation, and CI.
+   replay-as-tests (a security-sensitive *hardening* of the existing unsafe
+   `journal promote` path — see below), and latency/cost budgets across runtime,
+   debugger, CLI, validation, and CI.
 
 ## Assets
 
@@ -37,11 +42,14 @@ Read these in order:
    `VoiceApp`, browser-first dev, unified modes, CLI migration, and Twilio
    extraction.
 4. [phase-2-voice-server.md](phase-2-voice-server.md): implementation plan for
-   production server, manifest loader, capability planning, auth, health,
-   metrics, and graceful shutdown.
+   the production server, auth, health/readiness, metrics, and graceful
+   shutdown, plus the manifest loader (M6a) and the declarative provider planner
+   (M6b) as two separate deliverables.
 5. [phase-3-feedback-loop.md](phase-3-feedback-loop.md): implementation plan
    for debugger dev mode, eval/simulation APIs, replay promotion, and budgets.
-6. [roadmap.md](roadmap.md): milestone ordering, dependencies, sequencing, and
+6. [roadmap.md](roadmap.md): milestone ordering (M1–M13, with M6 split into
+   M6a/M6b, WebRTC keeping the number 7, a new M8 (server metrics) inserted after
+   M7, and old M8–M12 renumbered to M9–M13), dependencies, sequencing, and
    suggested first PRs.
 7. [acceptance-matrix.md](acceptance-matrix.md): measurable acceptance criteria
    and test/doc evidence by phase.
@@ -59,12 +67,29 @@ Read these in order:
   transcript archive.
 - When a milestone ships, add a short status note to the relevant phase file and
   link the implementation PR.
+- Treat the promotion-to-test workstream (Phase 3) as **security-sensitive**: it
+  is a *hardening* of the existing, unsafe `journal promote` path (which today
+  copies raw NDJSON + every audio blob + verbatim transcripts with zero
+  redaction), not a preservation of already-safe behavior. Promotion must be
+  redact-by-default with `--no-audio` as the default — review it accordingly.
 - If docs route maps are edited as part of implementation, follow the repository
   guidance and regenerate `llms.txt` / `llms-full.txt` with
   `uv run python scripts/regen_llms_txt.py`.
 
 ## Source Baseline
 
-This plan was drafted after static code exploration of the current branch. The
-attempt to pull latest `origin/main` failed because the checkout has no `origin`
-remote configured. The current local branch was `work` at commit `18cbf07`.
+An authoritative code-ground-truth review
+([neo-plan-review.md](neo-plan-review.md)) has since been completed against the
+current tree and folded into this packet. Every symbol named in the plan was
+verified to exist at a compatible signature, so the original staleness caveat
+**did not bite for symbol existence**. The corrections that were applied are
+conceptual — *where* logic actually lives (e.g. capacity/draining is not in
+`SessionManager`; the `config_factory` seam, not a `ConnectionContext` type) —
+and net-new-vs-existing labeling (e.g. `assert_budgets_pass`,
+`promote_turn_to_test`, the planner metadata for vad/transport/agent/noise/echo,
+and the `easycat plan`/`easycat eval` CLIs are net-new, not re-exports).
+
+The original draft was authored from a static read of branch `work` at commit
+`18cbf07` with no `origin` remote configured; that note is now **superseded** by
+the completed ground-truth verification above and should not be read as an
+outstanding caveat.
