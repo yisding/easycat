@@ -221,6 +221,12 @@ def enforce_bind_guard(
     behavior — and the ``0.0.0.0`` gap it closes — is identical across
     transports.
 
+    The escape hatch is honored from BOTH the ``unsafe_allow_no_auth``
+    PARAMETER and the same-named field on the policy object (so an
+    ``unsafe_allow_no_auth=True`` carried on a :class:`NoAuth` /
+    :class:`BearerTokenAuth` is not silently ignored when only the policy is
+    passed). The guard stays fail-safe: with neither set it still raises.
+
     The error wording mirrors the existing WebSocket guard so callers/tests that
     assert on the host + ``unsafe_allow_no_auth`` substrings stay green.
     """
@@ -233,7 +239,9 @@ def enforce_bind_guard(
         return
     if _policy_has_token(auth):
         return
-    if unsafe_allow_no_auth:
+    # Honor the escape hatch from either the parameter OR the policy field; the
+    # policy field was previously dead (declared but never consulted).
+    if unsafe_allow_no_auth or getattr(auth, "unsafe_allow_no_auth", False):
         return
     raise ValueError(
         f"Refusing to bind {host!r} without a token. Configure an AuthPolicy "

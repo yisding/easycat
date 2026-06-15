@@ -145,6 +145,32 @@ def test_bind_guard_raises_for_noauth_without_escape_hatch() -> None:
         enforce_bind_guard("0.0.0.0", auth=NoAuth())
 
 
+# ── F1: the escape hatch is honored from the POLICY field, not just the
+# ``unsafe_allow_no_auth`` parameter (previously the policy field was dead code).
+
+
+def test_bind_guard_default_raises_for_non_loopback_no_token() -> None:
+    # Fail-safe default: neither the parameter nor a policy escape hatch set.
+    with pytest.raises(ValueError):
+        enforce_bind_guard("0.0.0.0", auth=NoAuth(unsafe_allow_no_auth=False))
+
+
+def test_bind_guard_honors_noauth_policy_escape_hatch() -> None:
+    # ``NoAuth(unsafe_allow_no_auth=True)`` must be honored even though the
+    # ``unsafe_allow_no_auth`` PARAMETER is left at its default (False).
+    enforce_bind_guard("0.0.0.0", auth=NoAuth(unsafe_allow_no_auth=True))
+
+
+def test_bind_guard_honors_bearer_token_policy_escape_hatch() -> None:
+    # A tokenless ``BearerTokenAuth`` is unusual, but its policy-carried
+    # ``unsafe_allow_no_auth=True`` must still open the bind (the field was
+    # silently ignored before the fix).
+    enforce_bind_guard(
+        "0.0.0.0",
+        auth=BearerTokenAuth(token="", unsafe_allow_no_auth=True),
+    )
+
+
 # ── bearer_auth_from_env ─────────────────────────────────────────────
 
 

@@ -17,6 +17,11 @@ import pytest
 
 from easycat.server import VoiceServer, VoiceServerConfig
 
+# A realistic secret-shaped token (``sk-...``, 24+ chars) so the leak assertions
+# exercise ``redact_value``'s value-policy safety net — not just the structural
+# guarantee. A 3-char token like ``"tok"`` could never trip value redaction.
+_RESOLVED_TOKEN = "sk-live-secret-token-abcdef1234567890"
+
 
 class _FakeSession:
     async def start(self) -> None:  # noqa: D401 - test stub
@@ -73,7 +78,7 @@ def _factory_only_server() -> VoiceServer:
 
 
 def _manifest_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> VoiceServer:
-    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     server.config.port = 0
@@ -130,7 +135,7 @@ async def test_metrics_endpoint_shape_from_manifest(
         }
         # No resolved token can appear in a metrics snapshot.
         async with client.get(f"{_base_url(server)}/metrics") as resp:
-            assert "tok" not in await resp.text()
+            assert _RESOLVED_TOKEN not in await resp.text()
     finally:
         await server.stop()
 
@@ -166,8 +171,11 @@ async def test_manifest_endpoint_from_manifest_has_no_token(
         manifest = body["manifest"]
         # The redacted dump exposes only the bearer-env:NAME reference.
         assert manifest["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
-        # The resolved token must never appear in the dump.
-        assert "tok" not in text
+        # The IPv4 bind host is a structural field; it survives redaction
+        # verbatim (it must NOT be mangled into a [REDACTED_PHONE]).
+        assert manifest["server"]["host"] == "127.0.0.1"
+        # The resolved (secret-shaped) token must never appear in the dump.
+        assert _RESOLVED_TOKEN not in text
     finally:
         await server.stop()
 
@@ -184,7 +192,7 @@ async def test_plan_endpoint_has_no_token(
     try:
         async with client.get(f"{_base_url(server)}/plan") as resp:
             assert resp.status == 200
-            assert "tok" not in await resp.text()
+            assert _RESOLVED_TOKEN not in await resp.text()
     finally:
         await server.stop()
 
@@ -237,6 +245,6 @@ async def test_capabilities_endpoint_from_manifest_lists_seven_roles(
         assert "duplex_audio" in body["all_capabilities"]
         assert "browser" in body["roles"]["transport"]
         # The planner reads only metadata, never secret values.
-        assert "tok" not in text
+        assert _RESOLVED_TOKEN not in text
     finally:
         await server.stop()

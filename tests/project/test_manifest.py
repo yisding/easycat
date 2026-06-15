@@ -70,6 +70,38 @@ def test_redacted_dump_shows_reference_never_resolved_token() -> None:
     assert not contains_unredacted_sensitive_text(serialized)
 
 
+def test_redacted_dump_passes_ipv4_host_through_verbatim() -> None:
+    # F2: the bind host is a STRUCTURAL operator address, not PII. A dotted IPv4
+    # must survive ``to_redacted_dict`` verbatim — ``redact_value``'s phone-number
+    # policy would otherwise mangle it into ``[REDACTED_PHONE]``. The token
+    # reference must still be the safe ``bearer-env:NAME`` reference (never a
+    # resolved token).
+    manifest = parse_manifest(
+        {
+            "project": {"name": "demo"},
+            "server": {
+                "host": "127.0.0.1",
+                "auth": "bearer-env:EASYCAT_SERVE_TOKEN",
+                "port": 8080,
+            },
+            "voice": {"default": {"transport": "webrtc"}},
+        }
+    )
+    # Resolve the token first to prove it still never appears in the dump.
+    manifest.resolve_auth({"EASYCAT_SERVE_TOKEN": _RESOLVED_TOKEN})
+
+    dump = manifest.to_redacted_dict()
+    serialized = json.dumps(dump)
+
+    # The IPv4 bind host survives verbatim (NOT mangled into a phone redaction).
+    assert dump["server"]["host"] == "127.0.0.1"
+    assert "[REDACTED_PHONE]" not in serialized
+    # The secret-bearing field stays redacted: only the env reference, no token.
+    assert dump["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
+    assert _RESOLVED_TOKEN not in serialized
+    assert not contains_unredacted_sensitive_text(serialized)
+
+
 def test_redacted_dump_token_field_only_reference() -> None:
     manifest = parse_manifest(
         {

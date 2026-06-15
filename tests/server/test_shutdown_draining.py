@@ -78,6 +78,46 @@ class _GuardedSession:
         await self._release.wait()
 
 
+class _HangEvenInForceSession:
+    """A session whose graceful AND forced stop both hang forever.
+
+    The drain's ``force_shutdown_timeout_s`` bound on the FORCED phase must make
+    ``stop()`` return regardless: even a session that resists force-stop cannot
+    block teardown past roughly ``force_shutdown_timeout_s``.
+    """
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.graceful_started = asyncio.Event()
+        self.force_started = asyncio.Event()
+        self._never = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self, *, force: bool = False) -> None:
+        if force:
+            self.force_started.set()
+        else:
+            self.graceful_started.set()
+        await self._never.wait()  # hangs in BOTH paths
+
+
+async def _running_hang_even_in_force_server(
+    config: VoiceServerConfig,
+) -> tuple[VoiceServer, list[_HangEvenInForceSession]]:
+    sessions: list[_HangEvenInForceSession] = []
+
+    def session_factory(_transport: object) -> _HangEvenInForceSession:
+        session = _HangEvenInForceSession()
+        sessions.append(session)
+        return session
+
+    server = VoiceServer(config, session_factory=session_factory)
+    await server.start()
+    return server, sessions
+
+
 async def _running_server(
     config: VoiceServerConfig, *, hang: bool = False
 ) -> tuple[VoiceServer, list[_FakeSession]]:
@@ -197,6 +237,37 @@ async def test_force_stop_escalates_immediately() -> None:
     assert sessions[0].force_stopped.is_set()
 
 
+@pytest.mark.integration_socket
+async def test_session_hung_even_in_force_does_not_block_stop() -> None:
+    # F4: a session whose force-stop ALSO hangs must not block ``stop()`` past
+    # ~force_shutdown_timeout_s. ``force_shutdown_timeout_s`` bounds the forced
+    # phase inside the drain, so the hung force-stop is abandoned and ``stop()``
+    # returns promptly.
+    server, sessions = await _running_hang_even_in_force_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=0.1,
+            force_shutdown_timeout_s=0.2,
+        )
+    )
+    async with websockets.connect(_ws_url(server)):
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+        await _wait_until(lambda: server._active_sessions == 1)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        # Must return well under the 4s bound despite the force-stop hanging.
+        await asyncio.wait_for(server.stop(), timeout=4)
+        elapsed = loop.time() - start
+    # The forced phase ran but was bounded; teardown did not block forever.
+    assert sessions[0].graceful_started.is_set()
+    assert sessions[0].force_started.is_set()
+    assert elapsed < 3.0
+    assert server._active_sessions == 0
+    assert not server._ws_handler_tasks
+
+
 class _HangingWsServer:
     """A raw-ws ``Server`` stub whose ``wait_closed`` never resolves."""
 
@@ -305,6 +376,49 @@ async def test_bearer_auth_query_token_rejected_by_default() -> None:
     server, sessions = await _running_server(config)
     try:
         # Default-OFF: a ``?token=`` query value does not authenticate.
+        async with websockets.connect(_ws_url(server, suffix="/?token=sekrit")) as client:
+            await asyncio.wait_for(client.wait_closed(), timeout=2)
+            assert client.close_code == 1008
+        assert sessions == []
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_config_allow_query_token_makes_query_auth_live() -> None:
+    # F3: ``config.allow_query_token`` was declared LIVE but never consumed, so
+    # a ``?token=`` query was rejected even when the operator opted in. With the
+    # config flag threaded onto the policy at start(), the query token now
+    # authenticates the handshake (the bundled browser client depends on this).
+    config = VoiceServerConfig(
+        host="127.0.0.1",
+        port=0,
+        max_sessions=4,
+        auth=BearerTokenAuth(token="sekrit"),
+        allow_query_token=True,
+    )
+    server, sessions = await _running_server(config)
+    try:
+        async with websockets.connect(_ws_url(server, suffix="/?token=sekrit")):
+            await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+            await _wait_until(lambda: server._active_sessions == 1)
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
+async def test_config_allow_query_token_off_keeps_query_auth_rejected() -> None:
+    # The default-OFF posture is preserved: leaving ``allow_query_token`` unset
+    # keeps a ``?token=`` query rejected even though the policy token is correct.
+    config = VoiceServerConfig(
+        host="127.0.0.1",
+        port=0,
+        max_sessions=4,
+        auth=BearerTokenAuth(token="sekrit"),
+        allow_query_token=False,
+    )
+    server, sessions = await _running_server(config)
+    try:
         async with websockets.connect(_ws_url(server, suffix="/?token=sekrit")) as client:
             await asyncio.wait_for(client.wait_closed(), timeout=2)
             assert client.close_code == 1008

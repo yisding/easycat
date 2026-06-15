@@ -70,6 +70,27 @@ class _GuardedSession:
         await self._release.wait()
 
 
+class _HangEvenInForceSession:
+    """A session whose graceful AND forced stop both hang forever.
+
+    The drain's ``force_timeout_s`` must bound the FORCED phase so even this
+    pathological session cannot block the caller past the timeout (the task is
+    cancelled / abandoned rather than awaited forever).
+    """
+
+    def __init__(self) -> None:
+        self.graceful_started = asyncio.Event()
+        self.force_started = asyncio.Event()
+        self._never = asyncio.Event()
+
+    async def stop(self, *, force: bool = False) -> None:
+        if force:
+            self.force_started.set()
+        else:
+            self.graceful_started.set()
+        await self._never.wait()  # hangs in BOTH paths
+
+
 def _make_gate(sessions: dict[int, object]) -> CapacityGate[int]:
     gate: CapacityGate[int] = CapacityGate(max_sessions=8)
     for key in sessions:
@@ -143,6 +164,34 @@ async def test_drain_zero_timeout_force_escalates_immediately() -> None:
     )
 
     assert s.forced is True
+    assert gate.active_keys() == ()
+
+
+async def test_drain_force_timeout_bounds_a_hung_force_stop() -> None:
+    # F4: a session whose force-stop ALSO hangs must not block the drain past
+    # ~force_timeout_s. The forced phase (the stop(force=True) call and the
+    # follow-on cancel-await) is bounded; the hung task is abandoned.
+    s = _HangEvenInForceSession()
+    sessions: dict[int, object] = {1: s}
+    gate = _make_gate(sessions)
+
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await asyncio.wait_for(
+        gate.drain(
+            _pairs(sessions),
+            drain_timeout_s=0.05,
+            force_after=True,
+            force_timeout_s=0.1,
+        ),
+        timeout=2,
+    )
+    elapsed = loop.time() - start
+
+    assert s.graceful_started.is_set()
+    assert s.force_started.is_set()
+    # Drain returned promptly despite the force-stop hanging (bounded, not 2s).
+    assert elapsed < 1.5
     assert gate.active_keys() == ()
 
 

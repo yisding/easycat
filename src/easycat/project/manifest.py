@@ -210,12 +210,19 @@ class ProjectManifest:
     def resolve_auth(
         self,
         environ: Mapping[str, str] | None = None,
+        *,
+        allow_query_token: bool = False,
     ) -> BearerTokenAuth | None:
         """Resolve ``[server] auth`` to a :class:`BearerTokenAuth` or ``None``.
 
         The token is read from ``environ`` (defaulting to ``os.environ``) at call
         time — it is never stored on the manifest, so a dumped/echoed manifest
         cannot leak it. Returns ``None`` when no ``auth`` is configured.
+
+        ``allow_query_token`` (default OFF) is forwarded to the built policy so a
+        server constructed from this manifest can opt the ``?token=`` query auth
+        on (the bundled browser WS client depends on it because browsers cannot
+        set handshake headers).
         """
         if self.server.auth is None:
             return None
@@ -223,7 +230,7 @@ class ProjectManifest:
 
         env = dict(environ) if environ is not None else dict(os.environ)
         token = self.server.auth.resolve(env)
-        return BearerTokenAuth(token=token)
+        return BearerTokenAuth(token=token, allow_query_token=allow_query_token)
 
     # ── Redacted dump ────────────────────────────────────────────────
 
@@ -243,11 +250,17 @@ class ProjectManifest:
         public env var name, not a secret) so ``redact_value``'s key-name policy
         does not over-redact the useful, safe reference into an opaque
         placeholder.
+
+        The bind ``host`` is a STRUCTURAL field (an operator-chosen address, not
+        user PII), so it is passed through verbatim rather than routed through
+        ``redact_value`` — whose ``_PHONE_RE`` would otherwise mangle a dotted
+        IPv4 (e.g. ``"127.0.0.1"``) into ``[REDACTED_PHONE]``. The
+        secret-bearing fields (``auth``/``token``) stay redacted: only the
+        ``bearer-env:NAME`` reference is ever surfaced, never a resolved token.
         """
         raw: dict[str, Any] = {
             "project": {"name": self.project.name},
             "server": {
-                "host": self.server.host,
                 "port": self.server.port,
                 "max_sessions": self.server.max_sessions,
                 "auth_ref": self.server.auth.reference if self.server.auth else None,
@@ -258,7 +271,12 @@ class ProjectManifest:
         }
         if self.source_path is not None:
             raw["source_path"] = str(self.source_path)
-        return redact_value(raw)  # type: ignore[return-value]
+        redacted: dict[str, Any] = redact_value(raw)  # type: ignore[assignment]
+        # Re-attach the bind host VERBATIM (a structural operator address, not
+        # PII) so a dotted IPv4 survives ``_PHONE_RE``. It is added after
+        # redaction so it is never routed through the value policy.
+        redacted["server"]["host"] = self.server.host
+        return redacted
 
     @staticmethod
     def _profile_to_dict(spec: VoiceProfile) -> dict[str, Any]:

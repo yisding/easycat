@@ -183,6 +183,17 @@ class VoiceServer:
             unsafe_allow_no_auth=self.config.unsafe_allow_no_auth,
         )
 
+        # Make ``config.allow_query_token`` LIVE: a ``BearerTokenAuth`` the
+        # process layer authorizes against must honor the process-level
+        # ``allow_query_token`` opt-in (the bundled browser WS client depends on
+        # ``?token=`` because browsers cannot set handshake headers). Without
+        # this the field was declared LIVE but never consumed — a policy built
+        # from env / passed in kept its own (default-OFF) value regardless. The
+        # reconciliation only ever OPTS IN (never forces OFF a policy that
+        # already enabled it) so it spans both the ``/ws`` and ``/webrtc`` paths,
+        # which both authorize through ``self.config.auth``.
+        self._reconcile_query_token_opt_in()
+
         web = require_module("aiohttp.web", extra="webrtc", purpose="VoiceServer")
 
         # The metrics middleware records per-request server metrics keyed by the
@@ -358,6 +369,9 @@ class VoiceServer:
             self._active_session_pairs,
             drain_timeout_s=drain_timeout,
             force_after=True,
+            # Bound the forced phase so a session that hangs even in its
+            # force-stop is abandoned rather than blocking ``stop()`` forever.
+            force_timeout_s=self.config.force_shutdown_timeout_s,
         )
 
         # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
@@ -396,8 +410,21 @@ class VoiceServer:
         # (7) final hard sweep of the bare registry, then reset the shared gate
         # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
         # their own untrack/release (the drain owns teardown), so reset the gate
-        # here once no handler can still run.
-        await self._manager.stop_all()
+        # here once no handler can still run. The drain already owns the single
+        # effective stop per session; this sweep is an idempotent backstop, so
+        # bound it with ``force_shutdown_timeout_s`` — a session that hangs even
+        # here (e.g. a force-stop that never returns) must not block teardown.
+        try:
+            await asyncio.wait_for(
+                self._manager.stop_all(),
+                timeout=self.config.force_shutdown_timeout_s,
+            )
+        except TimeoutError:
+            logger.warning(
+                "VoiceServer: SessionManager.stop_all did not finish within "
+                "force_shutdown_timeout_s=%ss; abandoning the hard sweep",
+                self.config.force_shutdown_timeout_s,
+            )
         self._active_session_objs.clear()
         self._reset_gate_bookkeeping()
         self._started = False
@@ -842,6 +869,22 @@ class VoiceServer:
         if self._gate.is_draining:
             return
         await self._manager.remove(key)
+
+    def _reconcile_query_token_opt_in(self) -> None:
+        """Thread ``config.allow_query_token`` onto the configured auth policy.
+
+        Makes the process-level ``allow_query_token`` field LIVE: when it is set
+        and ``config.auth`` is a token policy exposing an ``allow_query_token``
+        attribute, opt that policy in so its ``?token=`` query auth is accepted.
+        This is opt-in ONLY — it never disables a policy that already enabled
+        query tokens — and it covers both the ``/ws`` and ``/webrtc`` paths,
+        which authorize through ``self.config.auth``.
+        """
+        if not self.config.allow_query_token:
+            return
+        auth = self.config.auth
+        if auth is not None and hasattr(auth, "allow_query_token"):
+            auth.allow_query_token = True
 
     def _authorize_websocket(self, ws: Any) -> bool:
         """Return whether a ``/ws`` handshake is authorized (bool shim)."""

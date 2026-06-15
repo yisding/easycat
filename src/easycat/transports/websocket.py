@@ -173,31 +173,40 @@ async def serve_websocket_sessions(
     :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
     the inline ``Semaphore``) so it behaves identically to the WebRTC helper.
     """
-    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websocket
     from easycat.server.transports import CapacityGate
 
     settings = config or WebSocketSessionServerConfig()
-    bind_auth = (
+    # The SAME unified policy gates the bind guard AND each handshake (F6): a
+    # configured token builds a ``BearerTokenAuth`` (honoring ``allow_query_token``);
+    # no token leaves ``auth=None`` (an open endpoint, subject to the bind guard).
+    auth_policy = (
         BearerTokenAuth(token=settings.auth_token, allow_query_token=allow_query_token)
         if settings.auth_token is not None
         else None
     )
     enforce_bind_guard(
         settings.host,
-        auth=bind_auth,
+        auth=auth_policy,
         unsafe_allow_no_auth=unsafe_allow_no_auth,
     )
     manager: SessionManager[int] = SessionManager()
     gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
-        if not websocket_server_authorized(
-            request.headers,
-            request.path,
-            settings.auth_token,
-            allow_query_token=allow_query_token,
-        ):
-            return _plain_response(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n")
+        # Per-handshake authorization routes through the UNIFIED ``AuthPolicy``
+        # (F6) rather than the legacy ``websocket_server_authorized`` path, so
+        # WebSocket and WebRTC share one auth layer. With no token (``auth_policy
+        # is None``) the endpoint stays open (the prior behavior). A valid bearer
+        # header is accepted; a missing/invalid credential is rejected; the
+        # ``?token=`` query is gated by ``allow_query_token`` (carried on the
+        # policy), preserving the documented default-off posture.
+        if auth_policy is not None:
+            result = auth_policy.authorize(from_websocket(request.headers, request.path))
+            if not result.allowed:
+                return _plain_response(
+                    HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n"
+                )
         return None
 
     async def handle_connection(ws: ServerConnection) -> None:

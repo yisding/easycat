@@ -17,6 +17,11 @@ import pytest
 
 from easycat.server import VoiceServer, VoiceServerConfig
 
+# A realistic secret-shaped token (``sk-...``, 24+ chars) for the token-leak
+# assertions so they exercise ``redact_value``'s value-policy safety net, not
+# just the structural guarantee that the resolved token is never stored.
+_RESOLVED_TOKEN = "sk-live-secret-token-abcdef1234567890"
+
 
 class _FakeSession:
     async def start(self) -> None:  # noqa: D401 - test stub
@@ -92,7 +97,7 @@ def test_plan_payload_factory_only_server_is_empty() -> None:
 
 
 def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     payload = server.plan_payload()
@@ -110,14 +115,14 @@ def test_plan_payload_from_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     # No resolved token appears anywhere in the payload.
     import json
 
-    assert "tok" not in json.dumps(payload)
+    assert _RESOLVED_TOKEN not in json.dumps(payload)
 
 
 @pytest.mark.integration_socket
 async def test_plan_route_returns_200(
     client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
     server = VoiceServer.from_manifest(_write_manifest(tmp_path))
     # Override host/port to ephemeral loopback so the test binds safely.
@@ -129,7 +134,7 @@ async def test_plan_route_returns_200(
             body = await resp.json()
         assert body["profile"] == "default"
         assert "stt" in body["selected"]
-        assert "tok" not in await _text_of(client, f"{_base_url(server)}/plan")
+        assert _RESOLVED_TOKEN not in await _text_of(client, f"{_base_url(server)}/plan")
     finally:
         await server.stop()
 
