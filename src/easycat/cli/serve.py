@@ -1,14 +1,16 @@
-"""``easycat serve`` — launch the browser voice playground.
+"""``easycat serve`` — launch a voice playground through ``VoiceApp``.
 
-One command from zero to a talking browser page: builds
-``EasyConfig.browser()`` with the bundled WebRTC client (live transcript,
-interruption indicator, per-turn latency readout), starts the session, and
-prints the URL to open.
+One command from zero to a talking page: ``serve`` constructs a
+:class:`~easycat.VoiceApp` with the bundled playground agent and drives it for
+the chosen ``--mode`` (``browser`` by default — WebRTC + bundled client with a
+live transcript, interruption indicator, and per-turn latency readout).
 
 Security defaults mirror the WebSocket/docker golden path: the signaling
 server binds loopback (``127.0.0.1``) unless ``--host`` is overridden, and a
 non-loopback bind requires a shared ``--token`` (or ``EASYCAT_SERVE_TOKEN``)
 that the bundled client forwards from the page URL's ``?token=`` query.
+``VoiceApp`` also enforces this guard internally (defense in depth); the CLI
+keeps its own pre-flight check so it can emit the exit-code-2 message contract.
 
 The wire protocol behind the playground page is documented in
 ``docs/browser-playground.md``.
@@ -31,6 +33,10 @@ _DEFAULT_INSTRUCTIONS = (
     "You are a helpful voice assistant. Keep responses concise and conversational."
 )
 
+# Modes the serve CLI surfaces (plus the VoiceApp aliases it accepts). Twilio is
+# intentionally excluded here — it has its own server shape (Phase 1 / M3).
+_SERVE_MODES = frozenset({"browser", "websocket", "local", "ws", "mic"})
+
 
 def _serve_token_from_env() -> str | None:
     return os.environ.get("EASYCAT_SERVE_TOKEN") or None
@@ -45,18 +51,20 @@ def _playground_url(host: str, port: int, token: str | None) -> str:
     return url
 
 
-def _build_serve_session(
+def _playground_config_factory(
     *,
-    host: str,
-    port: int,
-    token: str | None,
     agent_model: str,
     instructions: str,
-) -> Any:
-    """Build the playground session: EasyConfig.browser + bundled client."""
-    from easycat.config import EasyConfig, create_session
+):
+    """Build the per-transport config factory for the playground.
+
+    Per-connection modes (``browser``/``websocket``) reject a static ``config``
+    and require a ``config_factory``; this builds a fresh ``EasyConfig.browser``
+    bound to the concrete per-connection transport, with a playground agent that
+    injects ``instructions`` on every Responses-API request.
+    """
+    from easycat.config import EasyConfig
     from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-    from easycat.transports.webrtc import WebRTCTransportConfig
 
     class _PlaygroundBridge(RemoteResponsesAPIBridge):
         """Responses-API bridge with playground instructions on every request."""
@@ -66,27 +74,58 @@ def _build_serve_session(
             body["instructions"] = instructions
             return body
 
-    agent = _PlaygroundBridge(
-        base_url="https://api.openai.com",
-        model=agent_model,
-        api_key=os.environ.get("OPENAI_API_KEY"),
+    def factory(transport: Any) -> EasyConfig:
+        agent = _PlaygroundBridge(
+            base_url="https://api.openai.com",
+            model=agent_model,
+            api_key=os.environ.get("OPENAI_API_KEY"),
+        )
+        return EasyConfig.browser(transport=transport, agent=agent)
+
+    return factory
+
+
+def _build_voice_app(
+    *,
+    agent_model: str,
+    instructions: str,
+) -> Any:
+    """Build the playground :class:`VoiceApp` (extracted for tests)."""
+    from easycat.voice_app import VoiceApp
+
+    factory = _playground_config_factory(
+        agent_model=agent_model,
+        instructions=instructions,
     )
-    config = EasyConfig.browser(
-        transport=WebRTCTransportConfig(host=host, port=port, auth_token=token),
-        agent=agent,
-    )
-    return create_session(config)
+    return VoiceApp(config_factory=factory)
 
 
-def _run_serve(session: Any) -> None:
-    """Run the playground session until shutdown (extracted for tests)."""
-    from easycat.helpers import run_session
-
-    run_session(session)
+def _run_voice_app(
+    app: Any,
+    *,
+    mode: str,
+    host: str,
+    port: int,
+    token: str | None,
+) -> None:
+    """Run the VoiceApp for *mode* until shutdown (extracted for tests)."""
+    if mode in {"local", "mic"}:
+        # Local mode has no listener; host/port/token are not applicable.
+        app.run(mode)
+        return
+    app.run(mode, host=host, port=port, auth_token=token)
 
 
 @cli_command
 def serve(
+    mode: str = typer.Option(
+        "browser",
+        "--mode",
+        help=(
+            "Deployment mode to serve: browser (WebRTC + bundled client), "
+            "websocket (per-client WebSocket sessions), or local (mic)."
+        ),
+    ),
     port: int = typer.Option(8080, "--port", "-p", help="Port for the playground server."),
     host: str = typer.Option(
         "127.0.0.1",
@@ -117,7 +156,15 @@ def serve(
         help="System-style guidance for the playground agent.",
     ),
 ) -> None:
-    """Serve the browser voice playground (WebRTC + bundled client)."""
+    """Serve the voice playground via VoiceApp (browser/WebRTC by default)."""
+    if mode not in _SERVE_MODES:
+        emit_command_error(
+            "serve",
+            f"Unknown --mode {mode!r}. Choose one of: browser, websocket, local.",
+            json_output=False,
+        )
+        raise typer.Exit(2)
+
     token = token or _serve_token_from_env()
     if host not in _LOOPBACK_HOSTS and not token:
         emit_command_error(
@@ -129,15 +176,9 @@ def serve(
         )
         raise typer.Exit(2)
 
-    session = _build_serve_session(
-        host=host,
-        port=port,
-        token=token,
-        agent_model=agent_model,
-        instructions=instructions,
-    )
+    app = _build_voice_app(agent_model=agent_model, instructions=instructions)
     stdout_console.print(f"Open {_playground_url(host, port, token)}")
     stdout_console.print(
         "The page shows the live transcript, interruption indicator, and per-turn latency."
     )
-    _run_serve(session)
+    _run_voice_app(app, mode=mode, host=host, port=port, token=token)

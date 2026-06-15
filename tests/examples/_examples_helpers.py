@@ -373,6 +373,7 @@ def _load_slim_example(
 
 _REQUIRES_AGENTS = frozenset(
     {
+        "examples/voice_app.py",
         "examples/openai_agents_voice.py",
         "examples/ws_browser_example.py",
         "examples/webrtc_server.py",

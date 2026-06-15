@@ -60,6 +60,34 @@ def captured_websocket(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 # ── Browser mode delegation ──────────────────────────────────────────
 
 
+def test_browser_announces_url_before_blocking_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The browser URL must be printed BEFORE the (blocking) server call.
+
+    ``run_webrtc_config_server`` blocks until shutdown, so announcing the URL
+    after it returns would print nothing useful. The serve CLI relies on the
+    up-front announce, and the helper's own ``announce`` must be suppressed to
+    avoid a duplicate "Server ready..." line.
+    """
+    order: list[str] = []
+
+    def _fake_run(factory: Any, config: Any = None, **kwargs: Any) -> None:
+        order.append("server")
+        # VoiceApp must suppress the helper's own announce to avoid a dupe.
+        assert kwargs.get("announce") is False
+
+    def _fake_announce(self: Any, transport_config: Any) -> None:
+        order.append("announce")
+
+    monkeypatch.setattr(webrtc_module, "run_webrtc_config_server", _fake_run)
+    monkeypatch.setattr(VoiceApp, "_announce_browser_url", _fake_announce)
+
+    VoiceApp(agent="a").run("browser")
+
+    assert order == ["announce", "server"]
+
+
 def test_browser_run_delegates_to_webrtc_config_server(
     captured_webrtc: dict[str, Any],
 ) -> None:

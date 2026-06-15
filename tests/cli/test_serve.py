@@ -1,8 +1,7 @@
-"""Tests for ``easycat serve`` — the browser voice playground launcher."""
+"""Tests for ``easycat serve`` — the VoiceApp-driven voice playground launcher."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -14,24 +13,36 @@ import easycat.integrations.agents.responses_api as responses_mod
 from easycat.cli.serve import _playground_url
 
 
-class _StubSession:
-    pass
+class _StubVoiceApp:
+    """Records the config_factory it was built with and its run() calls."""
+
+    def __init__(self, *, config_factory: Any) -> None:
+        self.config_factory = config_factory
+        self.runs: list[dict[str, Any]] = []
+
+    def run(self, mode: str, **kwargs: Any) -> None:
+        self.runs.append({"mode": mode, **kwargs})
 
 
 @pytest.fixture
 def stub_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Stub the session build/run pair so the CLI surface is testable offline."""
-    calls: dict[str, Any] = {"build": None, "ran": []}
+    """Stub the VoiceApp build/run pair so the CLI surface is testable offline."""
+    calls: dict[str, Any] = {"build": None, "app": None, "ran": []}
 
-    def fake_build(**kwargs: Any) -> _StubSession:
-        calls["build"] = kwargs
-        return _StubSession()
+    def fake_build(*, agent_model: str, instructions: str) -> _StubVoiceApp:
+        factory = serve_mod._playground_config_factory(
+            agent_model=agent_model, instructions=instructions
+        )
+        app = _StubVoiceApp(config_factory=factory)
+        calls["build"] = {"agent_model": agent_model, "instructions": instructions}
+        calls["app"] = app
+        return app
 
-    def fake_run(session: Any) -> None:
-        calls["ran"].append(session)
+    def fake_run(app: Any, *, mode: str, host: str, port: int, token: str | None) -> None:
+        calls["ran"].append({"app": app, "mode": mode, "host": host, "port": port, "token": token})
 
-    monkeypatch.setattr(serve_mod, "_build_serve_session", fake_build)
-    monkeypatch.setattr(serve_mod, "_run_serve", fake_run)
+    monkeypatch.setattr(serve_mod, "_build_voice_app", fake_build)
+    monkeypatch.setattr(serve_mod, "_run_voice_app", fake_run)
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
     return calls
 
@@ -41,19 +52,24 @@ def test_serve_help_describes_playground(cli: CliRunner, typer_app) -> None:
     assert result.exit_code == 0
     assert "playground" in result.stdout.lower()
     assert "--token" in result.stdout
+    assert "--mode" in result.stdout
 
 
-def test_serve_prints_open_url_and_runs_session(
+def test_serve_prints_open_url_and_runs_app(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:
     result = cli.invoke(typer_app, ["serve", "--port", "9123"])
 
     assert result.exit_code == 0
     assert "Open http://localhost:9123" in result.stdout
-    assert stub_runtime["build"]["host"] == "127.0.0.1"
-    assert stub_runtime["build"]["port"] == 9123
-    assert stub_runtime["build"]["token"] is None
     assert len(stub_runtime["ran"]) == 1
+    run = stub_runtime["ran"][0]
+    assert run["mode"] == "browser"
+    assert run["host"] == "127.0.0.1"
+    assert run["port"] == 9123
+    assert run["token"] is None
+    # The VoiceApp was constructed with a config_factory (per-connection path).
+    assert stub_runtime["app"].config_factory is not None
 
 
 def test_serve_refuses_non_loopback_host_without_token(
@@ -73,8 +89,9 @@ def test_serve_allows_non_loopback_host_with_token(
 
     assert result.exit_code == 0
     assert "?token=sekrit" in result.stdout
-    assert stub_runtime["build"]["token"] == "sekrit"
-    assert stub_runtime["build"]["host"] == "0.0.0.0"
+    run = stub_runtime["ran"][0]
+    assert run["token"] == "sekrit"
+    assert run["host"] == "0.0.0.0"
 
 
 def test_serve_reads_token_from_env(
@@ -88,7 +105,31 @@ def test_serve_reads_token_from_env(
     result = cli.invoke(typer_app, ["serve", "--host", "0.0.0.0"])
 
     assert result.exit_code == 0
-    assert stub_runtime["build"]["token"] == "envtoken"
+    assert stub_runtime["ran"][0]["token"] == "envtoken"
+
+
+def test_serve_websocket_mode_routes_through_voice_app(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    result = cli.invoke(typer_app, ["serve", "--mode", "websocket", "--port", "8765"])
+
+    assert result.exit_code == 0
+    run = stub_runtime["ran"][0]
+    assert run["mode"] == "websocket"
+    assert run["host"] == "127.0.0.1"
+    assert run["port"] == 8765
+    # websocket is a per-connection mode; the app must carry a config_factory.
+    assert stub_runtime["app"].config_factory is not None
+
+
+def test_serve_rejects_unknown_mode(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    result = cli.invoke(typer_app, ["serve", "--mode", "telepathy"])
+
+    assert result.exit_code == 2
+    assert "telepathy" in result.output
+    assert stub_runtime["ran"] == []
 
 
 def test_serve_passes_agent_options_through(
@@ -104,11 +145,30 @@ def test_serve_passes_agent_options_through(
     assert stub_runtime["build"]["instructions"] == "Be terse."
 
 
-def test_build_serve_session_wires_browser_transport_and_playground_agent(
+def test_voice_app_built_with_per_connection_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real seam builds a VoiceApp carrying a config_factory, not a static config."""
+    captured: dict[str, Any] = {}
+
+    class StubVoiceApp:
+        def __init__(self, *, config_factory: Any = None, config: Any = None) -> None:
+            captured["config_factory"] = config_factory
+            captured["config"] = config
+
+    monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
+
+    app = serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
+
+    assert isinstance(app, StubVoiceApp)
+    assert captured["config_factory"] is not None
+    assert captured["config"] is None
+
+
+def test_playground_factory_wires_browser_transport_and_playground_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    sentinel_session = object()
 
     class StubRemoteResponsesAPIBridge:
         def __init__(self, base_url: str, model: str, *, api_key: str | None = None) -> None:
@@ -125,43 +185,37 @@ def test_build_serve_session_wires_browser_transport_and_playground_agent(
             }
 
     def fake_browser(**kwargs: Any) -> Any:
-        captured["browser_kwargs"] = kwargs
+        captured.setdefault("browser_calls", []).append(kwargs)
+        from types import SimpleNamespace
+
         return SimpleNamespace(kind="browser-config", kwargs=kwargs)
 
-    def fake_create_session(config: Any) -> object:
-        captured["created_config"] = config
-        return sentinel_session
-
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setattr(
-        responses_mod,
-        "RemoteResponsesAPIBridge",
-        StubRemoteResponsesAPIBridge,
-    )
+    monkeypatch.setattr(responses_mod, "RemoteResponsesAPIBridge", StubRemoteResponsesAPIBridge)
     monkeypatch.setattr(config_mod.EasyConfig, "browser", staticmethod(fake_browser))
-    monkeypatch.setattr(config_mod, "create_session", fake_create_session)
 
-    session = serve_mod._build_serve_session(
-        host="0.0.0.0",
-        port=9123,
-        token="sekrit",
-        agent_model="gpt-test",
-        instructions="Speak plainly.",
+    factory = serve_mod._playground_config_factory(
+        agent_model="gpt-test", instructions="Speak plainly."
     )
 
-    assert session is sentinel_session
-    assert captured["created_config"].kind == "browser-config"
+    transport_a = object()
+    transport_b = object()
+    config_a = factory(transport_a)
+    config_b = factory(transport_b)
 
-    transport = captured["browser_kwargs"]["transport"]
-    assert transport.host == "0.0.0.0"
-    assert transport.port == 9123
-    assert transport.auth_token == "sekrit"
+    # The factory is invoked once per connection and yields a fresh config.
+    assert config_a is not config_b
+    assert config_a.kind == "browser-config"
+    assert captured["browser_calls"][0]["transport"] is transport_a
+    assert captured["browser_calls"][1]["transport"] is transport_b
 
-    agent = captured["browser_kwargs"]["agent"]
+    agent = captured["browser_calls"][0]["agent"]
     assert isinstance(agent, StubRemoteResponsesAPIBridge)
     assert agent.base_url == "https://api.openai.com"
     assert agent.model == "gpt-test"
     assert agent.api_key == "sk-test"
+
+    from types import SimpleNamespace
 
     body = agent._build_request_body(SimpleNamespace(text="hello"))
     assert body == {

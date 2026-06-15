@@ -252,8 +252,11 @@ class VoiceApp:
         from easycat.transports.webrtc import run_webrtc_config_server
 
         transport_config = self._browser_transport_config(**kwargs)
-        run_webrtc_config_server(self._browser_factory(), transport_config)
+        # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
+        # announced first. Pass ``announce=False`` to suppress the helper's own
+        # "Server ready..." line and avoid a duplicate.
         self._announce_browser_url(transport_config)
+        run_webrtc_config_server(self._browser_factory(), transport_config, announce=False)
 
     async def _serve_browser(self, **kwargs: Any) -> None:
         from easycat.transports.webrtc import serve_webrtc_config_sessions

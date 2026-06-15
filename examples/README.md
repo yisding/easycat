@@ -64,6 +64,7 @@ an additional third-party package to install in the same environment with
 
 | Example | Use When | Run | Install | Env |
 | --- | --- | --- | --- | --- |
+| [voice_app.py](voice_app.py) | App-first VoiceApp with one-word mode switching (browser/local/websocket). | `uv run python examples/voice_app.py` | `uv sync --extra quickstart --extra webrtc --group dev` | `OPENAI_API_KEY` |
 | [openai_agents_voice.py](openai_agents_voice.py) | First local mic/speaker bot with OpenAI Agents SDK. | `uv run python examples/openai_agents_voice.py` | `uv sync --extra quickstart --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_voice.py](pydantic_ai_voice.py) | Single-agent PydanticAI voice bot. | `uv run python examples/pydantic_ai_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |
 | [pydantic_ai_workflow_voice.py](pydantic_ai_workflow_voice.py) | Workflow-level PydanticAI hand-off across turns. | `uv run python examples/pydantic_ai_workflow_voice.py` | `uv sync --extra quickstart --extra pydantic-ai --group dev` | `OPENAI_API_KEY` |

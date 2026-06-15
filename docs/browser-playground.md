@@ -1,10 +1,10 @@
 # Browser Playground
 
-Talk to a voice bot in the browser with one command. `easycat serve` wires
-`EasyConfig.browser()` to the bundled WebRTC client and prints the URL to
-open. The page shows a live transcript (user and bot), an interruption
-indicator that lights up when you barge in, and a per-turn latency readout
-(final user transcript → first bot audio).
+Talk to a voice bot in the browser with one command. `easycat serve` drives a
+`VoiceApp` that wires `EasyConfig.browser()` to the bundled WebRTC client and
+prints the URL to open. The page shows a live transcript (user and bot), an
+interruption indicator that lights up when you barge in, and a per-turn latency
+readout (final user transcript → first bot audio).
 
 ## Quickstart
 
@@ -20,6 +20,10 @@ Then open the printed URL (`Open http://localhost:8080`) and click **Start**.
 
 Useful options:
 
+- `--mode` — deployment mode to serve. Defaults to `browser` (WebRTC + bundled
+  client); pass `--mode websocket` for per-client WebSocket sessions or
+  `--mode local` for a local mic/speaker run. The same `VoiceApp` backs every
+  mode.
 - `--port` / `--host` — where the playground server listens. The default
   bind is loopback (`127.0.0.1`), matching the WebSocket/docker security
   defaults.

@@ -14,6 +14,13 @@ Run `uv run easycat docs --audience app-builders` for the surrounding route
 map, and see the [session lifecycle reference](session-lifecycle.md) for what
 happens after construction.
 
+For the app-first path, `VoiceApp` wraps this surface: it resolves the matching
+`EasyConfig` preset (`EasyConfig.mic()` / `.browser()` / `.phone()`) per
+deployment mode, then builds and runs the session through `create_session`. The
+high-level `VoiceApp(agent=..., stt=..., tts=...)` fields below are forwarded
+into the chosen preset. See the [public API contract](../public-api.md) for the
+`from easycat import VoiceApp` entry point.
+
 ## Construction Fields
 
 Every keyword `EasyConfig(...)` accepts as a real (stored) field:

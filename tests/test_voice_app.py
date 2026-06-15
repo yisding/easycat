@@ -201,3 +201,42 @@ def test_run_local_with_static_config_passes_it_through(
 def test_twilio_run_raises_not_implemented() -> None:
     with pytest.raises(NotImplementedError):
         VoiceApp(agent="a").run("twilio")
+
+
+# ── Top-level public export + lazy-import guard ──────────────────────
+
+
+def test_voice_app_is_top_level_public_export() -> None:
+    import easycat
+
+    assert "VoiceApp" in easycat.__all__
+    resolved = easycat.VoiceApp
+    assert resolved is VoiceApp
+    assert resolved.__name__ == "VoiceApp"
+
+
+def test_touching_voice_app_does_not_eager_load_heavy_sdks() -> None:
+    """Cold-start guard: ``import easycat; easycat.VoiceApp`` must not drag in
+    heavy provider/transport/agent SDKs.
+
+    Runs in a fresh interpreter so the test process's own imports don't pollute
+    ``sys.modules`` (mirrors
+    ``test_touching_easyconfig_does_not_eager_load_telephony_stack``).
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys, easycat\n"
+        "app = easycat.VoiceApp\n"
+        "heavy = sorted(m for m in sys.modules if m in {'aiortc', 'agents', 'aiohttp'})\n"
+        "print('\\n'.join(heavy))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    loaded = {line for line in result.stdout.splitlines() if line}
+    assert not loaded, f"easycat.VoiceApp eager-loaded heavy SDKs: {sorted(loaded)}"
