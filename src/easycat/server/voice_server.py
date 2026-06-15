@@ -107,6 +107,12 @@ class VoiceServer:
         # ``session.stop(force=True)`` directly (the collaborator drives this;
         # ``SessionManager`` has no draining state).
         self._active_session_objs: dict[int, Any] = {}
+        # Live ``/ws`` handler tasks. Tracked so :meth:`stop` can cancel a handler
+        # that is hung in ``ws.wait_closed()`` (e.g. a client that never closes),
+        # which would otherwise keep the raw-ws ``Server._close`` waiter (it
+        # ``asyncio.wait``s on its handlers, it does NOT cancel them) — and thus
+        # ``ws_server.wait_closed()`` — blocked forever.
+        self._ws_handler_tasks: set[asyncio.Task[None]] = set()
 
         # In-process metric snapshot for ``GET /metrics`` (M8). The
         # ``easycat._observability`` instruments are write-only and no-op without
@@ -297,11 +303,23 @@ class VoiceServer:
         2. Stop accepting — ``gate.try_acquire()`` already rejects while
            draining and ``_handle_websocket_connection`` checks draining.
         3. Close the raw-ws listener AND the aiohttp site/runner (both kinds).
-        4. Wait for active connection tasks up to ``drain_timeout_s``; each
-           handler that ends in time calls ``session.stop()`` itself.
-        5. Escalate any session still active after the grace window with
-           ``session.stop(force=True)`` (driven by the gate's active set).
-        6. ``SessionManager.stop_all()`` ONLY as the final hard sweep, once the
+        4. Hand the active sessions to :meth:`CapacityGate.drain`. During drain
+           each handler leaves its session in the active set (the drain OWNS the
+           stop — see :meth:`_teardown_ws_session`); the drain starts the single
+           graceful ``session.stop()`` per session and waits ``drain_timeout_s``.
+        5. The drain escalates any session whose graceful stop did NOT finish in
+           the grace window by calling ``session.stop(force=True)`` and then
+           cancelling the still-pending graceful task. Because the DRAIN (not the
+           handler) starts the graceful stop, this is the single ``_stopping``
+           lineage: a fast graceful stays graceful, and a hung graceful is
+           cancelled so it cannot block teardown. The real :class:`Session`
+           ``_stopping`` guard makes a force-after-graceful a no-op, so the
+           cancellation — not the force call — is what unblocks a hung teardown.
+        6. Cancel any handler task still hung in ``ws.wait_closed()`` (e.g. a
+           client that never completed the close handshake) so the raw-ws
+           ``Server._close`` waiter — which ``asyncio.wait``s on its handlers
+           rather than cancelling them — cannot block forever.
+        7. ``SessionManager.stop_all()`` ONLY as the final hard sweep, once the
            listeners are closed and no handler can still add/remove sessions.
 
         ``force=True`` collapses the grace window to zero so remaining sessions
@@ -316,9 +334,9 @@ class VoiceServer:
         # (3) close the listeners so no new handler task can start AND in-flight
         # ``/ws`` connections are closed (each handler's ``ws.wait_closed()``
         # returns). Do NOT ``await ws_server.wait_closed()`` yet: a hung handler
-        # (graceful ``session.stop()`` that blocks) would deadlock it before the
-        # drain can force-escalate. The aiohttp site/runner are torn down now;
-        # the raw-ws server is closed now and awaited AFTER the drain.
+        # would deadlock it before the drain can force-escalate. The aiohttp
+        # site/runner are torn down now; the raw-ws server is closed now and
+        # awaited AFTER the drain (and the handler cancel).
         ws_server = self._ws_server
         if ws_server is not None:
             ws_server.close()
@@ -333,7 +351,8 @@ class VoiceServer:
         # (4)+(5) wait for active connection tasks up to ``drain_timeout_s``,
         # then force-escalate the remainder. ``force=True`` skips the grace
         # window entirely. Running BEFORE ``ws_server.wait_closed()`` lets the
-        # force-stop unblock any handler whose graceful stop is hung.
+        # force-stop own teardown for any handler whose graceful stop is skipped
+        # while draining.
         drain_timeout = 0.0 if force else self.config.drain_timeout_s
         await self._gate.drain(
             self._active_session_pairs,
@@ -341,10 +360,29 @@ class VoiceServer:
             force_after=True,
         )
 
-        # Now all handlers can return (closed connections + forced sessions), so
-        # awaiting the raw-ws server completes promptly.
+        # (6) cancel any handler still hung in ``ws.wait_closed()``. The drain
+        # already force-stopped the sessions; cancelling the surviving handler
+        # tasks unblocks the raw-ws ``Server._close`` waiter so the bounded
+        # ``wait_closed`` below cannot deadlock.
+        await self._cancel_ws_handler_tasks()
+
+        # Now all handlers can return (closed connections + forced sessions +
+        # cancelled hung handlers), so awaiting the raw-ws server completes
+        # promptly. Bound it with ``force_shutdown_timeout_s`` as an independent
+        # backstop: even a pathological handler that resists cancellation cannot
+        # make ``stop()`` block forever.
         if ws_server is not None:
-            await ws_server.wait_closed()
+            try:
+                await asyncio.wait_for(
+                    ws_server.wait_closed(),
+                    timeout=self.config.force_shutdown_timeout_s,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "VoiceServer: raw-ws listener did not close within "
+                    "force_shutdown_timeout_s=%ss; abandoning the wait",
+                    self.config.force_shutdown_timeout_s,
+                )
 
         # Cancel the per-offer WebRTC ``wait_closed`` cleanup tasks. The drain
         # step already force-stopped the sessions via the shared active set;
@@ -355,10 +393,44 @@ class VoiceServer:
             await self._webrtc_routes.cancel_cleanup_tasks()
             self._webrtc_routes = None
 
-        # (6) final hard sweep of the bare registry.
+        # (7) final hard sweep of the bare registry, then reset the shared gate
+        # bookkeeping. While draining, the ``/ws`` handlers deliberately skip
+        # their own untrack/release (the drain owns teardown), so reset the gate
+        # here once no handler can still run.
         await self._manager.stop_all()
         self._active_session_objs.clear()
+        self._reset_gate_bookkeeping()
         self._started = False
+
+    def _reset_gate_bookkeeping(self) -> None:
+        """Clear the gate's active set + reservations after a full drain.
+
+        Idempotent: drops every remaining active key and returns every reserved
+        slot so a stopped server reports ``active_sessions == 0`` even though the
+        draining handlers skipped their own untrack/release.
+        """
+        for key in self._gate.active_keys():
+            self._gate.untrack(key)
+        while self._gate.reserved_count > 0:
+            self._gate.release()
+
+    async def _cancel_ws_handler_tasks(self) -> None:
+        """Cancel + await any ``/ws`` handler task still running.
+
+        Called during :meth:`stop` after the drain so a handler hung in
+        ``ws.wait_closed()`` (e.g. a client that never finished the close
+        handshake) cannot keep the raw-ws ``Server._close`` waiter — which
+        ``asyncio.wait``s on its handlers rather than cancelling them — blocked
+        forever. The current task (``stop`` itself never runs as a handler) is
+        excluded defensively.
+        """
+        current = asyncio.current_task()
+        tasks = [t for t in self._ws_handler_tasks if t is not current and not t.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._ws_handler_tasks.clear()
 
     def _active_session_pairs(self) -> list[tuple[int, Any]]:
         """Return the ``(key, session)`` pairs still active (for the drain step)."""
@@ -671,58 +743,105 @@ class VoiceServer:
         :class:`CapacityGate`), and authorize via the unified ``AuthPolicy`` so
         the ``/ws`` path is no longer unauthenticated (closing the ``0.0.0.0``
         gap). On accept, build a per-connection ``WebSocketConnectionTransport``
-        + session via the ``session_factory`` and drive it through
-        ``SessionManager.connection``; the gate tracks the key + session so the
-        graceful-drain step can force-stop it if the handler hangs.
+        + session via the ``session_factory`` and drive its lifetime here; the
+        gate tracks the key + session so the graceful-drain step can force-stop it.
+
+        Drain-ownership rule (review fix): the per-connection teardown is
+        drain-aware. On a normal client disconnect (not draining) the handler
+        stops its own session GRACEFULLY. During drain, the handler does NOT
+        stop the session itself — the shared :meth:`CapacityGate.drain` owns the
+        single stop (graceful, then force / cancel on timeout). This matters
+        because the real :meth:`Session.stop` has a ``_stopping`` idempotency
+        guard: a graceful stop already in progress turns a later ``force=True``
+        call into a no-op, so a handler that started its own graceful stop could
+        never be force-preempted and a hung teardown would deadlock ``stop()``.
+        Letting the drain start the single stop keeps the escalation effective.
         """
         from easycat.transports.websocket import WebSocketConnectionTransport
 
-        if self._gate.is_draining:
-            self._emit_session_rejected(server_state="draining")
-            await ws.close(code=_WS_OVER_CAPACITY_CLOSE_CODE, reason=_WS_DRAINING_CLOSE_REASON)
-            return
-
-        auth_reason = self._websocket_auth_reason(ws)
-        if auth_reason != "allowed":
-            self._emit_session_rejected(server_state="serving", auth_result=auth_reason)
-            await ws.close(
-                code=_WS_UNAUTHORIZED_CLOSE_CODE,
-                reason=_WS_UNAUTHORIZED_CLOSE_REASON,
-            )
-            return
-
-        if self._session_factory is None:
-            # No factory configured (e.g. a health-only server); reject cleanly
-            # rather than crashing the listener task.
-            self._emit_session_rejected(server_state="serving")
-            await ws.close(
-                code=_WS_OVER_CAPACITY_CLOSE_CODE,
-                reason="No session factory configured",
-            )
-            return
-
-        if not self._gate.try_acquire():
-            self._emit_session_rejected(server_state="serving")
-            await ws.close(
-                code=_WS_OVER_CAPACITY_CLOSE_CODE,
-                reason=_WS_OVER_CAPACITY_CLOSE_REASON,
-            )
-            return
-
-        key = id(ws)
+        # Register this handler task so :meth:`stop` can cancel it if it hangs
+        # in ``ws.wait_closed()`` (otherwise ``ws_server.wait_closed()`` would
+        # block forever on the surviving handler).
+        task = asyncio.current_task()
+        if task is not None:
+            self._ws_handler_tasks.add(task)
         try:
-            transport = WebSocketConnectionTransport(ws)
-            session = self._build_session(transport)
-            self._gate.track(key)
-            self._active_session_objs[key] = session
-            self._emit_connections_active()
-            async with self._manager.connection(key, session, runtime_feedback=False):
-                await ws.wait_closed()
+            if self._gate.is_draining:
+                self._emit_session_rejected(server_state="draining")
+                await ws.close(code=_WS_OVER_CAPACITY_CLOSE_CODE, reason=_WS_DRAINING_CLOSE_REASON)
+                return
+
+            auth_reason = self._websocket_auth_reason(ws)
+            if auth_reason != "allowed":
+                self._emit_session_rejected(server_state="serving", auth_result=auth_reason)
+                await ws.close(
+                    code=_WS_UNAUTHORIZED_CLOSE_CODE,
+                    reason=_WS_UNAUTHORIZED_CLOSE_REASON,
+                )
+                return
+
+            if self._session_factory is None:
+                # No factory configured (e.g. a health-only server); reject cleanly
+                # rather than crashing the listener task.
+                self._emit_session_rejected(server_state="serving")
+                await ws.close(
+                    code=_WS_OVER_CAPACITY_CLOSE_CODE,
+                    reason="No session factory configured",
+                )
+                return
+
+            if not self._gate.try_acquire():
+                self._emit_session_rejected(server_state="serving")
+                await ws.close(
+                    code=_WS_OVER_CAPACITY_CLOSE_CODE,
+                    reason=_WS_OVER_CAPACITY_CLOSE_REASON,
+                )
+                return
+
+            key = id(ws)
+            try:
+                transport = WebSocketConnectionTransport(ws)
+                session = self._build_session(transport)
+                self._gate.track(key)
+                self._active_session_objs[key] = session
+                self._emit_connections_active()
+                await self._manager.add(key, session)
+                try:
+                    await ws.wait_closed()
+                finally:
+                    await self._teardown_ws_session(key)
+            finally:
+                # When draining, the shared drain owns BOTH the force-stop and the
+                # gate/objs/release bookkeeping — leave the entry in place so the
+                # drain can still see and force-stop it. Otherwise (normal
+                # disconnect) the handler owns its own cleanup.
+                if not self._gate.is_draining:
+                    self._gate.untrack(key)
+                    self._active_session_objs.pop(key, None)
+                    self._gate.release()
+                    self._emit_connections_active()
         finally:
-            self._gate.untrack(key)
-            self._active_session_objs.pop(key, None)
-            self._gate.release()
-            self._emit_connections_active()
+            if task is not None:
+                self._ws_handler_tasks.discard(task)
+
+    async def _teardown_ws_session(self, key: int) -> None:
+        """Tear down one ``/ws`` session, deferring to the drain when draining.
+
+        When NOT draining (a normal client disconnect), drop the session from
+        the registry, which stops it GRACEFULLY. When draining, leave the
+        session in the active set and registry untouched so the shared
+        :meth:`CapacityGate.drain` owns the single stop. The drain starts the
+        sole graceful ``session.stop()`` itself and force-escalates / cancels it
+        on timeout — keeping the teardown effective against the real
+        :class:`Session` ``_stopping`` idempotency guard (a graceful stop already
+        in progress turns a later ``force=True`` into a no-op, so a handler that
+        started its OWN graceful stop could never be force-preempted). The final
+        :meth:`SessionManager.stop_all` hard sweep in :meth:`stop` then clears
+        the registry entry (idempotent against the already-stopped session).
+        """
+        if self._gate.is_draining:
+            return
+        await self._manager.remove(key)
 
     def _authorize_websocket(self, ws: Any) -> bool:
         """Return whether a ``/ws`` handshake is authorized (bool shim)."""

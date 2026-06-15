@@ -133,41 +133,104 @@ class CapacityGate(Generic[KeyT]):
         force_after: bool = True,
         poll_interval_s: float = 0.05,
     ) -> None:
-        """Wait for the active set to empty, then force-stop the remainder.
+        """Drive each active session GRACEFULLY, then force-escalate the stragglers.
 
-        ``sessions_for_keys`` returns the ``(key, session)`` pairs currently
-        active when called; it is re-invoked so connection handlers that finish
-        on their own (decrementing the active set) drop out of the wait. This
-        collaborator drives the per-session stop directly — it does NOT route
-        draining through ``SessionManager`` (which has no draining state).
+        ``sessions_for_keys`` returns the ``(key, session)`` pairs that are
+        active when called. The collaborator OWNS the per-session stop here —
+        the ``VoiceServer`` ``/ws`` handler defers its teardown to this method
+        while draining (see ``VoiceServer._teardown_ws_session``), so this is the
+        single, effective stop. It does NOT route draining through
+        ``SessionManager`` (which has no draining state).
 
-        1. Poll the active set up to ``drain_timeout_s``; return early if it
-           empties (graceful — each handler called ``session.stop()`` itself).
-        2. If ``force_after`` and connections remain, ``session.stop(force=True)``
-           each remaining session so a hung handler cannot block teardown.
+        Why the drain owns the stop (review fix): the real
+        :meth:`~easycat.session._session.Session.stop` has a ``_stopping``
+        idempotency guard, so a ``force=True`` call after an in-progress graceful
+        ``stop`` is a NO-OP. If the handler had already started a graceful stop
+        that hung, the drain could never preempt it and ``stop()`` would deadlock.
+        By making the drain start the (single) graceful stop itself, the
+        force-escalation path stays effective:
+
+        1. Snapshot the active ``(key, session)`` pairs and launch a graceful
+           ``session.stop()`` task for each.
+        2. Wait up to ``drain_timeout_s`` for every graceful stop to finish; if
+           they all complete in time, the drain stayed graceful (no force).
+        3. For any session whose graceful stop did NOT finish, call
+           ``session.stop(force=True)`` (the force path runs for an
+           idempotency-free session; for a real ``Session`` whose graceful stop
+           is hung, the guard makes it a no-op — handled by step 4) and then
+           CANCEL the still-pending graceful task so a genuinely-hung teardown
+           cannot block the caller forever.
+        4. Untrack every drained key.
+
+        ``drain_timeout_s <= 0`` (the ``force=True`` path) collapses the grace
+        window to zero so every session is force-escalated immediately.
         """
-        deadline = asyncio.get_event_loop().time() + max(drain_timeout_s, 0.0)
-        while self._active and asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(poll_interval_s)
-
-        if not force_after or not self._active:
+        pairs = list(sessions_for_keys())
+        if not pairs:
             return
 
-        # Escalation: force-stop whatever is still active after the grace window.
-        for key, session in list(sessions_for_keys()):
+        # (1) launch the single graceful stop per active session. The raw
+        # ``stop()`` coroutine is scheduled directly as the task so cancelling it
+        # never leaves an un-awaited coroutine; a synchronous ``stop`` runs inline
+        # and is recorded with no pending task (``None``).
+        graceful: dict[KeyT, tuple[object, asyncio.Task[None] | None]] = {}
+        for key, session in pairs:
             stop = getattr(session, "stop", None)
             if stop is None:
+                # Nothing to stop; just drop it from the active set.
                 self.untrack(key)
                 continue
-            result = stop(force=True)
-            if isinstance(result, Awaitable):
-                await _safe_await(result)
+            result = stop(force=False)
+            task = asyncio.ensure_future(result) if isinstance(result, Awaitable) else None
+            graceful[key] = (session, task)
+
+        # (2) wait up to the grace window for the graceful stops to complete.
+        pending_tasks = [t for _, t in graceful.values() if t is not None]
+        if pending_tasks and drain_timeout_s > 0:
+            await asyncio.wait(pending_tasks, timeout=max(drain_timeout_s, 0.0))
+
+        # (3) escalate / reap each graceful stop, then (4) untrack the key.
+        for key, (session, task) in graceful.items():
+            await _escalate_graceful_stop(session, task, force_after=force_after)
             self.untrack(key)
+
+
+async def _escalate_graceful_stop(
+    session: object,
+    task: asyncio.Task[None] | None,
+    *,
+    force_after: bool,
+) -> None:
+    """Reap, force-escalate, or cancel one session's graceful-stop task.
+
+    * Graceful already completed (``task.done()``) — reap it, no escalation.
+    * Still pending and ``force_after`` — call ``stop(force=True)`` then cancel
+      the pending graceful task so a hung teardown cannot block forever.
+    * Still pending and NOT ``force_after`` — cancel it rather than block on a
+      teardown that may never complete.
+    """
+    if task is not None and task.done():
+        await _safe_await(task)
+        return
+    if force_after:
+        stop = getattr(session, "stop", None)
+        if stop is not None:
+            await _safe_await_stop(stop, force=True)
+    if task is not None:
+        task.cancel()
+        await _safe_await(task)
+
+
+async def _safe_await_stop(stop: Callable[..., object], *, force: bool) -> None:
+    """Call ``stop(force=...)`` and await it if awaitable, swallowing errors."""
+    result = stop(force=force)
+    if isinstance(result, Awaitable):
+        await _safe_await(result)
 
 
 async def _safe_await(awaitable: Awaitable[object]) -> None:
     """Await ``awaitable`` swallowing errors so one bad teardown cannot abort drain."""
     try:
         await awaitable
-    except Exception:  # pragma: no cover - defensive teardown
+    except (asyncio.CancelledError, Exception):  # pragma: no cover - defensive teardown
         pass

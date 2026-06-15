@@ -41,6 +41,43 @@ class _FakeSession:
         self.stopped.set()
 
 
+class _GuardedSession:
+    """A session-like stub that replicates the real ``Session._stopping`` guard.
+
+    Mirrors ``easycat.session._session.Session.stop`` exactly where it matters:
+    once a graceful ``stop`` is in progress, a later ``stop(force=True)`` returns
+    immediately as a NO-OP (the ``if self._stopping: return`` early-out). A
+    graceful stop here hangs forever — the regression scenario from the review
+    where a force-escalation could never preempt an in-progress graceful stop, so
+    ``VoiceServer.stop()`` deadlocked. The drain fix must complete ``stop()`` and
+    leave the handler task done WITHOUT relying on force preempting an already
+    graceful-started stop.
+    """
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.graceful_started = asyncio.Event()
+        self.force_path_ran = False
+        self._stopping = False
+        self._release = asyncio.Event()
+
+    async def start(self) -> None:
+        self.started.set()
+
+    async def stop(self, *, force: bool = False) -> None:
+        if self._stopping:
+            # The real guard: a force call after an in-progress graceful stop is
+            # a no-op. The force path is therefore never reached here.
+            return
+        self._stopping = True
+        if force:
+            self.force_path_ran = True
+            return
+        self.graceful_started.set()
+        # Graceful teardown hangs until the drain cancels this coroutine.
+        await self._release.wait()
+
+
 async def _running_server(
     config: VoiceServerConfig, *, hang: bool = False
 ) -> tuple[VoiceServer, list[_FakeSession]]:
@@ -48,6 +85,21 @@ async def _running_server(
 
     def session_factory(_transport: object) -> _FakeSession:
         session = _FakeSession(hang_until_force=hang)
+        sessions.append(session)
+        return session
+
+    server = VoiceServer(config, session_factory=session_factory)
+    await server.start()
+    return server, sessions
+
+
+async def _running_guarded_server(
+    config: VoiceServerConfig,
+) -> tuple[VoiceServer, list[_GuardedSession]]:
+    sessions: list[_GuardedSession] = []
+
+    def session_factory(_transport: object) -> _GuardedSession:
+        session = _GuardedSession()
         sessions.append(session)
         return session
 
@@ -107,6 +159,31 @@ async def test_hung_session_is_force_escalated_after_drain_timeout() -> None:
 
 
 @pytest.mark.integration_socket
+async def test_hung_guarded_session_does_not_deadlock_stop() -> None:
+    # Review regression: with a session that replicates the real ``_stopping``
+    # idempotency guard, a graceful stop already in progress turns a later
+    # ``stop(force=True)`` into a no-op. The old code let the ``/ws`` handler
+    # start that graceful stop, so the drain's force-escalation was a no-op and
+    # ``ws_server.wait_closed()`` blocked forever — ``stop()`` deadlocked. The
+    # fix makes the drain own the (single) graceful stop and cancel it on
+    # timeout, so ``stop()`` completes promptly and the handler task ends.
+    server, sessions = await _running_guarded_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, max_sessions=4, drain_timeout_s=0.2)
+    )
+    async with websockets.connect(_ws_url(server)):
+        await _wait_until(lambda: bool(sessions) and sessions[0].started.is_set())
+        await _wait_until(lambda: server._active_sessions == 1)
+        # Must NOT hang: bounded well under any unbounded ``wait_closed`` wait.
+        await asyncio.wait_for(server.stop(), timeout=5)
+    # The drain started the graceful stop and, on timeout, cancelled it. The
+    # force path is a no-op against the guard (as in the real Session) — the
+    # point is that ``stop()`` returned and no handler task is left running.
+    assert sessions[0].graceful_started.is_set()
+    assert server._active_sessions == 0
+    assert not server._ws_handler_tasks
+
+
+@pytest.mark.integration_socket
 async def test_force_stop_escalates_immediately() -> None:
     server, sessions = await _running_server(
         VoiceServerConfig(host="127.0.0.1", port=0, max_sessions=4, drain_timeout_s=30.0),
@@ -118,6 +195,43 @@ async def test_force_stop_escalates_immediately() -> None:
         # force=True collapses the 30s drain window to zero.
         await asyncio.wait_for(server.stop(force=True), timeout=2)
     assert sessions[0].force_stopped.is_set()
+
+
+class _HangingWsServer:
+    """A raw-ws ``Server`` stub whose ``wait_closed`` never resolves."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        await asyncio.Event().wait()  # never resolves
+
+
+async def test_wait_closed_is_bounded_by_force_shutdown_timeout() -> None:
+    # Independent backstop: even if the raw-ws ``Server.wait_closed`` never
+    # resolves (a pathological handler that resists cancellation), ``stop()``
+    # must return within ``force_shutdown_timeout_s`` rather than block forever.
+    server = VoiceServer(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=4,
+            drain_timeout_s=0.0,
+            force_shutdown_timeout_s=0.2,
+            enable_websocket=False,
+        ),
+        session_factory=lambda _t: _FakeSession(),
+    )
+    await server.start()
+    # Inject a hanging raw-ws server directly (the listener is otherwise off so
+    # nothing else binds a port).
+    hanging = _HangingWsServer()
+    server._ws_server = hanging
+    await asyncio.wait_for(server.stop(), timeout=2)
+    assert hanging.closed is True
 
 
 # ── draining + capacity ──────────────────────────────────────────────
