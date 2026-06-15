@@ -176,7 +176,7 @@ class VoiceApp:
         elif resolved == "websocket":
             await self._serve_websocket(**kwargs)
         else:  # twilio
-            self._raise_twilio_not_implemented()
+            await self._serve_twilio(**kwargs)
 
     def run(self, mode: VoiceMode | None = None, **kwargs: Any) -> None:
         """Synchronous entry point — the only method that owns the event loop.
@@ -193,7 +193,7 @@ class VoiceApp:
         elif resolved == "websocket":
             self._run_websocket(**kwargs)
         else:  # twilio
-            self._raise_twilio_not_implemented()
+            self._run_twilio(**kwargs)
 
     # ── Local mode ───────────────────────────────────────────────────
 
@@ -307,13 +307,57 @@ class VoiceApp:
         server_config = self._websocket_server_config(**kwargs)
         await serve_websocket_config_sessions(self._websocket_factory(), server_config)
 
-    # ── Twilio mode (M3) ─────────────────────────────────────────────
+    # ── Twilio mode ──────────────────────────────────────────────────
 
-    def _raise_twilio_not_implemented(self) -> None:
-        raise NotImplementedError(
-            "VoiceApp twilio mode is not implemented yet (Phase 1 / M3). "
-            "Use run('local'), run('browser'), or run('websocket') for now."
+    def _twilio_server_config(self, **kwargs: Any) -> Any:
+        """Build the :class:`TwilioVoiceServerConfig` for the twilio listeners.
+
+        Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
+        ``http_port`` / ``stream_url`` / ``stream_token_secret``) come from
+        ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
+        deliberately NOT in the constructor allow-list (which is for high-level
+        ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret``
+        fall back to ``TWILIO_STREAM_URL`` / ``TWILIO_STREAM_TOKEN_SECRET`` as a
+        convenience, but ``stream_url`` is required: the helper raises a clear
+        ``ValueError`` when it is missing.
+        """
+        from easycat.telephony.server import TwilioVoiceServerConfig
+
+        host = kwargs.pop("host", "0.0.0.0")
+        media_port = kwargs.pop("media_port", 8766)
+        http_host = kwargs.pop("http_host", "0.0.0.0")
+        http_port = kwargs.pop("http_port", 8000)
+        stream_url = kwargs.pop("stream_url", None) or os.environ.get("TWILIO_STREAM_URL")
+        stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
+            "TWILIO_STREAM_TOKEN_SECRET"
         )
+        return TwilioVoiceServerConfig(
+            host=host,
+            media_port=media_port,
+            http_host=http_host,
+            http_port=http_port,
+            stream_url=stream_url,
+            stream_token_secret=stream_token_secret,
+        )
+
+    def _twilio_factory(self) -> Callable[[Any], EasyConfig]:
+        return self._per_connection_factory("twilio")
+
+    def _run_twilio(self, **kwargs: Any) -> None:
+        import asyncio
+
+        from easycat.telephony.server import serve_twilio_voice_app
+
+        factory = self._twilio_factory()
+        server_config = self._twilio_server_config(**kwargs)
+        asyncio.run(serve_twilio_voice_app(factory, server_config))
+
+    async def _serve_twilio(self, **kwargs: Any) -> None:
+        from easycat.telephony.server import serve_twilio_voice_app
+
+        factory = self._twilio_factory()
+        server_config = self._twilio_server_config(**kwargs)
+        await serve_twilio_voice_app(factory, server_config)
 
     # ── Shared helpers ───────────────────────────────────────────────
 
@@ -338,14 +382,19 @@ class VoiceApp:
 
         from easycat.config import EasyConfig
 
-        preset = EasyConfig.browser if mode == "browser" else None
-
-        if preset is not None:
+        if mode == "browser":
 
             def _browser_config(transport: Any) -> EasyConfig:
                 return EasyConfig.browser(transport=transport, **self._config_kwargs)
 
             return _browser_config
+
+        if mode == "twilio":
+
+            def _phone_config(transport: Any) -> EasyConfig:
+                return EasyConfig.phone(transport=transport, **self._config_kwargs)
+
+            return _phone_config
 
         # WebSocket has no dedicated preset; build EasyConfig with the
         # per-connection transport directly.

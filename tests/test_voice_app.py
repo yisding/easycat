@@ -198,9 +198,23 @@ def test_run_local_with_static_config_passes_it_through(
     assert len(ran) == 1
 
 
-def test_twilio_run_raises_not_implemented() -> None:
-    with pytest.raises(NotImplementedError):
-        VoiceApp(agent="a").run("twilio")
+def test_twilio_run_delegates_to_server_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``run('twilio')`` delegates to the extracted helper (covered in depth in
+    ``tests/telephony/test_voice_app_twilio.py``); this is the smoke check."""
+    import easycat.telephony.server as server_module
+
+    calls: list[Any] = []
+
+    async def _fake_serve(factory: Any, config: Any) -> None:
+        calls.append((factory, config))
+
+    monkeypatch.setattr(server_module, "serve_twilio_voice_app", _fake_serve)
+    VoiceApp(agent="a").run("twilio", stream_url="wss://example/media")
+
+    assert len(calls) == 1
+    factory, config = calls[0]
+    assert callable(factory)
+    assert config.stream_url == "wss://example/media"
 
 
 # ── Top-level public export + lazy-import guard ──────────────────────

@@ -19,6 +19,7 @@ from tests.examples._examples_helpers import (
     "script_path",
     [
         "examples/voice_app.py",
+        "examples/voice_app_twilio.py",
         "examples/openai_agents_voice.py",
         "examples/ws_server.py",
         "examples/ws_supervisor_server.py",
