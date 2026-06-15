@@ -12,6 +12,7 @@ Codes are namespaced by range:
 * ``E3xx`` — runtime (session execution)
 * ``E4xx`` — bundle / replay
 * ``E5xx`` — CLI usage
+* ``E6xx`` — project manifest (``easycat.toml``)
 
 Adding a code is a one-file change: call :func:`register` at module
 load time and (optionally) bind the returned factory to a module-level
@@ -507,6 +508,96 @@ EASYCAT_E501 = register(
 )
 
 
+# ══════════════════════════════════════════════════════════════════
+# E6xx — project manifest (easycat.toml)
+# ══════════════════════════════════════════════════════════════════
+
+EASYCAT_E601 = register(
+    "EASYCAT_E601",
+    "Manifest file not found: {path}",
+    cause=(
+        "`easycat serve --manifest` (or `VoiceServer.from_manifest`) could "
+        "not find an `easycat.toml`. The loader looks at `--manifest`, then "
+        "`EASYCAT_MANIFEST`, then `easycat.toml` in the working directory."
+    ),
+    fix=(
+        "Create an `easycat.toml`, pass `--manifest path/to/easycat.toml`, "
+        "or set `EASYCAT_MANIFEST`."
+    ),
+    example="easycat serve --manifest easycat.toml",
+    related=["EASYCAT_E602"],
+)
+
+EASYCAT_E602 = register(
+    "EASYCAT_E602",
+    "Invalid manifest {path}: {problem}",
+    cause=(
+        "The manifest is not valid TOML, is missing a required table/field, "
+        "uses an unknown profile, or names an unknown transport. The schema "
+        "rejects unknown keys so typos fail loudly."
+    ),
+    fix=(
+        "Check the manifest against `docs/deployment/production-servers.md`. "
+        "Each `[voice.<profile>]` needs a known `transport` "
+        "(`webrtc`/`websocket`/`twilio`/`local`)."
+    ),
+    example='[voice.default]\ntransport = "webrtc"',
+    related=["EASYCAT_E601", "EASYCAT_E603"],
+)
+
+EASYCAT_E603 = register(
+    "EASYCAT_E603",
+    "Manifest field {field!r} must be an env reference (bearer-env:NAME), not a literal secret.",
+    cause=(
+        "A `auth`/`token` field carried a literal-looking secret. Secrets "
+        "must never be committed to `easycat.toml`; the loader requires the "
+        "`bearer-env:NAME` grammar and resolves the value from the "
+        "environment at load time so a token never appears in the manifest, "
+        "logs, or `--json`/`/manifest` dumps."
+    ),
+    fix=(
+        "Replace the literal with an env reference, e.g. "
+        '`auth = "bearer-env:EASYCAT_SERVE_TOKEN"`, and export the secret '
+        "in the environment (`export EASYCAT_SERVE_TOKEN=...`)."
+    ),
+    example='auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
+    related=["EASYCAT_E602"],
+)
+
+EASYCAT_E604 = register(
+    "EASYCAT_E604",
+    "Manifest env reference {reference!r} points at an unset variable {var!r}.",
+    cause=(
+        "An `auth`/`token` field used the `bearer-env:NAME` grammar, but the "
+        "named environment variable is unset or empty at load time."
+    ),
+    fix=(
+        "Export the variable before serving (`export {var}=...`), or use a "
+        "`.env` file and verify with `easycat doctor --env-file .env`."
+    ),
+    example="export EASYCAT_SERVE_TOKEN=...",
+    related=["EASYCAT_E603"],
+)
+
+EASYCAT_E605 = register(
+    "EASYCAT_E605",
+    "Manifest agent reference {reference!r} could not be resolved: {detail}",
+    cause=(
+        "A `[voice.<profile>] agent` used the `python:module:function` "
+        "grammar, but the module or attribute could not be imported, or it "
+        "was not callable. The resolver imports lazily so a typo or a missing "
+        "extra surfaces here."
+    ),
+    fix=(
+        "Check the dotted path resolves (`python -c 'import module'`), that "
+        "the attribute exists and is callable, and that any provider extra "
+        "the agent needs is installed."
+    ),
+    example='agent = "python:app:create_agent"',
+    related=["EASYCAT_E602"],
+)
+
+
 __all__ = [
     "EasyCatError",
     "ErrorEntry",
@@ -537,4 +628,9 @@ __all__ = [
     "EASYCAT_E402",
     "EASYCAT_E403",
     "EASYCAT_E501",
+    "EASYCAT_E601",
+    "EASYCAT_E602",
+    "EASYCAT_E603",
+    "EASYCAT_E604",
+    "EASYCAT_E605",
 ]

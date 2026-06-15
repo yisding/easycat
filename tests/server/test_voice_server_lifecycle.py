@@ -156,31 +156,65 @@ def test_from_app_honors_explicit_config() -> None:
     assert server.config.max_sessions == 3
 
 
-def test_from_manifest_raises_not_implemented() -> None:
-    with pytest.raises(NotImplementedError):
-        VoiceServer.from_manifest("easycat.toml")
+def test_from_manifest_missing_file_raises_coded_error() -> None:
+    # M6a implements ``from_manifest``; a missing file surfaces the coded
+    # discovery error (EASYCAT_E601), not ``NotImplementedError``.
+    from easycat.errors import EasyCatError
+
+    with pytest.raises(EasyCatError) as exc_info:
+        VoiceServer.from_manifest("/nonexistent/easycat.toml")
+    assert exc_info.value.code == "EASYCAT_E601"
+
+
+def test_from_manifest_builds_server_with_server_policy(tmp_path: object) -> None:
+    # ``from_manifest`` maps ``[server]`` to VoiceServerConfig process policy and
+    # builds a per-connection session_factory from the selected profile.
+    from pathlib import Path
+
+    manifest = Path(str(tmp_path)) / "easycat.toml"
+    manifest.write_text(
+        "[server]\n"
+        'host = "127.0.0.1"\n'
+        "port = 9099\n"
+        "max_sessions = 7\n"
+        "\n"
+        "[voice.default]\n"
+        'transport = "websocket"\n',
+        encoding="utf-8",
+    )
+    server = VoiceServer.from_manifest(manifest)
+    assert server.config.host == "127.0.0.1"
+    assert server.config.port == 9099
+    assert server.config.max_sessions == 7
+    assert server.config.auth is None  # no [server] auth configured
+    assert server._session_factory is not None
 
 
 # ── M4 boundary guards ───────────────────────────────────────────────
 
 
 def test_importing_server_does_not_import_planner_or_project() -> None:
-    # Re-import ``easycat.server`` from a clean slate and assert the M4 boundary:
-    # no planner/project import, no ``create_session`` triggered at import time.
-    for name in list(sys.modules):
-        if name == "easycat.server" or name.startswith("easycat.server."):
-            del sys.modules[name]
-    sys.modules.pop("easycat.planning", None)
-    sys.modules.pop("easycat.project", None)
+    # Assert the boundary: importing ``easycat.server`` triggers no planner
+    # (M6b) or project (M6a) import — ``from_manifest`` pulls ``easycat.project``
+    # lazily, only when called. Run in a FRESH subprocess so the check observes a
+    # true module-load (not leftover ``sys.modules`` state from sibling tests)
+    # AND does not mutate this process's module identity (re-importing
+    # ``easycat.server.*`` in-process would split class identity for later tests).
+    import subprocess
 
-    import easycat.server  # noqa: F401
-
-    leaked = [
-        name
-        for name in sys.modules
-        if name.startswith("easycat.planning") or name.startswith("easycat.project")
-    ]
-    assert leaked == []
+    code = (
+        "import sys; import easycat.server; "
+        "leaked = sorted(n for n in sys.modules "
+        "if n.startswith('easycat.planning') or n.startswith('easycat.project')); "
+        "print(leaked)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "[]", result.stdout
 
 
 def test_importing_server_registers_no_server_metric_names() -> None:

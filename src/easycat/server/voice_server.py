@@ -305,11 +305,39 @@ class VoiceServer:
         *,
         profile: str = "default",
     ) -> VoiceServer:
-        """Build a server from an ``easycat.toml`` manifest (M6a owns this)."""
-        raise NotImplementedError(
-            "VoiceServer.from_manifest is implemented in M6a (manifest loader). "
-            "Use VoiceServer.from_app(...) or construct with a session_factory."
+        """Build a server from an ``easycat.toml`` manifest (M6a).
+
+        Loads + validates the manifest (enforcing the ``bearer-env:NAME`` secret
+        contract), maps ``[server]`` to :class:`VoiceServerConfig` process policy
+        (host/port/max_sessions + the resolved :class:`BearerTokenAuth`), and
+        builds a per-connection ``session_factory`` that converts the selected
+        ``[voice.<profile>]`` to a fresh ``EasyConfig`` per connection (resolving
+        the ``python:module:function`` agent reference). The resolved token is
+        read from the environment at load time and never lives on the manifest.
+
+        This does NOT import the planner (M6b owns ``/health/ready`` manifest/plan
+        wiring); ``from_manifest`` only constructs the server.
+        """
+        from easycat.project import load_manifest
+
+        manifest = load_manifest(path)
+        manifest.profile(profile)  # validate the profile exists up front
+
+        auth = manifest.resolve_auth()
+        config = VoiceServerConfig(
+            host=manifest.server.host,
+            port=manifest.server.port,
+            max_sessions=manifest.server.max_sessions,
+            auth=auth,
+            manifest_path=manifest.source_path,
+            profile=profile,
         )
+
+        def _factory(_transport: Any) -> EasyConfig:
+            # A fresh EasyConfig per connection (no shared grouped sub-configs).
+            return manifest.to_easyconfig(profile)
+
+        return cls(config, session_factory=_factory)
 
     # ── Internals ────────────────────────────────────────────────────
 
