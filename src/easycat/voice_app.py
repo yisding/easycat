@@ -96,26 +96,47 @@ def _normalize_mode(mode: str) -> VoiceMode:
 _LIVE_CAPABLE_FIELDS: frozenset[str] = frozenset({"agent", "stt", "tts", "vad"})
 
 
-def _is_shareable_spec(value: Any) -> bool:
-    """Return ``True`` when *value* is safe to reuse across concurrent sessions.
+def _is_shareable_spec(field: str, value: Any) -> bool:
+    """Return ``True`` when *value* for high-level *field* is safe to reuse
+    across concurrent sessions.
 
     Per-connection modes build a fresh ``EasyConfig`` per connection but forward
     the same high-level field values into each one. That is only safe for
-    *specs* — a provider-name string, a debug flag, or a provider *config*
-    dataclass — from which ``EasyConfig`` builds a fresh provider per session.
-    A built provider/bridge instance (e.g. a ``RemoteResponsesAPIBridge`` or an
-    already-constructed STT/TTS/VAD provider) carries per-session stream or
-    conversation state, so reusing one object across connections would let
-    concurrent sessions corrupt each other.
+    *specs* — a provider-name string, a debug flag, a provider *config*
+    dataclass, or a declarative framework agent spec — from which a fresh
+    provider/bridge is built per session. A built provider or agent bridge
+    instance (e.g. a ``RemoteResponsesAPIBridge`` or an already-constructed
+    STT/TTS/VAD provider) carries per-session stream or conversation state, so
+    reusing one object across connections would let concurrent sessions corrupt
+    each other.
     """
     if value is None or isinstance(value, (str, bool, int, float)):
         return True
-    # Provider *config* dataclasses are specs; built provider instances are not.
-    from easycat.stt.factory import STTConfig
-    from easycat.tts.factory import TTSConfig
-    from easycat.vad import VADConfig
+    if field == "agent":
+        # Framework agent *specs* (OpenAI/PydanticAI/LangChain/LangGraph/Llama)
+        # are rebuilt into a fresh bridge per session; built bridges/runners and
+        # unrecognized objects are not, so they need a ``config_factory``. Import
+        # from ``_factory`` directly (like the other internal callers) so this
+        # guard does not eagerly pull in every bridge module via the package.
+        from easycat.integrations.agents._factory import is_reusable_agent_spec
 
-    return isinstance(value, STTConfig | TTSConfig | VADConfig)
+        return is_reusable_agent_spec(value)
+    # Provider *config* dataclasses are specs; built provider instances are not.
+    # Use the factory predicates so registered third-party extension configs
+    # (not just the built-in ``STTConfig`` / ``TTSConfig`` unions) are accepted.
+    if field == "stt":
+        from easycat.stt.factory import is_stt_config
+
+        return is_stt_config(value)
+    if field == "tts":
+        from easycat.tts.factory import is_tts_config
+
+        return is_tts_config(value)
+    if field == "vad":
+        from easycat.vad import VADConfig
+
+        return isinstance(value, VADConfig)
+    return False
 
 
 class VoiceApp:
@@ -360,6 +381,8 @@ class VoiceApp:
         )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
+        from urllib.parse import urlencode
+
         from easycat.cli._output import stdout_console
 
         host = transport_config.host
@@ -367,7 +390,11 @@ class VoiceApp:
         display_host = "localhost" if host in {"127.0.0.1", "localhost", "::1"} else host
         url = f"http://{display_host}:{port}"
         if transport_config.auth_token:
-            url = f"{url}/webrtc_client.html?token={transport_config.auth_token}"
+            # URL-encode the token so query-special characters (``+``, ``&``,
+            # ``#``, spaces) survive into the bundled client's ``?token=`` read,
+            # matching the CLI ``serve`` path (``cli/serve.py``).
+            query = urlencode({"token": transport_config.auth_token})
+            url = f"{url}/webrtc_client.html?{query}"
         stdout_console.print(f"Open {url}")
 
     # ── WebSocket mode ───────────────────────────────────────────────
@@ -517,7 +544,7 @@ class VoiceApp:
         live_fields = sorted(
             field
             for field in _LIVE_CAPABLE_FIELDS
-            if field in forwarded and not _is_shareable_spec(forwarded[field])
+            if field in forwarded and not _is_shareable_spec(field, forwarded[field])
         )
         if live_fields:
             raise ValueError(

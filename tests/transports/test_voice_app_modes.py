@@ -162,6 +162,110 @@ def test_browser_allows_string_and_config_high_level_fields(
     assert "factory" in captured_webrtc
 
 
+def test_browser_allows_framework_agent_spec(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """The documented quickstart shape ``VoiceApp(agent=Agent(...)).run("browser")``
+    must work: a framework agent *spec* (here the OpenAI Agents SDK ``Agent``) is
+    rebuilt into a fresh bridge per session, so it is safe to reuse across
+    per-connection sessions and the live-collaborator guard must not reject it."""
+    agents = pytest.importorskip("agents")
+
+    VoiceApp(agent=agents.Agent(name="assistant", instructions="help")).run("browser")
+    assert "factory" in captured_webrtc
+
+
+def test_browser_rejects_built_agent_bridge() -> None:
+    """A built ``ExternalAgentBridge`` carries per-session conversation state and
+    is passed through (not rebuilt) per session, so sharing one across
+    per-connection sessions must be rejected with the ``config_factory`` remedy."""
+    from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+    bridge = RemoteResponsesAPIBridge(base_url="https://api.openai.com", model="gpt-4o")
+    app = VoiceApp(agent=bridge)
+    with pytest.raises(ValueError) as exc:
+        app.run("browser")
+    message = str(exc.value)
+    assert "config_factory" in message
+    assert "per-connection" in message
+    assert "agent" in message
+
+
+def test_browser_allows_registered_extension_stt_config(
+    monkeypatch: pytest.MonkeyPatch,
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """A registered third-party STT *config* (outside the built-in
+    ``STTConfig`` union) is a spec from which a fresh provider is built per
+    session, so it must pass the live-collaborator guard like the built-ins."""
+    from dataclasses import dataclass
+
+    from easycat.stt.factory import _CATALOG, register_stt_provider
+
+    # Snapshot/restore the global catalog so the fake provider does not leak.
+    snapshot = (
+        dict(_CATALOG.providers),
+        dict(_CATALOG.env_vars),
+        dict(_CATALOG.extras),
+        dict(_CATALOG.api_domains),
+        dict(_CATALOG.config_to_provider),
+        _CATALOG._discovered,
+    )
+
+    @dataclass
+    class _ExtensionSTTConfig:
+        api_key: str | None = None
+
+    class _ExtensionSTT:
+        def __init__(self, config: Any) -> None:
+            self.config = config
+
+    try:
+        register_stt_provider(
+            "extstt", _ExtensionSTT, _ExtensionSTTConfig, env_var="EXTSTT_API_KEY"
+        )
+        # Building the per-connection factory must not reject the extension config.
+        VoiceApp(agent="a", stt=_ExtensionSTTConfig()).run("browser")
+        assert "factory" in captured_webrtc
+    finally:
+        providers, env_vars, extras, api_domains, reverse, discovered = snapshot
+        for attr, restored in (
+            ("providers", providers),
+            ("env_vars", env_vars),
+            ("extras", extras),
+            ("api_domains", api_domains),
+            ("config_to_provider", reverse),
+        ):
+            current = getattr(_CATALOG, attr)
+            current.clear()
+            current.update(restored)
+        object.__setattr__(_CATALOG, "_discovered", discovered)
+
+
+def test_announce_browser_url_encodes_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The announced browser URL must URL-encode the auth token so query-special
+    characters survive into the bundled client's ``?token=`` read (matching the
+    CLI ``serve`` path); the raw token would otherwise parse as a different one."""
+    from easycat.cli import _output
+    from easycat.transports.webrtc import WebRTCTransportConfig
+
+    printed: list[str] = []
+    monkeypatch.setattr(
+        _output.stdout_console, "print", lambda msg, *a, **k: printed.append(str(msg))
+    )
+
+    config = WebRTCTransportConfig(host="127.0.0.1", port=8080, auth_token="a+b&c#d e")
+    VoiceApp(agent="a")._announce_browser_url(config)
+
+    assert printed, "expected an announced URL"
+    announced = printed[-1]
+    assert "token=a%2Bb%26c%23d+e" in announced
+    # The raw token must not leak through unencoded.
+    assert "a+b&c#d e" not in announced
+
+
 def test_browser_uses_supplied_config_factory(
     captured_webrtc: dict[str, Any],
 ) -> None:
