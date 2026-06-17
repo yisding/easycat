@@ -64,6 +64,15 @@ class TwilioVoiceServerConfig:
     endpoint. Set ``trust_proxy_headers=True`` when running behind a
     TLS-terminating proxy/load balancer so the public URL Twilio signed is
     reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
+
+    ``max_sessions`` caps concurrent media sessions. The media listener defaults
+    to a public bind (``host="0.0.0.0"``) and builds a full EasyCat session per
+    accepted WebSocket *before* the first ``start`` frame's one-time stream
+    token is validated, so an unauthenticated client could otherwise open
+    idle/invalid sockets and exhaust provider connections or block real calls.
+    The gate bounds that blast radius (mirroring the WebRTC/WebSocket session
+    servers); over-limit connections are rejected with WebSocket close code
+    ``1013`` (Try Again Later).
     """
 
     host: str = "0.0.0.0"
@@ -75,6 +84,7 @@ class TwilioVoiceServerConfig:
     auth_token: str | None = None
     trust_proxy_headers: bool = False
     unsafe_allow_unsigned_webhooks: bool = False
+    max_sessions: int = 64
 
 
 async def serve_twilio_voice_app(
@@ -134,15 +144,26 @@ async def serve_twilio_voice_app(
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(config.stream_token_secret)
+    session_slots = asyncio.Semaphore(config.max_sessions)
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
-        transport = TwilioConnectionTransport(
-            ws,
-            config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
-        )
-        session = create_session(config_factory(transport))
-        async with manager.connection(id(ws), session, runtime_feedback=True):
-            await ws.wait_closed()
+        # Gate before building/starting a session: this handler spins up a full
+        # EasyCat session (provider connections included) for every accepted
+        # WebSocket, and the one-time stream token is only validated once the
+        # first ``start`` frame arrives inside the transport. Cap concurrency so
+        # an unauthenticated client cannot exhaust provider connections or block
+        # real calls by opening idle/invalid sockets.
+        if session_slots.locked():
+            await ws.close(code=1013, reason="Server is at the configured session limit")
+            return
+        async with session_slots:
+            transport = TwilioConnectionTransport(
+                ws,
+                config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
+            )
+            session = create_session(config_factory(transport))
+            async with manager.connection(id(ws), session, runtime_feedback=True):
+                await ws.wait_closed()
 
     async def handle_twiml(request: Any) -> Any:
         post = await request.post()

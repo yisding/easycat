@@ -391,7 +391,8 @@ class VoiceApp:
 
         Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
         ``http_port`` / ``stream_url`` / ``stream_token_secret`` / ``auth_token``
-        / ``trust_proxy_headers`` / ``unsafe_allow_unsigned_webhooks``) come from
+        / ``trust_proxy_headers`` / ``unsafe_allow_unsigned_webhooks`` /
+        ``max_sessions``) come from
         ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
         deliberately NOT in the constructor allow-list (which is for high-level
         ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret`` /
@@ -414,6 +415,7 @@ class VoiceApp:
         auth_token = kwargs.pop("auth_token", None) or os.environ.get("TWILIO_AUTH_TOKEN")
         trust_proxy_headers = kwargs.pop("trust_proxy_headers", False)
         unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
+        max_sessions = kwargs.pop("max_sessions", TwilioVoiceServerConfig.max_sessions)
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
@@ -424,6 +426,7 @@ class VoiceApp:
             auth_token=auth_token,
             trust_proxy_headers=trust_proxy_headers,
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
+            max_sessions=max_sessions,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

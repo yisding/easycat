@@ -100,6 +100,23 @@ def _build_voice_app(
     return VoiceApp(config_factory=factory)
 
 
+def _validate_playground_config() -> None:
+    """Surface the playground's credential requirement before serving.
+
+    Each client connection builds a fresh ``EasyConfig.browser`` through the
+    per-connection factory, so a missing ``OPENAI_API_KEY`` would otherwise only
+    fail server-side when the first client connects — after the CLI has already
+    printed the Open URL and started listening. Construct the same browser preset
+    once up front (the per-connection agent/transport do not affect the
+    credential check) so the catalogued missing-key error
+    (``EASYCAT_E203``) fails at startup instead. The throwaway config builds no
+    network clients, so it is safe to discard.
+    """
+    from easycat.config import EasyConfig
+
+    EasyConfig.browser()
+
+
 def _run_voice_app(
     app: Any,
     *,
@@ -180,6 +197,11 @@ def serve(
             json_output=False,
         )
         raise typer.Exit(2)
+
+    # Fail fast on a missing OPENAI_API_KEY: the playground config is built
+    # per-connection, so without this the CLI would announce the Open URL and
+    # start listening, leaving the first client to hit a server-side failure.
+    _validate_playground_config()
 
     app = _build_voice_app(agent_model=agent_model, instructions=instructions)
     # Only browser mode serves the bundled playground page; websocket/local modes

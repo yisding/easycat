@@ -359,6 +359,7 @@ def test_server_config_defaults_match_spec() -> None:
     assert config.auth_token is None
     assert config.trust_proxy_headers is False
     assert config.unsafe_allow_unsigned_webhooks is False
+    assert config.max_sessions == 64
 
 
 # ── Missing telephony extra ───────────────────────────────────────────
@@ -674,3 +675,70 @@ def test_media_handler_creates_and_tears_down_session(
     # Server teardown closes the media listener and stops all sessions.
     assert harness.media_server.closed is True
     assert "stop_all" in manager.events
+
+
+class _BlockingWs:
+    """Fake ws whose ``wait_closed`` blocks until released, recording closes."""
+
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.close_calls: list[tuple[Any, Any]] = []
+
+    async def wait_closed(self) -> None:
+        self.entered.set()
+        await self.release.wait()
+
+    async def close(self, *, code: Any = None, reason: Any = None) -> None:
+        self.close_calls.append((code, reason))
+
+
+def test_media_handler_rejects_connections_over_session_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once ``max_sessions`` sessions are live, extra sockets are closed (1013)
+    without building or starting a session."""
+    created: list[Any] = []
+    manager = _FakeManager()
+
+    def _fake_create_session(config: Any) -> _FakeSession:
+        created.append(config)
+        return _FakeSession(config, manager.events)
+
+    import easycat.config as config_mod
+    import easycat.session_manager as sm_mod
+    import easycat.transports.twilio_media as twilio_mod
+
+    monkeypatch.setattr(config_mod, "create_session", _fake_create_session)
+    monkeypatch.setattr(sm_mod, "SessionManager", lambda: manager)
+    monkeypatch.setattr(twilio_mod, "TwilioConnectionTransport", _FakeTwilioTransport)
+
+    harness = _ServerHarness(monkeypatch)
+
+    def _factory(transport: Any) -> EasyConfig:
+        return EasyConfig.phone(transport=transport, agent="a")
+
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media",
+        unsafe_allow_unsigned_webhooks=True,
+        max_sessions=1,
+    )
+
+    async def _body(h: _ServerHarness) -> None:
+        ws_active = _BlockingWs()
+        ws_rejected = _BlockingWs()
+        # First connection fills the single slot and parks in wait_closed.
+        active = asyncio.create_task(h.media_handler(ws_active))
+        await ws_active.entered.wait()
+        # Second connection is over the limit: rejected with 1013, no session.
+        await h.media_handler(ws_rejected)
+        assert ws_rejected.close_calls == [(1013, "Server is at the configured session limit")]
+        assert len(created) == 1
+        # Releasing the first connection frees the slot and lets it tear down.
+        ws_active.release.set()
+        await active
+
+    asyncio.run(harness.run(_factory, config, _body))
+
+    # Exactly one session was ever created/started despite two connections.
+    assert len(created) == 1
