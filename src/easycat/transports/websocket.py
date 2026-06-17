@@ -98,8 +98,21 @@ def websocket_session_server_config_from_env(
     )
 
 
+def _normalize_auth_token(token: str | None) -> str | None:
+    """Treat blank or whitespace-only tokens as no token at all.
+
+    An empty string is not a usable secret: ``Authorization: Bearer `` would
+    otherwise pass ``compare_digest("", "")``. Normalizing blank tokens to
+    ``None`` keeps the public-bind guard and request authorization in sync.
+    """
+    if token is None or not token.strip():
+        return None
+    return token
+
+
 def websocket_server_authorized(headers: Headers, path: str, token: str | None) -> bool:
     """Authorize a WebSocket request against an optional bearer/query token."""
+    token = _normalize_auth_token(token)
     if token is None:
         return True
     value = headers.get("Authorization")
@@ -150,11 +163,8 @@ async def serve_websocket_sessions(
     unauthenticated endpoint.
     """
     settings = config or WebSocketSessionServerConfig()
-    if (
-        settings.auth_token is None
-        and not _is_loopback_host(settings.host)
-        and not unsafe_allow_no_auth
-    ):
+    auth_token = _normalize_auth_token(settings.auth_token)
+    if auth_token is None and not _is_loopback_host(settings.host) and not unsafe_allow_no_auth:
         raise ValueError(
             f"Refusing to bind {settings.host!r} without a token. Set "
             "WebSocketSessionServerConfig.auth_token (or EASYCAT_WS_TOKEN) when "
@@ -165,7 +175,7 @@ async def serve_websocket_sessions(
     session_slots = asyncio.Semaphore(settings.max_sessions)
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
-        if not websocket_server_authorized(request.headers, request.path, settings.auth_token):
+        if not websocket_server_authorized(request.headers, request.path, auth_token):
             return _plain_response(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n")
         return None
 
