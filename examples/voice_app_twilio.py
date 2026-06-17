@@ -7,6 +7,7 @@ detection) is opted in through the ``config_factory`` via ``TelephonyConfig``,
 not through server config.
 
 Setup: export OPENAI_API_KEY=...; export TWILIO_STREAM_URL=wss://your-host:8766
+       export TWILIO_AUTH_TOKEN=...  # signs/validates the POST /twiml webhook
        uv sync --extra openai --extra telephony --extra openai-agents --group dev
        uv run easycat doctor
        uv run easycat doctor --env-file .env  # if keys live in .env
@@ -15,6 +16,12 @@ Run:   uv run python examples/voice_app_twilio.py
        uv run --env-file .env python examples/voice_app_twilio.py  # if keys live in .env
 
 Point your Twilio number's voice webhook at this server's POST /twiml route.
+``POST /twiml`` mints a media stream token on every request, so the webhook is
+authenticated by default: ``TWILIO_AUTH_TOKEN`` validates the
+``X-Twilio-Signature`` header before a token is issued. Behind a TLS-terminating
+proxy, also pass ``trust_proxy_headers=True`` so the signed public URL is
+reconstructed from the forwarded headers.
+
 For the lower-level FastAPI reference (outbound calls, status callbacks, SMS),
 see examples/twilio_app.py.
 """
@@ -34,6 +41,7 @@ from easycat import EasyConfig, TelephonyConfig, VoiceApp, require_env
 def main() -> None:
     require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
+    auth_token = require_env("TWILIO_AUTH_TOKEN")
 
     def config_factory(transport: object) -> EasyConfig:
         return EasyConfig.phone(
@@ -46,7 +54,7 @@ def main() -> None:
         )
 
     app = VoiceApp(config_factory=config_factory)
-    app.run("twilio", stream_url=stream_url)
+    app.run("twilio", stream_url=stream_url, auth_token=auth_token)
 
 
 if __name__ == "__main__":

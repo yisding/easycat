@@ -40,6 +40,7 @@ def captured_webrtc(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def _fake_run(factory: Any, config: Any = None, **kwargs: Any) -> None:
         captured["factory"] = factory
         captured["config"] = config
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(webrtc_module, "run_webrtc_config_server", _fake_run)
     return captured
@@ -157,6 +158,28 @@ def test_browser_forwards_host_port_token(
     config = captured_webrtc["config"]
     assert config.port == 9001
     assert config.auth_token == "secret"
+
+
+def test_browser_default_max_sessions_uses_webrtc_default(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """Without an explicit limit, the WebRTCTransportConfig default applies."""
+    VoiceApp(agent="a").run("browser")
+    assert captured_webrtc["config"].max_sessions == 64
+
+
+def test_browser_forwards_max_sessions_from_construction(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    VoiceApp(agent="a", max_sessions=3).run("browser")
+    assert captured_webrtc["config"].max_sessions == 3
+
+
+def test_browser_forwards_max_sessions_from_run(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    VoiceApp(agent="a").run("browser", max_sessions=5)
+    assert captured_webrtc["config"].max_sessions == 5
 
 
 def test_browser_factory_does_not_leak_server_policy_fields(
@@ -315,6 +338,9 @@ def test_unsafe_allow_no_auth_escape_hatch_browser(
     config = captured_webrtc["config"]
     assert config.auth_token is None
     assert config.host == "0.0.0.0"
+    # The flag must reach the WebRTC serve helper too; otherwise its own
+    # non-loopback guard would re-reject the unauthenticated bind.
+    assert captured_webrtc["kwargs"]["unsafe_allow_no_auth"] is True
 
 
 def test_unsafe_allow_no_auth_escape_hatch_websocket(

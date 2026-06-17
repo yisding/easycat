@@ -267,36 +267,62 @@ class VoiceApp:
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
-    def _browser_transport_config(self, **kwargs: Any) -> Any:
+    def _browser_transport_config(self, **kwargs: Any) -> tuple[Any, bool]:
+        """Build the :class:`WebRTCTransportConfig` plus the resolved
+        ``unsafe_allow_no_auth`` flag.
+
+        The flag is returned (not just consumed by the token pre-check) so the
+        run/serve methods can forward it to
+        :func:`~easycat.transports.webrtc.serve_webrtc_config_sessions`, whose
+        own non-loopback guard would otherwise re-reject an intentionally
+        unauthenticated bind.
+        """
         from easycat.transports.webrtc import WebRTCTransportConfig
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8080))
+        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions"))
+        unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
             kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
             host=host,
-            unsafe_allow_no_auth=kwargs.pop("unsafe_allow_no_auth", False),
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
-        return WebRTCTransportConfig(host=host, port=port, auth_token=token)
+        # Only override the WebRTCTransportConfig default when a limit is given,
+        # keeping that dataclass the single source of the default capacity.
+        capacity = {} if max_sessions is None else {"max_sessions": max_sessions}
+        config = WebRTCTransportConfig(host=host, port=port, auth_token=token, **capacity)
+        return config, unsafe_allow_no_auth
 
     def _browser_factory(self) -> Callable[[WebRTCTransport], EasyConfig]:
         return self._per_connection_factory("browser")
 
-    def _run_browser(self, **kwargs: Any) -> None:
+    def _run_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
         from easycat.transports.webrtc import run_webrtc_config_server
 
-        transport_config = self._browser_transport_config(**kwargs)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
         # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
         # announced first. Pass ``announce=False`` to suppress the helper's own
-        # "Server ready..." line and avoid a duplicate.
-        self._announce_browser_url(transport_config)
-        run_webrtc_config_server(self._browser_factory(), transport_config, announce=False)
+        # "Server ready..." line and avoid a duplicate. Callers that already
+        # printed the URL (e.g. ``easycat serve``) pass ``announce=False`` here.
+        if announce:
+            self._announce_browser_url(transport_config)
+        run_webrtc_config_server(
+            self._browser_factory(),
+            transport_config,
+            announce=False,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     async def _serve_browser(self, **kwargs: Any) -> None:
         from easycat.transports.webrtc import serve_webrtc_config_sessions
 
-        transport_config = self._browser_transport_config(**kwargs)
-        await serve_webrtc_config_sessions(self._browser_factory(), transport_config)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
+        await serve_webrtc_config_sessions(
+            self._browser_factory(),
+            transport_config,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
         from easycat.cli._output import stdout_console
@@ -364,13 +390,16 @@ class VoiceApp:
         """Build the :class:`TwilioVoiceServerConfig` for the twilio listeners.
 
         Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
-        ``http_port`` / ``stream_url`` / ``stream_token_secret``) come from
+        ``http_port`` / ``stream_url`` / ``stream_token_secret`` / ``auth_token``
+        / ``trust_proxy_headers`` / ``unsafe_allow_unsigned_webhooks``) come from
         ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
         deliberately NOT in the constructor allow-list (which is for high-level
-        ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret``
-        fall back to ``TWILIO_STREAM_URL`` / ``TWILIO_STREAM_TOKEN_SECRET`` as a
-        convenience, but ``stream_url`` is required: the helper raises a clear
-        ``ValueError`` when it is missing.
+        ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret`` /
+        ``auth_token`` fall back to ``TWILIO_STREAM_URL`` /
+        ``TWILIO_STREAM_TOKEN_SECRET`` / ``TWILIO_AUTH_TOKEN`` as a convenience.
+        ``stream_url`` and ``auth_token`` are both required (the helper raises a
+        clear ``ValueError`` when ``stream_url`` is missing, or when
+        ``auth_token`` is missing without ``unsafe_allow_unsigned_webhooks``).
         """
         from easycat.telephony.server import TwilioVoiceServerConfig
 
@@ -382,6 +411,9 @@ class VoiceApp:
         stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
             "TWILIO_STREAM_TOKEN_SECRET"
         )
+        auth_token = kwargs.pop("auth_token", None) or os.environ.get("TWILIO_AUTH_TOKEN")
+        trust_proxy_headers = kwargs.pop("trust_proxy_headers", False)
+        unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
@@ -389,6 +421,9 @@ class VoiceApp:
             http_port=http_port,
             stream_url=stream_url,
             stream_token_secret=stream_token_secret,
+            auth_token=auth_token,
+            trust_proxy_headers=trust_proxy_headers,
+            unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

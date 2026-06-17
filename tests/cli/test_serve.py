@@ -120,6 +120,20 @@ def test_serve_websocket_mode_routes_through_voice_app(
     assert run["port"] == 8765
     # websocket is a per-connection mode; the app must carry a config_factory.
     assert stub_runtime["app"].config_factory is not None
+    # The browser playground URL / page hint must NOT print for non-browser modes.
+    assert "Open http" not in result.stdout
+    assert "The page shows" not in result.stdout
+
+
+def test_serve_local_mode_omits_browser_output(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    result = cli.invoke(typer_app, ["serve", "--mode", "local"])
+
+    assert result.exit_code == 0
+    assert stub_runtime["ran"][0]["mode"] == "local"
+    assert "Open http" not in result.stdout
+    assert "The page shows" not in result.stdout
 
 
 def test_serve_rejects_unknown_mode(

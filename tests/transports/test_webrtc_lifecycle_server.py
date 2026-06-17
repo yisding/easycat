@@ -882,6 +882,33 @@ class _FakeSession:
 @pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
     @pytest.mark.asyncio
+    async def test_non_loopback_without_token_is_rejected(self) -> None:
+        """Binding beyond loopback without a token raises before any I/O setup."""
+        with pytest.raises(ValueError, match="auth_token is required"):
+            await serve_webrtc_config_sessions(
+                lambda transport: {},
+                WebRTCTransportConfig(host="0.0.0.0", auth_token=None),
+            )
+
+    @pytest.mark.asyncio
+    async def test_unsafe_allow_no_auth_passes_the_guard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``unsafe_allow_no_auth=True`` lets a non-loopback unauthenticated bind
+        get past the guard (proven by reaching the telephony-extra import seam)."""
+
+        def _reached(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("reached require_module past the auth guard")
+
+        monkeypatch.setattr(webrtc_mod, "require_module", _reached)
+        with pytest.raises(RuntimeError, match="reached require_module"):
+            await serve_webrtc_config_sessions(
+                lambda transport: {},
+                WebRTCTransportConfig(host="0.0.0.0", auth_token=None),
+                unsafe_allow_no_auth=True,
+            )
+
+    @pytest.mark.asyncio
     async def test_serve_webrtc_config_sessions_creates_session_per_offer(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -54,6 +54,16 @@ class TwilioVoiceServerConfig:
     ``enable_dtmf_aggregator`` / ``enable_voicemail_detector`` are deliberately
     absent: they live on :class:`~easycat.config.TelephonyConfig` (default
     ``False``) and are opted in per-connection through the ``config_factory``.
+
+    ``auth_token`` is the Twilio account auth token used to validate the
+    ``X-Twilio-Signature`` header on inbound ``POST /twiml`` webhooks. Because
+    the TwiML listener defaults to a public bind (``http_host="0.0.0.0"``) and
+    every accepted request mints a media stream token, the webhook is
+    authenticated by default: serving without ``auth_token`` raises unless
+    ``unsafe_allow_unsigned_webhooks=True`` opts into an unauthenticated
+    endpoint. Set ``trust_proxy_headers=True`` when running behind a
+    TLS-terminating proxy/load balancer so the public URL Twilio signed is
+    reconstructed from ``X-Forwarded-Proto`` / ``X-Forwarded-Host``.
     """
 
     host: str = "0.0.0.0"
@@ -62,6 +72,9 @@ class TwilioVoiceServerConfig:
     http_port: int = 8000
     stream_url: str | None = None
     stream_token_secret: str | None = None
+    auth_token: str | None = None
+    trust_proxy_headers: bool = False
+    unsafe_allow_unsigned_webhooks: bool = False
 
 
 async def serve_twilio_voice_app(
@@ -78,6 +91,12 @@ async def serve_twilio_voice_app(
 
     ``config.stream_url`` is required — TwiML cannot be built without the
     ``wss://`` media URL Twilio should dial back into.
+
+    The ``POST /twiml`` webhook is authenticated by default: every accepted
+    request mints a media stream token, so an unauthenticated public listener
+    would let anyone obtain a token the media WebSocket accepts. ``config``
+    must therefore carry a Twilio ``auth_token`` (validated against the
+    ``X-Twilio-Signature`` header) unless ``unsafe_allow_unsigned_webhooks=True``.
     """
     if not config.stream_url:
         raise ValueError(
@@ -91,9 +110,22 @@ async def serve_twilio_voice_app(
     # missing extra surfaces as a clear, actionable error.
     web = require_module("aiohttp.web", extra="telephony", purpose="VoiceApp twilio mode")
 
+    if not config.auth_token and not config.unsafe_allow_unsigned_webhooks:
+        raise ValueError(
+            "TwilioVoiceServerConfig.auth_token is required so POST /twiml can "
+            "validate the X-Twilio-Signature header before minting a media stream "
+            "token. Set auth_token (or the TWILIO_AUTH_TOKEN env var when running "
+            "through VoiceApp), or pass unsafe_allow_unsigned_webhooks=True to "
+            "accept unauthenticated webhooks."
+        )
+
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
     from easycat.telephony import twilio_stream_parameters_from_form
+    from easycat.telephony.twiml import (
+        reconstruct_public_url,
+        validate_twilio_webhook_signature,
+    )
     from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
     from easycat.transports.twilio_media import (
         TwilioConnectionTransport,
@@ -115,6 +147,22 @@ async def serve_twilio_voice_app(
     async def handle_twiml(request: Any) -> Any:
         post = await request.post()
         form_items = list(post.items())
+        # Authenticate the webhook before minting a stream token. Skipped only
+        # when the operator explicitly opted into unsigned webhooks above.
+        if config.auth_token:
+            public_url = reconstruct_public_url(
+                request.headers,
+                request.path_qs,
+                trust_proxy=config.trust_proxy_headers,
+                default_scheme=request.scheme,
+            )
+            if not validate_twilio_webhook_signature(
+                auth_token=config.auth_token,
+                url=public_url,
+                params=form_items,
+                signature=request.headers.get("X-Twilio-Signature"),
+            ):
+                return web.Response(status=403, text="Twilio signature validation failed")
         xml = twiml_connect_stream(
             config.stream_url,
             parameters=twilio_stream_parameters_from_form(form_items),

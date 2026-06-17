@@ -113,6 +113,11 @@ def _run_voice_app(
         # Local mode has no listener; host/port/token are not applicable.
         app.run(mode)
         return
+    if mode == "browser":
+        # The CLI already printed the Open URL; suppress VoiceApp's own browser
+        # announcement so it is not printed twice.
+        app.run(mode, host=host, port=port, auth_token=token, announce=False)
+        return
     app.run(mode, host=host, port=port, auth_token=token)
 
 
@@ -177,8 +182,12 @@ def serve(
         raise typer.Exit(2)
 
     app = _build_voice_app(agent_model=agent_model, instructions=instructions)
-    stdout_console.print(f"Open {_playground_url(host, port, token)}")
-    stdout_console.print(
-        "The page shows the live transcript, interruption indicator, and per-turn latency."
-    )
+    # Only browser mode serves the bundled playground page; websocket/local modes
+    # start a raw WebSocket server or a local mic session (each announces itself),
+    # so the playground URL and page instructions would mislead there.
+    if mode == "browser":
+        stdout_console.print(f"Open {_playground_url(host, port, token)}")
+        stdout_console.print(
+            "The page shows the live transcript, interruption indicator, and per-turn latency."
+        )
     _run_voice_app(app, mode=mode, host=host, port=port, token=token)

@@ -331,6 +331,7 @@ async def serve_webrtc_config_sessions(
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
 ) -> None:
     """Serve one EasyCat session per browser WebRTC offer.
 
@@ -338,16 +339,26 @@ async def serve_webrtc_config_sessions(
     ``/stats``, ``/health``, root, static-file, CORS, and bearer-token behavior
     as :class:`WebRTCTransport`, but each accepted offer receives an isolated
     transport/session instead of replacing a singleton peer connection.
+
+    A non-loopback bind requires ``config.auth_token``: binding beyond loopback
+    without a token raises :class:`ValueError` unless ``unsafe_allow_no_auth=True``
+    is passed to explicitly opt into an unauthenticated endpoint (mirroring
+    :func:`~easycat.transports.websocket.serve_websocket_sessions`).
     """
     from easycat.config import create_session
     from easycat.helpers import attach_runtime_feedback
     from easycat.session_manager import SessionManager
 
     settings = config or WebRTCTransportConfig()
-    if not _is_loopback_host(settings.host) and settings.auth_token is None:
+    if (
+        not _is_loopback_host(settings.host)
+        and settings.auth_token is None
+        and not unsafe_allow_no_auth
+    ):
         raise ValueError(
             "WebRTCTransportConfig.auth_token is required when binding WebRTC "
-            "signaling to a non-loopback host"
+            "signaling to a non-loopback host (or pass unsafe_allow_no_auth=True "
+            "to bind an unauthenticated endpoint)"
         )
     web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
     manager: SessionManager[int] = SessionManager()
@@ -488,14 +499,19 @@ def run_webrtc_config_server(
     *,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
 ) -> None:
-    """Run a multi-session WebRTC signaling server from a synchronous entry point."""
+    """Run a multi-session WebRTC signaling server from a synchronous entry point.
+
+    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``.
+    """
     asyncio.run(
         serve_webrtc_config_sessions(
             config_factory,
             config,
             runtime_feedback=runtime_feedback,
             announce=announce,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
     )
 
