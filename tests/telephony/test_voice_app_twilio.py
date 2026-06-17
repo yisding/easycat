@@ -421,6 +421,40 @@ def test_run_twilio_without_stream_url_raises(monkeypatch: pytest.MonkeyPatch) -
     assert "stream_url" in str(exc.value)
 
 
+# ── media listener cleanup on HTTP startup failure ────────────────────
+
+
+def test_media_listener_closed_when_http_startup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If TwiML HTTP setup fails (e.g. http_port already in use), the already-
+    bound media WebSocket listener must be closed (and the runner cleaned up)
+    instead of leaking the media port."""
+    web = _FakeAiohttpWeb()
+    media_server = _FakeMediaServer()
+
+    # Simulate ``http_port`` already in use: TCPSite.start raises after the
+    # media listener is already bound.
+    async def _boom(self: Any) -> None:
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(web.TCPSite, "start", _boom)
+
+    async def _fake_serve_ws(handler: Any, host: str, port: int) -> _FakeMediaServer:
+        return media_server
+
+    monkeypatch.setattr(server_module, "require_module", lambda *a, **k: web)
+    monkeypatch.setattr(server_module.websockets, "serve", _fake_serve_ws)
+
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media", auth_token="tok")
+
+    with pytest.raises(OSError, match="address already in use"):
+        asyncio.run(serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config))
+
+    assert media_server.closed is True
+    assert web.runner_cleaned is True
+
+
 # ── session('twilio') still raises ────────────────────────────────────
 
 

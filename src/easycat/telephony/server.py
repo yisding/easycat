@@ -87,6 +87,34 @@ class TwilioVoiceServerConfig:
     max_sessions: int = 64
 
 
+async def _start_twiml_http_listener(
+    web: Any,
+    config: TwilioVoiceServerConfig,
+    handle_twiml: Callable[[Any], Any],
+    media_server: Any,
+) -> tuple[Any, Any]:
+    """Start the aiohttp ``POST /twiml`` listener, returning ``(runner, site)``.
+
+    The media WebSocket listener is already bound by the time this runs. If HTTP
+    listener setup fails (for example because ``http_port`` is already in use),
+    close the media listener and tear down the partially set-up runner before
+    re-raising, so a startup failure does not leak the bound media port.
+    """
+    app = web.Application()
+    app.router.add_post("/twiml", handle_twiml)
+    runner = web.AppRunner(app)
+    try:
+        await runner.setup()
+        site = web.TCPSite(runner, config.http_host, config.http_port)
+        await site.start()
+    except BaseException:
+        media_server.close()
+        await media_server.wait_closed()
+        await runner.cleanup()
+        raise
+    return runner, site
+
+
 async def serve_twilio_voice_app(
     config_factory: Callable[[Any], EasyConfig],
     config: TwilioVoiceServerConfig,
@@ -193,12 +221,10 @@ async def serve_twilio_voice_app(
 
     media_server = await websockets.serve(handle_twilio_connection, config.host, config.media_port)
 
-    app = web.Application()
-    app.router.add_post("/twiml", handle_twiml)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, config.http_host, config.http_port)
-    await site.start()
+    # Start the TwiML HTTP listener; the helper closes the already-bound media
+    # listener if its own setup fails (e.g. http_port in use) so the port is not
+    # leaked before the steady-state try/finally below takes over teardown.
+    runner, site = await _start_twiml_http_listener(web, config, handle_twiml, media_server)
     logger.info(
         "Twilio voice server ready: media ws://%s:%s, TwiML http://%s:%s/twiml",
         config.host,

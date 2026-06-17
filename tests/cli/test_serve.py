@@ -85,6 +85,17 @@ def test_serve_refuses_non_loopback_host_without_token(
     assert stub_runtime["ran"] == []
 
 
+def test_serve_local_mode_ignores_non_loopback_host(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """Local/mic mode opens no listener, so the non-loopback bind-token guard
+    must not block ``serve --mode local --host 0.0.0.0`` (host is unused there)."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "local", "--host", "0.0.0.0"])
+
+    assert result.exit_code == 0
+    assert stub_runtime["ran"][0]["mode"] == "local"
+
+
 def test_serve_allows_non_loopback_host_with_token(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:

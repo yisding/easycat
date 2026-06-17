@@ -132,6 +132,36 @@ def test_browser_rejects_static_config() -> None:
     assert "per-connection" in message
 
 
+def test_browser_rejects_live_high_level_collaborator() -> None:
+    """A built provider/bridge passed as a high-level field is shared across
+    every per-connection ``EasyConfig``; reject it like a static ``config``."""
+
+    class _LiveBridge:
+        """Stand-in for a stateful agent bridge (e.g. RemoteResponsesAPIBridge)."""
+
+    app = VoiceApp(agent=_LiveBridge())
+    with pytest.raises(ValueError) as exc:
+        app.run("browser")
+    message = str(exc.value)
+    assert "config_factory" in message
+    assert "per-connection" in message
+    assert "agent" in message
+
+
+def test_browser_allows_string_and_config_high_level_fields(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """Provider-name strings and provider-config specs are safe to reuse across
+    per-connection sessions, so they pass the live-collaborator guard that runs
+    when the per-connection factory is built (a fresh provider is built from
+    them each connection)."""
+    from easycat.stt.openai_provider import OpenAISTTConfig
+
+    # Building the per-connection factory (where the guard runs) must not raise.
+    VoiceApp(agent="a", stt=OpenAISTTConfig()).run("browser")
+    assert "factory" in captured_webrtc
+
+
 def test_browser_uses_supplied_config_factory(
     captured_webrtc: dict[str, Any],
 ) -> None:

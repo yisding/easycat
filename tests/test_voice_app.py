@@ -7,6 +7,7 @@ rather than by wiring real providers.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -35,18 +36,30 @@ class _FakeSession:
 
 
 class _LifecycleSession:
-    """Fake session that counts ``start``/``stop`` calls for lifecycle tests."""
+    """Fake session that counts ``start``/``stop`` calls for lifecycle tests.
+
+    ``stop`` mirrors the real :meth:`easycat.session.Session.stop`: it is
+    idempotent, returning early once the session is closed. ``stop_calls``
+    counts every invocation; ``effective_stops`` counts only the calls that
+    actually tore the session down.
+    """
 
     def __init__(self, config: Any) -> None:
         self.config = config
         self.start_calls = 0
         self.stop_calls = 0
+        self.effective_stops = 0
+        self._closed = False
 
     async def start(self) -> None:
         self.start_calls += 1
 
     async def stop(self, *, force: bool = False) -> None:
         self.stop_calls += 1
+        if self._closed:
+            return
+        self._closed = True
+        self.effective_stops += 1
 
     async def __aenter__(self) -> _LifecycleSession:
         await self.start()
@@ -262,18 +275,19 @@ def test_twilio_run_delegates_to_server_helper(monkeypatch: pytest.MonkeyPatch) 
 async def test_serve_local_stops_session_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``serve('local')`` must start the session and stop it exactly once.
+    """``serve('local')`` starts the session and tears it down exactly once.
 
-    ``wait_for_shutdown_signal`` already owns teardown (it calls
-    ``session.stop()``), so ``_serve_local`` must not also wrap the session in
-    ``async with`` — that would run ``stop()`` a second time on shutdown.
+    ``wait_for_shutdown_signal`` owns teardown on the signal path (it calls
+    ``session.stop()``); ``_serve_local`` adds a ``finally`` that calls
+    ``stop()`` again to cover cancellation. Because ``stop()`` is idempotent,
+    the session is torn down exactly once on the normal path.
     """
     session = _LifecycleSession(config=object())
 
     monkeypatch.setattr(config_module, "create_session", lambda _config: session)
 
     async def _fake_wait(passed_session: Any) -> None:
-        # Mirror the real helper: the shutdown path calls stop() exactly once.
+        # Mirror the real helper: the shutdown path calls stop() once.
         assert passed_session is session
         await passed_session.stop()
 
@@ -282,7 +296,38 @@ async def test_serve_local_stops_session_exactly_once(
     await VoiceApp(agent="a").serve("local")
 
     assert session.start_calls == 1
-    assert session.stop_calls == 1
+    assert session.effective_stops == 1
+
+
+async def test_serve_local_stops_session_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancelled ``serve('local')`` still tears the session down.
+
+    ``wait_for_shutdown_signal``'s signal-handler path awaits the stop event
+    without a ``finally``, so when the ``serve('local')`` task is cancelled from
+    an outer loop the helper never calls ``stop()``. ``_serve_local``'s own
+    ``finally`` must cover that so microphone/provider tasks do not leak.
+    """
+    session = _LifecycleSession(config=object())
+
+    monkeypatch.setattr(config_module, "create_session", lambda _config: session)
+
+    async def _hang(passed_session: Any) -> None:
+        # Mirror the signal-handler path: block until cancelled, never stopping.
+        assert passed_session is session
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(helpers_module, "wait_for_shutdown_signal", _hang)
+
+    task = asyncio.ensure_future(VoiceApp(agent="a").serve("local"))
+    await asyncio.sleep(0)  # let the task reach the hanging wait
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert session.start_calls == 1
+    assert session.effective_stops == 1
 
 
 # ── Local config_factory path (F4) ───────────────────────────────────

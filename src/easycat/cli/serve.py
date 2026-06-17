@@ -188,7 +188,13 @@ def serve(
         raise typer.Exit(2)
 
     token = token or _serve_token_from_env()
-    if host not in _LOOPBACK_HOSTS and not token:
+    # Local/mic mode opens no listener — host/port/token are ignored by
+    # ``_run_voice_app`` there — so the non-loopback bind-token guard only
+    # applies to the listener modes (browser/websocket). Without this gate,
+    # ``serve --mode local --host 0.0.0.0`` would be rejected for a bind that
+    # never happens.
+    is_listener_mode = mode not in {"local", "mic"}
+    if is_listener_mode and host not in _LOOPBACK_HOSTS and not token:
         emit_command_error(
             "serve",
             f"Refusing to bind {host!r} without a token. Pass --token (or set "

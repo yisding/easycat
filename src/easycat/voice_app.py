@@ -90,6 +90,34 @@ def _normalize_mode(mode: str) -> VoiceMode:
     return canonical  # type: ignore[return-value]
 
 
+# High-level fields that can hold a *live* collaborator (a built provider or an
+# agent bridge) rather than an immutable spec. ``debug`` is excluded: it is
+# always a flag/level, never a stateful collaborator.
+_LIVE_CAPABLE_FIELDS: frozenset[str] = frozenset({"agent", "stt", "tts", "vad"})
+
+
+def _is_shareable_spec(value: Any) -> bool:
+    """Return ``True`` when *value* is safe to reuse across concurrent sessions.
+
+    Per-connection modes build a fresh ``EasyConfig`` per connection but forward
+    the same high-level field values into each one. That is only safe for
+    *specs* — a provider-name string, a debug flag, or a provider *config*
+    dataclass — from which ``EasyConfig`` builds a fresh provider per session.
+    A built provider/bridge instance (e.g. a ``RemoteResponsesAPIBridge`` or an
+    already-constructed STT/TTS/VAD provider) carries per-session stream or
+    conversation state, so reusing one object across connections would let
+    concurrent sessions corrupt each other.
+    """
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return True
+    # Provider *config* dataclasses are specs; built provider instances are not.
+    from easycat.stt.factory import STTConfig
+    from easycat.tts.factory import TTSConfig
+    from easycat.vad import VADConfig
+
+    return isinstance(value, STTConfig | TTSConfig | VADConfig)
+
+
 class VoiceApp:
     """A product-level voice bot that runs across local / browser / websocket / twilio.
 
@@ -257,13 +285,20 @@ class VoiceApp:
         from easycat.helpers import wait_for_shutdown_signal
 
         session = self._build_local_session(**kwargs)
-        # ``wait_for_shutdown_signal`` already calls ``session.stop()`` once the
-        # signal fires (and on its KeyboardInterrupt fallback), so it owns
-        # teardown. Starting explicitly here — rather than wrapping in
-        # ``async with session:`` — keeps ``stop()`` from running twice (once via
-        # the helper, once via ``__aexit__``).
+        # ``wait_for_shutdown_signal`` calls ``session.stop()`` once the signal
+        # fires (and on its KeyboardInterrupt fallback), so it owns teardown on
+        # those paths. It does NOT, however, stop the session when *this*
+        # coroutine is cancelled from an outer event loop (its signal-handler
+        # path awaits the stop event without a ``finally``), which would leave
+        # the microphone/provider tasks running. Guard with ``finally`` so a
+        # cancelled ``serve('local')`` still tears the session down. ``stop()``
+        # is idempotent — on the normal signal path the session is already
+        # closed, so this second call is a no-op.
         await session.start()
-        await wait_for_shutdown_signal(session)
+        try:
+            await wait_for_shutdown_signal(session)
+        finally:
+            await session.stop(force=True)
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
@@ -472,6 +507,27 @@ class VoiceApp:
         # Only EasyConfig-forwardable fields reach the preset; server-policy
         # fields stay with the transport-config builders.
         forwarded = self._forwardable_config_kwargs()
+
+        # A per-connection mode forwards the same high-level values into a fresh
+        # ``EasyConfig`` per connection. Reusing a *live* collaborator (a built
+        # provider or agent bridge) that way shares one stateful object across
+        # concurrent sessions — the same hazard that makes a static ``config``
+        # unsafe above. Reject it with the same remedy: pass a ``config_factory``
+        # that builds fresh collaborators per connection.
+        live_fields = sorted(
+            field
+            for field in _LIVE_CAPABLE_FIELDS
+            if field in forwarded and not _is_shareable_spec(forwarded[field])
+        )
+        if live_fields:
+            raise ValueError(
+                f"VoiceApp {mode!r} mode is per-connection and cannot reuse live "
+                f"high-level field(s) {live_fields} across connections: a built "
+                "provider or agent bridge carries per-session state, so concurrent "
+                "sessions would corrupt each other. Pass a provider-name string or a "
+                "provider-config instead, or a `config_factory` that builds fresh "
+                "collaborators per connection."
+            )
 
         if mode == "browser":
 
