@@ -65,7 +65,7 @@ _SERVER_POLICY_FIELDS: frozenset[str] = frozenset(
     {
         "host",
         "port",
-        "auth_token",
+        "serve_token",
         "max_sessions",
     }
 )
@@ -88,6 +88,63 @@ def _normalize_mode(mode: str) -> VoiceMode:
         valid = sorted(_CANONICAL_MODES | set(_MODE_ALIASES))
         raise ValueError(f"Unknown VoiceApp mode {mode!r}. Valid modes: {valid}.")
     return canonical  # type: ignore[return-value]
+
+
+# High-level fields that can hold a *live* collaborator (a built provider or an
+# agent bridge) rather than an immutable spec. Derived from the forwarded fields
+# minus ``debug``, which is always a flag/level, never a stateful collaborator —
+# so a new forwardable field is covered by the live-reuse guard automatically.
+_LIVE_CAPABLE_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS - frozenset({"debug"})
+
+
+def _is_shareable_spec(field: str, value: Any) -> bool:
+    """Return ``True`` when *value* for high-level *field* is safe to reuse
+    across concurrent sessions.
+
+    Per-connection modes build a fresh ``EasyConfig`` per connection but forward
+    the same high-level field values into each one. That is only safe for
+    *specs* — a provider-name string, a debug flag, a provider *config*
+    dataclass, or a declarative framework agent spec — from which a fresh
+    provider/bridge is built per session. A built provider or agent bridge
+    instance (e.g. a ``RemoteResponsesAPIBridge`` or an already-constructed
+    STT/TTS/VAD provider) carries per-session stream or conversation state, so
+    reusing one object across connections would let concurrent sessions corrupt
+    each other.
+    """
+    # Only ``None`` and a provider-name/URL ``str`` are universal scalar specs
+    # for these fields. ``bool``/``int``/``float`` are never valid here, so they
+    # must NOT short-circuit to "shareable" — letting them fall through to the
+    # per-field checks below makes a stray ``agent=True`` / ``stt=1`` typo fail
+    # loudly at construction (rejected as non-shareable) instead of being
+    # forwarded into every per-connection ``EasyConfig`` to blow up later. (Note
+    # ``bool`` is an ``int`` subclass, so it must not be treated as a spec.)
+    if value is None or isinstance(value, str):
+        return True
+    if field == "agent":
+        # Framework agent *specs* (OpenAI/PydanticAI/LangChain/LangGraph/Llama)
+        # are rebuilt into a fresh bridge per session; built bridges/runners and
+        # unrecognized objects are not, so they need a ``config_factory``. Import
+        # from ``_factory`` directly (like the other internal callers) so this
+        # guard does not eagerly pull in every bridge module via the package.
+        from easycat.integrations.agents._factory import is_reusable_agent_spec
+
+        return is_reusable_agent_spec(value)
+    # Provider *config* dataclasses are specs; built provider instances are not.
+    # Use the factory predicates so registered third-party extension configs
+    # (not just the built-in ``STTConfig`` / ``TTSConfig`` unions) are accepted.
+    if field == "stt":
+        from easycat.stt.factory import is_stt_config
+
+        return is_stt_config(value)
+    if field == "tts":
+        from easycat.tts.factory import is_tts_config
+
+        return is_tts_config(value)
+    if field == "vad":
+        from easycat.vad import VADConfig
+
+        return isinstance(value, VADConfig)
+    return False
 
 
 class VoiceApp:
@@ -160,7 +217,7 @@ class VoiceApp:
     def _forwardable_config_kwargs(self) -> dict[str, Any]:
         """Return only the keys safe to forward into an ``EasyConfig`` preset.
 
-        Server-policy fields (``host`` / ``port`` / ``auth_token`` /
+        Server-policy fields (``host`` / ``port`` / ``serve_token`` /
         ``max_sessions``) live in ``_config_kwargs`` for the transport-config
         builders, but ``EasyConfig`` and its presets have no such fields —
         forwarding them would crash the preset constructor per connection.
@@ -257,55 +314,63 @@ class VoiceApp:
         from easycat.helpers import wait_for_shutdown_signal
 
         session = self._build_local_session(**kwargs)
-        # ``wait_for_shutdown_signal`` already calls ``session.stop()`` once the
-        # signal fires (and on its KeyboardInterrupt fallback), so it owns
-        # teardown. Starting explicitly here — rather than wrapping in
-        # ``async with session:`` — keeps ``stop()`` from running twice (once via
-        # the helper, once via ``__aexit__``).
+        # ``wait_for_shutdown_signal`` calls ``session.stop()`` once the signal
+        # fires (and on its KeyboardInterrupt fallback), so it owns teardown on
+        # those paths. It does NOT, however, stop the session when *this*
+        # coroutine is cancelled from an outer event loop (its signal-handler
+        # path awaits the stop event without a ``finally``), which would leave
+        # the microphone/provider tasks running. Guard with ``finally`` so a
+        # cancelled ``serve('local')`` still tears the session down. ``stop()``
+        # is idempotent — on the normal signal path the session is already
+        # closed, so this second call is a no-op.
         await session.start()
-        await wait_for_shutdown_signal(session)
+        try:
+            await wait_for_shutdown_signal(session)
+        finally:
+            await session.stop(force=True)
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
     def _browser_transport_config(self, **kwargs: Any) -> tuple[Any, bool]:
-        """Build the WebRTC config plus the resolved ``unsafe_allow_no_auth`` flag.
+        """Build the :class:`WebRTCTransportConfig` plus the resolved
+        ``unsafe_allow_no_auth`` flag.
 
-        Mirrors :meth:`_websocket_server_config`: ``max_sessions`` is threaded into
-        the transport config so a requested capacity limit is honored (the WebRTC
-        default would otherwise silently win), and the flag is returned (not just
-        consumed by the pre-check) so the run/serve methods can forward it to the
-        shared WebRTC serve helper, whose own non-loopback guard would otherwise
-        re-reject an intentionally unauthenticated bind.
+        The flag is returned (not just consumed by the token pre-check) so the
+        run/serve methods can forward it to
+        :func:`~easycat.transports.webrtc.serve_webrtc_config_sessions`, whose
+        own non-loopback guard would otherwise re-reject an intentionally
+        unauthenticated bind.
         """
         from easycat.transports.webrtc import WebRTCTransportConfig
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8080))
-        # Fall back to the WebRTC default (64) so an unspecified capacity keeps
-        # its prior behavior; an explicit value (construction- or run-time) wins.
-        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 64))
+        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions"))
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
-            kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
+            kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
-        transport_config = WebRTCTransportConfig(
-            host=host, port=port, auth_token=token, max_sessions=max_sessions
-        )
-        return transport_config, unsafe_allow_no_auth
+        # Only override the WebRTCTransportConfig default when a limit is given,
+        # keeping that dataclass the single source of the default capacity.
+        capacity = {} if max_sessions is None else {"max_sessions": max_sessions}
+        config = WebRTCTransportConfig(host=host, port=port, auth_token=token, **capacity)
+        return config, unsafe_allow_no_auth
 
     def _browser_factory(self) -> Callable[[WebRTCTransport], EasyConfig]:
         return self._per_connection_factory("browser")
 
-    def _run_browser(self, **kwargs: Any) -> None:
+    def _run_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
         from easycat.transports.webrtc import run_webrtc_config_server
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
         # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
         # announced first. Pass ``announce=False`` to suppress the helper's own
-        # "Server ready..." line and avoid a duplicate.
-        self._announce_browser_url(transport_config)
+        # "Server ready..." line and avoid a duplicate. Callers that already
+        # printed the URL (e.g. ``easycat serve``) pass ``announce=False`` here.
+        if announce:
+            self._announce_browser_url(transport_config)
         run_webrtc_config_server(
             self._browser_factory(),
             transport_config,
@@ -324,6 +389,8 @@ class VoiceApp:
         )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
+        from urllib.parse import urlencode
+
         from easycat.cli._output import stdout_console
 
         host = transport_config.host
@@ -331,7 +398,11 @@ class VoiceApp:
         display_host = "localhost" if host in {"127.0.0.1", "localhost", "::1"} else host
         url = f"http://{display_host}:{port}"
         if transport_config.auth_token:
-            url = f"{url}/webrtc_client.html?token={transport_config.auth_token}"
+            # URL-encode the token so query-special characters (``+``, ``&``,
+            # ``#``, spaces) survive into the bundled client's ``?token=`` read,
+            # matching the CLI ``serve`` path (``cli/serve.py``).
+            query = urlencode({"token": transport_config.auth_token})
+            url = f"{url}/webrtc_client.html?{query}"
         stdout_console.print(f"Open {url}")
 
     # ── WebSocket mode ───────────────────────────────────────────────
@@ -351,7 +422,7 @@ class VoiceApp:
         max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 10))
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
-            kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
+            kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
@@ -388,14 +459,27 @@ class VoiceApp:
     def _twilio_server_config(self, **kwargs: Any) -> Any:
         """Build the :class:`TwilioVoiceServerConfig` for the twilio listeners.
 
-        Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
-        ``http_port`` / ``stream_url`` / ``stream_token_secret``) come from
-        ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
-        deliberately NOT in the constructor allow-list (which is for high-level
-        ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret``
-        fall back to ``TWILIO_STREAM_URL`` / ``TWILIO_STREAM_TOKEN_SECRET`` as a
-        convenience, but ``stream_url`` is required: the helper raises a clear
-        ``ValueError`` when it is missing.
+        Twilio-listener fields (``host`` / ``media_port`` / ``http_host`` /
+        ``http_port`` / ``stream_url`` / ``stream_token_secret`` /
+        ``twilio_auth_token`` / ``trust_proxy_headers`` /
+        ``unsafe_allow_unsigned_webhooks``) come from
+        ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs``. They are
+        twilio-specific (two listeners, each with its own host/port pair), so
+        they are NOT taken from the generic constructor ``host`` / ``port``.
+        ``max_sessions`` is the one mode-neutral server-policy field, so it
+        mirrors the browser/websocket builders: a ``run``/``serve`` value wins,
+        otherwise a ``max_sessions=`` given at construction, otherwise the
+        ``TwilioVoiceServerConfig`` default. ``stream_url`` /
+        ``stream_token_secret`` / ``twilio_auth_token`` fall back to
+        ``TWILIO_STREAM_URL`` / ``TWILIO_STREAM_TOKEN_SECRET`` /
+        ``TWILIO_AUTH_TOKEN`` as a convenience.
+        ``twilio_auth_token`` is the Twilio *account* auth token (validating the
+        ``X-Twilio-Signature`` webhook header) — distinct from the
+        browser/websocket ``serve_token`` that gates the signaling bind.
+        ``stream_url`` and ``twilio_auth_token`` are both required (the helper
+        raises a clear ``ValueError`` when ``stream_url`` is missing, or when
+        ``twilio_auth_token`` is missing without
+        ``unsafe_allow_unsigned_webhooks``).
         """
         from easycat.telephony.server import TwilioVoiceServerConfig
 
@@ -414,6 +498,9 @@ class VoiceApp:
         twilio_auth_token = kwargs.pop("twilio_auth_token", None) or os.environ.get(
             "TWILIO_AUTH_TOKEN"
         )
+        # ``trust_proxy_headers`` honors X-Forwarded-Proto/Host when reconstructing
+        # the signed public URL behind a TLS-terminating proxy. An explicit kwarg
+        # wins; otherwise fall back to the TRUST_PROXY_HEADERS env var.
         trust_proxy_headers = kwargs.pop("trust_proxy_headers", None)
         if trust_proxy_headers is None:
             trust_proxy_headers = os.environ.get("TRUST_PROXY_HEADERS", "").lower() in {
@@ -421,6 +508,11 @@ class VoiceApp:
                 "true",
                 "yes",
             }
+        unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
+        max_sessions = kwargs.pop(
+            "max_sessions",
+            self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
+        )
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
@@ -430,6 +522,8 @@ class VoiceApp:
             stream_token_secret=stream_token_secret,
             twilio_auth_token=twilio_auth_token,
             trust_proxy_headers=bool(trust_proxy_headers),
+            unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
+            max_sessions=max_sessions,
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:
@@ -476,6 +570,27 @@ class VoiceApp:
         # fields stay with the transport-config builders.
         forwarded = self._forwardable_config_kwargs()
 
+        # A per-connection mode forwards the same high-level values into a fresh
+        # ``EasyConfig`` per connection. Reusing a *live* collaborator (a built
+        # provider or agent bridge) that way shares one stateful object across
+        # concurrent sessions — the same hazard that makes a static ``config``
+        # unsafe above. Reject it with the same remedy: pass a ``config_factory``
+        # that builds fresh collaborators per connection.
+        live_fields = sorted(
+            field
+            for field in _LIVE_CAPABLE_FIELDS
+            if field in forwarded and not _is_shareable_spec(field, forwarded[field])
+        )
+        if live_fields:
+            raise ValueError(
+                f"VoiceApp {mode!r} mode is per-connection and cannot reuse live "
+                f"high-level field(s) {live_fields} across connections: a built "
+                "provider or agent bridge carries per-session state, so concurrent "
+                "sessions would corrupt each other. Pass a provider-name string or a "
+                "provider-config instead, or a `config_factory` that builds fresh "
+                "collaborators per connection."
+            )
+
         if mode == "browser":
 
             def _browser_config(transport: Any) -> EasyConfig:
@@ -509,13 +624,20 @@ class VoiceApp:
         A non-loopback bind requires a token for BOTH the WebRTC and WebSocket
         paths. The token falls back to ``EASYCAT_SERVE_TOKEN``. The only
         structured escape hatch is ``unsafe_allow_no_auth=True``.
+
+        Blank or whitespace-only tokens are normalized to ``None`` (via the
+        shared :func:`~easycat.transports.websocket._normalize_auth_token`) so a
+        ``"   "`` value cannot satisfy this guard as truthy while the downstream
+        WebSocket authorizer treats it as no token at all — keeping the bind
+        guard and request authorization in sync across both transports.
         """
         from easycat.transports.webrtc import _is_loopback_host
+        from easycat.transports.websocket import _normalize_auth_token
 
-        resolved = token or os.environ.get(_SERVE_TOKEN_ENV) or None
+        resolved = _normalize_auth_token(token or os.environ.get(_SERVE_TOKEN_ENV))
         if resolved is None and not _is_loopback_host(host) and not unsafe_allow_no_auth:
             raise ValueError(
-                f"Refusing to bind {host!r} without a token. Pass auth_token= "
+                f"Refusing to bind {host!r} without a token. Pass serve_token= "
                 f"(or set {_SERVE_TOKEN_ENV}) when serving beyond loopback, or pass "
                 "unsafe_allow_no_auth=True to bind an unauthenticated endpoint."
             )

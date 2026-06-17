@@ -143,7 +143,10 @@ def test_from_app_applies_server_policy_not_websocket_defaults() -> None:
     # A mounted VoiceApp contributes ONLY its config_factory. VoiceServerConfig
     # owns process policy: max_sessions=64 / port=8080 (NOT the
     # WebSocketSessionServerConfig 10/8765 defaults).
-    app = VoiceApp(agent=object())
+    # A per-connection ``config_factory`` is the valid mounted-app input: a live
+    # ``agent=object()`` is rejected by VoiceApp's per-connection guard (a built
+    # collaborator cannot be reused across connections).
+    app = VoiceApp(config_factory=lambda _transport: object())
     server = VoiceServer.from_app(app)
     assert server.config.max_sessions == 64
     assert server.config.port == 8080
@@ -171,7 +174,10 @@ def test_from_app_lifts_the_apps_config_factory() -> None:
 
 
 def test_from_app_honors_explicit_config() -> None:
-    app = VoiceApp(agent=object())
+    # A per-connection ``config_factory`` is the valid mounted-app input: a live
+    # ``agent=object()`` is rejected by VoiceApp's per-connection guard (a built
+    # collaborator cannot be reused across connections).
+    app = VoiceApp(config_factory=lambda _transport: object())
     config = VoiceServerConfig(max_sessions=3, port=0)
     server = VoiceServer.from_app(app, config)
     assert server.config is config

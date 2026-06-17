@@ -44,6 +44,9 @@ def stub_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(serve_mod, "_build_voice_app", fake_build)
     monkeypatch.setattr(serve_mod, "_run_voice_app", fake_run)
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    # ``serve`` eagerly validates the playground config before announcing, which
+    # requires the OpenAI key; provide one so these tests exercise the happy path.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     return calls
 
 
@@ -82,6 +85,17 @@ def test_serve_refuses_non_loopback_host_without_token(
     assert stub_runtime["ran"] == []
 
 
+def test_serve_local_mode_ignores_non_loopback_host(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """Local/mic mode opens no listener, so the non-loopback bind-token guard
+    must not block ``serve --mode local --host 0.0.0.0`` (host is unused there)."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "local", "--host", "0.0.0.0"])
+
+    assert result.exit_code == 0
+    assert stub_runtime["ran"][0]["mode"] == "local"
+
+
 def test_serve_allows_non_loopback_host_with_token(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:
@@ -108,6 +122,32 @@ def test_serve_reads_token_from_env(
     assert stub_runtime["ran"][0]["token"] == "envtoken"
 
 
+def test_serve_requires_openai_key_before_listening(
+    cli: CliRunner,
+    typer_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing OPENAI_API_KEY fails serve at startup, before announce/listen."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    ran: list[Any] = []
+    # The eager validation must short-circuit before the app is built or run; if
+    # it does not, these stubs make the test fail loudly rather than serve.
+    monkeypatch.setattr(
+        serve_mod, "_build_voice_app", lambda **_: pytest.fail("built app despite missing key")
+    )
+    monkeypatch.setattr(serve_mod, "_run_voice_app", lambda *a, **k: ran.append(k))
+
+    result = cli.invoke(typer_app, ["serve", "--port", "9123"])
+
+    assert result.exit_code != 0
+    assert "EASYCAT_E203" in result.output
+    assert "OPENAI_API_KEY" in result.output
+    # The Open URL must not be announced and the server must not start.
+    assert "Open http" not in result.output
+    assert ran == []
+
+
 def test_serve_websocket_mode_routes_through_voice_app(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:
@@ -120,6 +160,20 @@ def test_serve_websocket_mode_routes_through_voice_app(
     assert run["port"] == 8765
     # websocket is a per-connection mode; the app must carry a config_factory.
     assert stub_runtime["app"].config_factory is not None
+    # The browser playground URL / page hint must NOT print for non-browser modes.
+    assert "Open http" not in result.stdout
+    assert "The page shows" not in result.stdout
+
+
+def test_serve_local_mode_omits_browser_output(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    result = cli.invoke(typer_app, ["serve", "--mode", "local"])
+
+    assert result.exit_code == 0
+    assert stub_runtime["ran"][0]["mode"] == "local"
+    assert "Open http" not in result.stdout
+    assert "The page shows" not in result.stdout
 
 
 def test_serve_websocket_mode_prints_ws_endpoint(

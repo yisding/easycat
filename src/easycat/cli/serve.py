@@ -113,22 +113,21 @@ def _playground_config_factory(
     return factory
 
 
-def _validate_playground_config(factory: Any) -> None:
-    """Build the per-connection config once so credential errors fail fast.
+def _validate_playground_config() -> None:
+    """Surface the playground's credential requirement before serving.
 
-    The per-connection modes defer ``EasyConfig.browser(...)`` construction to
-    the ``config_factory`` (one fresh config per client). Without this check a
-    missing ``OPENAI_API_KEY`` (or an otherwise invalid default provider config)
-    would only raise ``EASYCAT_E203`` inside the first connection handler —
-    AFTER the CLI printed the URL and bound the listener. Constructing the
-    config once here surfaces that startup error before binding. A throwaway
-    :class:`~easycat.transports.WebRTCTransportConfig` stands in for the
-    per-connection transport: the playground always builds a browser config, so
-    the credential/provider validation is identical regardless of mode.
+    Each client connection builds a fresh ``EasyConfig.browser`` through the
+    per-connection factory, so a missing ``OPENAI_API_KEY`` would otherwise only
+    fail server-side when the first client connects — after the CLI has already
+    printed the Open URL and started listening. Construct the same browser preset
+    once up front (the per-connection agent/transport do not affect the
+    credential check) so the catalogued missing-key error (``EASYCAT_E203``)
+    fails at startup instead. The throwaway config builds no network clients, so
+    it is safe to discard.
     """
-    from easycat.transports import WebRTCTransportConfig
+    from easycat.config import EasyConfig
 
-    factory(WebRTCTransportConfig())
+    EasyConfig.browser()
 
 
 def _build_voice_app(
@@ -139,11 +138,11 @@ def _build_voice_app(
     """Build the playground :class:`VoiceApp` (extracted for tests)."""
     from easycat.voice_app import VoiceApp
 
+    _validate_playground_config()
     factory = _playground_config_factory(
         agent_model=agent_model,
         instructions=instructions,
     )
-    _validate_playground_config(factory)
     return VoiceApp(config_factory=factory)
 
 
@@ -160,7 +159,12 @@ def _run_voice_app(
         # Local mode has no listener; host/port/token are not applicable.
         app.run(mode)
         return
-    app.run(mode, host=host, port=port, auth_token=token)
+    if mode == "browser":
+        # The CLI already printed the Open URL; suppress VoiceApp's own browser
+        # announcement so it is not printed twice.
+        app.run(mode, host=host, port=port, serve_token=token, announce=False)
+        return
+    app.run(mode, host=host, port=port, serve_token=token)
 
 
 @cli_command
@@ -213,7 +217,13 @@ def serve(
         raise typer.Exit(2)
 
     token = token or _serve_token_from_env()
-    if host not in _LOOPBACK_HOSTS and not token:
+    # Local/mic mode opens no listener — host/port/token are ignored by
+    # ``_run_voice_app`` there — so the non-loopback bind-token guard only
+    # applies to the listener modes (browser/websocket). Without this gate,
+    # ``serve --mode local --host 0.0.0.0`` would be rejected for a bind that
+    # never happens.
+    is_listener_mode = mode not in {"local", "mic"}
+    if is_listener_mode and host not in _LOOPBACK_HOSTS and not token:
         emit_command_error(
             "serve",
             f"Refusing to bind {host!r} without a token. Pass --token (or set "
@@ -223,6 +233,14 @@ def serve(
         )
         raise typer.Exit(2)
 
+    # Fail fast on a missing OPENAI_API_KEY before announcing an endpoint or
+    # binding a listener — the playground builds its config per-connection, so
+    # without this the first client would hit a server-side failure instead.
+    _validate_playground_config()
+
     app = _build_voice_app(agent_model=agent_model, instructions=instructions)
+    # Mode-appropriate hint: browser prints the playground URL, websocket prints
+    # the ws:// endpoint, local prints the mic message — never the page URL for a
+    # mode that does not serve it.
     _announce_serve_endpoint(mode=mode, host=host, port=port, token=token)
     _run_voice_app(app, mode=mode, host=host, port=port, token=token)

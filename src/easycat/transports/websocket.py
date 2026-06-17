@@ -97,6 +97,18 @@ def websocket_session_server_config_from_env(
     )
 
 
+def _normalize_auth_token(token: str | None) -> str | None:
+    """Treat blank or whitespace-only tokens as no token at all.
+
+    An empty string is not a usable secret: ``Authorization: Bearer `` would
+    otherwise pass ``compare_digest("", "")``. Normalizing blank tokens to
+    ``None`` keeps the public-bind guard and request authorization in sync.
+    """
+    if token is None or not token.strip():
+        return None
+    return token
+
+
 def websocket_server_authorized(
     headers: Headers,
     path: str,
@@ -111,8 +123,9 @@ def websocket_server_authorized(
     browser client (``examples/ws_browser_client.html``) — browsers cannot set
     handshake headers, so they relied on the query token. Pass
     ``allow_query_token=True`` as the loopback/dev opt-in to keep that client
-    working locally.
+    working locally. A blank/whitespace token normalizes to ``None`` (no auth).
     """
+    token = _normalize_auth_token(token)
     if token is None:
         return True
     value = headers.get("Authorization")
@@ -180,9 +193,13 @@ async def serve_websocket_sessions(
     # The SAME unified policy gates the bind guard AND each handshake (F6): a
     # configured token builds a ``BearerTokenAuth`` (honoring ``allow_query_token``);
     # no token leaves ``auth=None`` (an open endpoint, subject to the bind guard).
+    # A blank/whitespace token normalizes to ``None`` first so a misconfigured
+    # empty secret cannot arm a policy that would accept an empty bearer
+    # credential (``compare_digest("", "")``).
+    auth_token = _normalize_auth_token(settings.auth_token)
     auth_policy = (
-        BearerTokenAuth(token=settings.auth_token, allow_query_token=allow_query_token)
-        if settings.auth_token is not None
+        BearerTokenAuth(token=auth_token, allow_query_token=allow_query_token)
+        if auth_token is not None
         else None
     )
     enforce_bind_guard(
