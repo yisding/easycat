@@ -119,6 +119,7 @@ class WebRTCRoutes:
         manager: SessionManager[int],
         runtime_feedback: bool = True,
         active_session_objs: dict[int, Any] | None = None,
+        on_session_rejected: Callable[..., None] | None = None,
     ) -> None:
         self._config = config
         self._auth = auth
@@ -126,6 +127,13 @@ class WebRTCRoutes:
         self._gate = gate
         self._manager = manager
         self._runtime_feedback = runtime_feedback
+        # Optional rejection-metric sink, injected by ``VoiceServer`` so an offer
+        # rejected at this unified layer (auth / draining / capacity) feeds the
+        # SAME ``/metrics`` snapshot + ``easycat.server.sessions.rejected.total``
+        # counter as a ``/ws`` rejection — both transports share one gate, so the
+        # rejection counts must span both. The standalone serve helper passes
+        # ``None`` (it owns no server-level rejection metric).
+        self._on_session_rejected = on_session_rejected
         # When the server shares an active-session map across transports (the
         # ``VoiceServer`` case), the offer handler registers the created session
         # here keyed by the gate key so the shared drain step force-stops it.
@@ -229,19 +237,42 @@ class WebRTCRoutes:
     # ── Auth (unified) ───────────────────────────────────────────────
 
     def _authorized(self, request: Any) -> bool:
-        """Authorize ``request`` through the UNIFIED :class:`AuthPolicy`.
+        """Authorize ``request`` through the UNIFIED :class:`AuthPolicy` (bool shim)."""
+        return self._auth_reason(request) == "allowed"
+
+    def _auth_reason(self, request: Any) -> str:
+        """Return the ``AuthReason`` for ``request`` through the UNIFIED policy.
 
         Routes through ``server.auth.from_aiohttp_request`` +
         ``AuthPolicy.authorize`` (NOT ``WebRTCTransport._request_authorized``) so
         the WebSocket and WebRTC paths share one auth layer and the
         ``allow_query_token`` default-off posture applies to mounted WebRTC. No
-        policy configured means open access (the loopback/dev default).
+        policy configured means open access (``"allowed"`` — the loopback/dev
+        default). Returns the ``AuthReason`` Literal (``allowed`` / ``missing`` /
+        ``invalid``) so a rejection metric can carry the right
+        ``easycat.auth_result`` label.
         """
         if self._auth is None:
-            return True
+            return "allowed"
         from easycat.server.auth import from_aiohttp_request
 
-        return self._auth.authorize(from_aiohttp_request(request)).allowed
+        return self._auth.authorize(from_aiohttp_request(request)).reason
+
+    def _server_state(self) -> str:
+        """Return the ``ServerState`` Literal for the shared gate's draining flag."""
+        return "draining" if self._gate.is_draining else "serving"
+
+    def _record_rejection(self, *, server_state: str, auth_result: str | None = None) -> None:
+        """Forward an offer rejection to the owning server's rejection metric.
+
+        A no-op for the standalone serve helper (no callback injected). When
+        ``VoiceServer`` mounts these routes it injects ``_emit_session_rejected``,
+        so a WebRTC offer rejected here counts toward the same ``/metrics``
+        snapshot + ``easycat.server.sessions.rejected.total`` counter as a ``/ws``
+        rejection.
+        """
+        if self._on_session_rejected is not None:
+            self._on_session_rejected(server_state=server_state, auth_result=auth_result)
 
     def _cors_headers(self, request: Any) -> dict[str, str]:
         """Build CORS headers for ``request`` (byte-identical to the transport).
@@ -292,9 +323,13 @@ class WebRTCRoutes:
         provided) so the drain step can force-stop it.
         """
         web = self._web
-        if not self._authorized(request):
+        auth_reason = self._auth_reason(request)
+        if auth_reason != "allowed":
+            # Auth is checked before draining here, so report the live gate state.
+            self._record_rejection(server_state=self._server_state(), auth_result=auth_reason)
             return self._unauthorized_response(request)
         if self._gate.is_draining:
+            self._record_rejection(server_state="draining")
             return web.Response(
                 status=503,
                 text=json.dumps({"error": "Server is shutting down"}),
@@ -302,6 +337,8 @@ class WebRTCRoutes:
                 headers=self._cors_headers(request),
             )
         if not self._gate.try_acquire():
+            # ``try_acquire`` only fails for capacity here (draining handled above).
+            self._record_rejection(server_state="serving")
             return web.Response(
                 status=503,
                 text=json.dumps({"error": "Server is at the configured session limit"}),

@@ -238,6 +238,11 @@ class VoiceServer:
             self._ws_server = await self._start_websocket_listener()
 
         self._started = True
+        # Reflect the fresh serving state on the draining gauge (M8). A prior
+        # ``stop`` flipped it to draining=1; a reused server is serving again, so
+        # re-assert draining=0 (the gate flag itself was reset in
+        # ``_reset_gate_bookkeeping``). A no-op without an OTel SDK.
+        self._emit_draining(False)
         logger.info(
             "VoiceServer ready: http://%s:%s (websocket=%s, webrtc=%s)",
             self.config.host,
@@ -277,6 +282,10 @@ class VoiceServer:
             manager=self._manager,
             runtime_feedback=False,
             active_session_objs=self._active_session_objs,
+            # Route WebRTC offer rejections (auth / draining / capacity) through
+            # the SAME rejection metric path as ``/ws`` so ``/metrics`` and
+            # ``easycat.server.sessions.rejected.total`` span both transports.
+            on_session_rejected=self._emit_session_rejected,
         )
 
     async def serve(self, stop_event: asyncio.Event | None = None) -> None:
@@ -430,16 +439,21 @@ class VoiceServer:
         self._started = False
 
     def _reset_gate_bookkeeping(self) -> None:
-        """Clear the gate's active set + reservations after a full drain.
+        """Reset the gate's active set, reservations, AND draining flag after a drain.
 
         Idempotent: drops every remaining active key and returns every reserved
         slot so a stopped server reports ``active_sessions == 0`` even though the
-        draining handlers skipped their own untrack/release.
+        draining handlers skipped their own untrack/release. Crucially it ALSO
+        clears the draining flag the drain set in :meth:`stop`: without this a
+        stop-then-:meth:`start` reuse would re-bind the listeners but leave the
+        shared gate draining, so readiness never recovers and every new ``/ws`` /
+        WebRTC session is rejected as "draining".
         """
         for key in self._gate.active_keys():
             self._gate.untrack(key)
         while self._gate.reserved_count > 0:
             self._gate.release()
+        self._gate.stop_draining()
 
     async def _cancel_ws_handler_tasks(self) -> None:
         """Cancel + await any ``/ws`` handler task still running.
@@ -511,7 +525,22 @@ class VoiceServer:
         from easycat.planning import build_provider_plan
 
         profile = self.config.profile
-        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        try:
+            plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        except Exception:
+            # An unresolvable profile (e.g. an unknown provider/backend shortcut
+            # such as ``stt = "opnai"``) makes the planner RAISE. A readiness
+            # probe must report a structured not-ready response, NOT a 500 — a
+            # raised health check breaks k8s liveness/readiness probes outright.
+            # The manifest file loaded; the plan is what is unbuildable, so report
+            # it as a plan blocking error (``plan_has_blocking_errors``).
+            logger.warning(
+                "VoiceServer readiness: provider plan for profile %r is "
+                "unresolvable; reporting not-ready",
+                profile,
+                exc_info=True,
+            )
+            return True, ("plan_unresolvable",)
         return True, plan.blocking_errors()
 
     def plan_payload(self) -> dict[str, Any]:

@@ -73,6 +73,28 @@ async def test_start_is_idempotent() -> None:
 
 
 @pytest.mark.integration_socket
+async def test_stop_then_start_resets_draining_and_recovers_readiness() -> None:
+    # Regression: ``stop`` drains by flipping the shared gate's draining flag.
+    # Reusing the same instance via ``start`` must reset it, or the restarted
+    # server binds its listeners but rejects every new connection as "draining"
+    # and never reports ready.
+    server = _idle_server()
+    await server.start()
+    await server.stop()
+    assert server._gate.is_draining is False  # cleared by the drain reset
+
+    await server.start()  # reuse the same instance
+    try:
+        assert server._gate.is_draining is False
+        health = await server.health()
+        assert health.draining is False
+        assert health.route_stack_ready is True
+        assert health.is_ready() is True
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
 async def test_serve_runs_until_stop_event_and_does_not_call_asyncio_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

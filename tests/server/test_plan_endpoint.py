@@ -210,6 +210,33 @@ async def test_ready_503_when_plan_has_blocking_errors(
 
 
 @pytest.mark.integration_socket
+async def test_ready_503_when_manifest_plan_unresolvable(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: an unresolvable profile (here a typo'd STT shortcut) makes the
+    # planner RAISE. A readiness probe must report a structured not-ready
+    # response, NOT a 500 — a raised health check breaks k8s probes outright.
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, stt="opnai"))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/health/ready") as resp:
+            assert resp.status == 503
+            body = await resp.json()
+            assert "plan_has_blocking_errors" in body["reasons"]
+        # /health degrades the providers sub-check rather than 500-ing.
+        async with client.get(f"{_base_url(server)}/health") as resp:
+            assert resp.status == 200
+            health = await resp.json()
+        assert health["checks"]["manifest"] == {"status": "ok"}
+        assert health["checks"]["providers"] == {"status": "degraded"}
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
 async def test_factory_only_keeps_m4_skipped_placeholders(
     client: aiohttp.ClientSession,
 ) -> None:

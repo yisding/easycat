@@ -226,13 +226,26 @@ def _select_transport(transport: Any) -> ProviderSelection:
 
 
 def _select_vad(vad: Any) -> ProviderSelection:
-    """Resolve the vad role from a config value (string, VADConfig, or instance)."""
+    """Resolve the vad role from a config value (string, VADConfig, or instance).
+
+    An UNKNOWN backend shortcut RAISES rather than silently falling back to the
+    ``auto`` metadata while keeping the bad name. ``create_vad`` /
+    ``ProjectManifest.to_easyconfig`` both reject an unknown VAD backend
+    (``ValueError`` / ``EASYCAT_E602``), so the planner must too — otherwise
+    ``/plan`` and ``/health/ready`` would report a CLEAN plan for a profile that
+    crashes on the first connection, breaking the planner-vs-``create_session``
+    parity contract. The readiness path catches this and renders a structured
+    not-ready response (see ``VoiceServer._manifest_readiness``).
+    """
     backend_name = DEFAULT_VAD
     if isinstance(vad, str):
         backend_name = vad
     elif vad is not None and hasattr(vad, "backend"):
         backend_name = vad.backend
-    backend = VAD_BACKENDS.get(backend_name, VAD_BACKENDS[DEFAULT_VAD])
+    backend = VAD_BACKENDS.get(backend_name)
+    if backend is None:
+        allowed = ", ".join(sorted(VAD_BACKENDS))
+        raise ValueError(f"Unknown VAD backend {backend_name!r}. Expected one of: {allowed}.")
     return _backend_selection("vad", backend_name, backend)
 
 

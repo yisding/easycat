@@ -124,6 +124,18 @@ def test_empty_dependency_extras_are_never_missing() -> None:
     assert "cartesia" not in plan.missing_extras
 
 
+def test_unknown_vad_shortcut_raises_not_silent_auto_fallback() -> None:
+    # Regression: an unknown vad shortcut must NOT silently fall back to the
+    # ``auto`` metadata while keeping the bad name. ``create_vad`` /
+    # ``to_easyconfig`` reject it, so the planner must too — otherwise the plan
+    # would look clean for a profile that crashes on the first connection.
+    with pytest.raises(ValueError, match="Unknown VAD backend 'not-a-backend'"):
+        build_provider_plan(
+            _profile(transport="websocket", vad="not-a-backend"),
+            environ={"OPENAI_API_KEY": "x"},
+        )
+
+
 def test_twilio_combo_emits_warning_not_blocking() -> None:
     plan = build_provider_plan(
         _profile(transport="twilio", stt="openai", tts="openai"),

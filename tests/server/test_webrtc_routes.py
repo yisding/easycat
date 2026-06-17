@@ -436,6 +436,41 @@ async def test_draining_rejects_new_offers(fake_webrtc: None, client: object) ->
 
 
 @pytest.mark.integration_socket
+async def test_webrtc_offer_rejections_count_in_server_metrics(
+    fake_webrtc: None, client: object
+) -> None:
+    # Regression: WebRTC offer rejections (auth / draining / capacity) share the
+    # server's gate, so they must feed the SAME rejection metric path as ``/ws``.
+    # Otherwise ``/metrics`` and ``easycat.server.sessions.rejected.total``
+    # undercount the WebRTC transport.
+    server = await _running_server(
+        VoiceServerConfig(
+            host="127.0.0.1",
+            port=0,
+            max_sessions=1,
+            enable_websocket=False,
+            auth=BearerTokenAuth(token="sekrit"),
+        )
+    )
+    try:
+        base = f"{_base_url(server)}/webrtc/offer"
+        assert server.metrics_payload()["sessions_rejected_total"] == 0
+        # (a) tokenless offer -> auth rejection counted.
+        async with client.post(base, json=_OFFER_BODY) as resp:
+            assert resp.status == 401
+        assert server.metrics_payload()["sessions_rejected_total"] == 1
+        # (b) draining offer -> rejection counted.
+        server._gate.start_draining()
+        async with client.post(
+            base, json=_OFFER_BODY, headers={"Authorization": "Bearer sekrit"}
+        ) as resp:
+            assert resp.status == 503
+        assert server.metrics_payload()["sessions_rejected_total"] == 2
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
 async def test_stop_force_drains_active_webrtc_session(fake_webrtc: None, client: object) -> None:
     sessions: list[_FakeSession] = []
     server = await _running_server(

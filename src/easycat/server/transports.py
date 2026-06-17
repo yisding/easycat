@@ -125,6 +125,15 @@ class CapacityGate(Generic[KeyT]):
         """Flip the draining flag so :meth:`try_acquire` rejects new connections."""
         self._draining = True
 
+    def stop_draining(self) -> None:
+        """Clear the draining flag so :meth:`try_acquire` accepts again.
+
+        Used when a stopped server is reset for reuse: a drained gate must NOT
+        stay in draining mode, or a restarted server would bind its listeners
+        but reject every new connection as "draining" (readiness never recovers).
+        """
+        self._draining = False
+
     async def drain(
         self,
         sessions_for_keys: Callable[[], Iterable[tuple[KeyT, object]]],
