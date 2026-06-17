@@ -200,6 +200,33 @@ def test_phone_alias_delegates_to_twilio(captured_twilio: dict[str, Any]) -> Non
     assert isinstance(captured_twilio["config"], TwilioVoiceServerConfig)
 
 
+def test_twilio_default_max_sessions_uses_server_config_default(
+    captured_twilio: dict[str, Any],
+) -> None:
+    """Without an explicit limit anywhere, the TwilioVoiceServerConfig default applies."""
+    VoiceApp(agent="a").run("twilio", stream_url="wss://example/media")
+    assert captured_twilio["config"].max_sessions == 64
+
+
+def test_twilio_forwards_max_sessions_from_construction(
+    captured_twilio: dict[str, Any],
+) -> None:
+    """``max_sessions`` is mode-neutral, so a construction-time value reaches twilio
+    (mirroring the browser/websocket builders)."""
+    VoiceApp(agent="a", max_sessions=3).run("twilio", stream_url="wss://example/media")
+    assert captured_twilio["config"].max_sessions == 3
+
+
+def test_twilio_run_max_sessions_overrides_construction(
+    captured_twilio: dict[str, Any],
+) -> None:
+    """A ``run('twilio', max_sessions=...)`` value wins over the construction-time one."""
+    VoiceApp(agent="a", max_sessions=3).run(
+        "twilio", stream_url="wss://example/media", max_sessions=7
+    )
+    assert captured_twilio["config"].max_sessions == 7
+
+
 def test_run_twilio_voice_app_drives_async_server(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sync wrapper owns ``asyncio.run`` and drives ``serve_twilio_voice_app``.
 

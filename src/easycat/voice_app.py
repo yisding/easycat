@@ -459,15 +459,20 @@ class VoiceApp:
     def _twilio_server_config(self, **kwargs: Any) -> Any:
         """Build the :class:`TwilioVoiceServerConfig` for the twilio listeners.
 
-        Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
+        Twilio-listener fields (``host`` / ``media_port`` / ``http_host`` /
         ``http_port`` / ``stream_url`` / ``stream_token_secret`` /
         ``twilio_auth_token`` / ``trust_proxy_headers`` /
-        ``unsafe_allow_unsigned_webhooks`` / ``max_sessions``) come from
-        ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
-        deliberately NOT in the constructor allow-list (which is for high-level
-        ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret`` /
-        ``twilio_auth_token`` fall back to ``TWILIO_STREAM_URL`` /
-        ``TWILIO_STREAM_TOKEN_SECRET`` / ``TWILIO_AUTH_TOKEN`` as a convenience.
+        ``unsafe_allow_unsigned_webhooks``) come from
+        ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs``. They are
+        twilio-specific (two listeners, each with its own host/port pair), so
+        they are NOT taken from the generic constructor ``host`` / ``port``.
+        ``max_sessions`` is the one mode-neutral server-policy field, so it
+        mirrors the browser/websocket builders: a ``run``/``serve`` value wins,
+        otherwise a ``max_sessions=`` given at construction, otherwise the
+        ``TwilioVoiceServerConfig`` default. ``stream_url`` /
+        ``stream_token_secret`` / ``twilio_auth_token`` fall back to
+        ``TWILIO_STREAM_URL`` / ``TWILIO_STREAM_TOKEN_SECRET`` /
+        ``TWILIO_AUTH_TOKEN`` as a convenience.
         ``twilio_auth_token`` is the Twilio *account* auth token (validating the
         ``X-Twilio-Signature`` webhook header) — distinct from the
         browser/websocket ``serve_token`` that gates the signaling bind.
@@ -491,7 +496,10 @@ class VoiceApp:
         )
         trust_proxy_headers = kwargs.pop("trust_proxy_headers", False)
         unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
-        max_sessions = kwargs.pop("max_sessions", TwilioVoiceServerConfig.max_sessions)
+        max_sessions = kwargs.pop(
+            "max_sessions",
+            self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
+        )
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
