@@ -288,7 +288,7 @@ def test_browser_uses_supplied_config_factory(
 def test_browser_forwards_host_port_token(
     captured_webrtc: dict[str, Any],
 ) -> None:
-    VoiceApp(agent="a", host="127.0.0.1", port=9001, auth_token="secret").run("browser")
+    VoiceApp(agent="a", host="127.0.0.1", port=9001, serve_token="secret").run("browser")
     config = captured_webrtc["config"]
     assert config.port == 9001
     assert config.auth_token == "secret"
@@ -322,11 +322,11 @@ def test_browser_factory_does_not_leak_server_policy_fields(
     """Server-policy fields land on the transport config, NOT the EasyConfig.
 
     Invoking the captured per-connection factory is what catches the leak:
-    ``EasyConfig.browser`` has no ``host`` / ``port`` / ``auth_token`` field, so
+    ``EasyConfig.browser`` has no ``host`` / ``port`` / ``serve_token`` field, so
     forwarding any of them would raise ``TypeError`` here (which previously only
     surfaced on the first real connection, after a clean startup).
     """
-    VoiceApp(agent="a", host="127.0.0.1", port=9001, auth_token="secret").run("browser")
+    VoiceApp(agent="a", host="127.0.0.1", port=9001, serve_token="secret").run("browser")
 
     # Server-policy fields reached the transport config.
     transport_config = captured_webrtc["config"]
@@ -339,7 +339,7 @@ def test_browser_factory_does_not_leak_server_policy_fields(
     assert isinstance(config, EasyConfig)
     assert config.agent == "a"
     # None of the server-policy fields leaked into the EasyConfig.
-    for leaked in ("host", "port", "auth_token", "max_sessions"):
+    for leaked in ("host", "port", "serve_token", "max_sessions"):
         assert not hasattr(config, leaked)
 
 
@@ -347,7 +347,7 @@ def test_websocket_factory_does_not_leak_server_policy_fields(
     captured_websocket: dict[str, Any],
 ) -> None:
     """The WebSocket per-connection factory must also stay leak-free."""
-    VoiceApp(agent="a", host="127.0.0.1", port=9001, auth_token="secret", max_sessions=3).run(
+    VoiceApp(agent="a", host="127.0.0.1", port=9001, serve_token="secret", max_sessions=3).run(
         "websocket"
     )
 
@@ -459,7 +459,7 @@ def test_non_loopback_explicit_token_satisfies_guard(
     monkeypatch: pytest.MonkeyPatch, captured_websocket: dict[str, Any]
 ) -> None:
     monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
-    VoiceApp(agent="a", host="0.0.0.0", auth_token="tok").run("websocket")
+    VoiceApp(agent="a", host="0.0.0.0", serve_token="tok").run("websocket")
     config = captured_websocket["config"]
     assert config.auth_token == "tok"
 

@@ -252,6 +252,29 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     return agent
 
 
+# ``configurable`` keys that pin a runnable to one conversation. A bound value
+# for any of these is resolved identically by every per-session bridge, so the
+# spec cannot be safely shared across concurrent connections.
+_CONVERSATION_PIN_KEYS = ("thread_id", "checkpoint_id", "session_id")
+
+
+def _runnable_pins_conversation(agent: Any) -> bool:
+    """Return ``True`` when a LangChain/LangGraph ``Runnable`` binds a
+    per-conversation key (``thread_id`` / ``checkpoint_id`` / ``session_id``)
+    via ``with_config(configurable={...})``.
+
+    Reuses the same SDK-free ``RunnableBinding`` walk the LangGraph bridge uses
+    to hoist a bound ``thread_id`` (:func:`._bound_config`), so the detection
+    here cannot drift from the value the bridge would actually resolve.
+    """
+    from easycat.integrations.agents.langgraph import _bound_config
+
+    configurable = _bound_config(agent).get("configurable")
+    if not isinstance(configurable, dict):
+        return False
+    return any(configurable.get(key) for key in _CONVERSATION_PIN_KEYS)
+
+
 def is_reusable_agent_spec(agent: Any) -> bool:
     """Return ``True`` when *agent* is a stateless framework spec safe to
     reuse across concurrent sessions.
@@ -273,6 +296,14 @@ def is_reusable_agent_spec(agent: Any) -> bool:
     Those must be supplied through a per-connection ``config_factory`` that
     constructs a fresh agent per connection.  ``str`` URLs/provider names are
     handled by the caller as primitives and never reach this predicate.
+
+    A LangChain/LangGraph ``Runnable`` that pins a *conversation* via
+    ``with_config(configurable={...})`` is the one exception to "a fresh bridge
+    means no shared state": a bound ``thread_id`` / ``checkpoint_id`` (LangGraph)
+    or ``session_id`` (LangChain history) is resolved identically by every
+    per-session bridge, so all concurrent connections would read and write the
+    *same* checkpointer thread / history store and corrupt each other. Such a
+    runnable is rejected here so it is routed through a ``config_factory``.
     """
     # OpenAI Agents SDK ``Agent`` -> fresh ``OpenAIAgentsBridge`` per session.
     try:
@@ -293,12 +324,14 @@ def is_reusable_agent_spec(agent: Any) -> bool:
     except ImportError:
         pass
     # LangChain ``Runnable`` -> fresh ``LangChainBridge`` / ``LangGraphBridge``
-    # per session (a compiled LangGraph graph is itself a ``Runnable``).
+    # per session (a compiled LangGraph graph is itself a ``Runnable``) — unless
+    # it pins a conversation via ``with_config(configurable={...})``, which every
+    # per-session bridge would resolve to the same shared thread/history.
     try:
         from langchain_core.runnables import Runnable
 
         if isinstance(agent, Runnable):
-            return True
+            return not _runnable_pins_conversation(agent)
     except ImportError:
         pass
     # LlamaIndex / LlamaAgents workflow -> fresh ``LlamaAgentsBridge`` per

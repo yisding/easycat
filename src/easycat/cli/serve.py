@@ -133,9 +133,9 @@ def _run_voice_app(
     if mode == "browser":
         # The CLI already printed the Open URL; suppress VoiceApp's own browser
         # announcement so it is not printed twice.
-        app.run(mode, host=host, port=port, auth_token=token, announce=False)
+        app.run(mode, host=host, port=port, serve_token=token, announce=False)
         return
-    app.run(mode, host=host, port=port, auth_token=token)
+    app.run(mode, host=host, port=port, serve_token=token)
 
 
 @cli_command

@@ -65,7 +65,7 @@ _SERVER_POLICY_FIELDS: frozenset[str] = frozenset(
     {
         "host",
         "port",
-        "auth_token",
+        "serve_token",
         "max_sessions",
     }
 )
@@ -91,9 +91,10 @@ def _normalize_mode(mode: str) -> VoiceMode:
 
 
 # High-level fields that can hold a *live* collaborator (a built provider or an
-# agent bridge) rather than an immutable spec. ``debug`` is excluded: it is
-# always a flag/level, never a stateful collaborator.
-_LIVE_CAPABLE_FIELDS: frozenset[str] = frozenset({"agent", "stt", "tts", "vad"})
+# agent bridge) rather than an immutable spec. Derived from the forwarded fields
+# minus ``debug``, which is always a flag/level, never a stateful collaborator —
+# so a new forwardable field is covered by the live-reuse guard automatically.
+_LIVE_CAPABLE_FIELDS: frozenset[str] = _FORWARDED_CONFIG_FIELDS - frozenset({"debug"})
 
 
 def _is_shareable_spec(field: str, value: Any) -> bool:
@@ -110,7 +111,14 @@ def _is_shareable_spec(field: str, value: Any) -> bool:
     reusing one object across connections would let concurrent sessions corrupt
     each other.
     """
-    if value is None or isinstance(value, (str, bool, int, float)):
+    # Only ``None`` and a provider-name/URL ``str`` are universal scalar specs
+    # for these fields. ``bool``/``int``/``float`` are never valid here, so they
+    # must NOT short-circuit to "shareable" — letting them fall through to the
+    # per-field checks below makes a stray ``agent=True`` / ``stt=1`` typo fail
+    # loudly at construction (rejected as non-shareable) instead of being
+    # forwarded into every per-connection ``EasyConfig`` to blow up later. (Note
+    # ``bool`` is an ``int`` subclass, so it must not be treated as a spec.)
+    if value is None or isinstance(value, str):
         return True
     if field == "agent":
         # Framework agent *specs* (OpenAI/PydanticAI/LangChain/LangGraph/Llama)
@@ -209,7 +217,7 @@ class VoiceApp:
     def _forwardable_config_kwargs(self) -> dict[str, Any]:
         """Return only the keys safe to forward into an ``EasyConfig`` preset.
 
-        Server-policy fields (``host`` / ``port`` / ``auth_token`` /
+        Server-policy fields (``host`` / ``port`` / ``serve_token`` /
         ``max_sessions``) live in ``_config_kwargs`` for the transport-config
         builders, but ``EasyConfig`` and its presets have no such fields —
         forwarding them would crash the preset constructor per connection.
@@ -340,7 +348,7 @@ class VoiceApp:
         max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions"))
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
-            kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
+            kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
@@ -414,7 +422,7 @@ class VoiceApp:
         max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 10))
         unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
-            kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
+            kwargs.pop("serve_token", self._config_kwargs.get("serve_token")),
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
@@ -452,17 +460,21 @@ class VoiceApp:
         """Build the :class:`TwilioVoiceServerConfig` for the twilio listeners.
 
         Server-policy fields (``host`` / ``media_port`` / ``http_host`` /
-        ``http_port`` / ``stream_url`` / ``stream_token_secret`` / ``auth_token``
-        / ``trust_proxy_headers`` / ``unsafe_allow_unsigned_webhooks`` /
-        ``max_sessions``) come from
+        ``http_port`` / ``stream_url`` / ``stream_token_secret`` /
+        ``twilio_auth_token`` / ``trust_proxy_headers`` /
+        ``unsafe_allow_unsigned_webhooks`` / ``max_sessions``) come from
         ``run('twilio', ...)`` / ``serve('twilio', ...)`` ``**kwargs`` — they are
         deliberately NOT in the constructor allow-list (which is for high-level
         ``EasyConfig`` fields only). ``stream_url`` / ``stream_token_secret`` /
-        ``auth_token`` fall back to ``TWILIO_STREAM_URL`` /
+        ``twilio_auth_token`` fall back to ``TWILIO_STREAM_URL`` /
         ``TWILIO_STREAM_TOKEN_SECRET`` / ``TWILIO_AUTH_TOKEN`` as a convenience.
-        ``stream_url`` and ``auth_token`` are both required (the helper raises a
-        clear ``ValueError`` when ``stream_url`` is missing, or when
-        ``auth_token`` is missing without ``unsafe_allow_unsigned_webhooks``).
+        ``twilio_auth_token`` is the Twilio *account* auth token (validating the
+        ``X-Twilio-Signature`` webhook header) — distinct from the
+        browser/websocket ``serve_token`` that gates the signaling bind.
+        ``stream_url`` and ``twilio_auth_token`` are both required (the helper
+        raises a clear ``ValueError`` when ``stream_url`` is missing, or when
+        ``twilio_auth_token`` is missing without
+        ``unsafe_allow_unsigned_webhooks``).
         """
         from easycat.telephony.server import TwilioVoiceServerConfig
 
@@ -474,7 +486,9 @@ class VoiceApp:
         stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
             "TWILIO_STREAM_TOKEN_SECRET"
         )
-        auth_token = kwargs.pop("auth_token", None) or os.environ.get("TWILIO_AUTH_TOKEN")
+        twilio_auth_token = kwargs.pop("twilio_auth_token", None) or os.environ.get(
+            "TWILIO_AUTH_TOKEN"
+        )
         trust_proxy_headers = kwargs.pop("trust_proxy_headers", False)
         unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
         max_sessions = kwargs.pop("max_sessions", TwilioVoiceServerConfig.max_sessions)
@@ -485,7 +499,7 @@ class VoiceApp:
             http_port=http_port,
             stream_url=stream_url,
             stream_token_secret=stream_token_secret,
-            auth_token=auth_token,
+            twilio_auth_token=twilio_auth_token,
             trust_proxy_headers=trust_proxy_headers,
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
             max_sessions=max_sessions,
@@ -589,13 +603,20 @@ class VoiceApp:
         A non-loopback bind requires a token for BOTH the WebRTC and WebSocket
         paths. The token falls back to ``EASYCAT_SERVE_TOKEN``. The only
         structured escape hatch is ``unsafe_allow_no_auth=True``.
+
+        Blank or whitespace-only tokens are normalized to ``None`` (via the
+        shared :func:`~easycat.transports.websocket._normalize_auth_token`) so a
+        ``"   "`` value cannot satisfy this guard as truthy while the downstream
+        WebSocket authorizer treats it as no token at all — keeping the bind
+        guard and request authorization in sync across both transports.
         """
         from easycat.transports.webrtc import _is_loopback_host
+        from easycat.transports.websocket import _normalize_auth_token
 
-        resolved = token or os.environ.get(_SERVE_TOKEN_ENV) or None
+        resolved = _normalize_auth_token(token or os.environ.get(_SERVE_TOKEN_ENV))
         if resolved is None and not _is_loopback_host(host) and not unsafe_allow_no_auth:
             raise ValueError(
-                f"Refusing to bind {host!r} without a token. Pass auth_token= "
+                f"Refusing to bind {host!r} without a token. Pass serve_token= "
                 f"(or set {_SERVE_TOKEN_ENV}) when serving beyond loopback, or pass "
                 "unsafe_allow_no_auth=True to bind an unauthenticated endpoint."
             )

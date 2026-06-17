@@ -356,7 +356,7 @@ def test_server_config_defaults_match_spec() -> None:
     assert config.http_port == 8000
     assert config.stream_url is None
     assert config.stream_token_secret is None
-    assert config.auth_token is None
+    assert config.twilio_auth_token is None
     assert config.trust_proxy_headers is False
     assert config.unsafe_allow_unsigned_webhooks is False
     assert config.max_sessions == 64
@@ -446,7 +446,7 @@ def test_media_listener_closed_when_http_startup_fails(
     monkeypatch.setattr(server_module, "require_module", lambda *a, **k: web)
     monkeypatch.setattr(server_module.websockets, "serve", _fake_serve_ws)
 
-    config = TwilioVoiceServerConfig(stream_url="wss://example/media", auth_token="tok")
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media", twilio_auth_token="tok")
 
     with pytest.raises(OSError, match="address already in use"):
         asyncio.run(serve_twilio_voice_app(lambda t: EasyConfig.phone(transport=t), config))
@@ -569,7 +569,7 @@ def test_twilio_auth_token_from_env(
 ) -> None:
     monkeypatch.setenv("TWILIO_AUTH_TOKEN", "twilio-secret")
     VoiceApp(agent="a").run("twilio", stream_url="wss://example/media")
-    assert captured_twilio["config"].auth_token == "twilio-secret"
+    assert captured_twilio["config"].twilio_auth_token == "twilio-secret"
 
 
 def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -599,7 +599,9 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
         missing = _FakeTwimlRequest(form, headers={"Host": "relay.example"})
         result["missing"] = await handler(missing)
 
-    config = TwilioVoiceServerConfig(stream_url="wss://example/media", auth_token="tw-secret")
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", twilio_auth_token="tw-secret"
+    )
     asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, _body))
 
     # Valid signature -> TwiML with an embedded stream token.

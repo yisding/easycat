@@ -41,7 +41,7 @@ from easycat import EasyConfig, TelephonyConfig, VoiceApp, require_env
 def main() -> None:
     require_env("OPENAI_API_KEY")
     stream_url = require_env("TWILIO_STREAM_URL")
-    auth_token = require_env("TWILIO_AUTH_TOKEN")
+    twilio_auth_token = require_env("TWILIO_AUTH_TOKEN")
 
     def config_factory(transport: object) -> EasyConfig:
         return EasyConfig.phone(
@@ -54,7 +54,7 @@ def main() -> None:
         )
 
     app = VoiceApp(config_factory=config_factory)
-    app.run("twilio", stream_url=stream_url, auth_token=auth_token)
+    app.run("twilio", stream_url=stream_url, twilio_auth_token=twilio_auth_token)
 
 
 if __name__ == "__main__":
