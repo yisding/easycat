@@ -75,6 +75,13 @@ class RoleBackend:
     extra: str | None = None
     required_env: str | None = None
     capabilities: frozenset[str] = field(default_factory=frozenset)
+    # For TRANSPORT backends only: mirrors the transport config's
+    # ``default_echo_cancellation_enabled`` ClassVar (read by
+    # ``EasyConfig._default_echo_cancellation_for_transport`` ->
+    # ``create_session``). The profile planner reads it so its echo-canceller
+    # verdict matches what ``create_session`` auto-enables for the transport,
+    # not just the browser preset. Ignored for the non-transport roles.
+    default_echo_cancellation_enabled: bool = False
 
 
 # ── TRANSPORT ────────────────────────────────────────────────────────
@@ -89,21 +96,25 @@ TRANSPORT_BACKENDS: dict[str, RoleBackend] = {
         config_type="WebRTCTransportConfig",
         extra="webrtc",
         capabilities=frozenset({"browser", "duplex_audio", "echo_loopback"}),
+        default_echo_cancellation_enabled=True,
     ),
     "websocket": RoleBackend(
         config_type="WebSocketTransportConfig",
         extra=None,
         capabilities=frozenset({"server", "duplex_audio"}),
+        default_echo_cancellation_enabled=True,
     ),
     "twilio": RoleBackend(
         config_type="TwilioTransportConfig",
         extra="telephony",
         capabilities=frozenset({"telephony", "mulaw", "8khz"}),
+        default_echo_cancellation_enabled=False,
     ),
     "local": RoleBackend(
         config_type="LocalTransportConfig",
         extra="local",
         capabilities=frozenset({"microphone", "duplex_audio"}),
+        default_echo_cancellation_enabled=True,
     ),
 }
 
@@ -127,6 +138,7 @@ TRANSPORT_BACKENDS_BY_CONFIG_TYPE["WebTransportTransportConfig"] = RoleBackend(
     config_type="WebTransportTransportConfig",
     extra="webtransport",
     capabilities=frozenset({"browser", "duplex_audio"}),
+    default_echo_cancellation_enabled=True,
 )
 
 

@@ -265,11 +265,25 @@ async def _safe_await(awaitable: Awaitable[object], *, timeout_s: float | None =
     When ``timeout_s`` is set, the await is bounded by :func:`asyncio.wait_for`
     so a hung teardown cannot block the drain past roughly ``timeout_s``; the
     :class:`TimeoutError` it raises cancels the awaitable and is swallowed here.
+
+    A :class:`asyncio.CancelledError` is swallowed ONLY when it belongs to the
+    teardown awaitable being reaped — e.g. a graceful-stop task
+    :func:`_escalate_graceful_stop` just cancelled, whose ``CancelledError``
+    surfaces here when awaited. The drain's OWN cancellation must NOT be
+    swallowed: if an outer caller cancels the task running
+    :meth:`CapacityGate.drain` / :meth:`VoiceServer.stop`,
+    ``current_task().cancelling()`` is set and the cancellation is re-raised so
+    cooperative cancellation is honored (the same idiom as
+    :mod:`easycat.runtime.scope` and :mod:`easycat.config._telephony_wiring`).
     """
     try:
         if timeout_s is not None:
             await asyncio.wait_for(asyncio.ensure_future(awaitable), timeout=timeout_s)
         else:
             await awaitable
-    except (asyncio.CancelledError, Exception):  # pragma: no cover - defensive teardown
+    except asyncio.CancelledError:
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            raise
+    except Exception:  # pragma: no cover - defensive teardown
         pass

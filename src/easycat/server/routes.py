@@ -231,20 +231,26 @@ def metrics_middleware(server: VoiceServer) -> Any:
     @web.middleware
     async def _middleware(request: Any, handler: Any) -> Any:
         start = time.perf_counter()
-        response = await handler(request)
-        if server.config.enable_metrics:
-            template = _matched_route_template(request)
-            if template is not None:
-                duration_s = time.perf_counter() - start
-                state = "draining" if server._gate.is_draining else "serving"
-                # In-process snapshot for ``GET /metrics`` (stable without an
-                # OTel SDK) alongside the registered OTel emission.
-                server._requests_total += 1
-                server_metrics.record_request(
-                    template,
-                    duration_s=duration_s,
-                    server_state=state,
-                )
-        return response
+        # Record in a ``finally`` so a handler that RAISES (a 500, or an aiohttp
+        # ``HTTPException`` such as a redirect/404 propagated through the stack)
+        # is still counted. Recording only after ``await handler(request)``
+        # returns would systematically undercount exactly the error requests an
+        # operator most wants to see in ``/metrics``.
+        try:
+            return await handler(request)
+        finally:
+            if server.config.enable_metrics:
+                template = _matched_route_template(request)
+                if template is not None:
+                    duration_s = time.perf_counter() - start
+                    state = "draining" if server._gate.is_draining else "serving"
+                    # In-process snapshot for ``GET /metrics`` (stable without an
+                    # OTel SDK) alongside the registered OTel emission.
+                    server._requests_total += 1
+                    server_metrics.record_request(
+                        template,
+                        duration_s=duration_s,
+                        server_state=state,
+                    )
 
     return _middleware

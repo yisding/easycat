@@ -265,9 +265,17 @@ def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
     cfg = config.noise_reduction
     if cfg is not None and hasattr(cfg, "backend"):
         backend_name = cfg.backend
-    backend = NOISE_REDUCER_BACKENDS.get(
-        backend_name, NOISE_REDUCER_BACKENDS[DEFAULT_NOISE_REDUCER]
-    )
+    # An UNKNOWN backend RAISES rather than silently falling back to the default
+    # while keeping the bad name (the same parity rule as ``_select_vad``):
+    # ``create_noise_reducer`` rejects an unknown backend (``ValueError``), so the
+    # planner must too — otherwise ``/plan`` / ``/health/ready`` would report a
+    # CLEAN plan for a config that crashes on the first connection.
+    backend = NOISE_REDUCER_BACKENDS.get(backend_name)
+    if backend is None:
+        allowed = ", ".join(sorted(NOISE_REDUCER_BACKENDS))
+        raise ValueError(
+            f"Unknown noise reducer backend {backend_name!r}. Expected one of: {allowed}."
+        )
     return _backend_selection("noise_reducer", backend_name, backend)
 
 
@@ -438,8 +446,6 @@ def _select_from_profile(
     ``EasyConfig``: an unset stt defaults to ``openai-realtime``, an unset tts to
     ``openai``.
     """
-    from easycat.project.schema import TRANSPORT_PRESET
-
     selected: dict[str, ProviderSelection] = {}
     selected["stt"] = _select_catalog_string(
         "stt", profile.stt, catalog=stt_catalog, default_provider="openai-realtime"
@@ -473,16 +479,22 @@ def _select_from_profile(
     )
 
     # Noise reduction / echo cancellation: the manifest has no knob for these, so
-    # the profile's transport preset drives the create_session defaults. A
-    # ``browser`` preset auto-enables echo cancellation; everything else leaves
-    # it off. Noise reduction defaults off unless explicitly enabled (no manifest
-    # field -> off).
-    # The manifest has no echo-cancellation fallback knob, so the browser
-    # preset's auto-enabled AEC always uses the default ``passthrough`` policy
-    # (matching ``EasyConfig.browser``): a missing ``aec`` extra degrades to
-    # PassthroughAEC rather than blocking readiness.
-    preset = TRANSPORT_PRESET.get(profile.transport)
-    echo_enabled = preset == "browser"
+    # the transport's create_session default drives them. ``create_session``
+    # auto-enables AEC for EVERY transport whose ``default_echo_cancellation_enabled``
+    # capability is True (browser/websocket/local/webtransport — NOT just the
+    # browser preset; only twilio is off) via
+    # ``EasyConfig._default_echo_cancellation_for_transport``, so the planner must
+    # read the SAME per-transport default or it would mis-report AEC for the
+    # websocket/local profiles. The manifest has no echo-cancellation fallback
+    # knob, so the auto-enabled AEC always uses the default ``passthrough`` policy
+    # (matching the ``EasyConfig`` presets): a missing ``aec`` extra degrades to
+    # PassthroughAEC rather than blocking readiness. Noise reduction defaults off
+    # unless explicitly enabled (no manifest field -> off).
+    echo_enabled = (
+        transport_backend.default_echo_cancellation_enabled
+        if transport_backend is not None
+        else False
+    )
     selected["echo_canceller"] = _echo_canceller_selection(
         enabled=echo_enabled, fallback_policy="passthrough"
     )

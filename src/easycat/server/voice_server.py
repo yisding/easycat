@@ -153,9 +153,14 @@ class VoiceServer:
     @_draining.setter
     def _draining(self, value: bool) -> None:
         # Tests flip this directly; route it onto the shared gate so the
-        # readiness check and the ``/ws`` handler observe it identically.
+        # readiness check and the ``/ws`` handler observe it identically. Handle
+        # BOTH values symmetrically — a write-only setter that silently dropped
+        # ``= False`` would be a trap (assigning the inverse of ``= True`` would
+        # be a no-op, leaving the gate draining).
         if value:
             self._gate.start_draining()
+        else:
+            self._gate.stop_draining()
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -927,10 +932,6 @@ class VoiceServer:
         auth = self.config.auth
         if auth is not None and hasattr(auth, "allow_query_token"):
             auth.allow_query_token = True
-
-    def _authorize_websocket(self, ws: Any) -> bool:
-        """Return whether a ``/ws`` handshake is authorized (bool shim)."""
-        return self._websocket_auth_reason(ws) == "allowed"
 
     def _websocket_auth_reason(self, ws: Any) -> str:
         """Authorize a ``/ws`` handshake through the unified ``AuthPolicy``.

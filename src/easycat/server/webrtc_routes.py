@@ -408,16 +408,29 @@ class WebRTCRoutes:
 
             attach_runtime_feedback(session)
         await self._manager.add(key, session)
-        self._gate.track(key)
-        if self._active_session_objs is not None:
-            self._active_session_objs[key] = session
-        # The accepted offer now holds a gate reservation — refresh the shared
-        # active-connection gauge so WebRTC traffic is visible to OTel.
-        self._emit_connections_changed()
-        transport._ensure_browser_event_forwarder()
-        task = asyncio.create_task(self._cleanup_session(key, transport))
-        self._cleanup_tasks.add(task)
-        task.add_done_callback(self._cleanup_tasks.discard)
+        # ``manager.add`` already STARTED the session. ``handle_offer``'s except
+        # only runs its unregister when ``session_started`` is True, and that flag
+        # is set by the caller AFTER this method returns — so any failure wiring up
+        # the remaining bookkeeping below (forwarder / cleanup task) would otherwise
+        # leave the started session registered forever (never stopped) with its gate
+        # slot orphaned. Unwind it here so a partial registration cannot leak.
+        try:
+            self._gate.track(key)
+            if self._active_session_objs is not None:
+                self._active_session_objs[key] = session
+            # The accepted offer now holds a gate reservation — refresh the shared
+            # active-connection gauge so WebRTC traffic is visible to OTel.
+            self._emit_connections_changed()
+            transport._ensure_browser_event_forwarder()
+            task = asyncio.create_task(self._cleanup_session(key, transport))
+            self._cleanup_tasks.add(task)
+            task.add_done_callback(self._cleanup_tasks.discard)
+        except Exception:
+            # Stop + drop the started session (``manager.remove`` stops it) and
+            # clear any partial gate/active-map bookkeeping. The gate reservation
+            # itself is released by ``handle_offer``'s except (no cleanup task ran).
+            await self._unregister_session(key)
+            raise
 
     async def _unregister_session(self, key: int) -> None:
         """Untrack a session that failed after being registered."""
