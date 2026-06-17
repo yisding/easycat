@@ -267,17 +267,33 @@ class VoiceApp:
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
-    def _browser_transport_config(self, **kwargs: Any) -> Any:
+    def _browser_transport_config(self, **kwargs: Any) -> tuple[Any, bool]:
+        """Build the WebRTC config plus the resolved ``unsafe_allow_no_auth`` flag.
+
+        Mirrors :meth:`_websocket_server_config`: ``max_sessions`` is threaded into
+        the transport config so a requested capacity limit is honored (the WebRTC
+        default would otherwise silently win), and the flag is returned (not just
+        consumed by the pre-check) so the run/serve methods can forward it to the
+        shared WebRTC serve helper, whose own non-loopback guard would otherwise
+        re-reject an intentionally unauthenticated bind.
+        """
         from easycat.transports.webrtc import WebRTCTransportConfig
 
         host = kwargs.pop("host", self._config_kwargs.get("host", "127.0.0.1"))
         port = kwargs.pop("port", self._config_kwargs.get("port", 8080))
+        # Fall back to the WebRTC default (64) so an unspecified capacity keeps
+        # its prior behavior; an explicit value (construction- or run-time) wins.
+        max_sessions = kwargs.pop("max_sessions", self._config_kwargs.get("max_sessions", 64))
+        unsafe_allow_no_auth = kwargs.pop("unsafe_allow_no_auth", False)
         token = self._resolve_serve_token(
             kwargs.pop("auth_token", self._config_kwargs.get("auth_token")),
             host=host,
-            unsafe_allow_no_auth=kwargs.pop("unsafe_allow_no_auth", False),
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
-        return WebRTCTransportConfig(host=host, port=port, auth_token=token)
+        transport_config = WebRTCTransportConfig(
+            host=host, port=port, auth_token=token, max_sessions=max_sessions
+        )
+        return transport_config, unsafe_allow_no_auth
 
     def _browser_factory(self) -> Callable[[WebRTCTransport], EasyConfig]:
         return self._per_connection_factory("browser")
@@ -285,18 +301,27 @@ class VoiceApp:
     def _run_browser(self, **kwargs: Any) -> None:
         from easycat.transports.webrtc import run_webrtc_config_server
 
-        transport_config = self._browser_transport_config(**kwargs)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
         # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
         # announced first. Pass ``announce=False`` to suppress the helper's own
         # "Server ready..." line and avoid a duplicate.
         self._announce_browser_url(transport_config)
-        run_webrtc_config_server(self._browser_factory(), transport_config, announce=False)
+        run_webrtc_config_server(
+            self._browser_factory(),
+            transport_config,
+            announce=False,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     async def _serve_browser(self, **kwargs: Any) -> None:
         from easycat.transports.webrtc import serve_webrtc_config_sessions
 
-        transport_config = self._browser_transport_config(**kwargs)
-        await serve_webrtc_config_sessions(self._browser_factory(), transport_config)
+        transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
+        await serve_webrtc_config_sessions(
+            self._browser_factory(),
+            transport_config,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
         from easycat.cli._output import stdout_console

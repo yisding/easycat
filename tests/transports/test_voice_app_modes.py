@@ -40,6 +40,7 @@ def captured_webrtc(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def _fake_run(factory: Any, config: Any = None, **kwargs: Any) -> None:
         captured["factory"] = factory
         captured["config"] = config
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(webrtc_module, "run_webrtc_config_server", _fake_run)
     return captured
@@ -52,6 +53,7 @@ def captured_websocket(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def _fake_run(factory: Any, config: Any = None, **kwargs: Any) -> None:
         captured["factory"] = factory
         captured["config"] = config
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(websocket_module, "run_websocket_config_server", _fake_run)
     return captured
@@ -157,6 +159,28 @@ def test_browser_forwards_host_port_token(
     config = captured_webrtc["config"]
     assert config.port == 9001
     assert config.auth_token == "secret"
+
+
+def test_browser_forwards_max_sessions(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    """A requested capacity limit must reach the WebRTC config (not the default)."""
+    VoiceApp(agent="a", max_sessions=3).run("browser")
+    assert captured_webrtc["config"].max_sessions == 3
+
+
+def test_browser_max_sessions_run_kwarg_overrides(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    VoiceApp(agent="a", max_sessions=3).run("browser", max_sessions=5)
+    assert captured_webrtc["config"].max_sessions == 5
+
+
+def test_browser_max_sessions_defaults_to_webrtc_default(
+    captured_webrtc: dict[str, Any],
+) -> None:
+    VoiceApp(agent="a").run("browser")
+    assert captured_webrtc["config"].max_sessions == 64
 
 
 def test_browser_factory_does_not_leak_server_policy_fields(
@@ -315,6 +339,9 @@ def test_unsafe_allow_no_auth_escape_hatch_browser(
     config = captured_webrtc["config"]
     assert config.auth_token is None
     assert config.host == "0.0.0.0"
+    # The flag must be FORWARDED to the helper, whose own non-loopback bind guard
+    # would otherwise re-reject the intentionally unauthenticated bind.
+    assert captured_webrtc["kwargs"].get("unsafe_allow_no_auth") is True
 
 
 def test_unsafe_allow_no_auth_escape_hatch_websocket(

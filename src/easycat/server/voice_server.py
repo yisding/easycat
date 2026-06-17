@@ -679,9 +679,18 @@ class VoiceServer:
             profile=profile,
         )
 
-        def _factory(_transport: Any) -> EasyConfig:
-            # A fresh EasyConfig per connection (no shared grouped sub-configs).
-            return manifest.to_easyconfig(profile)
+        def _factory(transport: Any) -> EasyConfig:
+            # A fresh EasyConfig per connection (no shared grouped sub-configs),
+            # bound to the already-negotiated connection transport. The manifest's
+            # transport shortcut only selects the preset (browser/websocket/…) and
+            # its provider defaults; ``to_easyconfig`` would otherwise hand back a
+            # standalone transport that opens a SECOND listener/peer instead of
+            # driving the accepted socket. Override it with the live transport so
+            # manifest-backed websocket/webrtc serving uses the connected client —
+            # mirrors the per-connection factory ``from_app`` builds.
+            config = manifest.to_easyconfig(profile)
+            config.transport = transport
+            return config
 
         server = cls(config, session_factory=_factory)
         # Retain the loaded manifest so the read-only ``/plan`` route and the M6b

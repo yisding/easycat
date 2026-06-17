@@ -190,6 +190,29 @@ def test_from_manifest_builds_server_with_server_policy(tmp_path: object) -> Non
     assert server._session_factory is not None
 
 
+def test_from_manifest_factory_binds_accepted_transport(
+    tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The per-connection factory must drive the already-negotiated connection
+    # transport, NOT the standalone transport the manifest shortcut would build
+    # (otherwise each accepted client opens a second listener/peer).
+    from pathlib import Path
+
+    # A bare websocket profile (no stt/tts) needs a key to construct EasyConfig.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    manifest = Path(str(tmp_path)) / "easycat.toml"
+    manifest.write_text(
+        '[server]\nhost = "127.0.0.1"\nport = 9099\n\n[voice.default]\ntransport = "websocket"\n',
+        encoding="utf-8",
+    )
+    server = VoiceServer.from_manifest(manifest)
+    assert server._session_factory is not None
+
+    sentinel_transport = object()
+    config = server._session_factory(sentinel_transport)
+    assert config.transport is sentinel_transport
+
+
 # ── M4 boundary guards ───────────────────────────────────────────────
 
 

@@ -122,6 +122,31 @@ def test_serve_websocket_mode_routes_through_voice_app(
     assert stub_runtime["app"].config_factory is not None
 
 
+def test_serve_websocket_mode_prints_ws_endpoint(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """WebSocket mode starts a raw WS listener — print a ws:// endpoint, not an HTTP page."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "websocket", "--port", "8765"])
+
+    assert result.exit_code == 0
+    assert "ws://localhost:8765" in result.stdout
+    # The browser playground URL/message must NOT appear for websocket mode.
+    assert "http://" not in result.stdout
+    assert "transcript" not in result.stdout.lower()
+
+
+def test_serve_local_mode_prints_mic_hint_not_url(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """Local mode has no listener — never print a URL the user cannot use."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "local"])
+
+    assert result.exit_code == 0
+    assert "microphone" in result.stdout.lower()
+    assert "http://" not in result.stdout
+    assert "ws://" not in result.stdout
+
+
 def test_serve_rejects_unknown_mode(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:

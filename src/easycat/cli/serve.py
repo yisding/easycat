@@ -51,6 +51,34 @@ def _playground_url(host: str, port: int, token: str | None) -> str:
     return url
 
 
+def _websocket_endpoint(host: str, port: int) -> str:
+    display_host = "localhost" if host in _LOOPBACK_HOSTS else host
+    return f"ws://{display_host}:{port}"
+
+
+def _announce_serve_endpoint(*, mode: str, host: str, port: int, token: str | None) -> None:
+    """Print a mode-appropriate endpoint hint before the (blocking) server starts.
+
+    Only ``browser`` mode serves the HTTP playground page; ``websocket`` mode
+    starts a raw WebSocket listener (no page) and ``local`` mode opens the
+    microphone with no listener at all. Printing the browser playground URL for
+    the latter two left users staring at an address that cannot work.
+    """
+    if mode in {"local", "mic"}:
+        stdout_console.print("Listening on your microphone. Press Ctrl+C to stop.")
+        return
+    if mode in {"websocket", "ws"}:
+        endpoint = _websocket_endpoint(host, port)
+        stdout_console.print(f"Connect a WebSocket client to {endpoint}")
+        if token:
+            stdout_console.print("Send the token as an `Authorization: Bearer <token>` header.")
+        return
+    stdout_console.print(f"Open {_playground_url(host, port, token)}")
+    stdout_console.print(
+        "The page shows the live transcript, interruption indicator, and per-turn latency."
+    )
+
+
 def _playground_config_factory(
     *,
     agent_model: str,
@@ -177,8 +205,5 @@ def serve(
         raise typer.Exit(2)
 
     app = _build_voice_app(agent_model=agent_model, instructions=instructions)
-    stdout_console.print(f"Open {_playground_url(host, port, token)}")
-    stdout_console.print(
-        "The page shows the live transcript, interruption indicator, and per-turn latency."
-    )
+    _announce_serve_endpoint(mode=mode, host=host, port=port, token=token)
     _run_voice_app(app, mode=mode, host=host, port=port, token=token)
