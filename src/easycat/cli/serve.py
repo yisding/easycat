@@ -113,6 +113,24 @@ def _playground_config_factory(
     return factory
 
 
+def _validate_playground_config(factory: Any) -> None:
+    """Build the per-connection config once so credential errors fail fast.
+
+    The per-connection modes defer ``EasyConfig.browser(...)`` construction to
+    the ``config_factory`` (one fresh config per client). Without this check a
+    missing ``OPENAI_API_KEY`` (or an otherwise invalid default provider config)
+    would only raise ``EASYCAT_E203`` inside the first connection handler —
+    AFTER the CLI printed the URL and bound the listener. Constructing the
+    config once here surfaces that startup error before binding. A throwaway
+    :class:`~easycat.transports.WebRTCTransportConfig` stands in for the
+    per-connection transport: the playground always builds a browser config, so
+    the credential/provider validation is identical regardless of mode.
+    """
+    from easycat.transports import WebRTCTransportConfig
+
+    factory(WebRTCTransportConfig())
+
+
 def _build_voice_app(
     *,
     agent_model: str,
@@ -125,6 +143,7 @@ def _build_voice_app(
         agent_model=agent_model,
         instructions=instructions,
     )
+    _validate_playground_config(factory)
     return VoiceApp(config_factory=factory)
 
 

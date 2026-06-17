@@ -271,12 +271,38 @@ def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
     return _backend_selection("noise_reducer", backend_name, backend)
 
 
+def _echo_canceller_selection(*, enabled: bool, fallback_policy: str) -> ProviderSelection:
+    """Resolve the echo-canceller role, honoring graceful passthrough fallback.
+
+    A missing ``aec`` extra is only a BLOCKING gap when ``fallback_policy ==
+    "error"``: with the default ``"passthrough"`` policy ``create_session``
+    degrades to :class:`~easycat.echo_cancellation.PassthroughAEC` instead of
+    raising (see ``create_echo_canceller``), so the planner tags the selection
+    with the ``"degrades_to_passthrough"`` capability and
+    :func:`build_provider_plan` reports a missing extra as a WARNING rather than
+    blocking ``/health/ready`` for an otherwise-deployable browser server.
+    """
+    backend_name = "livekit" if enabled else DEFAULT_ECHO_CANCELLER
+    backend = ECHO_CANCELLER_BACKENDS[backend_name]
+    capabilities = backend.capabilities
+    if enabled and fallback_policy != "error":
+        capabilities = capabilities | {"degrades_to_passthrough"}
+    return ProviderSelection(
+        role="echo_canceller",
+        provider=backend_name,
+        model=None,
+        config_type=backend.config_type,
+        extra=backend.extra,
+        required_env=backend.required_env,
+        capabilities=capabilities,
+    )
+
+
 def _select_echo_canceller(config: EasyConfig) -> ProviderSelection:
     cfg = config.echo_cancellation
     enabled = bool(getattr(cfg, "enabled", False))
-    backend_name = "livekit" if enabled else DEFAULT_ECHO_CANCELLER
-    backend = ECHO_CANCELLER_BACKENDS[backend_name]
-    return _backend_selection("echo_canceller", backend_name, backend)
+    fallback_policy = str(getattr(cfg, "fallback_policy", "passthrough"))
+    return _echo_canceller_selection(enabled=enabled, fallback_policy=fallback_policy)
 
 
 def _select_agent(config: EasyConfig) -> ProviderSelection:
@@ -346,15 +372,23 @@ def build_provider_plan(
 
     missing_env: set[str] = set()
     missing_extras: set[str] = set()
+    degraded_extras: list[str] = []
     for role in _ROLE_ORDER:
         choice = selected[role]
         if choice.required_env and not env.get(choice.required_env):
             missing_env.add(choice.required_env)
         if _extra_is_missing(choice.extra):
             assert choice.extra is not None  # _extra_is_missing(None) is False
-            missing_extras.add(choice.extra)
+            # A role that degrades gracefully when its extra is absent (the AEC
+            # passthrough fallback) is a WARNING, not a blocking gap:
+            # ``create_session`` still runs, so ``/health/ready`` must stay
+            # ready. Anything ``create_session`` would refuse stays blocking.
+            if "degrades_to_passthrough" in choice.capabilities:
+                degraded_extras.append(f"{choice.role}_extra_{choice.extra}_missing_degraded")
+            else:
+                missing_extras.add(choice.extra)
 
-    warnings = _incompatibility_warnings(selected)
+    warnings = _incompatibility_warnings(selected) + tuple(sorted(degraded_extras))
 
     return ProviderPlan(
         profile=profile,
@@ -443,11 +477,14 @@ def _select_from_profile(
     # ``browser`` preset auto-enables echo cancellation; everything else leaves
     # it off. Noise reduction defaults off unless explicitly enabled (no manifest
     # field -> off).
+    # The manifest has no echo-cancellation fallback knob, so the browser
+    # preset's auto-enabled AEC always uses the default ``passthrough`` policy
+    # (matching ``EasyConfig.browser``): a missing ``aec`` extra degrades to
+    # PassthroughAEC rather than blocking readiness.
     preset = TRANSPORT_PRESET.get(profile.transport)
     echo_enabled = preset == "browser"
-    echo_name = "livekit" if echo_enabled else DEFAULT_ECHO_CANCELLER
-    selected["echo_canceller"] = _backend_selection(
-        "echo_canceller", echo_name, ECHO_CANCELLER_BACKENDS[echo_name]
+    selected["echo_canceller"] = _echo_canceller_selection(
+        enabled=echo_enabled, fallback_policy="passthrough"
     )
     selected["noise_reducer"] = ProviderSelection(
         role="noise_reducer",

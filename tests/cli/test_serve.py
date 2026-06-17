@@ -181,6 +181,8 @@ def test_voice_app_built_with_per_connection_factory(
             captured["config_factory"] = config_factory
             captured["config"] = config
 
+    # The build seam now validates the config up front, which needs a key.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
 
     app = serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
@@ -188,6 +190,46 @@ def test_voice_app_built_with_per_connection_factory(
     assert isinstance(app, StubVoiceApp)
     assert captured["config_factory"] is not None
     assert captured["config"] is None
+
+
+def test_build_voice_app_fails_fast_without_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing OPENAI_API_KEY raises EASYCAT_E203 BEFORE the listener binds."""
+    from easycat.errors import EasyCatError
+
+    captured: dict[str, Any] = {}
+
+    class StubVoiceApp:
+        def __init__(self, *, config_factory: Any = None, config: Any = None) -> None:
+            captured["built"] = True
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
+
+    with pytest.raises(EasyCatError) as excinfo:
+        serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
+
+    assert excinfo.value.code == "EASYCAT_E203"
+    # The VoiceApp/listener was never constructed — validation ran first.
+    assert "built" not in captured
+
+
+def test_serve_cli_fails_fast_without_openai_key(
+    cli: CliRunner, typer_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``easycat serve`` exits non-zero on a missing key instead of binding."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+
+    ran: list[Any] = []
+    monkeypatch.setattr(serve_mod, "_run_voice_app", lambda *a, **k: ran.append((a, k)))
+
+    result = cli.invoke(typer_app, ["serve"])
+
+    # EASYCAT_E203 maps to CLI exit code 3; the listener never ran.
+    assert result.exit_code == 3
+    assert ran == []
 
 
 def test_playground_factory_wires_browser_transport_and_playground_agent(

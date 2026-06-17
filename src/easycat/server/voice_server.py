@@ -286,6 +286,10 @@ class VoiceServer:
             # the SAME rejection metric path as ``/ws`` so ``/metrics`` and
             # ``easycat.server.sessions.rejected.total`` span both transports.
             on_session_rejected=self._emit_session_rejected,
+            # Route accepted/torn-down WebRTC offers through the SAME
+            # active-connection gauge as ``/ws`` so ``easycat.server.connections
+            # .active`` spans both transports (the shared gate already does).
+            on_connections_changed=self._emit_connections_active,
         )
 
     async def serve(self, stop_event: asyncio.Event | None = None) -> None:

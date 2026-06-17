@@ -38,6 +38,8 @@ def _clear_twilio_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep env convenience fallbacks from leaking between tests."""
     monkeypatch.delenv("TWILIO_STREAM_URL", raising=False)
     monkeypatch.delenv("TWILIO_STREAM_TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
 
 
 class _FakeTwilioTransport:
@@ -61,9 +63,12 @@ class _FakeAiohttpWeb:
         web = self
 
         class Response:
-            def __init__(self, *, text: str, content_type: str) -> None:
+            def __init__(
+                self, *, text: str, content_type: str | None = None, status: int = 200
+            ) -> None:
                 self.text = text
                 self.content_type = content_type
+                self.status = status
 
         class _Router:
             def add_post(self, path: str, handler: Any) -> None:
@@ -478,6 +483,107 @@ def test_twiml_handler_returns_application_xml(monkeypatch: pytest.MonkeyPatch) 
     assert harness.media_server.closed is True
     assert harness.web.site_stopped is True
     assert harness.web.runner_cleaned is True
+
+
+# ── TwiML webhook authentication (X-Twilio-Signature) ─────────────────
+
+
+class _SignedTwimlRequest:
+    """A /twiml request carrying headers + URL parts for signature validation."""
+
+    def __init__(
+        self,
+        form: dict[str, str],
+        *,
+        headers: dict[str, str],
+        path: str = "/twiml",
+        query_string: str = "",
+        scheme: str = "https",
+    ) -> None:
+        from types import SimpleNamespace
+
+        self._form = dict(form)
+        self.headers = dict(headers)
+        self.path = path
+        self.query_string = query_string
+        self.url = SimpleNamespace(scheme=scheme)
+
+    async def post(self) -> dict[str, str]:
+        return self._form
+
+
+def _drive_twiml(
+    monkeypatch: pytest.MonkeyPatch, config: TwilioVoiceServerConfig, request: Any
+) -> Any:
+    """Run one /twiml handler call against ``request`` through the server harness."""
+    harness = _ServerHarness(monkeypatch)
+    result: dict[str, Any] = {}
+
+    async def _body(h: _ServerHarness) -> None:
+        handler = h.web.routes["/twiml"]
+        result["response"] = await handler(request)
+
+    asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, _body))
+    return result["response"]
+
+
+def test_twiml_accepts_signed_request_when_auth_token_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A correctly signed Twilio webhook mints the stream token (200 + XML)."""
+    from easycat.telephony import compute_twilio_webhook_signature
+
+    auth_token = "twilio-secret"
+    form = {"From": "+15551234567", "Direction": "inbound"}
+    url = "https://example.com/twiml"
+    signature = compute_twilio_webhook_signature(
+        auth_token=auth_token, url=url, params=list(form.items())
+    )
+    request = _SignedTwimlRequest(
+        form, headers={"host": "example.com", "x-twilio-signature": signature}
+    )
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", twilio_auth_token=auth_token
+    )
+
+    response = _drive_twiml(monkeypatch, config, request)
+
+    assert response.status == 200
+    assert response.content_type == "application/xml"
+    assert TWILIO_STREAM_TOKEN_PARAMETER in response.text
+
+
+@pytest.mark.parametrize("signature", ["forged-signature", None])
+def test_twiml_rejects_unsigned_request_when_auth_token_set(
+    monkeypatch: pytest.MonkeyPatch, signature: str | None
+) -> None:
+    """A forged/missing X-Twilio-Signature is rejected with 403 — no token minted."""
+    headers = {"host": "example.com"}
+    if signature is not None:
+        headers["x-twilio-signature"] = signature
+    request = _SignedTwimlRequest({"From": "+15551234567"}, headers=headers)
+    config = TwilioVoiceServerConfig(
+        stream_url="wss://example/media", twilio_auth_token="twilio-secret"
+    )
+
+    response = _drive_twiml(monkeypatch, config, request)
+
+    assert response.status == 403
+    assert TWILIO_STREAM_TOKEN_PARAMETER not in response.text
+
+
+def test_twilio_server_config_reads_auth_token_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VoiceApp sources the webhook auth token from TWILIO_AUTH_TOKEN."""
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "env-twilio-secret")
+    monkeypatch.setenv("TWILIO_STREAM_URL", "wss://example/media")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+
+    config = VoiceApp(agent="a")._twilio_server_config()
+
+    assert config.twilio_auth_token == "env-twilio-secret"
+    assert config.trust_proxy_headers is True
 
 
 # ── Media lifecycle (fake ServerConnection + stubbed session) ─────────

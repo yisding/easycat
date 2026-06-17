@@ -206,6 +206,7 @@ src/easycat/cli/
     _guard_commands.py    # generated guard-lane command hints (regen_guard_commands.py)
     console.py            # `easycat console` keyless terminal demo
     serve.py              # `easycat serve` browser voice playground
+    plan.py               # `easycat plan` manifest provider/capability plan
     validate.py           # `easycat validate ...`
     scaffold/
         __init__.py

@@ -201,6 +201,54 @@ def test_parity_missing_echo_canceller_extra(monkeypatch: pytest.MonkeyPatch) ->
         create_session(config)
 
 
+def test_parity_passthrough_aec_extra_missing_is_warning_not_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The DEFAULT fallback_policy is "passthrough": with livekit absent
+    # create_session degrades to PassthroughAEC instead of raising, so the
+    # planner must NOT block /health/ready — it reports a non-blocking warning.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    from easycat.echo_cancellation import EchoCancellationConfig
+
+    config = _base_config(echo_cancellation=EchoCancellationConfig(enabled=True))
+
+    _force_find_spec_none(monkeypatch, "livekit")
+    plan = build_provider_plan(config, environ=_ENV)
+    assert "aec" not in plan.missing_extras
+    assert not plan.has_blocking_errors, plan.blocking_errors()
+    assert any("degraded" in warning for warning in plan.warnings)
+
+    # create_session degrades to passthrough (no raise) when the livekit import
+    # fails under the passthrough policy — matching the non-blocking plan.
+    import easycat.echo_cancellation as aec
+
+    def boom(module_name: str, **kwargs: object) -> object:
+        raise ImportError(f"Echo cancellation requires the {module_name} package.")
+
+    monkeypatch.setattr(aec, "require_module", boom)
+    session = create_session(config)
+    assert session is not None
+
+
+def test_parity_browser_profile_aec_extra_missing_is_warning_not_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A manifest browser profile auto-enables AEC with the passthrough fallback
+    # (the manifest cannot pick "error"), so a missing aec extra must stay a
+    # warning — otherwise /health/ready would reject a deployable browser server.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    from easycat.project.schema import VoiceProfile
+
+    profile = VoiceProfile(name="default", transport="webrtc", stt="openai", tts="openai")
+
+    _force_find_spec_none(monkeypatch, "livekit")
+    plan = build_provider_plan(profile, environ=_ENV)
+    assert plan.selected["echo_canceller"].provider == "livekit"
+    assert "aec" not in plan.missing_extras
+    assert not plan.has_blocking_errors, plan.blocking_errors()
+    assert any("degraded" in warning for warning in plan.warnings)
+
+
 def test_parity_missing_noise_reducer_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.noise_reduction import NoiseReducerConfig

@@ -407,6 +407,20 @@ class VoiceApp:
         stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
             "TWILIO_STREAM_TOKEN_SECRET"
         )
+        # The Twilio auth token authenticates the ``POST /twiml`` webhook
+        # (X-Twilio-Signature) before a media-stream token is minted. Source it
+        # from TWILIO_AUTH_TOKEN — the same env var the twilio-phone scaffold
+        # requires — so the secure path is automatic when the operator sets it.
+        twilio_auth_token = kwargs.pop("twilio_auth_token", None) or os.environ.get(
+            "TWILIO_AUTH_TOKEN"
+        )
+        trust_proxy_headers = kwargs.pop("trust_proxy_headers", None)
+        if trust_proxy_headers is None:
+            trust_proxy_headers = os.environ.get("TRUST_PROXY_HEADERS", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
@@ -414,6 +428,8 @@ class VoiceApp:
             http_port=http_port,
             stream_url=stream_url,
             stream_token_secret=stream_token_secret,
+            twilio_auth_token=twilio_auth_token,
+            trust_proxy_headers=bool(trust_proxy_headers),
         )
 
     def _twilio_factory(self) -> Callable[[Any], EasyConfig]:

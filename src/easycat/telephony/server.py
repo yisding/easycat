@@ -62,6 +62,18 @@ class TwilioVoiceServerConfig:
     http_port: int = 8000
     stream_url: str | None = None
     stream_token_secret: str | None = None
+    # Twilio auth token used to validate the ``X-Twilio-Signature`` on the
+    # ``POST /twiml`` webhook. When set (the production posture — Twilio needs a
+    # publicly reachable webhook and the default bind is ``0.0.0.0``), an
+    # unsigned/forged request is rejected with 403 BEFORE a stream token is
+    # minted, so the media-stream token cannot be mintable by arbitrary callers.
+    # ``None`` leaves the webhook unauthenticated (loopback/dev only) and the
+    # helper logs a loud warning at startup.
+    twilio_auth_token: str | None = None
+    # Honor ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` when reconstructing the
+    # public URL Twilio signed. Enable ONLY behind a trusted TLS-terminating
+    # proxy that overwrites those headers (the most common cause of false 403s).
+    trust_proxy_headers: bool = False
 
 
 async def serve_twilio_voice_app(
@@ -93,7 +105,11 @@ async def serve_twilio_voice_app(
 
     from easycat.config import create_session
     from easycat.session_manager import SessionManager
-    from easycat.telephony import twilio_stream_parameters_from_form
+    from easycat.telephony import (
+        reconstruct_public_url,
+        twilio_stream_parameters_from_form,
+        validate_twilio_webhook_signature,
+    )
     from easycat.transports import TwilioStreamTokenStore, TwilioTransportConfig
     from easycat.transports.twilio_media import (
         TwilioConnectionTransport,
@@ -102,6 +118,14 @@ async def serve_twilio_voice_app(
 
     manager: SessionManager[int] = SessionManager()
     stream_tokens = TwilioStreamTokenStore(config.stream_token_secret)
+
+    if not config.twilio_auth_token:
+        logger.warning(
+            "Twilio /twiml webhook is UNAUTHENTICATED: any caller can POST and "
+            "mint a media-stream token. Set TwilioVoiceServerConfig.twilio_auth_token "
+            "(or the TWILIO_AUTH_TOKEN env var when running through VoiceApp) so "
+            "X-Twilio-Signature is validated before a token is issued.",
+        )
 
     async def handle_twilio_connection(ws: ServerConnection) -> None:
         transport = TwilioConnectionTransport(
@@ -112,9 +136,33 @@ async def serve_twilio_voice_app(
         async with manager.connection(id(ws), session, runtime_feedback=True):
             await ws.wait_closed()
 
+    def _twiml_request_is_authentic(request: Any, form_items: list[tuple[str, str]]) -> bool:
+        """Validate Twilio's ``X-Twilio-Signature`` over the request's public URL."""
+        path = request.path
+        query = getattr(request, "query_string", "") or ""
+        if query:
+            path = f"{path}?{query}"
+        public_url = reconstruct_public_url(
+            request.headers,
+            path,
+            trust_proxy=config.trust_proxy_headers,
+            default_scheme=getattr(getattr(request, "url", None), "scheme", "https") or "https",
+        )
+        return validate_twilio_webhook_signature(
+            auth_token=config.twilio_auth_token,
+            url=public_url,
+            params=form_items,
+            signature=request.headers.get("x-twilio-signature"),
+        )
+
     async def handle_twiml(request: Any) -> Any:
         post = await request.post()
         form_items = list(post.items())
+        # Authenticate the webhook BEFORE minting a stream token so the
+        # media-stream token cannot be issued to an unsigned/forged request.
+        if config.twilio_auth_token and not _twiml_request_is_authentic(request, form_items):
+            logger.warning("Rejecting Twilio /twiml webhook: invalid X-Twilio-Signature")
+            return web.Response(status=403, text="Invalid Twilio signature")
         xml = twiml_connect_stream(
             config.stream_url,
             parameters=twilio_stream_parameters_from_form(form_items),

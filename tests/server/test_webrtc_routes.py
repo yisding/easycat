@@ -471,6 +471,36 @@ async def test_webrtc_offer_rejections_count_in_server_metrics(
 
 
 @pytest.mark.integration_socket
+async def test_webrtc_offer_emits_connections_active_metric(
+    fake_webrtc: None, client: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: an accepted WebRTC offer reserves on the shared gate, so it
+    # must refresh the SAME ``easycat.server.connections.active`` gauge as a
+    # ``/ws`` session. Otherwise OTel alerts/autoscaling miss WebRTC-only traffic
+    # even though the JSON ``/metrics`` snapshot (gate-read) stays correct.
+    from easycat.server import metrics as server_metrics
+
+    observed: list[tuple[int, str]] = []
+    real = server_metrics.observe_connections_active
+
+    def spy(count: int, *, server_state: str) -> None:
+        observed.append((count, server_state))
+        real(count, server_state=server_state)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(server_metrics, "observe_connections_active", spy)
+    server = await _running_server(
+        VoiceServerConfig(host="127.0.0.1", port=0, enable_websocket=False, drain_timeout_s=0.0)
+    )
+    try:
+        async with client.post(f"{_base_url(server)}/webrtc/offer", json=_OFFER_BODY) as resp:
+            assert resp.status == 200
+        # The accepted offer emitted the active-connection gauge at count 1.
+        assert (1, "serving") in observed
+    finally:
+        await server.stop()
+
+
+@pytest.mark.integration_socket
 async def test_stop_force_drains_active_webrtc_session(fake_webrtc: None, client: object) -> None:
     sessions: list[_FakeSession] = []
     server = await _running_server(

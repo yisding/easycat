@@ -2,8 +2,8 @@
 
 Before M7 the multi-session WebRTC signaling server reused the WebRTC route
 handlers by binding them to a throwaway ``shim = WebRTCTransport(settings)``
-(``transports/webrtc.py:386``). That shim existed ONLY to lend its bound
-methods (``_handle_config`` / ``_handle_stats`` / ``_handle_root`` /
+inside the standalone WebRTC serve helper. That shim existed ONLY to lend its
+bound methods (``_handle_config`` / ``_handle_stats`` / ``_handle_root`` /
 ``_handle_cors_preflight`` / ``_cors_headers``) and its per-process stats
 rate-limit deque to the serve helper's nested route closures. It was never a
 real peer connection.
@@ -120,6 +120,7 @@ class WebRTCRoutes:
         runtime_feedback: bool = True,
         active_session_objs: dict[int, Any] | None = None,
         on_session_rejected: Callable[..., None] | None = None,
+        on_connections_changed: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
         self._auth = auth
@@ -134,6 +135,14 @@ class WebRTCRoutes:
         # rejection counts must span both. The standalone serve helper passes
         # ``None`` (it owns no server-level rejection metric).
         self._on_session_rejected = on_session_rejected
+        # Optional active-connection gauge sink, injected by ``VoiceServer`` so an
+        # ACCEPTED offer (and its later teardown) updates the SAME
+        # ``easycat.server.connections.active`` OTel gauge as a ``/ws`` session.
+        # Both transports reserve on the one shared gate, so the gauge must span
+        # both — otherwise OTel alerts / autoscaling miss WebRTC-only traffic even
+        # though the JSON ``/metrics`` snapshot (which reads the gate directly)
+        # stays correct. The standalone serve helper passes ``None``.
+        self._on_connections_changed = on_connections_changed
         # When the server shares an active-session map across transports (the
         # ``VoiceServer`` case), the offer handler registers the created session
         # here keyed by the gate key so the shared drain step force-stops it.
@@ -274,6 +283,17 @@ class WebRTCRoutes:
         if self._on_session_rejected is not None:
             self._on_session_rejected(server_state=server_state, auth_result=auth_result)
 
+    def _emit_connections_changed(self) -> None:
+        """Forward an active-connection count change to the owning server's gauge.
+
+        A no-op for the standalone serve helper (no callback injected). When
+        ``VoiceServer`` mounts these routes it injects ``_emit_connections_active``
+        so an accepted/torn-down WebRTC offer updates the same
+        ``easycat.server.connections.active`` gauge as a ``/ws`` session.
+        """
+        if self._on_connections_changed is not None:
+            self._on_connections_changed()
+
     def _cors_headers(self, request: Any) -> dict[str, str]:
         """Build CORS headers for ``request`` (byte-identical to the transport).
 
@@ -391,6 +411,9 @@ class WebRTCRoutes:
         self._gate.track(key)
         if self._active_session_objs is not None:
             self._active_session_objs[key] = session
+        # The accepted offer now holds a gate reservation — refresh the shared
+        # active-connection gauge so WebRTC traffic is visible to OTel.
+        self._emit_connections_changed()
         transport._ensure_browser_event_forwarder()
         task = asyncio.create_task(self._cleanup_session(key, transport))
         self._cleanup_tasks.add(task)
@@ -402,6 +425,7 @@ class WebRTCRoutes:
         self._gate.untrack(key)
         if self._active_session_objs is not None:
             self._active_session_objs.pop(key, None)
+        self._emit_connections_changed()
 
     async def _cleanup_session(self, key: int, transport: WebRTCTransport) -> None:
         """Untrack + release once the peer connection closes."""
@@ -415,6 +439,9 @@ class WebRTCRoutes:
                     self._active_session_objs.pop(key, None)
             finally:
                 self._gate.release()
+                # The reservation is gone — refresh the shared gauge so the
+                # active-connection count decrements for WebRTC teardown too.
+                self._emit_connections_changed()
 
     async def cancel_cleanup_tasks(self) -> None:
         """Cancel + await the per-offer cleanup tasks (called on server stop)."""
