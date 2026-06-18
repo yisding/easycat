@@ -34,16 +34,20 @@ def test_simulation_mode_values() -> None:
     assert SimulationMode.SYNTHETIC_CALLER.value == "synthetic_caller"
 
 
-def test_promote_turn_to_test_is_scaffold() -> None:
-    with pytest.raises(NotImplementedError, match="implemented in M11"):
-        evals.promote_turn_to_test("bundle.zip", "t1", out="out.py")
+def test_promote_turn_to_test_is_implemented() -> None:
+    # M11: the symbol is implemented and validates its arguments rather than
+    # raising NotImplementedError. An unknown assert_on mode is a ValueError.
+    with pytest.raises(ValueError, match="assert_on must be one of"):
+        evals.promote_turn_to_test("bundle.zip", "t1", out="out.py", assert_on="nope")
 
 
-def test_replay_bundle_as_test_is_scaffold() -> None:
-    from easycat.evals.replay_test import replay_bundle_as_test
+def test_promotion_error_is_re_exported() -> None:
+    assert evals.PromotionError is not None
+    assert issubclass(evals.PromotionError, RuntimeError)
 
-    with pytest.raises(NotImplementedError, match="implemented in M11"):
-        replay_bundle_as_test("bundle.zip")
+
+def test_assert_reply_hash_is_reexport() -> None:
+    assert evals.assert_reply_hash is debug_testing.assert_reply_hash
 
 
 async def test_run_scenario_glue_passes() -> None:

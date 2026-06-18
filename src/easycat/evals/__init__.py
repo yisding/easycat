@@ -38,6 +38,7 @@ from easycat.debug.testing import (
     assert_latency,
     assert_no_error,
     assert_regex,
+    assert_reply_hash,
     assert_tool_called,
     assert_turn_completed,
     load_bundle,
@@ -45,7 +46,7 @@ from easycat.debug.testing import (
 
 # (B) Net-new symbols — fully unit-tested.
 from easycat.evals.assertions import assert_budgets_pass
-from easycat.evals.promote import promote_turn_to_test
+from easycat.evals.promote import PromotionError, promote_turn_to_test
 from easycat.evals.runner import EvalRunner, ScenarioResult
 from easycat.evals.scenario import EvalScenario, EvalTurn, load_scenario
 
@@ -55,6 +56,7 @@ __all__ = [
     "assert_latency",
     "assert_no_error",
     "assert_regex",
+    "assert_reply_hash",
     "assert_tool_called",
     "assert_turn_completed",
     "load_bundle",
@@ -62,6 +64,7 @@ __all__ = [
     "EvalRunner",
     "EvalScenario",
     "EvalTurn",
+    "PromotionError",
     "ScenarioResult",
     "assert_budgets_pass",
     "load_scenario",

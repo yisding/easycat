@@ -42,6 +42,7 @@ __all__ = [
     "find_record",
     "assert_exact_match",
     "assert_regex",
+    "assert_reply_hash",
     "assert_turn_completed",
     "assert_no_error",
     "assert_tool_called",
@@ -295,6 +296,32 @@ def assert_regex(
     actual = _assistant_text(record)
     if not compiled.search(actual):
         raise AssertionError(f"{event} text did not match /{pattern}/\n  actual: {actual!r}")
+
+
+def assert_reply_hash(
+    source: RecordSource,
+    *,
+    expected_hash: str,
+    event: str = "agent_final",
+) -> None:
+    """Assert the SHA-256 of an event's text field equals ``expected_hash``.
+
+    The redaction-safe default for promoted regression tests: a stable hash of
+    the (already redacted) reply pins the regression without embedding the
+    verbatim transcript into the committed test (see
+    :func:`easycat.evals.promote_turn_to_test`).
+    """
+    import hashlib
+
+    record = find_record(source, name=event)
+    if record is None:
+        raise AssertionError(f"no {event!r} record in bundle")
+    actual = _assistant_text(record)
+    digest = hashlib.sha256(actual.encode("utf-8")).hexdigest()
+    if digest != expected_hash:
+        raise AssertionError(
+            f"{event} reply hash mismatch\n  expected: {expected_hash}\n  actual:   {digest}"
+        )
 
 
 def assert_turn_completed(source: RecordSource, turn_id: str) -> None:

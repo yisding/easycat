@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
+from easycat.debug.bundle import FORMAT_VERSION
 
 
 def _write_scenario(path: Path, name: str = "echo_flow", regex: str = "hi") -> None:
@@ -18,6 +20,85 @@ def _write_scenario(path: Path, name: str = "echo_flow", regex: str = "hi") -> N
         ),
         encoding="utf-8",
     )
+
+
+_PROMOTE_TURN = "turn-1"
+
+
+def _promote_records() -> list[dict]:
+    reply = "Refund issued for order 9876."
+    return [
+        {"sequence": 1, "kind": "event", "name": "turn_started", "turn_id": _PROMOTE_TURN},
+        {
+            "sequence": 2,
+            "kind": "event",
+            "name": "agent_final",
+            "turn_id": _PROMOTE_TURN,
+            "data": {"text": reply, "generated_text": reply},
+        },
+        {"sequence": 3, "kind": "event", "name": "turn_ended", "turn_id": _PROMOTE_TURN},
+    ]
+
+
+def _write_bundle(path: Path, records: list[dict]) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"format_version": FORMAT_VERSION, "provider_versions": {}}),
+        )
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(r) for r in records))
+
+
+def test_eval_promote_json_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "session.zip"
+    _write_bundle(bundle, _promote_records())
+    out = tmp_path / "test_regressions.py"
+
+    result = cli.invoke(
+        app, ["eval", "promote", str(bundle), _PROMOTE_TURN, "--out", str(out), "--json"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["command"] == "eval promote"
+    assert payload["status"] == "ok"
+    assert payload["turn_id"] == _PROMOTE_TURN
+    assert payload["out"] == str(out)
+    assert payload["redacted"] is True
+    assert payload["include_audio"] is False
+    assert out.exists()
+
+
+def test_eval_promote_missing_turn_error(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "session.zip"
+    _write_bundle(bundle, _promote_records())
+    out = tmp_path / "test_regressions.py"
+
+    result = cli.invoke(
+        app, ["eval", "promote", str(bundle), "missing", "--out", str(out), "--json"]
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "eval promote"
+    assert payload["status"] == "error"
+    assert "No journal records" in payload["message"]
+    assert not out.exists()
+
+
+def test_eval_promote_default_redacts_reply(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "session.zip"
+    _write_bundle(bundle, _promote_records())
+    out = tmp_path / "test_regressions.py"
+
+    result = cli.invoke(app, ["eval", "promote", str(bundle), _PROMOTE_TURN, "--out", str(out)])
+
+    assert result.exit_code == 0, result.stdout
+    source = out.read_text(encoding="utf-8")
+    # Default mode never embeds the verbatim reply; it hashes the redacted text.
+    assert "Refund issued for order 9876." not in source
+    assert "assert_reply_hash" in source
 
 
 def test_eval_run_file_json_envelope(cli: CliRunner, tmp_path: Path) -> None:

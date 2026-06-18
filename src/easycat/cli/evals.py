@@ -7,8 +7,12 @@
 * ``easycat eval report FILE`` re-renders a persisted eval report; ``--json``
   re-emits the report envelope (mirrors ``easycat validate report``).
 
-``easycat eval promote`` is scaffolded in M10 and implemented in M11; it is not
-registered yet.
+* ``easycat eval promote PATH TURN_ID --out tests/test_regressions.py`` is the
+  hardened, FORKED promotion verb: it is redact-by-default, ``--no-audio`` by
+  default, and refuses to write unredacted sensitive text unless ``--allow-pii``
+  is set. The legacy ``journal promote`` command is the UNSAFE ``.zip``-slice
+  path (full raw NDJSON + every audio blob + verbatim reply, no redaction) and
+  is retained only for back-compat.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from easycat.cli._output import (
     json_envelope,
     stdout_console,
 )
+from easycat.evals.promote import PromotionError, promote_turn_to_test
 from easycat.evals.runner import EvalRunner, ScenarioResult
 from easycat.evals.scenario import load_scenario
 
@@ -193,6 +198,113 @@ def report_command(
 
     _render_report(payload)
     raise typer.Exit(exit_code)
+
+
+@eval_app.command(name="promote")
+def promote_command(
+    path: Annotated[
+        Path,
+        typer.Argument(help="ZIP bundle (.zip/.bundle) or .sqlite journal to promote from."),
+    ],
+    turn_id: Annotated[
+        str,
+        typer.Argument(help="Turn id to promote into a regression test."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", "-o", help="Destination .py regression test path."),
+    ],
+    include_audio: Annotated[
+        bool,
+        typer.Option(
+            "--include-audio/--no-audio",
+            help="Copy artifact blobs into the slice. Off by default.",
+        ),
+    ] = False,
+    allow_pii: Annotated[
+        bool,
+        typer.Option(
+            "--allow-pii",
+            help="Disable the unredacted-sensitive-text tripwire. Off by default.",
+        ),
+    ] = False,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="record-assertion (default) or artifact-replay."),
+    ] = "record-assertion",
+    assert_on: Annotated[
+        str,
+        typer.Option(
+            "--assert-on",
+            help="Reply assertion: hash (default, redaction-safe), regex, or exact (opt-in).",
+        ),
+    ] = "hash",
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Override the generated test function name."),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the promotion envelope (schema_version=1)."),
+    ] = False,
+) -> None:
+    """Promote one recorded turn into a hardened, redact-by-default pytest test.
+
+    This is the FORKED, hardened replacement for ``journal promote``: every
+    record is routed through ``redact_value`` before serialization, audio is
+    excluded unless ``--include-audio``, and the committed slice is rejected if
+    it still carries unredacted sensitive text unless ``--allow-pii`` is set.
+    """
+    try:
+        written = promote_turn_to_test(
+            path,
+            turn_id,
+            out=out,
+            name=name,
+            include_audio=include_audio,
+            allow_pii=allow_pii,
+            mode=mode,
+            assert_on=assert_on,
+        )
+    except PromotionError as exc:
+        _command_error(
+            "eval promote",
+            str(exc),
+            json_output=json_output,
+            path=str(path),
+            turn_id=turn_id,
+            out=str(out),
+        )
+    except (ValueError, OSError) as exc:
+        _command_error(
+            "eval promote",
+            str(exc),
+            json_output=json_output,
+            path=str(path),
+            turn_id=turn_id,
+            out=str(out),
+        )
+
+    bundle_out = written.with_suffix(".bundle")
+    if json_output:
+        emit_json(
+            json_envelope(
+                "eval promote",
+                path=str(path),
+                turn_id=turn_id,
+                out=str(written),
+                bundle=str(bundle_out),
+                mode=mode,
+                assert_on=assert_on,
+                include_audio=include_audio,
+                redacted=not allow_pii,
+            )
+        )
+        raise typer.Exit(0)
+
+    _print_literal(f"Promoted turn {turn_id} to {written} (slice: {bundle_out})")
+    _print_literal(written.read_text(encoding="utf-8"))
+    raise typer.Exit(0)
 
 
 def _render_report(payload: dict[str, Any]) -> None:

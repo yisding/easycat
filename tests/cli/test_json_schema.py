@@ -802,6 +802,60 @@ def test_eval_report_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert "eval report not found" in payload["message"]
 
 
+def _make_promote_bundle(path: Path, turn_id: str = "turn-1") -> None:
+    reply = "Refund issued for order 9876."
+    records = [
+        {"sequence": 1, "kind": "event", "name": "turn_started", "turn_id": turn_id},
+        {
+            "sequence": 2,
+            "kind": "event",
+            "name": "agent_final",
+            "turn_id": turn_id,
+            "data": {"text": reply, "generated_text": reply},
+        },
+        {"sequence": 3, "kind": "event", "name": "turn_ended", "turn_id": turn_id},
+    ]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"format_version": FORMAT_VERSION, "provider_versions": {}}),
+        )
+        zf.writestr("journal.ndjson", "\n".join(json.dumps(record) for record in records))
+
+
+def test_eval_promote_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "session.zip"
+    _make_promote_bundle(bundle)
+    out = tmp_path / "test_regressions.py"
+
+    result = cli.invoke(
+        app, ["eval", "promote", str(bundle), "turn-1", "--out", str(out), "--json"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "eval promote")
+    assert payload["turn_id"] == "turn-1"
+    assert payload["out"] == str(out)
+    assert payload["redacted"] is True
+    assert payload["include_audio"] is False
+
+
+def test_eval_promote_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    bundle = tmp_path / "session.zip"
+    _make_promote_bundle(bundle)
+    out = tmp_path / "test_regressions.py"
+
+    result = cli.invoke(
+        app, ["eval", "promote", str(bundle), "missing-turn", "--out", str(out), "--json"]
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "eval promote", status="error")
+    assert "No journal records" in payload["message"]
+
+
 def _json_command_paths() -> list[tuple[str, ...]]:
     """Walk the registered CLI tree, returning every command exposing ``--json``.
 

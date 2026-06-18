@@ -221,6 +221,7 @@ EVALS_REEXPORT_SURFACE = (
     "assert_latency",
     "assert_no_error",
     "assert_regex",
+    "assert_reply_hash",
     "assert_tool_called",
     "assert_turn_completed",
     "load_bundle",

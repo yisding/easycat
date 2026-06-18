@@ -168,6 +168,44 @@ uv run easycat eval report .easycat/evals/latest.json
 uv run easycat eval report .easycat/evals/latest.json --json
 ```
 
+## Promote a recorded turn into a test
+
+`easycat eval promote` turns one recorded turn into a committed rung-1
+regression test. It is the hardened, FORKED replacement for the legacy
+`journal promote` command and is **safe by default**:
+
+```bash
+uv run easycat eval promote PATH TURN_ID --out tests/test_regressions.py
+```
+
+It writes two artifacts next to `--out`: a redacted single-turn slice
+(`<out>.bundle`) and the `.py` test that loads it via the `easycat_bundle`
+fixture. The generated test imports its helpers from `easycat.evals`, so it
+runs under `pytest` immediately.
+
+Hardened defaults:
+
+- **Redact by default.** Every promoted record is routed through
+  `redact_value`, and the reply/transcript `text` fields are replaced with
+  redaction placeholders, so the verbatim conversation is never committed.
+- **`--no-audio` is the default.** Audio blobs (and their `input_ref` /
+  `output_ref` pointers) are dropped unless you pass `--include-audio`.
+- **PII tripwire.** Before writing, the serialized slice is scanned with
+  `contains_unredacted_sensitive_text`; promotion RAISES unless `--allow-pii`
+  is explicitly set.
+- **Hash-by-default assertion.** `--assert-on hash` (default) pins a stable
+  hash of the redacted reply. `--assert-on regex` is the redaction-safe
+  alternative; `--assert-on exact` embeds the verbatim reply and is opt-in
+  (it warns), so it should only be used with `--allow-pii` on already-safe
+  text.
+
+`--json` emits the promotion envelope (`schema_version=1`).
+
+> **Legacy `journal promote`.** The older `journal promote PATH TURN_ID --out
+> slice.zip` command copies the full raw NDJSON, every audio blob, and the
+> verbatim reply into the slice with **zero redaction**. It is retained only
+> for back-compat; prefer `eval promote` for anything committed to a repo.
+
 ## Rung 4 — live audio
 
 Once text-level behavior is pinned down, validate the full audio
