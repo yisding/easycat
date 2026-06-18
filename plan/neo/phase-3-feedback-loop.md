@@ -1,7 +1,10 @@
 # Phase 3 — Feedback Loop: Debugger, Evals, Replay, Budgets
 
-Status: active implementation — in progress on `neo/phase-3-feedback-loop`
-(builds on shipped Phases 1–2; see PRs #283 and #284).
+Status: partial — M9–M12 landed in PR
+[#290](https://github.com/yisding/easycat/pull/290) on
+`neo/phase-3-feedback-loop` (stacked on PR #284); M13 (Dev Debugger Mode) is RED
+and the pipeline HALTED there, so it is NOT included. Builds on shipped
+Phases 1–2 (PRs #283 and #284).
 
 ## Goal
 

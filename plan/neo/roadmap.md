@@ -1,7 +1,8 @@
 # Neo Roadmap
 
 Status: active sequencing — M1–M8 **shipped** (Phase 1 in PR #283, Phase 2 in
-PR #284); M9–M13 **in progress** on `neo/phase-3-feedback-loop`.
+PR #284); M9–M12 **landed** in PR #290 (stacked on #284) on
+`neo/phase-3-feedback-loop`; M13 is **RED** (pipeline halted there, not landed).
 
 This roadmap converts the phase plans into reviewable PR slices. The ordering is
 optimized for early user value, low abstraction risk, and testability.
@@ -405,7 +406,9 @@ server: register metrics and complete read-only endpoints
 
 > Renumbered from old M8.
 
-Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+Status: **landed** in PR [#290](https://github.com/yisding/easycat/pull/290)
+on `neo/phase-3-feedback-loop` — commit `8aed223c` (`budgets: add shared budget
+API`).
 
 Scope:
 
@@ -442,7 +445,9 @@ budgets: add shared budget API
 
 > Renumbered from old M9.
 
-Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+Status: **landed** in PR [#290](https://github.com/yisding/easycat/pull/290)
+on `neo/phase-3-feedback-loop` — commit `a7216a90` (`evals: add scenario
+runner`).
 
 Scope:
 
@@ -482,7 +487,11 @@ evals: add scenario runner
 > full raw NDJSON + every audio blob + the verbatim transcript into a committed
 > file with **zero** redaction. State this plainly here, in R8, and in Q14.
 
-Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+Status: **landed (SECURITY-SENSITIVE)** in PR
+[#290](https://github.com/yisding/easycat/pull/290) on
+`neo/phase-3-feedback-loop` — commit `ec3a977a` (`evals: promote bundle turns to
+tests`). Hardens the unsafe legacy promote path: redact-by-default,
+`--no-audio` default, `--allow-pii` tripwire, hash/regex default assertion.
 
 Scope:
 
@@ -522,7 +531,9 @@ evals: promote bundle turns to tests
 
 > Renumbered from old M11.
 
-Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+Status: **landed** in PR [#290](https://github.com/yisding/easycat/pull/290)
+on `neo/phase-3-feedback-loop` — commit `e9d1f8bb` (`runtime: record first audio
+budget milestones`).
 
 Scope:
 
@@ -550,7 +561,10 @@ runtime: record first audio budget milestones
 
 > Renumbered from old M12.
 
-Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+Status: **RED — NOT landed.** The Phase 3 pipeline (PR
+[#290](https://github.com/yisding/easycat/pull/290)) HALTED at this milestone: it
+could not reach green, and dependent work was skipped. Must be completed in a
+follow-up before Phase 3 is considered done.
 
 Scope:
 
