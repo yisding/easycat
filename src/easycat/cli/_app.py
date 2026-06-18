@@ -135,6 +135,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Run validation checks and inspect validation reports.",
         journey="Run validation checks and inspect validation reports",
     ),
+    "eval": _CommandText(
+        help="Run conversation eval scenarios and inspect eval reports.",
+        journey="Run conversation eval scenarios and inspect eval reports",
+    ),
     "docs": _CommandText(
         help="Show docs for learning, maintenance, validation, and operations.",
         journey="Show docs for learning, maintenance, validation, and operations",
@@ -157,7 +161,7 @@ _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "explain",
         ),
     ),
-    ("Validation", ("validate",)),
+    ("Validation", ("validate", "eval")),
     ("Docs and guidance", ("docs",)),
 )
 
@@ -949,6 +953,7 @@ def _register_commands() -> None:
     )
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
+    from easycat.cli.evals import eval_app
     from easycat.cli.plan import plan as plan_cmd
     from easycat.cli.scaffold.init import init as init_cmd
     from easycat.cli.serve import serve as serve_cmd
@@ -970,6 +975,7 @@ def _register_commands() -> None:
     app.add_typer(debugger_app, name="debugger", help=_COMMAND_TEXT["debugger"].help)
     app.add_typer(journal_app, name="journal", help=_COMMAND_TEXT["journal"].help)
     app.add_typer(validate_app, name="validate", help=_COMMAND_TEXT["validate"].help)
+    app.add_typer(eval_app, name="eval", help=_COMMAND_TEXT["eval"].help)
     _COMMANDS_REGISTERED = True
 
 

@@ -103,6 +103,71 @@ any exported bundle:
 uv run python docs/teaching/12-evals-and-latency/llm_judge.py docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
 ```
 
+## Scenario runner — `easycat.evals`
+
+Multi-turn conversation scenarios live in `easycat.evals` (a submodule
+export — `from easycat.evals import ...`). A scenario is a named list of
+turns plus optional latency/cost budgets:
+
+```python
+from easycat.evals import EvalRunner, EvalScenario, EvalTurn
+from easycat.budgets import CostBudget, LatencyBudget
+
+scenario = EvalScenario(
+    name="refund_flow",
+    turns=[EvalTurn(user="I need a refund", expect_response_regex="refund|order")],
+    budgets=[
+        LatencyBudget(stage="total_ms", max_ms=1500),
+        CostBudget(max_session_usd=0.05),
+    ],
+)
+result = await EvalRunner(my_agent).run(scenario)
+assert result.passed
+```
+
+`EvalRunner` replays each turn against a text-mode session (audio stages
+are Noop stubs, no API keys needed) and returns a journal-backed
+`ScenarioResult` whose `.records()` works with the same `assert_*`
+helpers re-exported from `easycat.evals`. Budgets are evaluated through
+the shared `build_budget_report` from `easycat.budgets`; use
+`assert_budgets_pass(result.budget_report)` to assert them directly.
+
+**Text-mode budget rule.** Text turns emit only `total_ms` latency
+records, so text scenarios may assert turn-total (`total_ms`) latency
+budgets plus cost budgets. A provider-stage latency budget
+(`tts_ttfb_ms`, `llm_ttft_ms`) attached to a text scenario would
+evaluate against zero samples; rather than passing vacuously the runner
+raises a clear `no samples for stage X` error. Provider-stage latency
+budgets become meaningful once the audio-simulation runner lands.
+
+Scenario files are YAML or JSON:
+
+```yaml
+name: refund_flow
+budgets:
+  latency:
+    - stage: total_ms
+      max_ms: 1500
+  cost:
+    max_session_cost_usd: 0.05
+turns:
+  - user: "I need a refund"
+    expect:
+      response_regex: "refund|order"
+      tools:
+        - lookup_order
+```
+
+Run them from the CLI; `--json` emits the eval report envelope
+(`schema_version=1`):
+
+```bash
+uv run easycat eval run tests/evals/refund_flow.yaml
+uv run easycat eval run tests/evals --json
+uv run easycat eval report .easycat/evals/latest.json
+uv run easycat eval report .easycat/evals/latest.json --json
+```
+
 ## Rung 4 — live audio
 
 Once text-level behavior is pinned down, validate the full audio

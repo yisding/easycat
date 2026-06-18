@@ -212,6 +212,10 @@ easycat validate release     # run the strict installed-wheel release gate
 easycat validate release --json # emit release validation in the standard envelope
 easycat validate report .easycat/validation/latest.json # render latest validation report
 easycat validate report .easycat/validation/latest.json --json # emit latest report in the standard envelope
+easycat eval run PATH      # run conversation eval scenarios from a file or directory
+easycat eval run PATH --json # emit the eval report in the standard envelope
+easycat eval report FILE   # render a persisted eval report
+easycat eval report FILE --json # emit a persisted eval report in the standard envelope
 ```
 
 From an empty directory, `easycat init --list-templates` shows the available

@@ -212,6 +212,70 @@ def test_budgets_submodule_exports_are_public() -> None:
     assert budgets.LatencyBudget is ValidationLatencyBudget
 
 
+# `easycat.evals` carries two distinct sets with different testing obligations.
+# Set (A) is pure re-exports of `easycat.debug.testing`; set (B) is net-new and
+# unit-tested in `tests/evals/`. Both are asserted explicitly so neither can
+# silently regress to missing.
+EVALS_REEXPORT_SURFACE = (
+    "assert_exact_match",
+    "assert_latency",
+    "assert_no_error",
+    "assert_regex",
+    "assert_tool_called",
+    "assert_turn_completed",
+    "load_bundle",
+)
+
+EVALS_NET_NEW_SURFACE = (
+    "EvalRunner",
+    "EvalScenario",
+    "EvalTurn",
+    "ScenarioResult",
+    "assert_budgets_pass",
+    "promote_turn_to_test",
+)
+
+
+def test_evals_submodule_reexports_resolve_to_debug_testing() -> None:
+    """Set (A): `easycat.evals` re-exports the exact `debug.testing` symbols.
+
+    These are pure re-exports (no new behavior), so the only obligation is that
+    each name resolves to the identical `easycat.debug.testing` object.
+    """
+    import easycat.debug.testing as debug_testing
+    import easycat.evals as evals
+
+    for name in EVALS_REEXPORT_SURFACE:
+        assert name in evals.__all__, f"easycat.evals.__all__ missing re-export {name}"
+        assert getattr(evals, name) is getattr(debug_testing, name), (
+            f"easycat.evals.{name} must be the debug.testing symbol"
+        )
+
+
+def test_evals_submodule_net_new_symbols_are_public() -> None:
+    """Set (B): net-new eval symbols are importable and listed in `__all__`.
+
+    These do NOT exist in `easycat.debug.testing`; they are net-new and must be
+    asserted separately so they cannot regress to missing.
+    """
+    import easycat.evals as evals
+
+    for name in EVALS_NET_NEW_SURFACE:
+        assert name in evals.__all__, f"easycat.evals.__all__ missing net-new symbol {name}"
+        assert getattr(evals, name) is not None
+
+    # The net-new symbols must NOT leak onto the top-level allowlist/cap.
+    for name in ("EvalRunner", "EvalScenario", "EvalTurn", "ScenarioResult"):
+        assert name not in easycat.__all__
+
+    # CostBudget in the scenario model is imported from easycat.budgets, never
+    # redefined inside easycat.evals.
+    from easycat.budgets import CostBudget
+    from easycat.evals.scenario import CostBudget as ScenarioCostBudget
+
+    assert ScenarioCostBudget is CostBudget
+
+
 def test_transport_extension_surface_is_public_and_documented() -> None:
     """`easycat.transports` exposes the out-of-tree transport building blocks.
 

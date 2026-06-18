@@ -747,6 +747,61 @@ def test_replay_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert "context" not in payload
 
 
+def _write_eval_scenario(tmp_path: Path, name: str = "echo_flow") -> Path:
+    scenario = tmp_path / f"{name}.json"
+    scenario.write_text(
+        json.dumps(
+            {
+                "name": name,
+                "turns": [{"user": "hi", "expect": {"response_regex": "hi"}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return scenario
+
+
+def test_eval_run_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    scenario = _write_eval_scenario(tmp_path)
+
+    result = cli.invoke(app, ["eval", "run", str(scenario), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "eval run")
+    assert payload["exit_code"] == 0
+    assert payload["report"]["schema_version"] == 1
+    assert payload["report"]["kind"] == "eval_run"
+    assert payload["report"]["status"] == "pass"
+
+
+def test_eval_report_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    scenario = _write_eval_scenario(tmp_path)
+    report_path = tmp_path / "report.json"
+    cli.invoke(app, ["eval", "run", str(scenario), "--out", str(report_path)])
+
+    result = cli.invoke(app, ["eval", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "eval report")
+    assert payload["report_path"] == str(report_path)
+    assert payload["exit_code"] == 0
+    assert payload["report"]["kind"] == "eval_run"
+
+
+def test_eval_report_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    report_path = tmp_path / "missing.json"
+
+    result = cli.invoke(app, ["eval", "report", str(report_path), "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "eval report", status="error")
+    assert payload["report_path"] == str(report_path)
+    assert "eval report not found" in payload["message"]
+
+
 def _json_command_paths() -> list[tuple[str, ...]]:
     """Walk the registered CLI tree, returning every command exposing ``--json``.
 

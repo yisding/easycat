@@ -425,10 +425,11 @@ Current verified state:
 
 - `src/easycat/cli/_app.py` registers top-level `console`, `init`, `doctor`,
   `serve`, `plan`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`,
-  `tail`, plus the `bundles`, `debugger`, `journal`, and `validate` groups.
+  `tail`, plus the `bundles`, `debugger`, `journal`, `validate`, and `eval`
+  groups.
 - The bare `easycat` journey menu includes `Scaffold`,
   `Debug with the journal`, `Validation`, and `Docs and guidance`; the
-  `Validation` section points at `easycat validate`.
+  `Validation` section points at `easycat validate` and `easycat eval`.
 - `easycat validate` exposes `quick`, `socket`, `stress`, `contracts`,
   `latency`, `live`, `release`, and `report`.
 

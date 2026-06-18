@@ -938,6 +938,7 @@ EasyCat — voice bot framework
 
   Validation
     validate    Run validation checks and inspect validation reports
+    eval        Run conversation eval scenarios and inspect eval reports
 
   Docs and guidance
     docs        Show docs for learning, maintenance, validation, and operations
