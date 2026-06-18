@@ -23,9 +23,9 @@ from the CLI with `easycat serve --mode browser`. See
 [examples/voice_app.py](examples/voice_app.py).
 
 ### Quickstart (EasyConfig)
-For the lower-level shape, `run(EasyConfig.mic(agent=...))` is the canonical
-three-line path, identical in `examples/openai_agents_voice.py` and the scaffold
-that `easycat init my-agent` writes:
+For the lower-level shape, `run(EasyConfig.mic(agent=...))` is the one canonical
+shape — the three-line path identical in `examples/openai_agents_voice.py` and
+the scaffold that `easycat init my-agent` writes:
 
 ```python
 from agents import Agent
