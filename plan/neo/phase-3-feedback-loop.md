@@ -1,10 +1,13 @@
 # Phase 3 — Feedback Loop: Debugger, Evals, Replay, Budgets
 
-Status: partial — M9–M12 landed in PR
+Status: feature-complete — M9–M13 landed in PR
 [#290](https://github.com/yisding/easycat/pull/290) on
-`neo/phase-3-feedback-loop` (stacked on PR #284); M13 (Dev Debugger Mode) is RED
-and the pipeline HALTED there, so it is NOT included. Builds on shipped
-Phases 1–2 (PRs #283 and #284).
+`neo/phase-3-feedback-loop` (stacked on PR #284). Builds on shipped
+Phases 1–2 (PRs #283 and #284). M13 (Dev Debugger Mode) was initially reported
+red by the build pipeline, but that was a false negative from two pre-existing,
+unrelated `tests/test_dx_helpers.py` failures (Phase 1–2 doc drift); M13's own
+`tests/debugger` suite is green. See the M13 entry in [roadmap.md](roadmap.md)
+for detail.
 
 ## Goal
 

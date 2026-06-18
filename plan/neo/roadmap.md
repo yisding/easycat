@@ -1,8 +1,12 @@
 # Neo Roadmap
 
 Status: active sequencing — M1–M8 **shipped** (Phase 1 in PR #283, Phase 2 in
-PR #284); M9–M12 **landed** in PR #290 (stacked on #284) on
-`neo/phase-3-feedback-loop`; M13 is **RED** (pipeline halted there, not landed).
+PR #284); M9–M13 **landed** in PR #290 (stacked on #284) on
+`neo/phase-3-feedback-loop`. Phase 3 is feature-complete; M13 was initially
+reported red by the build pipeline due to two **pre-existing, unrelated**
+`tests/test_dx_helpers.py` failures (onramp-plan `__all__` count drift + a
+quickstart docstring phrase) inherited from Phase 1–2 — its own
+`tests/debugger` suite is green.
 
 This roadmap converts the phase plans into reviewable PR slices. The ordering is
 optimized for early user value, low abstraction risk, and testability.
@@ -561,10 +565,16 @@ runtime: record first audio budget milestones
 
 > Renumbered from old M12.
 
-Status: **RED — NOT landed.** The Phase 3 pipeline (PR
-[#290](https://github.com/yisding/easycat/pull/290)) HALTED at this milestone: it
-could not reach green, and dependent work was skipped. Must be completed in a
-follow-up before Phase 3 is considered done.
+Status: **landed** in PR [#290](https://github.com/yisding/easycat/pull/290)
+(commit `002dda54`). The build pipeline initially reported this milestone red,
+but that was a **false negative**: the milestone gate ran
+`tests/test_dx_helpers.py`, which carries two **pre-existing failures unrelated
+to M13** (the onramp plan claims `__all__` has 94 names but it is now 95 after
+M2's `VoiceApp` export, and a quickstart docstring no longer contains the phrase
+"one canonical shape"). Both already fail on the Phase 2 base branch. M13's own
+`tests/debugger` suite (including the R7 additive-autolaunch regression test)
+is green. The two `test_dx_helpers.py` failures are tracked separately as
+Phase 1–2 doc drift.
 
 Scope:
 
