@@ -91,10 +91,28 @@ class LatencyBudgetMonitor:
         return results
 
 
+# Waterfall ``*_to_*_ms`` milestone names that map onto the flat runtime
+# metric stages emitted by the turn runner. Kept in lock-step with
+# ``easycat.budgets.report.WATERFALL_STAGE_ALIASES`` so a single
+# ``LatencyBudget(stage=...)`` matches whether it is expressed as the flat
+# runtime stage or the waterfall milestone name.
+_WATERFALL_STAGE_ALIASES: dict[str, str] = {
+    "vad_endpoint_to_stt_final_ms": "stt_final_latency_ms",
+    "agent_request_to_first_token_ms": "llm_ttft_ms",
+    "agent_first_token_to_tts_first_byte_ms": "tts_ttfb_ms",
+    "vad_endpoint_to_tts_first_byte_ms": "first_audio_ms",
+    "user_speech_start_to_bot_stopped_ms": "barge_in_ack_ms",
+}
+
+
 def _budget_matches_stage(stage: str, budget_stage: Any) -> bool:
     if budget_stage is None:
         return False
     key = str(budget_stage).strip()
+    # A budget may target the flat runtime stage directly, the bare stage with
+    # an ``_ms``/``_latency_ms`` suffix, or the waterfall milestone name that
+    # lifts onto the same flat stage.
+    key = _WATERFALL_STAGE_ALIASES.get(key, key)
     return key in {stage, f"{stage}_ms", f"{stage}_latency_ms"}
 
 

@@ -763,6 +763,88 @@ async def test_run_streaming_agent_records_total_latency_budget_alert() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_streaming_agent_records_stage_latency_milestones() -> None:
+    """The runner emits flat per-stage latency milestones when budgeted (M12)."""
+    journal = InMemoryRingBuffer(capacity=128)
+    session = Session(
+        _config(
+            journal=journal,
+            latency_budget=(
+                LatencyBudget(stage="stt_final_latency_ms", max_ms=10_000.0),
+                LatencyBudget(stage="llm_ttft_ms", max_ms=10_000.0),
+                LatencyBudget(stage="tts_ttfb_ms", max_ms=10_000.0),
+                LatencyBudget(stage="first_audio_ms", max_ms=10_000.0),
+            ),
+        )
+    )
+    turn = TurnContext("turn-stage-latency", CancelToken())
+    now = time.monotonic()
+    turn.end_time = now - 1.0
+    turn.stt_final_time = now - 0.5
+    session._turn = turn
+
+    await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    by_name = {record.name: record for record in journal.read() if record.kind.name == "METRIC"}
+    for stage in ("stt_final_latency_ms", "llm_ttft_ms", "tts_ttfb_ms", "first_audio_ms"):
+        assert stage in by_name, f"missing milestone {stage}"
+        record = by_name[stage]
+        assert record.turn_id == turn.id
+        assert record.data["value"] >= 0.0
+        assert "latency_budget_exceeded" not in record.data
+    # The lifts of offline-validation columns carry the documented endpoints.
+    assert by_name["llm_ttft_ms"].data == {
+        "value": by_name["llm_ttft_ms"].data["value"],
+        "from": "stt_final",
+        "to": "agent_first_token",
+    }
+    assert by_name["first_audio_ms"].data["from"] == "turn_ended"
+    assert by_name["first_audio_ms"].data["to"] == "tts_first_byte"
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_records_stage_budget_exceeded() -> None:
+    """A breached per-stage budget appends a ``latency_budget_exceeded`` record."""
+    journal = InMemoryRingBuffer(capacity=128)
+    session = Session(
+        _config(
+            journal=journal,
+            latency_budget=(LatencyBudget(stage="first_audio_ms", max_ms=0.0),),
+        )
+    )
+    turn = TurnContext("turn-stage-budget", CancelToken())
+    turn.end_time = time.monotonic() - 1.0
+    session._turn = turn
+
+    await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    metric = next(record for record in journal.read() if record.name == "first_audio_ms")
+    assert metric.data["latency_budget_exceeded"] is True
+    alert = next(record for record in journal.read() if record.name == "latency_budget_exceeded")
+    assert alert.turn_id == turn.id
+    assert alert.data["trigger_record_name"] == "first_audio_ms"
+    assert alert.data["stage"] == "first_audio_ms"
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_skips_unbudgeted_stage_milestones() -> None:
+    """No per-stage milestone is recorded for stages without a configured budget."""
+    journal = InMemoryRingBuffer(capacity=128)
+    session = Session(_config(journal=journal))
+    turn = TurnContext("turn-no-stage-budget", CancelToken())
+    turn.end_time = time.monotonic() - 1.0
+    turn.stt_final_time = time.monotonic() - 0.5
+    session._turn = turn
+
+    await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    names = {record.name for record in journal.read()}
+    assert names.isdisjoint(
+        {"stt_final_latency_ms", "llm_ttft_ms", "tts_ttfb_ms", "first_audio_ms"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_timeout_emits_error() -> None:
     """Hitting the agent timeout emits an Error event."""
 

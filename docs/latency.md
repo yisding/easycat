@@ -58,6 +58,30 @@ no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
 `user_speech_start_to_bot_stopped_ms` barge-in delta is `null` for turns the
 user never interrupted.
 
+### Runtime budget milestones (flat stage names)
+
+The waterfall deltas above are reconstructed *offline* from journal events. At
+*runtime*, when a `LatencyBudget` is configured for a stage, the session emits a
+matching per-turn metric record under a flat stage name and feeds it through the
+`LatencyBudgetMonitor`, so a breach lands in the journal/issue rollups while the
+turn is still live. These flat names are the runtime lift of the waterfall
+milestones, and `tts_ttfb_ms` / `llm_ttft_ms` are the *same measurement* as the
+offline `easycat validate latency` percentile columns — not a duplicate
+vocabulary.
+
+| Runtime metric (flat) | Measured from → to | Equivalent waterfall milestone |
+| --- | --- | --- |
+| `stt_final_latency_ms` | turn ended → STT final | `vad_endpoint_to_stt_final_ms` |
+| `llm_ttft_ms` | STT final → agent first token | `agent_request_to_first_token_ms` |
+| `tts_ttfb_ms` | agent first token → TTS first byte | `agent_first_token_to_tts_first_byte_ms` |
+| `first_audio_ms` | turn ended → TTS first byte | `vad_endpoint_to_tts_first_byte_ms` |
+| `total_ms` | turn ended → TTS first byte (turn total) | — |
+
+A budget may target either the flat name or the waterfall milestone name — both
+resolve to the same stage. A milestone is only recorded when its budget is
+configured (so the journal is not flooded) and only when both timing markers were
+observed; an errored or text-only turn skips the milestones it never reached.
+
 ## Latency-adding defaults
 
 These are the defaults that *add waiting time* on the response path. Each

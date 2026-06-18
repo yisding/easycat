@@ -248,7 +248,15 @@ There are three independent knobs, and they control different things:
   name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
   stage records with `latency_budget_exceeded`; `LatencyBudget(stage="total_ms",
   max_ms=...)` emits turn-level `latency_budget_exceeded` metric records from
-  text turns and from voice turns once first TTS audio is available. The
+  text turns and from voice turns once first TTS audio is available. Voice turns
+  also emit flat per-stage runtime milestones — `stt_final_latency_ms`,
+  `llm_ttft_ms`, `tts_ttfb_ms`, and `first_audio_ms` — whenever a matching
+  `LatencyBudget` is configured; each is the runtime lift of the equivalent
+  waterfall `*_to_*_ms` milestone (and `tts_ttfb_ms` / `llm_ttft_ms` are the same
+  measurement as the offline `easycat validate latency` columns), so a breach
+  appends `latency_budget_exceeded` to the journal/issue rollups while the turn
+  is live. A budget may target either the flat stage name or the waterfall
+  milestone name. The
   debugger cost rollup reports `max_session_cost_usd` budget status from cost
   records using the shared `easycat.runtime.cost_budget_status(...)` helper, and
   the session journal emits `cost_budget_warning` / `cost_budget_exceeded`
@@ -257,9 +265,8 @@ There are three independent knobs, and they control different things:
   `cost_budget_stop_requested` and schedules `stop(force=True)` through the
   runtime task scope. `warmup=True` runs structural provider/model `warmup()`
   hooks during `Session.start()` before audio ingress and emits
-  `warmup_completed` timing records. Provider cost-record emission,
-  first-token/audio runtime budgets, and provider-specific warmup coverage are
-  still planned.
+  `warmup_completed` timing records. Provider cost-record emission and
+  provider-specific warmup coverage are still planned.
 
 - **Shared budget API.** `easycat.budgets` is the single import home for budget
   evaluation across runtime, validation, eval, and debugger surfaces. It

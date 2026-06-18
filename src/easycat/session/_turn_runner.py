@@ -466,6 +466,7 @@ class TurnRunner:
             return
 
         self._record_voice_total_latency(turn)
+        self._record_voice_stage_latencies(turn)
 
         # If a newer turn started (e.g. barge-in), avoid clobbering its state.
         if self._turn.current is turn and self._turn.generation == st.turn_gen:
@@ -694,6 +695,75 @@ class TurnRunner:
                 "to": "first_tts_audio",
             },
         )
+
+    def _record_voice_stage_latencies(self, turn: TurnContext) -> None:
+        """Emit per-stage runtime latency budget milestones for a voice turn.
+
+        These are the flat runtime names that reconcile the three latency
+        vocabularies (M12): ``stt_final_latency_ms`` / ``llm_ttft_ms`` /
+        ``tts_ttfb_ms`` / ``first_audio_ms``. Each is the runtime lift of an
+        equivalent waterfall ``*_to_*_ms`` milestone and feeds through the same
+        :class:`LatencyBudgetMonitor` as the turn-total record, so budget
+        violations land in the journal/issue rollups. ``llm_ttft_ms`` and
+        ``tts_ttfb_ms`` are renames/lifts of the existing offline-validation
+        columns — the runtime flat name and the offline column refer to the
+        same measurement, not a duplicate.
+
+        Each milestone is gated on a configured budget so the journal is not
+        flooded with metrics nobody asked to enforce, mirroring
+        ``_record_voice_total_latency``.
+        """
+        if not self._journal_enabled:
+            return
+
+        # (stage, name, from_marker, to_marker, from_label, to_label)
+        milestones: tuple[tuple[str, str, float | None, float | None, str, str], ...] = (
+            (
+                "stt_final_latency_ms",
+                "stt_final_latency_ms",
+                turn.end_time,
+                turn.stt_final_time,
+                "turn_ended",
+                "stt_final",
+            ),
+            (
+                "llm_ttft_ms",
+                "llm_ttft_ms",
+                turn.stt_final_time,
+                turn.first_agent_time,
+                "stt_final",
+                "agent_first_token",
+            ),
+            (
+                "tts_ttfb_ms",
+                "tts_ttfb_ms",
+                turn.first_agent_time,
+                turn.first_tts_audio_time,
+                "agent_first_token",
+                "tts_first_byte",
+            ),
+            (
+                "first_audio_ms",
+                "first_audio_ms",
+                turn.end_time,
+                turn.first_tts_audio_time,
+                "turn_ended",
+                "tts_first_byte",
+            ),
+        )
+        for stage, name, from_marker, to_marker, from_label, to_label in milestones:
+            if from_marker is None or to_marker is None:
+                continue
+            if not self._latency_budget.has_budget_for(stage):
+                continue
+            elapsed_ms = max(0.0, (to_marker - from_marker) * 1000.0)
+            self._latency_budget.record_metric(
+                name=name,
+                turn_id=turn.id,
+                stage=stage,
+                observed_ms=elapsed_ms,
+                data={"value": elapsed_ms, "from": from_label, "to": to_label},
+            )
 
     # ── Text mode ──────────────────────────────────────────────────
 

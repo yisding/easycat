@@ -183,10 +183,9 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
         "`stop(force=True)`",
         "structural provider/model `warmup()` hooks",
         "`warmup_completed` timing records",
-        (
-            "Provider cost-record emission, first-token/audio runtime budgets, and "
-            "provider-specific warmup coverage are still planned"
-        ),
+        "`stt_final_latency_ms`",
+        "`first_audio_ms`",
+        ("Provider cost-record emission and provider-specific warmup coverage are still planned"),
     ):
         assert token in config_text
 
