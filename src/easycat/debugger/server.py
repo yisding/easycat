@@ -1312,6 +1312,56 @@ def _turn_bundle_zip_from_session(session: Any, turn_id: str) -> Path | None:
     return tmp_path
 
 
+def _promote_active_turn(
+    session: Any,
+    turn_id: str,
+    *,
+    out: str,
+    include_audio: bool,
+    allow_pii: bool,
+    assert_on: str,
+) -> tuple[int, dict[str, Any]]:
+    """Promote one turn of *session* into a hardened regression test.
+
+    Exports the live session to a temp bundle, then delegates to the M11
+    hardened :func:`easycat.evals.promote_turn_to_test` (redact-by-default,
+    audio excluded by default, tripwire-guarded). Returns ``(status, payload)``
+    so the route can map promotion errors to a 4xx without leaking a traceback.
+    """
+    from easycat.evals import promote_turn_to_test
+    from easycat.evals.promote import PromotionError
+
+    bundle_path = _bundle_zip_from_session(session)
+    if bundle_path is None:
+        return 409, {
+            "error_code": "NO_JOURNAL",
+            "message": "session has no journal to promote (debug='off')",
+        }
+    try:
+        written = promote_turn_to_test(
+            bundle_path,
+            turn_id,
+            out=out,
+            include_audio=include_audio,
+            allow_pii=allow_pii,
+            assert_on=assert_on,
+        )
+    except PromotionError as exc:
+        return 422, {"error_code": "PROMOTION_FAILED", "message": str(exc)}
+    except (ValueError, TypeError) as exc:
+        return 400, {"error_code": "BAD_REQUEST", "message": str(exc)}
+    finally:
+        _safe_unlink(bundle_path)
+    return 200, {
+        "out": str(written),
+        "bundle": str(Path(out).with_suffix(".bundle")),
+        "turn_id": turn_id,
+        "include_audio": include_audio,
+        "redacted": not allow_pii,
+        "assert_on": assert_on,
+    }
+
+
 def _records_since(
     source: DebuggerSource, after_seq: int, cap: int
 ) -> tuple[list[dict[str, Any]], int]:
@@ -1332,17 +1382,158 @@ def _records_since(
     return batch, int(batch[-1]["sequence"])
 
 
+# ── Dev-mode registry adaptation ─────────────────────────────────
+
+
+_EMPTY_DEV_SOURCE_LABEL = "no-session"
+
+
+def _empty_dev_source() -> DebuggerSource:
+    """A well-formed empty source for when no live session is selected.
+
+    Every panel renders against zero records rather than 500'ing before the
+    developer has picked a session from the selector.
+    """
+    return DebuggerSource(
+        label=_EMPTY_DEV_SOURCE_LABEL,
+        _records_fn=lambda: [],
+        _progress_fn=lambda: (0, 0),
+        _artifact_fn=lambda _ref: None,
+        _manifest_fn=lambda: {
+            "source": "dev",
+            "session_id": "",
+            "is_live": False,
+            "supports_replay": False,
+            "supports_export": False,
+            "supports_annotate": False,
+            "active_session": None,
+            "replay_entry_points": [],
+        },
+        _bundle_fn=None,
+        _replay_fn=None,
+        is_live=False,
+    )
+
+
+class _DevDebuggerState:
+    """Per-app dev state: the selected session and the live proxy source.
+
+    Holds a process-local :class:`SessionRegistry` and the currently selected
+    registry id. ``proxy_source()`` returns a single :class:`DebuggerSource`
+    whose accessors resolve, on every call, against the selected session's
+    source — so the standard routes (records/timeline/cost/…) follow the
+    selector without being rebuilt.
+    """
+
+    def __init__(self, registry: Any) -> None:
+        self._registry = registry
+        self._active_id: str | None = None
+
+    @property
+    def registry(self) -> Any:
+        return self._registry
+
+    def select(self, registry_id: str | None) -> bool:
+        """Set the active registry id. Returns ``True`` when it resolves."""
+        if registry_id is None:
+            self._active_id = None
+            return True
+        if self._registry.get(registry_id) is None:
+            return False
+        self._active_id = registry_id
+        return True
+
+    def active_id(self) -> str | None:
+        # Auto-select the only running session so a single-session dev run shows
+        # data immediately without a manual selector click.
+        if self._active_id is not None and self._registry.get(self._active_id) is not None:
+            return self._active_id
+        sessions = self._registry.list()
+        if len(sessions) == 1:
+            self._active_id = sessions[0].registry_id
+            return self._active_id
+        return None
+
+    def active_session(self) -> Any | None:
+        active = self.active_id()
+        return self._registry.get(active) if active is not None else None
+
+    def _active_source(self) -> DebuggerSource:
+        session = self.active_session()
+        if session is None:
+            return _empty_dev_source()
+        source = _session_source(session)
+        # Wire the same live-export hooks ``serve_session`` installs so the
+        # promote/export paths work for the selected session.
+        source._export_fn = lambda s=session: _bundle_zip_from_session(s)  # type: ignore[attr-defined]
+        source._export_turn_fn = (  # type: ignore[attr-defined]
+            lambda turn_id, s=session: _turn_bundle_zip_from_session(s, turn_id)
+        )
+        return source
+
+    def proxy_source(self) -> DebuggerSource:
+        """Return a DebuggerSource that delegates to the active session source."""
+        state = self
+
+        def _manifest() -> dict[str, Any]:
+            payload = state._active_source().manifest()
+            payload["source"] = payload.get("source", "dev")
+            payload["dev_mode"] = True
+            payload["active_session"] = state.active_id()
+            return payload
+
+        proxy = DebuggerSource(
+            label="dev-registry",
+            _records_fn=lambda: state._active_source().records(),
+            _progress_fn=lambda: state._active_source().progress(),
+            _records_since_fn=lambda after, cap: state._active_source().records_since(after, cap),
+            _artifact_fn=lambda ref: state._active_source().artifact(ref),
+            _manifest_fn=_manifest,
+            _bundle_fn=lambda: state._active_source().bundle(),
+            _replay_fn=None,
+            is_live=True,
+        )
+        # The export route reads these hooks off the bound source (the proxy);
+        # delegate them to the live active session via its export-aware source.
+        proxy._export_fn = lambda: getattr(  # type: ignore[attr-defined]
+            state._active_source(), "_export_fn", lambda: None
+        )()
+        proxy._export_turn_fn = lambda turn_id: getattr(  # type: ignore[attr-defined]
+            state._active_source(), "_export_turn_fn", lambda _t: None
+        )(turn_id)
+        return proxy
+
+
 # ── HTTP API ─────────────────────────────────────────────────────
 
 
-def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
-    """Build the aiohttp Application with all routes wired up."""
+def _make_app(
+    source: DebuggerSource,
+    *,
+    allow_remote: bool = False,
+    registry: Any | None = None,
+) -> Any:
+    """Build the aiohttp Application with all routes wired up.
+
+    When ``registry`` is a
+    :class:`~easycat.debugger.session_registry.SessionRegistry`, the dev-mode
+    routes (``/api/dev/sessions``, ``/api/budgets``, ``/api/dev/promote``) are
+    mounted and *source* is replaced by a live proxy that follows the registry
+    session the developer selects. All other routes are unchanged — they read
+    through the proxy, so switching the active session re-points the whole UI.
+    """
     try:
         from aiohttp import WSMsgType, web
     except ImportError as exc:  # pragma: no cover - optional dep
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
     static_dir = Path(__file__).parent / "static"
+
+    dev = _DevDebuggerState(registry) if registry is not None else None
+    if dev is not None:
+        # All existing routes read through ``source``; swap in the live proxy so
+        # selecting a different session re-points every panel at once.
+        source = dev.proxy_source()
 
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -2008,6 +2199,123 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             await ws.close()
         return ws
 
+    async def dev_sessions(_request: Any) -> Any:
+        """List the live sessions the dev registry is tracking.
+
+        Powers the UI session selector. Returns the active registry id so the
+        selector can highlight the session every other panel is showing.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        return web.json_response(
+            {
+                "sessions": [summary.to_dict() for summary in dev.registry.list()],
+                "active_session": dev.active_id(),
+            }
+        )
+
+    async def dev_select(request: Any) -> Any:
+        """Switch the active session every panel renders against.
+
+        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        on this POST. A ``null``/absent ``registry_id`` clears the selection.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - malformed body → 400, never 500
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be JSON"}, status=400
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "body must be a JSON object"}, status=400
+            )
+        registry_id = body.get("registry_id")
+        if registry_id is not None and not isinstance(registry_id, str):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "registry_id must be a string or null"},
+                status=400,
+            )
+        if not dev.select(registry_id):
+            return web.json_response(
+                {"error_code": "NOT_FOUND", "message": f"unknown session {registry_id!r}"},
+                status=404,
+            )
+        return web.json_response({"active_session": dev.active_id()})
+
+    async def budgets(_request: Any) -> Any:
+        """Return the budget report for the active session.
+
+        Evaluates the session's configured latency/cost budgets against its
+        journal records through the shared M9 :func:`build_budget_report` — the
+        single budget evaluator the debugger, eval runner, CLI, and validation
+        all share — so the UI overlays match every other surface.
+        """
+        from easycat.budgets import build_budget_report
+        from easycat.debugger.dev import session_budgets
+
+        records = source.records()
+        session = dev.active_session() if dev is not None else None
+        latency_budgets, cost_budgets = ([], []) if session is None else session_budgets(session)
+        report = build_budget_report(records, [*latency_budgets, *cost_budgets])
+        payload = report.to_dict()
+        payload["active_session"] = dev.active_id() if dev is not None else None
+        return web.json_response(payload)
+
+    async def dev_promote(request: Any) -> Any:
+        """Promote one turn of the active session into a regression test.
+
+        Exports the active session to a temp bundle, then runs the M11 hardened
+        :func:`~easycat.evals.promote_turn_to_test` — redact-by-default, audio
+        excluded by default, the redaction tripwire raising on unredacted
+        sensitive text unless ``allow_pii`` is set. Returns the generated test +
+        bundle paths. ``_origin_guard`` already enforces JSON + a safe Origin.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        session = dev.active_session()
+        if session is None:
+            return web.json_response(
+                {"error_code": "NOT_FOUND", "message": "no active session selected"}, status=404
+            )
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - malformed body → 400, never 500
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be JSON"}, status=400
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "body must be a JSON object"}, status=400
+            )
+        try:
+            turn_id = _safe_turn_id(str(body.get("turn_id", "")))
+        except ValueError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        raw_out = str(body.get("out") or "").strip()
+        if not raw_out:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "out path is required"}, status=400
+            )
+        include_audio = bool(body.get("include_audio", False))
+        allow_pii = bool(body.get("allow_pii", False))
+        assert_on = str(body.get("assert_on", "hash"))
+        result = await asyncio.to_thread(
+            _promote_active_turn,
+            session,
+            turn_id,
+            out=raw_out,
+            include_audio=include_audio,
+            allow_pii=allow_pii,
+            assert_on=assert_on,
+        )
+        status, payload = result
+        return web.json_response(payload, status=status)
+
     app = web.Application(middlewares=[_origin_guard])
     app.router.add_get("/", index)
     app.router.add_get("/api/manifest", manifest)
@@ -2028,6 +2336,14 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/annotations", annotations)
     app.router.add_get("/api/refresh", refresh)
     app.router.add_get("/api/health", healthcheck)
+    # ``/api/budgets`` is mounted for every source (it degrades to an empty
+    # passing report when no budgets/records exist); the dev-only registry
+    # routes are mounted only when a registry is attached.
+    app.router.add_get("/api/budgets", budgets)
+    if dev is not None:
+        app.router.add_get("/api/dev/sessions", dev_sessions)
+        app.router.add_post("/api/dev/select", dev_select)
+        app.router.add_post("/api/dev/promote", dev_promote)
     app.router.add_get("/ws", websocket)
     # Static assets directory if we ever add JS / CSS files.
     if static_dir.is_dir():
@@ -2147,6 +2463,63 @@ def serve_session(
     return thread
 
 
+def serve_dev_registry(
+    registry: Any,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    in_thread: bool = False,
+    allow_remote: bool = False,
+) -> threading.Thread | None:
+    """Serve the dev debugger UI backed by a live :class:`SessionRegistry`.
+
+    Unlike :func:`serve_session` (one fixed session), this serves a session
+    *selector* over every session the process registers, so a browser/websocket
+    server fanning out many concurrent sessions exposes one UI for all of them.
+    Loopback-only by default (the journal can carry transcripts/audio); a
+    non-loopback bind requires ``allow_remote=True``.
+
+    Blocks the caller unless ``in_thread`` is set, in which case the server runs
+    on a background daemon thread and the started thread is returned.
+    """
+    _check_host(host, allow_remote)
+    # The app builds its own live proxy source from the registry; pass an empty
+    # placeholder source so the (registry-driven) proxy takes over.
+    source = _empty_dev_source()
+
+    if not in_thread:
+        _serve(
+            source,
+            host=host,
+            port=port,
+            open_browser=open_browser,
+            allow_remote=allow_remote,
+            registry=registry,
+        )
+        return None
+
+    _probe_bind(host, port)
+    thread = threading.Thread(
+        target=_serve,
+        args=(source,),
+        kwargs={
+            "host": host,
+            "port": port,
+            "open_browser": False,
+            "allow_remote": allow_remote,
+            "handle_signals": False,
+            "registry": registry,
+        },
+        daemon=True,
+        name="easycat-dev-debugger",
+    )
+    thread.start()
+    if open_browser:
+        _open_browser(f"http://{host}:{port}/")
+    return thread
+
+
 def _probe_bind(host: str, port: int) -> None:
     """Bind ``(host, port)`` once and release it so collisions surface here.
 
@@ -2219,6 +2592,7 @@ def _serve(
     open_browser: bool,
     allow_remote: bool,
     handle_signals: bool = True,
+    registry: Any | None = None,
 ) -> None:
     try:
         from aiohttp import web
@@ -2230,7 +2604,7 @@ def _serve(
     # ``webbrowser.open``) instead of popping a tab that points at a server
     # that never came up.
     _probe_bind(host, port)
-    app = _make_app(source, allow_remote=allow_remote)
+    app = _make_app(source, allow_remote=allow_remote, registry=registry)
     url = f"http://{host}:{port}/"
     logger.info("EasyCat debugger UI serving on %s (source=%s)", url, source.label)
     if open_browser:

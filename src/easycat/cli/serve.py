@@ -130,6 +130,18 @@ def _validate_playground_config() -> None:
     EasyConfig.browser()
 
 
+def _dev_mode_enabled() -> bool:
+    """Whether ``EASYCAT_DEV`` arms dev debugger mode for ``easycat serve``.
+
+    Mirrors the truthy parsing in :mod:`easycat.debugger.dev`: any value other
+    than ``""``/``0``/``false``/``no``/``off`` (case-insensitive) enables it.
+    """
+    value = os.environ.get("EASYCAT_DEV")
+    if value is None:
+        return False
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
 def _build_voice_app(
     *,
     agent_model: str,
@@ -143,7 +155,11 @@ def _build_voice_app(
         agent_model=agent_model,
         instructions=instructions,
     )
-    return VoiceApp(config_factory=factory)
+    # ``EASYCAT_DEV=1 easycat serve`` arms the always-available dev debugger:
+    # durable journaling + a loopback session-selector UI launched once. Purely
+    # additive over the autolaunch guard (R7) — it never relaxes the
+    # debug='full'-alone-never-autolaunches invariant.
+    return VoiceApp(config_factory=factory, dev=_dev_mode_enabled())
 
 
 def _run_voice_app(

@@ -26,6 +26,7 @@ or for a live session:
 from easycat.debugger.server import (
     DebuggerSource,
     serve_bundle,
+    serve_dev_registry,
     serve_run_bundle,
     serve_session,
 )
@@ -33,6 +34,7 @@ from easycat.debugger.server import (
 __all__ = [
     "DebuggerSource",
     "serve_bundle",
+    "serve_dev_registry",
     "serve_run_bundle",
     "serve_session",
 ]

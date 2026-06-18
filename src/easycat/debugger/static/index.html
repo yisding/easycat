@@ -446,6 +446,46 @@
     color: var(--muted);
     font-size: 10px;
   }
+  /* Budget overlay on the waterfall/timeline — derived from the shared M9
+     build_budget_report (/api/budgets, stashed on state.budgetReport).  An
+     over-budget stage row gets a red outline + flag, and each turn carries a
+     summary strip listing the breached stages and their limits. */
+  .waterfall-row.over-budget .waterfall-bar {
+    box-shadow: inset 0 0 0 2px var(--red);
+  }
+  .waterfall-row .budget-flag {
+    color: var(--red);
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-left: 6px;
+  }
+  .budget-overlay {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 4px 0 8px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: rgba(224, 99, 90, 0.12);
+    border: 1px solid rgba(224, 99, 90, 0.35);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--red);
+  }
+  .budget-overlay .budget-overlay-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+  .budget-overlay .budget-chip {
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: rgba(224, 99, 90, 0.18);
+    color: var(--text);
+  }
 
   /* Critical-path waterfall: one connected bar made of contiguous
      segments showing where a turn's latency went, VAD endpoint → TTS
@@ -1086,11 +1126,25 @@
 <header>
   <h1>EasyCat Debugger</h1>
   <span class="source" id="source-label">loading…</span>
+  <!-- Dev/prod source labeling: badge reflects whether this UI is a live dev
+       registry (EASYCAT_DEV / VoiceApp(dev=True)) or a static bundle/session. -->
+  <span class="source" id="source-mode-badge" hidden></span>
+  <!-- Live session selector (dev mode only): switch which registered session
+       every panel renders against. Hidden unless /api/dev/sessions exists. -->
+  <label id="dev-session-picker" hidden style="display:flex; align-items:center; gap:4px;">
+    session
+    <select id="dev-session-select" aria-label="Active live session"></select>
+  </label>
   <span class="live-indicator">
     <span class="live-dot" id="ws-dot"></span>
     <span id="ws-label">disconnected</span>
   </span>
+  <!-- Budget badge: passing/over-budget status from /api/budgets (shared M9
+       build_budget_report). Per-stage overlays render on the Timeline
+       waterfall (see renderTimelineView/budgetOverlay). -->
+  <span class="source" id="budget-badge" hidden></span>
   <span class="spacer"></span>
+  <button id="promote-test-btn" hidden>★ Promote turn to test</button>
   <button id="export-btn" hidden>↓ Export bundle</button>
   <button id="refresh-btn">⟳ Refresh</button>
 </header>
@@ -1407,6 +1461,11 @@ const state = {
   cost: null,
   annotations: {},
   issues: { issues: [], summary: {}, total: 0 },
+  // Dev mode (EASYCAT_DEV / VoiceApp(dev=True)) registry + budget overlays.
+  devSessions: [],
+  devActiveSession: null,
+  budgetReport: null,
+  selectedTurn: null,
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   recordsPage: { limit: 500, offset: 0, total: 0, pageSize: 0 },
   selectedSeq: null,
@@ -1530,13 +1589,112 @@ async function refreshAll() {
     ? `bundle ${m.name} · ${m.record_count} records · ${m.artifact_count} artifacts`
     : `live session ${m.session_id} · running=${m.is_running}`;
   $("#export-btn").hidden = !m.supports_export;
+  // Clearer dev/prod source labeling: a live dev registry surfaces a "dev"
+  // badge; a settled bundle is labeled "bundle"; a single live session "live".
+  const modeBadge = $("#source-mode-badge");
+  if (m.dev_mode) {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "dev registry";
+  } else if (m.source === "bundle") {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "bundle (read-only)";
+  } else {
+    modeBadge.hidden = false;
+    modeBadge.textContent = m.is_live ? "live session" : "session";
+  }
   $("#status-source").textContent = m.source === "bundle"
     ? `source: bundle "${m.name}"`
     : `source: live session ${m.session_id}`;
   $("#status-records").textContent = `${m.record_count ?? state.records.length} records`;
+  // Dev mode only: refresh the live-session selector and the promote button.
+  await refreshDevSessions();
+  // Budget overlays/badge from the shared M9 build_budget_report.
+  await refreshBudgets();
   // Always reload the data the active tab needs.
   await loadAllSnapshots();
   rerenderActiveTab();
+}
+
+// ── Dev mode: live session selector + promote-to-test ────────────
+//
+// ``/api/dev/sessions`` only exists when the debugger was launched as a dev
+// registry (EASYCAT_DEV / VoiceApp(dev=True)). A 404 means a plain
+// bundle/session source, so the selector and promote button stay hidden.
+async function refreshDevSessions() {
+  const picker = $("#dev-session-picker");
+  const select = $("#dev-session-select");
+  const promoteBtn = $("#promote-test-btn");
+  let data;
+  try {
+    data = await getJSON("/api/dev/sessions");
+  } catch (_e) {
+    picker.hidden = true;
+    promoteBtn.hidden = true;
+    return;
+  }
+  state.devSessions = (data && data.sessions) || [];
+  state.devActiveSession = data && data.active_session;
+  picker.hidden = false;
+  promoteBtn.hidden = state.devSessions.length === 0;
+  clear(select);
+  for (const s of state.devSessions) {
+    const opt = el("option", { value: s.registry_id });
+    const running = s.is_running ? "running" : "stopped";
+    opt.textContent = `${s.label} (${running})`;
+    if (s.registry_id === state.devActiveSession) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+async function selectDevSession(registryId) {
+  // Re-points every panel at the chosen session, then reloads the snapshot.
+  await postJSON("/api/dev/select", { registry_id: registryId });
+  await refreshAll();
+}
+
+// Promote the active session's selected turn into a hardened regression test
+// via /api/dev/promote (M11 redact-by-default path). Prompts for the turn id
+// and output path; the result paths are surfaced via an alert (no innerHTML).
+async function promoteTurnToTest() {
+  const turnId = (state.selectedTurn || prompt("Turn id to promote:") || "").trim();
+  if (!turnId) return;
+  const out = (prompt("Output test file path:", "tests/test_regression.py") || "").trim();
+  if (!out) return;
+  try {
+    const data = await postJSON("/api/dev/promote", { turn_id: turnId, out: out });
+    alert(`Wrote ${data.out}\nBundle: ${data.bundle}\nredacted=${data.redacted}`);
+  } catch (e) {
+    alert(`Promotion failed: ${e.message || e}`);
+  }
+}
+
+// ── Budget overlays ──────────────────────────────────────────────
+//
+// /api/budgets evaluates the active session's configured budgets through the
+// shared build_budget_report. The header badge shows pass/over-budget; the
+// full report is stashed on state.budgetReport so renderTimelineView's
+// budgetOverlay() can draw per-stage over-budget markers on the waterfall.
+async function refreshBudgets() {
+  const badge = $("#budget-badge");
+  let report;
+  try {
+    report = await getJSON("/api/budgets");
+  } catch (_e) {
+    badge.hidden = true;
+    state.budgetReport = null;
+    return;
+  }
+  state.budgetReport = report;
+  const evaluated = (report.evaluated_latency_budgets || 0) + (report.evaluated_cost_budgets || 0);
+  if (evaluated === 0) {
+    badge.hidden = true;
+    return;
+  }
+  badge.hidden = false;
+  badge.textContent = report.passed
+    ? "budgets: ok"
+    : `budgets: ${report.violations.length} over`;
+  badge.style.color = report.passed ? "#44d18a" : "#e0635a";
 }
 
 async function loadAllSnapshots() {
@@ -1862,6 +2020,60 @@ function renderCriticalPath(turn) {
   return panel;
 }
 
+// Map the flat budget-stage vocabulary returned by /api/budgets (mirrors
+// budgets/report.py WATERFALL_STAGE_ALIASES + the offline percentile columns)
+// onto the pipeline stage names the waterfall rows render (span.stage).  Stages
+// that span the whole turn (total/first-audio/barge-in) have no single owning
+// row and only surface in the per-turn overlay strip.
+const BUDGET_STAGE_TO_PIPELINE = {
+  stt_final_latency_ms: "stt",
+  llm_ttft_ms: "agent",
+  tts_ttfb_ms: "tts",
+};
+
+// Build a per-turn budget overlay from the shared report stashed on
+// state.budgetReport.  Returns the set of over-budget pipeline stages (for
+// marking waterfall rows) and a flat list of breach summaries (for the strip).
+// /api/budgets is process-scoped (the active session), so the same report
+// annotates every rendered turn — there is no per-turn report.
+function budgetOverlay() {
+  const report = state.budgetReport;
+  const overStages = new Set();
+  const breaches = [];
+  if (!report || !Array.isArray(report.violations)) {
+    return { overStages, breaches };
+  }
+  for (const v of report.violations) {
+    const stage = String(v.stage || "");
+    const pipeline = BUDGET_STAGE_TO_PIPELINE[stage] || null;
+    if (pipeline) overStages.add(pipeline);
+    breaches.push({
+      stage,
+      pipeline,
+      observed: typeof v.observed === "number" ? v.observed : null,
+      limit: typeof v.limit === "number" ? v.limit : null,
+      kind: v.kind || "latency",
+    });
+  }
+  return { overStages, breaches };
+}
+
+// Render the over-budget summary strip for a turn (omitted when nothing is
+// breached).  Built with safe DOM helpers only.
+function renderBudgetOverlayStrip(breaches) {
+  if (!breaches.length) return null;
+  const strip = el("div", { class: "budget-overlay" });
+  strip.appendChild(el("span", { class: "budget-overlay-label" }, "over budget"));
+  for (const b of breaches) {
+    const name = b.pipeline || b.stage;
+    const unit = b.kind === "cost" ? "" : "ms";
+    const observed = b.observed != null ? `${b.observed.toFixed(0)}${unit}` : "—";
+    const limit = b.limit != null ? `${b.limit.toFixed(0)}${unit}` : "—";
+    strip.appendChild(el("span", { class: "budget-chip" }, `${name}: ${observed} / ${limit}`));
+  }
+  return strip;
+}
+
 function renderTimelineView() {
   const root = $("#timeline-view");
   clear(root);
@@ -1870,6 +2082,9 @@ function renderTimelineView() {
     return;
   }
   const maxWall = Math.max(...state.timeline.map(t => t.wall_ms || 0)) || 1;
+  // /api/budgets is process-scoped to the active session, so the same overlay
+  // annotates every rendered turn.
+  const { overStages, breaches } = budgetOverlay();
   for (const turn of state.timeline) {
     const turnNode = el("div", { class: "timeline-turn" });
     const turnSummary = state.turns.find(t => t.turn_id === turn.turn_id) || {};
@@ -1909,6 +2124,9 @@ function renderTimelineView() {
     const critical = renderCriticalPath(turn);
     if (critical) turnNode.appendChild(critical);
 
+    const budgetStrip = renderBudgetOverlayStrip(breaches);
+    if (budgetStrip) turnNode.appendChild(budgetStrip);
+
     // Waveform strip: prefer the caller (mic) track when present, else the
     // bot (TTS) track.  VAD bands come from the turn's vad stage spans, and
     // interruption ticks from the rollup's interruption count (positioned at
@@ -1942,8 +2160,11 @@ function renderTimelineView() {
     } else {
       const turnWall = turn.wall_ms || 1;
       for (const span of turn.spans) {
-        const row = el("div", { class: "waterfall-row" });
-        row.appendChild(el("span", { class: "stage-name" }, span.stage));
+        const overBudget = overStages.has(span.stage);
+        const row = el("div", { class: overBudget ? "waterfall-row over-budget" : "waterfall-row" });
+        const stageName = el("span", { class: "stage-name" }, span.stage);
+        if (overBudget) stageName.appendChild(el("span", { class: "budget-flag" }, "⚠ over"));
+        row.appendChild(stageName);
         const track = el("div", { class: "waterfall-track" });
         const offsetPct = Math.min(99, (span.offset_ms / turnWall) * 100);
         const widthPct = Math.max(0.5, Math.min(100 - offsetPct, (span.duration_ms / turnWall) * 100));
@@ -3295,6 +3516,10 @@ document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => activateTab(t.dataset.tab));
 });
 $("#refresh-btn").addEventListener("click", () => refreshAll());
+// Dev mode: switching the selector re-points every panel at the chosen session;
+// the promote button opens the redact-by-default promote-turn-to-test flow.
+$("#dev-session-select").addEventListener("change", (e) => selectDevSession(e.target.value));
+$("#promote-test-btn").addEventListener("click", () => promoteTurnToTest());
 $("#stage-filter").addEventListener("change", () => {
   state.filters.stage = $("#stage-filter").value;
   resetRecordPager();
