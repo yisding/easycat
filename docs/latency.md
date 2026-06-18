@@ -93,7 +93,10 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 - **Latency budgets observe, they do not speed up** — `latency_budget=
   LatencyBudget(stage="tts", max_ms=500)` tags over-budget records so slow
   turns are findable; see [observability](observability.md) for the budget
-  and alerting story.
+  and alerting story. `LatencyBudget` (and the net-new `CostBudget`) live in
+  the shared `easycat.budgets` API, whose `build_budget_report` evaluates the
+  same budgets against runtime records, the waterfall `*_to_*_ms` milestones
+  below, and the offline `easycat validate latency` percentile columns.
 
 ## A worked triage
 

@@ -130,6 +130,15 @@ teams):
 The budgets here are defensible starting points; real numbers are
 per-deployment.
 
+Latency and cost budgets share one value-object API in
+`easycat.budgets`: `LatencyBudget` (re-exported from
+`easycat.validation.latency`, so the legacy import path keeps working) and
+the net-new `CostBudget` (the `max_session_cost_usd` config alias maps onto
+its `max_session_usd` ceiling). `easycat.budgets.build_budget_report`
+evaluates a budget set against both runtime journal records and the offline
+`easycat validate latency` percentile columns, so the same budget means the
+same thing in this chapter, in the validation lane, and in the debugger.
+
 The check itself is straightforward — pull the spans out of the
 journal, compare each against its budget, label `OK` or `OVER`:
 

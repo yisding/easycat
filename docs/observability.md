@@ -261,6 +261,22 @@ There are three independent knobs, and they control different things:
   first-token/audio runtime budgets, and provider-specific warmup coverage are
   still planned.
 
+- **Shared budget API.** `easycat.budgets` is the single import home for budget
+  evaluation across runtime, validation, eval, and debugger surfaces. It
+  re-exports `LatencyBudget` (the legacy
+  `from easycat.validation.latency import LatencyBudget` import keeps working),
+  adds the net-new `CostBudget` value object (`max_session_usd` ceiling,
+  `warn_at` fraction, and a `warn`/`stop` action; the config field
+  `max_session_cost_usd` is preserved as an alias), and exposes
+  `build_budget_report(records, budgets, *, percentiles=...)`.
+  `build_budget_report` reconciles the three latency vocabularies into one
+  report: it evaluates `LatencyBudget`/`CostBudget` against runtime journal
+  records (single `total_ms` observations), maps the waterfall `*_to_*_ms`
+  milestone names onto flat budget stages, AND — when a `percentiles` block is
+  supplied — evaluates the offline validation percentile columns through the
+  same builder (the `easycat validate latency` artifact's `budget_violations`
+  are produced this way).
+
 ### Correlation ids in logs
 
 When a session/turn is active, log records emitted within that async context are

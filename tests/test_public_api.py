@@ -178,6 +178,40 @@ def test_public_api_contract_doc_teaches_entry_and_lifecycle_paths() -> None:
     assert "SessionConfig" not in preferred
 
 
+BUDGETS_SUBMODULE_SURFACE = (
+    "BudgetReport",
+    "CostBudget",
+    "LatencyBudget",
+    "build_budget_report",
+)
+
+
+def test_budgets_submodule_exports_are_public() -> None:
+    """`easycat.budgets` is a submodule package and does NOT count against the
+    top-level `easycat.__all__` cap, but its export set is asserted explicitly
+    so the net-new budget surface cannot silently regress to missing.
+
+    `CostBudget`, `build_budget_report`, and `BudgetReport` are net-new;
+    `LatencyBudget` is re-exported from `easycat.validation.latency` and the
+    legacy import path must keep working.
+    """
+    import easycat.budgets as budgets
+
+    for name in BUDGETS_SUBMODULE_SURFACE:
+        assert name in budgets.__all__, f"easycat.budgets.__all__ missing {name}"
+        assert getattr(budgets, name) is not None
+
+    # These submodule symbols must NOT leak onto the top-level allowlist/cap.
+    for name in ("CostBudget", "build_budget_report", "BudgetReport"):
+        assert name not in easycat.__all__
+
+    # The re-exported LatencyBudget is the exact validation symbol, and the
+    # legacy import path keeps working.
+    from easycat.validation.latency import LatencyBudget as ValidationLatencyBudget
+
+    assert budgets.LatencyBudget is ValidationLatencyBudget
+
+
 def test_transport_extension_surface_is_public_and_documented() -> None:
     """`easycat.transports` exposes the out-of-tree transport building blocks.
 

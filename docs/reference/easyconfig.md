@@ -109,10 +109,16 @@ Group under `observability=ObservabilityConfig(...)`:
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
 - `latency_budget` — one or more `LatencyBudget` thresholds; the session
-  emits alerts when a turn exceeds them.
+  emits alerts when a turn exceeds them. `LatencyBudget` is re-exported from
+  the shared budget API (`from easycat.budgets import LatencyBudget`); the
+  legacy `from easycat.validation.latency import LatencyBudget` import keeps
+  working.
 - `warmup` — run provider warmup hooks at session start (default `True`).
 - `max_session_cost_usd` — hard cost ceiling; the session stops when
-  estimated provider spend crosses it.
+  estimated provider spend crosses it. This is the config alias for the
+  shared `easycat.budgets.CostBudget` value object's `max_session_usd`
+  ceiling (`CostBudget(max_session_usd=...).max_session_cost_usd` returns the
+  same value).
 - `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
   interactive terminal (default `False`). Durable journaling does not depend
   on this; the `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.

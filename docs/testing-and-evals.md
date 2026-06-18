@@ -61,7 +61,15 @@ async def test_agent_turn():
 
 `assert_latency` reuses the nearest-rank percentile code behind
 `easycat validate latency`, so a budget asserted in a unit test means
-the same thing as one enforced in a validation lane. Every scaffolded
+the same thing as one enforced in a validation lane. Latency and cost
+budgets share one value-object API in `easycat.budgets`: `LatencyBudget`
+(re-exported from `easycat.validation.latency`, so the legacy import path
+keeps working) and the net-new `CostBudget` (with the
+`max_session_cost_usd` config alias). `easycat.budgets.build_budget_report`
+evaluates a budget set against runtime journal records and the offline
+validation percentile columns through one builder, so the eval runner,
+debugger, CLI, and validation surfaces report budgets the same way. Every
+scaffolded
 project ships this pattern as `tests/test_agent.py` — offline and
 key-free via a stub agent — plus an `AGENTS.md` documenting it; run it
 with `uv run pytest` inside the project. The repo's own coverage for

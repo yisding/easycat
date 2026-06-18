@@ -452,8 +452,13 @@ def build_latency_artifact(
     # SMOKE runs are explicitly low-sample, so one slow probe would otherwise
     # turn the default `easycat validate latency` invocation into a hard fail.
     # Skip budget evaluation in SMOKE; sweep runs continue to enforce.
+    #
+    # The offline percentile path is evaluated through the SHARED
+    # ``easycat.budgets.build_budget_report`` so it is not structurally
+    # excluded from the one budget vocabulary (CONS-7); the artifact preserves
+    # the legacy ``observed_ms``/``budget_ms`` violation shape consumers expect.
     budget_violations = (
-        [violation.to_dict() for violation in evaluate_budgets(percentiles, effective_budgets)]
+        _offline_budget_violations(percentiles, effective_budgets)
         if mode is not LatencyMode.SMOKE
         else []
     )
@@ -471,6 +476,35 @@ def build_latency_artifact(
         "percentiles": percentiles,
         "budget_violations": budget_violations,
     }
+
+
+def _offline_budget_violations(
+    percentiles: Mapping[str, Any],
+    budgets: Sequence[LatencyBudget],
+) -> list[dict[str, float | str]]:
+    """Evaluate offline percentiles through the shared budget report.
+
+    Routes the offline percentile path through
+    :func:`easycat.budgets.build_budget_report` (imported lazily to avoid the
+    ``budgets`` -> ``validation.latency`` import cycle) so the runtime and
+    offline paths share one evaluator, then maps the shared ``BudgetViolation``
+    back onto the legacy ``observed_ms``/``budget_ms`` artifact shape that
+    downstream consumers (validation runner, report serialization) read.
+    """
+    from easycat.budgets.report import build_budget_report
+
+    report = build_budget_report(budgets=budgets, percentiles=percentiles)
+    return [
+        {
+            "stage": violation.stage,
+            "percentile": violation.percentile or "p95",
+            "observed_ms": violation.observed,
+            "budget_ms": violation.limit,
+            "scope": violation.scope,
+        }
+        for violation in report.violations
+        if violation.kind == "latency"
+    ]
 
 
 def build_reliability_artifact(
