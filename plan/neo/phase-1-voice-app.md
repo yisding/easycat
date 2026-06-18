@@ -1,6 +1,11 @@
 # Phase 1 — VoiceApp, Browser-First Dev, Unified Modes
 
-Status: active implementation plan.
+Status: **shipped** (M1–M3) in PR
+[#283](https://github.com/yisding/easycat/pull/283) (`neo/phase-1-voice-app`):
+`VoiceApp` run modes (M1), `easycat serve` migration + top-level `VoiceApp`
+export with the `__all__` cap bump 94→95 (M2), and Twilio server mode (M3). The
+implementation lives in `src/easycat/voice_app.py`; the active feedback-loop work
+(Phase 3) builds on top of it.
 
 ## Goal
 

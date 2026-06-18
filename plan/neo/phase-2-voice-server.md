@@ -1,6 +1,22 @@
 # Phase 2 — VoiceServer, Manifest Projects, Provider Planning
 
-Status: active implementation plan.
+Status: **shipped** (M4–M8) in PR
+[#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`): VoiceServer skeleton + health/readiness (M4),
+shared auth + capacity/draining + graceful shutdown (M5), manifest loader +
+secret-redaction contract (M6a), provider planner + readiness wiring (M6b),
+WebRTC mount (M7), and server metrics + read-only endpoints (M8). The
+implementation lives under `src/easycat/server/`, `src/easycat/project/`, and
+`src/easycat/planning/`. Phase 3 builds on this branch.
+
+> Branch lineage: local `neo/phase-2-voice-server` had been behind `origin`;
+> the active `neo/phase-3-feedback-loop` branch is based on
+> `origin/neo/phase-2-voice-server` and contains all of the work above.
+
+> Drift note (planner location): this plan places `ProviderPlan` under
+> `easycat.project` (see M6b), but the shipped code lives in a net-new
+> `easycat.planning` package (`src/easycat/planning/provider_plan.py`). The
+> manifest loader is in `easycat.project`; planning is its own sibling package.
 
 ## Goal
 

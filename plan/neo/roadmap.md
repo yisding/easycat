@@ -1,6 +1,7 @@
 # Neo Roadmap
 
-Status: active sequencing proposal.
+Status: active sequencing — M1–M8 **shipped** (Phase 1 in PR #283, Phase 2 in
+PR #284); M9–M13 **in progress** on `neo/phase-3-feedback-loop`.
 
 This roadmap converts the phase plans into reviewable PR slices. The ordering is
 optimized for early user value, low abstraction risk, and testability.
@@ -72,6 +73,9 @@ Exit criteria:
 
 ## Milestone 1 — Minimal VoiceApp
 
+Status: **shipped** in PR [#283](https://github.com/yisding/easycat/pull/283)
+(`neo/phase-1-voice-app`).
+
 Scope:
 
 - Add `src/easycat/voice_app.py`.
@@ -117,6 +121,9 @@ app: add VoiceApp run modes
 
 ## Milestone 2 — Serve Command Uses VoiceApp
 
+Status: **shipped** in PR [#283](https://github.com/yisding/easycat/pull/283)
+(`neo/phase-1-voice-app`); `easycat.__all__` cap raised 94→95.
+
 Scope:
 
 - Migrate `easycat serve` to construct a `VoiceApp`.
@@ -147,6 +154,9 @@ cli: route serve through VoiceApp
 
 ## Milestone 3 — Twilio Mode
 
+Status: **shipped** in PR [#283](https://github.com/yisding/easycat/pull/283)
+(`neo/phase-1-voice-app`).
+
 Scope:
 
 - Extract reusable Twilio server helper from the example shape.
@@ -161,6 +171,9 @@ telephony: add VoiceApp Twilio server mode
 ```
 
 ## Milestone 4 — VoiceServer Skeleton
+
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`).
 
 Scope:
 
@@ -189,6 +202,9 @@ server: add VoiceServer skeleton
 ```
 
 ## Milestone 5 — Auth, Capacity, Shutdown
+
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`).
 
 Scope:
 
@@ -236,6 +252,9 @@ server: add auth and graceful draining
 > milestones** in this roadmap (see R6). Nothing here may land before its
 > acceptance gate in M6b passes — the readiness wiring is deferred to M6b.
 
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`); manifest loader lives in `easycat.project`.
+
 Scope:
 
 - Add `easycat.project.ProjectManifest` (net-new package; no loader exists today
@@ -271,6 +290,10 @@ project: add manifest loader and secret-redaction contract
 ```
 
 ## Milestone 6b — Provider Planner + Readiness Wiring (HIGHEST RISK)
+
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`). Drift: `ProviderPlan` shipped in a net-new
+`easycat.planning` package (not `easycat.project` as sketched below).
 
 Scope:
 
@@ -315,6 +338,9 @@ project: add provider planning and readiness wiring
 > the bundled client targets the flat paths
 > (`webrtc_client.html:301,425,455`). Expanding the scope explicitly:
 
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`).
+
 Scope:
 
 - **Decouple the route handlers off `WebRTCTransport`** — extract the
@@ -342,6 +368,9 @@ server: mount WebRTC voice sessions
 > *skeleton*; this milestone is the **owning milestone** that makes server
 > metrics emittable and completes the four read-only endpoints. None of the
 > four endpoints exist today.
+
+Status: **shipped** in PR [#284](https://github.com/yisding/easycat/pull/284)
+(`neo/phase-2-voice-server`).
 
 Scope:
 
@@ -375,6 +404,8 @@ server: register metrics and complete read-only endpoints
 ## Milestone 9 — Budgets Public API
 
 > Renumbered from old M8.
+
+Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
 
 Scope:
 
@@ -410,6 +441,8 @@ budgets: add shared budget API
 ## Milestone 10 — Evals Public API
 
 > Renumbered from old M9.
+
+Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
 
 Scope:
 
@@ -449,6 +482,8 @@ evals: add scenario runner
 > full raw NDJSON + every audio blob + the verbatim transcript into a committed
 > file with **zero** redaction. State this plainly here, in R8, and in Q14.
 
+Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+
 Scope:
 
 - Add a `promote_turn_to_test` promotion library (net-new) plus
@@ -487,6 +522,8 @@ evals: promote bundle turns to tests
 
 > Renumbered from old M11.
 
+Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
+
 Scope:
 
 - Emit first-token and first-audio latency metrics where available. **These are
@@ -512,6 +549,8 @@ runtime: record first audio budget milestones
 ## Milestone 13 — Dev Debugger Mode
 
 > Renumbered from old M12.
+
+Status: **in progress (Phase 3)** on `neo/phase-3-feedback-loop`.
 
 Scope:
 

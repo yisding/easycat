@@ -1,6 +1,7 @@
 # Phase 3 — Feedback Loop: Debugger, Evals, Replay, Budgets
 
-Status: active implementation plan.
+Status: active implementation — in progress on `neo/phase-3-feedback-loop`
+(builds on shipped Phases 1–2; see PRs #283 and #284).
 
 ## Goal
 

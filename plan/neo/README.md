@@ -1,6 +1,10 @@
 # Neo Plan Index
 
-Status: active next-major planning packet.
+Status: active next-major planning packet. **Phases 1–2 have shipped** (PR #283
+`neo/phase-1-voice-app` for M1–M3; PR #284 `neo/phase-2-voice-server` for
+M4–M8); **Phase 3 (M9–M13) is being implemented** on
+`neo/phase-3-feedback-loop`, which is based on `origin/neo/phase-2-voice-server`
+and contains all prior phase work.
 
 This folder collects the implementation assets for the proposed next-major
 EasyCat product surface. It is intentionally separate from the historical
@@ -17,15 +21,17 @@ Neo is the next-major direction for EasyCat:
 
 The plan is organized around three phases:
 
-1. **VoiceApp** — a product-level app surface with browser-first development
-   and unified local/browser/WebSocket/Twilio modes.
-2. **VoiceServer** — a production process layer with health/readiness, auth,
-   metrics, and graceful shutdown, plus two separately-deliverable foundations:
+1. **VoiceApp** (shipped, PR #283) — a product-level app surface with
+   browser-first development and unified local/browser/WebSocket/Twilio modes.
+2. **VoiceServer** (shipped, PR #284) — a production process layer with
+   health/readiness, auth, metrics, and graceful shutdown, plus two
+   separately-deliverable foundations:
    a manifest loader (M6a) and a declarative provider planner (M6b). M6 is split
    into M6a/M6b and is the highest-risk milestone. WebRTC keeps the number 7; a
    new M8 (server metrics + read-only endpoints) is inserted after M7, so only
    old M8–M12 shift to M9–M13 (see [roadmap.md](roadmap.md)).
-3. **Feedback Loop** — always-available dev timelines, native evals,
+3. **Feedback Loop** (in progress on `neo/phase-3-feedback-loop`) —
+   always-available dev timelines, native evals,
    replay-as-tests (a security-sensitive *hardening* of the existing unsafe
    `journal promote` path — see below), and latency/cost budgets across runtime,
    debugger, CLI, validation, and CI.
@@ -60,6 +66,12 @@ Read these in order:
 
 ## How To Use This Folder
 
+- Phases 1–2 (M1–M8) are **shipped** — see the per-milestone status notes in
+  [roadmap.md](roadmap.md) and the status headers in
+  [phase-1-voice-app.md](phase-1-voice-app.md) and
+  [phase-2-voice-server.md](phase-2-voice-server.md). Phase 3 (M9–M13) is being
+  implemented on `neo/phase-3-feedback-loop`; track scope in
+  [phase-3-feedback-loop.md](phase-3-feedback-loop.md).
 - Use [roadmap.md](roadmap.md) to split implementation PRs.
 - Use [acceptance-matrix.md](acceptance-matrix.md) as the review checklist for
   each milestone.
