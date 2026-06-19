@@ -331,6 +331,23 @@ class VoiceApp:
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
 
+    @staticmethod
+    def _reject_unknown_mode_kwargs(mode: str, kwargs: dict[str, Any]) -> None:
+        """Fail loud on a misspelled ``run()``/``serve()`` server field.
+
+        Each mode builder ``pop``s every field it accepts; anything left in
+        ``kwargs`` is a typo (e.g. ``serve_token`` → ``serve_tokn``) that would
+        otherwise be silently dropped — re-binding the default port or, worse,
+        running an unauthenticated server. This mirrors the construction-time
+        allow-list guard so the run/serve entry points are fail-loud too.
+        """
+        if kwargs:
+            raise ValueError(
+                f"Unknown keyword argument(s) for {mode!r} mode: {sorted(kwargs)}. "
+                "Check for a typo; run()/serve() forward only that mode's documented "
+                "server fields."
+            )
+
     def _browser_transport_config(self, **kwargs: Any) -> tuple[Any, bool]:
         """Build the :class:`WebRTCTransportConfig` plus the resolved
         ``unsafe_allow_no_auth`` flag.
@@ -352,6 +369,7 @@ class VoiceApp:
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
+        self._reject_unknown_mode_kwargs("browser", kwargs)
         # Only override the WebRTCTransportConfig default when a limit is given,
         # keeping that dataclass the single source of the default capacity.
         capacity = {} if max_sessions is None else {"max_sessions": max_sessions}
@@ -426,6 +444,7 @@ class VoiceApp:
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
+        self._reject_unknown_mode_kwargs("websocket", kwargs)
         server_config = WebSocketSessionServerConfig(
             host=host, port=port, auth_token=token, max_sessions=max_sessions
         )
@@ -500,6 +519,7 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
         )
+        self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,

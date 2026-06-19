@@ -805,3 +805,17 @@ def test_media_handler_rejects_connections_over_session_limit(
 
     # Exactly one session was ever created/started despite two connections.
     assert len(created) == 1
+
+
+def test_twilio_run_rejects_unknown_kwarg(captured_twilio: dict[str, Any]) -> None:
+    """A typo'd ``twilio_auth_token`` must raise — never silently start the
+    listeners with webhook signature validation disabled."""
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        VoiceApp(agent="a").run(
+            "twilio",
+            stream_url="wss://example/media",
+            twilio_auth_token="acct-token",
+            twilio_auth_tokn="oops",  # typo of twilio_auth_token
+        )
+    # The guard fires inside the config builder, before the listeners start.
+    assert "asyncio_run_called" not in captured_twilio

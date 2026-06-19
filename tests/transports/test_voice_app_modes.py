@@ -484,3 +484,21 @@ def test_unsafe_allow_no_auth_escape_hatch_websocket(
     VoiceApp(agent="a", host="0.0.0.0").run("websocket", unsafe_allow_no_auth=True)
     config = captured_websocket["config"]
     assert config.auth_token is None
+
+
+# ── Fail-loud on a misspelled server kwarg ───────────────────────────
+
+
+def test_browser_run_rejects_unknown_kwarg(captured_webrtc: dict[str, Any]) -> None:
+    """A typo'd ``port``/``serve_token`` must raise, not silently bind the
+    default or run unauthenticated."""
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        VoiceApp(agent="a").run("browser", prot=9000)
+    # The guard fires before the serve helper, so it is never reached.
+    assert "factory" not in captured_webrtc
+
+
+def test_websocket_run_rejects_unknown_kwarg(captured_websocket: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        VoiceApp(agent="a").run("websocket", serve_tokn="secret")
+    assert "factory" not in captured_websocket
