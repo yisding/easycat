@@ -16,7 +16,9 @@ happens after construction.
 
 For the app-first path, `VoiceApp` wraps this surface: it resolves the matching
 `EasyConfig` preset (`EasyConfig.mic()` / `.browser()` / `.phone()`) per
-deployment mode, then builds and runs the session through `create_session`. The
+deployment mode — the `websocket` mode has no dedicated preset, so it builds a
+bare `EasyConfig` bound to the per-connection transport — then builds and runs
+the session through `create_session`. The
 high-level `VoiceApp(agent=..., stt=..., tts=...)` fields below are forwarded
 into the chosen preset. See the [public API contract](../public-api.md) for the
 `from easycat import VoiceApp` entry point.
