@@ -31,7 +31,7 @@ class _FakeSession:
         pass
 
 
-def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime") -> Path:
+def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime", vad: str = "silero") -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
         "\n".join(
@@ -48,7 +48,7 @@ def _write_manifest(tmp_path: Path, *, stt: str = "openai/realtime") -> Path:
                 'transport = "webrtc"',
                 f'stt = "{stt}"',
                 'tts = "openai"',
-                'vad = "silero"',
+                f'vad = "{vad}"',
                 "",
             ]
         ),
@@ -205,6 +205,58 @@ async def test_ready_503_when_plan_has_blocking_errors(
         async with client.get(f"{_base_url(server)}/health") as resp:
             health = await resp.json()
         assert health["checks"]["providers"] == {"status": "degraded"}
+    finally:
+        await server.stop()
+
+
+def test_plan_payload_unresolvable_backend_returns_blocking_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unknown vad backend makes the planner RAISE. ``plan_payload`` must
+    # surface that as a structured plan-with-blocking-errors, never propagate
+    # (the /plan route would otherwise 500 the diagnostic endpoint).
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, vad="silro"))
+    payload = server.plan_payload()
+    assert payload["has_blocking_errors"] is True
+    assert payload["selected"] == {}
+    assert payload["manifest_loaded"] is True
+    assert any("plan_unresolvable" in err for err in payload["blocking_errors"])
+
+
+def test_capabilities_payload_unresolvable_backend_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", _RESOLVED_TOKEN)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, vad="silro"))
+    caps = server.capabilities_payload()
+    assert caps["roles"] == {}
+    assert caps["all_capabilities"] == []
+
+
+@pytest.mark.integration_socket
+async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
+    client: aiohttp.ClientSession, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression: an unknown vad backend makes the planner RAISE; /plan and
+    # /capabilities must return 200 with structured data, NOT 500.
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "tok")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+    server = VoiceServer.from_manifest(_write_manifest(tmp_path, vad="silro"))
+    server.config.port = 0
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 200
+            body = await resp.json()
+            assert body["has_blocking_errors"] is True
+            assert body["selected"] == {}
+        async with client.get(f"{_base_url(server)}/capabilities") as resp:
+            assert resp.status == 200
+            caps = await resp.json()
+            assert caps["roles"] == {}
     finally:
         await server.stop()
 

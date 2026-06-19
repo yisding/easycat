@@ -814,7 +814,7 @@ def test_every_json_command_has_an_envelope_assertion() -> None:
     )
 
 
-def _write_plan_manifest(tmp_path: Path) -> Path:
+def _write_plan_manifest(tmp_path: Path, *, vad: str = "silero") -> Path:
     manifest = tmp_path / "easycat.toml"
     manifest.write_text(
         "\n".join(
@@ -829,7 +829,7 @@ def _write_plan_manifest(tmp_path: Path) -> Path:
                 'transport = "webrtc"',
                 'stt = "openai/realtime"',
                 'tts = "openai"',
-                'vad = "silero"',
+                f'vad = "{vad}"',
                 "",
             ]
         ),
@@ -890,6 +890,22 @@ def test_plan_unknown_profile_error_envelope(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
 
     result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--profile", "nope", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan", status="error")
+    assert payload["code"] == "EASYCAT_E602"
+
+
+def test_plan_unresolvable_backend_error_envelope(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unknown vad backend makes the planner RAISE a bare ValueError; the CLI
+    # must surface a clean coded E602 envelope, not a raw traceback.
+    manifest = _write_plan_manifest(tmp_path, vad="silro")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
 
     assert result.exit_code != 0
     payload = json.loads(result.stdout)

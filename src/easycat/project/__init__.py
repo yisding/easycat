@@ -31,7 +31,7 @@ from easycat.project.loader import (
     load_manifest,
     parse_manifest,
 )
-from easycat.project.manifest import ProjectManifest, VoiceProjectManifest
+from easycat.project.manifest import ProjectManifest
 from easycat.project.schema import (
     EnvReference,
     ProjectSection,
@@ -47,7 +47,6 @@ __all__ = [
     "ProjectSection",
     "ServerSection",
     "VoiceProfile",
-    "VoiceProjectManifest",
     "discover_manifest_path",
     "load_manifest",
     "parse_manifest",

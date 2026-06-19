@@ -77,6 +77,7 @@ def plan(
     Reports the selected provider per role plus any missing env vars / missing
     extras / incompatible-combo warnings — without instantiating providers.
     """
+    from easycat.errors import EASYCAT_E602
     from easycat.planning import build_provider_plan
     from easycat.project import load_manifest
 
@@ -84,7 +85,14 @@ def plan(
     # cli_command wrapper. An unknown profile raises E602 too.
     project_manifest = load_manifest(manifest)
     voice_profile = project_manifest.profile(profile)
-    provider_plan = build_provider_plan(voice_profile, profile=profile)
+    try:
+        provider_plan = build_provider_plan(voice_profile, profile=profile)
+    except ValueError as exc:
+        # The planner RAISES a bare ValueError on an unknown provider/backend
+        # shortcut (e.g. ``vad = "silro"``) to keep planner-vs-create_session
+        # parity. Surface it as the coded manifest error so the CLI prints a
+        # clean diagnosis instead of a raw traceback.
+        raise EASYCAT_E602(path=f"[voice.{profile}]", problem=str(exc)) from exc
 
     if json_output:
         emit_json(

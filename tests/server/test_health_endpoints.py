@@ -145,9 +145,12 @@ async def test_health_body_never_leaks_session_ids_or_tokens(
         await server._try_acquire_slot()
         async with client.get(f"{_base_url(server)}/health/ready") as resp:
             text = await resp.text()
-        # The readiness reasons are content-free tokens only.
-        assert "token" not in text.lower() or "at_capacity" in text
-        # No raw socket/host detail in the body.
+        # Precondition: we actually exercised the at-capacity not-ready path
+        # (so the leak assertions below run against a populated reasons body).
+        assert "at_capacity" in text
+        # The readiness reasons are content-free tokens only — never an auth
+        # token value and never raw socket/host detail.
+        assert "token" not in text.lower()
         assert "127.0.0.1" not in text
     finally:
         await server.stop()

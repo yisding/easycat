@@ -531,26 +531,42 @@ class VoiceServer:
                 # A manifest was configured but failed to load.
                 return False, None
             return None, None
+        # The manifest loaded; the plan may still be unbuildable (e.g. an unknown
+        # provider/backend shortcut such as ``stt = "opnai"`` or ``vad =
+        # "silro"``). Surface that as a plan blocking error, never a raised probe
+        # (a raised health check breaks k8s liveness/readiness outright). The
+        # reason stays a content-free token so the body leaks nothing.
+        plan, _error = self._resolve_profile_plan(self.config.profile)
+        if plan is None:
+            return True, ("plan_unresolvable",)
+        return True, plan.blocking_errors()
+
+    def _resolve_profile_plan(self, profile: str) -> tuple[Any | None, str | None]:
+        """Build the provider plan for *profile*, or return a redacted error.
+
+        The planner RAISES on an unresolvable profile (an unknown provider /
+        backend shortcut) to preserve the planner-vs-``create_session`` parity
+        contract. The readiness probe and the read-only ``/plan`` /
+        ``/capabilities`` endpoints must surface that as structured data, NOT a
+        500 — they are the exact endpoints an operator reaches to diagnose a red
+        ``/health/ready``, and a raised aiohttp handler would 500 the
+        diagnostic. Returns ``(plan, None)`` on success or ``(None, error)`` with
+        a redacted, content-bounded error string on failure.
+        """
         from easycat.planning import build_provider_plan
 
-        profile = self.config.profile
         try:
-            plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
-        except Exception:
-            # An unresolvable profile (e.g. an unknown provider/backend shortcut
-            # such as ``stt = "opnai"``) makes the planner RAISE. A readiness
-            # probe must report a structured not-ready response, NOT a 500 — a
-            # raised health check breaks k8s liveness/readiness probes outright.
-            # The manifest file loaded; the plan is what is unbuildable, so report
-            # it as a plan blocking error (``plan_has_blocking_errors``).
+            return build_provider_plan(self._manifest.profile(profile), profile=profile), None
+        except Exception as exc:
+            from easycat.validation.redaction import redact_value
+
             logger.warning(
-                "VoiceServer readiness: provider plan for profile %r is "
-                "unresolvable; reporting not-ready",
+                "VoiceServer: provider plan for profile %r is unresolvable; "
+                "reporting a plan blocking error",
                 profile,
                 exc_info=True,
             )
-            return True, ("plan_unresolvable",)
-        return True, plan.blocking_errors()
+            return None, f"plan_unresolvable: {redact_value(str(exc))}"
 
     def plan_payload(self) -> dict[str, Any]:
         """Return the read-only ``/plan`` JSON payload (redacted, no token).
@@ -572,10 +588,21 @@ class VoiceServer:
                 "has_blocking_errors": False,
                 "manifest_loaded": self._manifest_load_error is None,
             }
-        from easycat.planning import build_provider_plan
-
         profile = self.config.profile
-        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        plan, error = self._resolve_profile_plan(profile)
+        if plan is None:
+            # The manifest loaded but the profile is unbuildable. Return a
+            # structured plan-with-blocking-errors (HTTP 200), never a 500.
+            return {
+                "profile": profile,
+                "selected": {},
+                "missing_env": [],
+                "missing_extras": [],
+                "warnings": [],
+                "blocking_errors": [error],
+                "has_blocking_errors": True,
+                "manifest_loaded": True,
+            }
         return {
             "profile": plan.profile,
             "selected": {
@@ -648,10 +675,12 @@ class VoiceServer:
         """
         if self._manifest is None:
             return {"profile": self.config.profile, "roles": {}, "all_capabilities": []}
-        from easycat.planning import build_provider_plan
-
         profile = self.config.profile
-        plan = build_provider_plan(self._manifest.profile(profile), profile=profile)
+        plan, _error = self._resolve_profile_plan(profile)
+        if plan is None:
+            # Unbuildable profile: no capabilities resolvable. Return the
+            # documented empty shape (HTTP 200), never a 500.
+            return {"profile": profile, "roles": {}, "all_capabilities": []}
         roles = {role: sorted(selection.capabilities) for role, selection in plan.selected.items()}
         union: set[str] = set()
         for caps in roles.values():

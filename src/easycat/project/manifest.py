@@ -14,9 +14,8 @@ things downstream callers need:
   that routes every value through ``redact_value`` and shows the ``bearer-env:NAME``
   reference (never a resolved token).
 
-The deliberately-named type is ``ProjectManifest`` (not a second ambiguous
-``Manifest``); a ``VoiceProjectManifest`` alias is exported for callers that
-prefer the longer name.
+The deliberately-named type is ``ProjectManifest`` — the single manifest name
+(not a second ambiguous ``Manifest`` or ``VoiceProjectManifest``).
 
 Import weight: ``EasyConfig``/``create_session``/``BearerTokenAuth`` are imported
 LAZILY inside the methods that need them, so importing this module (and the
@@ -297,11 +296,6 @@ class ProjectManifest:
         }
 
 
-# Longer, unambiguous alias for callers that prefer the explicit name.
-VoiceProjectManifest = ProjectManifest
-
-
 __all__ = [
     "ProjectManifest",
-    "VoiceProjectManifest",
 ]
