@@ -97,29 +97,48 @@ class SessionRegistry:
             self._sessions.pop(registry_id, None)
 
     def get(self, registry_id: str) -> Session | None:
-        """Return the live session for *registry_id*, or ``None`` if gone."""
+        """Return the live session for *registry_id*, or ``None`` if gone.
+
+        A stopped session is pruned on access so the registry never hands the UI
+        a dead session.
+        """
         with self._lock:
             entry = self._sessions.get(registry_id)
-        return entry[0] if entry is not None else None
+            if entry is None:
+                return None
+            session = entry[0]
+            if _session_is_closed(session):
+                self._sessions.pop(registry_id, None)
+                return None
+            return session
 
     def list(self) -> list[LiveSessionSummary]:
         """Snapshot every registered session as a JSON-safe summary.
 
         Ordered by registry id (insertion order) so the UI selector is stable
-        across polls.
+        across polls. Stopped sessions are pruned here, so a per-connection
+        server mode that registers a session per connection self-cleans without
+        an explicit unregister at teardown (and the selector never lists a dead
+        session). The UI polls ``list`` regularly, so eviction is prompt.
         """
         with self._lock:
-            items = list(self._sessions.items())
-        return [
-            LiveSessionSummary(
-                registry_id=registry_id,
-                session_id=str(getattr(session, "session_id", "") or ""),
-                label=label,
-                is_running=bool(getattr(session, "is_running", False)),
-                turn_state=str(getattr(session, "turn_state", "") or ""),
-            )
-            for registry_id, (session, label) in items
-        ]
+            live: dict[str, tuple[Session, str]] = {}
+            summaries: list[LiveSessionSummary] = []
+            for registry_id, (session, label) in self._sessions.items():
+                if _session_is_closed(session):
+                    continue
+                live[registry_id] = (session, label)
+                summaries.append(
+                    LiveSessionSummary(
+                        registry_id=registry_id,
+                        session_id=str(getattr(session, "session_id", "") or ""),
+                        label=label,
+                        is_running=bool(getattr(session, "is_running", False)),
+                        turn_state=str(getattr(session, "turn_state", "") or ""),
+                    )
+                )
+            self._sessions = live
+            return summaries
 
     def clear(self) -> None:
         """Drop every entry. Used by tests to isolate the module singleton."""
@@ -131,6 +150,19 @@ def _default_label(session: Session, registry_id: str) -> str:
     """Derive a readable selector label from the session id (fallback id)."""
     session_id = str(getattr(session, "session_id", "") or "")
     return session_id or registry_id
+
+
+def _session_is_closed(session: Session) -> bool:
+    """Whether *session* has been torn down.
+
+    ``Session.stop()`` (the teardown verb the per-connection server modes call
+    when a connection ends) flips ``_closed`` via ``_close()``. Pruning closed
+    sessions lets the registry self-clean in fan-out modes without an explicit
+    per-connection unregister, and keeps a dead session out of the UI selector.
+    Read defensively (test fakes have no such attribute) and fall back to
+    treating the session as live.
+    """
+    return bool(getattr(session, "_closed", False))
 
 
 # ── Module-level singleton ───────────────────────────────────────────

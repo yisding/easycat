@@ -121,10 +121,15 @@ class WebRTCRoutes:
         active_session_objs: dict[int, Any] | None = None,
         on_session_rejected: Callable[..., None] | None = None,
         on_connections_changed: Callable[[], None] | None = None,
+        on_session: Callable[[Any], None] | None = None,
     ) -> None:
         self._config = config
         self._auth = auth
         self._config_factory = config_factory
+        # Optional per-session observer (register-only), injected by
+        # ``VoiceApp(dev=True)`` to register each accepted offer's session in the
+        # dev debugger registry. Stays debugger-agnostic here (a plain callback).
+        self._on_session = on_session
         self._gate = gate
         self._manager = manager
         self._runtime_feedback = runtime_feedback
@@ -403,6 +408,8 @@ class WebRTCRoutes:
             session = built
         else:
             session = create_session(built)
+        if self._on_session is not None:
+            self._on_session(session)
         if self._runtime_feedback:
             from easycat.helpers import attach_runtime_feedback
 

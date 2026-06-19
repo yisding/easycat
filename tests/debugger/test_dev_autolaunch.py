@@ -61,6 +61,45 @@ def test_register_and_list_sessions_round_trips():
     assert [s.registry_id for s in list_sessions()] == [id_b]
 
 
+def test_registry_prunes_stopped_sessions():
+    """A per-connection server mode registers a session per connection; a stopped
+    session (``Session._closed``) is pruned on the next list/get so the registry
+    self-cleans in fan-out modes without an explicit unregister at teardown."""
+    from easycat.debugger.session_registry import (
+        get_registry,
+        list_sessions,
+        register_session,
+    )
+
+    live = _FakeSession("live")
+    stopped = _FakeSession("stopped")
+    register_session(live)
+    stopped_id = register_session(stopped)
+
+    # Simulate teardown: Session.stop() -> _close() flips ``_closed``.
+    stopped._closed = True
+
+    summaries = {s.session_id for s in list_sessions()}
+    assert summaries == {"live"}
+    # The pruned entry is gone from the backing map and from get().
+    assert get_registry().get(stopped_id) is None
+
+
+def test_dev_session_observer_registers_only_when_opted_in():
+    """The fan-out ``on_session`` observer registers each session when dev mode
+    is opted in, and is ``None`` (a no-op for the serve helpers) otherwise."""
+    from easycat.debugger.dev import dev_session_observer
+    from easycat.debugger.session_registry import list_sessions
+
+    assert dev_session_observer(dev=False) is None
+
+    observer = dev_session_observer(dev=True)
+    assert observer is not None
+    session = _FakeSession("fanned-out")
+    observer(session)
+    assert {s.session_id for s in list_sessions()} == {"fanned-out"}
+
+
 def test_register_same_session_is_idempotent():
     from easycat.debugger.session_registry import list_sessions, register_session
 
@@ -395,6 +434,41 @@ async def test_dev_promote_requires_turn_id():
     async with TestClient(TestServer(app)) as client:
         resp = await client.post(
             "/api/dev/promote", json={"out": "tests/x.py"}, headers=_SAFE_HEADERS
+        )
+        assert resp.status == 400
+
+
+@pytest.mark.parametrize(
+    "bad_out",
+    [
+        "/etc/cron.d/evil.py",  # absolute → escapes the project
+        "../evil.py",  # parent traversal → escapes cwd
+        "tests/../../evil.py",  # normalizes to outside cwd
+        "tests/x.txt",  # not a .py regression test
+    ],
+)
+async def test_dev_promote_rejects_unsafe_out_path(monkeypatch: pytest.MonkeyPatch, bad_out: str):
+    """A client-controlled ``out`` that escapes the project or is not a ``.py``
+    file is rejected with 400 — never written. Promotion emits executable code,
+    so an unconfined path would be an arbitrary file/code-write primitive."""
+    import easycat.debugger.server as server_mod
+    from easycat.debugger.session_registry import SessionRegistry
+
+    registry = SessionRegistry()
+    registry.register(_FakeSession("promote-3"))
+    app = _dev_app(registry)
+
+    # If confinement fails to fire, this would be invoked — assert it is NOT.
+    def _must_not_run(*_args, **_kwargs):  # pragma: no cover - guard
+        raise AssertionError("unsafe out path reached the promote writer")
+
+    monkeypatch.setattr(server_mod, "_promote_active_turn", _must_not_run)
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/dev/promote",
+            json={"turn_id": "t1", "out": bad_out},
+            headers=_SAFE_HEADERS,
         )
         assert resp.status == 400
 

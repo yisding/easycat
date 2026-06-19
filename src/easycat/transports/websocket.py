@@ -267,6 +267,7 @@ async def serve_websocket_config_sessions(
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
     allow_query_token: bool = False,
+    on_session: Callable[[Session], None] | None = None,
 ) -> None:
     """Serve one EasyCat session per connection using an EasyConfig factory.
 
@@ -278,12 +279,19 @@ async def serve_websocket_config_sessions(
     Like :func:`serve_websocket_sessions`, a non-loopback bind requires a token
     unless ``unsafe_allow_no_auth=True``, and ``?token=`` query auth is OFF
     unless ``allow_query_token=True``.
+
+    ``on_session`` (optional) is invoked with each freshly created per-connection
+    session — ``VoiceApp(dev=True)`` passes it to register the session in the dev
+    debugger registry. It stays debugger-agnostic here (a plain callback).
     """
     from easycat.config import create_session
 
     def session_factory(ws: ServerConnection) -> Session:
         transport = WebSocketConnectionTransport(ws, transport_config)
-        return create_session(config_factory(transport))
+        session = create_session(config_factory(transport))
+        if on_session is not None:
+            on_session(session)
+        return session
 
     await serve_websocket_sessions(
         session_factory,
@@ -305,6 +313,7 @@ def run_websocket_config_server(
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
     allow_query_token: bool = False,
+    on_session: Callable[[Session], None] | None = None,
 ) -> None:
     """Run a WebSocket server using ``EASYCAT_WS_*`` env defaults.
 
@@ -327,6 +336,7 @@ def run_websocket_config_server(
             announce=announce,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
             allow_query_token=allow_query_token,
+            on_session=on_session,
         )
     )
 

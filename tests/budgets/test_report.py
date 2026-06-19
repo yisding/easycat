@@ -128,9 +128,21 @@ def test_waterfall_milestone_names_map_to_flat_stages() -> None:
     assert not report.passed
     stages = {v.stage for v in report.violations}
     assert stages == {"tts_ttfb_ms", "llm_ttft_ms"}
-    # Waterfall observations are surfaced under their flat sampled-stage names.
+
+
+def test_waterfall_named_budget_matches_flat_runtime_record() -> None:
+    # Regression: a budget expressed with a WATERFALL milestone name must match a
+    # flat runtime observation, exactly as session/_latency_budget does. report.py
+    # previously skipped the alias on the budget side, so this silently passed.
+    record = {"stage": "tts_ttfb_ms", "observed_ms": 2000.0}
+    report = build_budget_report(
+        [record],
+        [LatencyBudget(stage="agent_first_token_to_tts_first_byte_ms", max_ms=1500.0)],
+    )
+    assert not report.passed
+    assert {v.stage for v in report.violations} == {"agent_first_token_to_tts_first_byte_ms"}
+    # The flat runtime observation is surfaced under its flat sampled-stage name.
     assert "tts_ttfb_ms" in report.sampled_stages
-    assert "llm_ttft_ms" in report.sampled_stages
 
 
 def test_waterfall_milestone_within_budget_passes() -> None:

@@ -120,6 +120,8 @@ async def _start_twiml_http_listener(
 async def serve_twilio_voice_app(
     config_factory: Callable[[Any], EasyConfig],
     config: TwilioVoiceServerConfig,
+    *,
+    on_session: Callable[[Any], None] | None = None,
 ) -> None:
     """Serve a Twilio voice app: raw media WebSocket + aiohttp TwiML HTTP route.
 
@@ -192,6 +194,8 @@ async def serve_twilio_voice_app(
                 config=TwilioTransportConfig(stream_token_validator=stream_tokens.consume),
             )
             session = create_session(config_factory(transport))
+            if on_session is not None:
+                on_session(session)
             async with manager.connection(id(ws), session, runtime_feedback=True):
                 await ws.wait_closed()
 
@@ -249,6 +253,8 @@ async def serve_twilio_voice_app(
 def run_twilio_voice_app(
     config_factory: Callable[[Any], EasyConfig],
     config: TwilioVoiceServerConfig,
+    *,
+    on_session: Callable[[Any], None] | None = None,
 ) -> None:
     """Run a Twilio voice app from a synchronous entry point.
 
@@ -257,4 +263,4 @@ def run_twilio_voice_app(
     :func:`~easycat.transports.websocket.run_websocket_config_server` so the
     loop ownership lives next to the async server rather than in the caller.
     """
-    asyncio.run(serve_twilio_voice_app(config_factory, config))
+    asyncio.run(serve_twilio_voice_app(config_factory, config, on_session=on_session))

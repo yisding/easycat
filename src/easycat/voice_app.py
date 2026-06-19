@@ -331,6 +331,20 @@ class VoiceApp:
 
         maybe_launch_dev_registry_ui(dev=self.dev)
 
+    def _dev_session_observer(self) -> Callable[[Any], None] | None:
+        """The dev-registry ``on_session`` callback for per-connection modes.
+
+        Registers each per-connection session in the dev debugger registry when
+        ``VoiceApp(dev=True)`` / ``EASYCAT_DEV`` is opted in (so the UI selector
+        actually lists fan-out sessions); ``None`` otherwise, keeping the serve
+        helpers a no-op for non-dev apps. Pairs with :meth:`_arm_dev_registry`
+        (which launches the UI). Teardown needs no unregister — the registry
+        prunes a session once it stops.
+        """
+        from easycat.debugger.dev import dev_session_observer
+
+        return dev_session_observer(dev=self.dev)
+
     def _local_config(self, **kwargs: Any) -> EasyConfig:
         """Resolve the local-mode :class:`EasyConfig` per construction style."""
         from easycat.config import EasyConfig
@@ -417,6 +431,7 @@ class VoiceApp:
             transport_config,
             announce=False,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            on_session=self._dev_session_observer(),
         )
 
     async def _serve_browser(self, **kwargs: Any) -> None:
@@ -427,6 +442,7 @@ class VoiceApp:
             self._browser_factory(),
             transport_config,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            on_session=self._dev_session_observer(),
         )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
@@ -483,6 +499,7 @@ class VoiceApp:
             self._websocket_factory(),
             server_config,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            on_session=self._dev_session_observer(),
         )
 
     async def _serve_websocket(self, **kwargs: Any) -> None:
@@ -493,6 +510,7 @@ class VoiceApp:
             self._websocket_factory(),
             server_config,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            on_session=self._dev_session_observer(),
         )
 
     # ── Twilio mode ──────────────────────────────────────────────────
@@ -575,14 +593,16 @@ class VoiceApp:
 
         factory = self._twilio_factory()
         server_config = self._twilio_server_config(**kwargs)
-        run_twilio_voice_app(factory, server_config)
+        run_twilio_voice_app(factory, server_config, on_session=self._dev_session_observer())
 
     async def _serve_twilio(self, **kwargs: Any) -> None:
         from easycat.telephony.server import serve_twilio_voice_app
 
         factory = self._twilio_factory()
         server_config = self._twilio_server_config(**kwargs)
-        await serve_twilio_voice_app(factory, server_config)
+        await serve_twilio_voice_app(
+            factory, server_config, on_session=self._dev_session_observer()
+        )
 
     # ── Shared helpers ───────────────────────────────────────────────
 

@@ -479,6 +479,7 @@ def test_run_websocket_config_server_delegates_with_env_settings(
         announce: bool = True,
         unsafe_allow_no_auth: bool = False,
         allow_query_token: bool = False,
+        on_session: Callable[[object], None] | None = None,
     ) -> None:
         calls.append(
             {
@@ -489,6 +490,7 @@ def test_run_websocket_config_server_delegates_with_env_settings(
                 "announce": announce,
                 "unsafe_allow_no_auth": unsafe_allow_no_auth,
                 "allow_query_token": allow_query_token,
+                "on_session": on_session,
             }
         )
 
@@ -523,5 +525,6 @@ def test_run_websocket_config_server_delegates_with_env_settings(
             "announce": False,
             "unsafe_allow_no_auth": False,
             "allow_query_token": False,
+            "on_session": None,
         }
     ]

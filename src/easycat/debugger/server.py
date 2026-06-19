@@ -157,6 +157,30 @@ def _safe_turn_id(turn_id: str) -> str:
     return turn_id
 
 
+def _confine_promote_out_path(raw_out: str) -> str:
+    """Confine a client-supplied ``/api/dev/promote`` ``out`` path to the project.
+
+    Promotion writes a generated ``.py`` regression test — executable code — to
+    ``out``. A fully client-controlled path is an arbitrary file/code-write
+    primitive (the loopback bind + Origin guard reduce but do not remove the
+    exposure, e.g. a CSRF-style POST from a malicious local page). Require a
+    RELATIVE ``.py`` path that resolves INSIDE the current working directory;
+    reject absolute or parent-escaping paths. Returns the normalized relative
+    path; raises ``ValueError`` (→ 400) otherwise. The ``easycat eval promote``
+    CLI is unaffected — a local user may still write anywhere via that path.
+    """
+    candidate = Path(raw_out)
+    if candidate.is_absolute():
+        raise ValueError("out must be a relative path inside the project, not absolute")
+    if candidate.suffix != ".py":
+        raise ValueError("out must end in .py")
+    root = Path.cwd().resolve()
+    resolved = (root / candidate).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError("out must resolve inside the current working directory")
+    return str(resolved.relative_to(root))
+
+
 # ── Source adaptation ────────────────────────────────────────────
 
 
@@ -2301,6 +2325,12 @@ def _make_app(
             return web.json_response(
                 {"error_code": "BAD_REQUEST", "message": "out path is required"}, status=400
             )
+        try:
+            safe_out = _confine_promote_out_path(raw_out)
+        except ValueError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
         include_audio = bool(body.get("include_audio", False))
         allow_pii = bool(body.get("allow_pii", False))
         assert_on = str(body.get("assert_on", "hash"))
@@ -2308,7 +2338,7 @@ def _make_app(
             _promote_active_turn,
             session,
             turn_id,
-            out=raw_out,
+            out=safe_out,
             include_audio=include_audio,
             allow_pii=allow_pii,
             assert_on=assert_on,

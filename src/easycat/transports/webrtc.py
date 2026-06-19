@@ -338,6 +338,7 @@ async def serve_webrtc_config_sessions(
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
+    on_session: Callable[[Any], None] | None = None,
 ) -> None:
     """Serve one EasyCat session per browser WebRTC offer.
 
@@ -397,6 +398,7 @@ async def serve_webrtc_config_sessions(
         gate=gate,
         manager=manager,
         runtime_feedback=runtime_feedback,
+        on_session=on_session,
     )
 
     app = web.Application()
@@ -430,6 +432,7 @@ def run_webrtc_config_server(
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
+    on_session: Callable[[Any], None] | None = None,
 ) -> None:
     """Run a multi-session WebRTC signaling server from a synchronous entry point.
 
@@ -443,6 +446,7 @@ def run_webrtc_config_server(
             runtime_feedback=runtime_feedback,
             announce=announce,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            on_session=on_session,
         )
     )
 

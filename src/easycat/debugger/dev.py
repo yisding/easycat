@@ -31,6 +31,7 @@ import logging
 import os
 import sys
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
@@ -203,6 +204,29 @@ def maybe_launch_dev_registry_ui(*, dev: bool = False, launch_ui: bool = True) -
     if launch_ui:
         _launch_dev_ui(port=_dev_port())
     return True
+
+
+def dev_session_observer(*, dev: bool = False) -> Callable[[Session], None] | None:
+    """Return an ``on_session`` callback that registers each fan-out session.
+
+    The per-connection server modes (browser/websocket/twilio) build a session
+    per connection downstream of ``VoiceApp``, so there is no single session to
+    hand to :func:`maybe_launch_dev_debugger`. Passing this observer to the serve
+    helpers registers every such session in the process-local registry, so the
+    dev UI selector actually lists them (it is otherwise empty in those modes).
+
+    Returns ``None`` when dev mode is not opted in, so the serve helpers stay a
+    pure no-op for non-dev callers. Teardown needs no explicit unregister: the
+    registry prunes a session once it is stopped (see
+    ``SessionRegistry._session_is_closed``).
+    """
+    if not dev_mode_opted_in(dev=dev):
+        return None
+
+    def _observe(session: Session) -> None:
+        register_session(session)
+
+    return _observe
 
 
 def _dev_port() -> int:

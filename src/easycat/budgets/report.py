@@ -72,9 +72,13 @@ def _budget_matches_stage(observed_stage: str, budget_stage: str) -> bool:
 
     Mirrors ``session/_latency_budget._budget_matches_stage`` so the shared
     report and the runtime monitor agree: a budget stage matches the observed
-    stage exactly, or via the ``_ms`` / ``_latency_ms`` suffix forms.
+    stage exactly, via the ``_ms`` / ``_latency_ms`` suffix forms, or via the
+    waterfall ``*_to_*_ms`` milestone name that lifts onto the same flat stage
+    (e.g. ``agent_first_token_to_tts_first_byte_ms`` -> ``tts_ttfb_ms``). The
+    alias is applied to the budget side, exactly as the runtime monitor does, so
+    a single budget matches whether expressed as the flat or waterfall name.
     """
-    key = budget_stage.strip()
+    key = normalize_budget_stage(budget_stage.strip())
     return key in {
         observed_stage,
         f"{observed_stage}_ms",

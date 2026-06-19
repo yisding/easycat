@@ -161,7 +161,7 @@ def captured_twilio(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     ``asyncio.run`` so ``run('twilio')`` never opens a socket."""
     captured: dict[str, Any] = {}
 
-    async def _fake_serve(factory: Any, config: Any) -> None:
+    async def _fake_serve(factory: Any, config: Any, *, on_session: Any = None) -> None:
         captured["factory"] = factory
         captured["config"] = config
 
@@ -237,7 +237,7 @@ def test_run_twilio_voice_app_drives_async_server(monkeypatch: pytest.MonkeyPatc
     """
     captured: dict[str, Any] = {}
 
-    async def _fake_serve(factory: Any, config: Any) -> None:
+    async def _fake_serve(factory: Any, config: Any, *, on_session: Any = None) -> None:
         captured["factory"] = factory
         captured["config"] = config
 
@@ -272,7 +272,7 @@ def test_twilio_serve_does_not_call_asyncio_run(monkeypatch: pytest.MonkeyPatch)
     """``serve('twilio')`` is the async entry — only ``run()`` owns the loop."""
     seen: dict[str, Any] = {}
 
-    async def _fake_serve(factory: Any, config: Any) -> None:
+    async def _fake_serve(factory: Any, config: Any, *, on_session: Any = None) -> None:
         seen["config"] = config
 
     def _explode(_coro: Any) -> None:
