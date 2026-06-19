@@ -1186,6 +1186,7 @@ pydantic-ai-v2-beta = [
     { name = "pydantic-graph", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
 ]
 quickstart = [
+    { name = "livekit" },
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
@@ -1260,6 +1261,7 @@ requires-dist = [
     { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=0.2.0" },
     { name = "livekit", marker = "extra == 'aec'", specifier = ">=1.0.0" },
     { name = "livekit", marker = "extra == 'all'", specifier = ">=1.0.0" },
+    { name = "livekit", marker = "extra == 'quickstart'", specifier = ">=1.0.0" },
     { name = "llama-agents-client", marker = "extra == 'all'", specifier = ">=0.3.0,<1.0.0" },
     { name = "llama-agents-client", marker = "extra == 'llama-agents'", specifier = ">=0.3.0,<1.0.0" },
     { name = "llama-index-workflows", marker = "extra == 'all'", specifier = ">=2.15.0,<3.0.0" },
