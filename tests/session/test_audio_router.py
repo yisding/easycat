@@ -747,3 +747,52 @@ async def test_await_drain_waits_for_in_flight_send():
 
     state["running"] = False
     await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_await_drain_waits_for_transport_playout_buffer():
+    """A transport exposing pending_playout_ms is waited on until it empties."""
+
+    class _PlayoutTransport(_FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pending_ms = 40.0
+
+        def pending_playout_ms(self) -> float:
+            return self.pending_ms
+
+    transport = _PlayoutTransport()
+    router, state = _make_router(transport=transport)
+
+    # No outbound work in flight and the queue is empty, but the local speaker
+    # buffer still reports pending audio: await_drain must not return early.
+    router.start_outbound()
+    state["running"] = False
+    await asyncio.sleep(0)
+
+    # Playout buffer never empties within the window: bounded by the timeout.
+    await router.await_drain(timeout=0.05)
+    assert transport.pending_ms == 40.0  # still pending; await_drain bailed on timeout
+
+    # Once the speaker buffer drains, await_drain returns promptly.
+    transport.pending_ms = 0.0
+    await router.await_drain(timeout=1.0)
+
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_await_drain_is_noop_without_playout_hook():
+    """Transports lacking pending_playout_ms keep the original drained semantics."""
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport)
+    # No hook present: with an empty queue and nothing in flight, await_drain
+    # must return immediately (strict no-op for the playout extension).
+    assert not hasattr(transport, "pending_playout_ms")
+    router.start_outbound()
+    state["running"] = False
+    await asyncio.sleep(0)
+
+    await router.await_drain(timeout=0.05)
+
+    await router.stop_outbound()

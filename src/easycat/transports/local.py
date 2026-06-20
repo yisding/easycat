@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 # Frame duration for mic capture chunks (milliseconds).
 _DEFAULT_FRAME_MS = 20
 
+# Output jitter-buffer pre-roll: silence is emitted until this many frames have
+# accumulated in ``_out_queue`` so a small burst of late chunks does not
+# underrun the speaker callback. Kept deliberately small (~60ms at 20ms frames)
+# so it smooths jitter without adding audible latency to the bot's first word.
+_OUTPUT_PREROLL_FRAMES = 3
+
 
 @dataclass
 class _QueuedOutputChunk:
@@ -76,6 +82,12 @@ class LocalTransport(AudioQueueMixin):
         self._event_bus: EventBus | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
+        # Output jitter buffer: the callback emits silence until ``_out_queue``
+        # has built up ``_OUTPUT_PREROLL_FRAMES`` of pre-roll, then drains one
+        # frame per callback. Reset to ``False`` on every connect / barge-in so
+        # each utterance re-primes.
+        self._primed: bool = False
+
         self._input_stream: object | None = None
         self._output_stream: object | None = None
 
@@ -93,6 +105,7 @@ class LocalTransport(AudioQueueMixin):
 
         self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
+        self._primed = False
         self._loop = asyncio.get_running_loop()
 
         sd = require_module(
@@ -138,39 +151,54 @@ class LocalTransport(AudioQueueMixin):
         self._input_stream.start()  # type: ignore[union-attr]
 
         # --- Output stream (speaker) ---
-        def _output_callback(
-            outdata: object, frames: int, time_info: object, status: object
-        ) -> None:
-            try:
-                queued = self._out_queue.get_nowait()
-            except thread_queue.Empty:
-                queued = None
-
-            if queued is None:
-                outdata[:] = 0  # type: ignore[index]
-                return
-
-            pcm = queued.chunk.data
-            arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)  # type: ignore[union-attr]
-            arr /= 32767.0
-            # Pad / trim to fit outdata
-            out_flat = outdata.reshape(-1)  # type: ignore[union-attr]
-            n = min(len(arr), len(out_flat))
-            out_flat[:n] = arr[:n]
-            if n < len(out_flat):
-                out_flat[n:] = 0
-            self._schedule_audio_delivery(queued)
-
         self._output_stream = sd.OutputStream(
             samplerate=self._audio_format.sample_rate,
             channels=self._audio_format.channels,
             dtype="float32",
             blocksize=frame_size,
             device=self._config.output_device,
-            callback=_output_callback,
+            callback=partial(self._output_callback, np),
         )
         self._output_stream.start()  # type: ignore[union-attr]
         self._connected = True
+
+    def _output_callback(
+        self, np: object, outdata: object, frames: int, time_info: object, status: object
+    ) -> None:
+        """Speaker callback: drain one queued frame per call behind a pre-roll.
+
+        ``np`` is bound via ``partial`` at ``connect()`` time so this stays a
+        plain method (testable without ``sounddevice``) while sounddevice still
+        sees the four-argument callback signature it expects.
+        """
+        # Jitter-buffer pre-roll: emit silence until enough frames have queued,
+        # then drain one frame per callback. Re-primes after every
+        # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
+        if not self._primed:
+            if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
+                outdata[:] = 0  # type: ignore[index]
+                return
+            self._primed = True
+
+        try:
+            queued = self._out_queue.get_nowait()
+        except thread_queue.Empty:
+            queued = None
+
+        if queued is None:
+            outdata[:] = 0  # type: ignore[index]
+            return
+
+        pcm = queued.chunk.data
+        arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)  # type: ignore[union-attr]
+        arr /= 32767.0
+        # Pad / trim to fit outdata
+        out_flat = outdata.reshape(-1)  # type: ignore[union-attr]
+        n = min(len(arr), len(out_flat))
+        out_flat[:n] = arr[:n]
+        if n < len(out_flat):
+            out_flat[n:] = 0
+        self._schedule_audio_delivery(queued)
 
     async def disconnect(self) -> None:
         """Close audio devices and release resources."""
@@ -247,6 +275,17 @@ class LocalTransport(AudioQueueMixin):
                 self._out_queue.get_nowait()
             except thread_queue.Empty:
                 break
+        # Re-prime the jitter buffer so the post-barge-in utterance builds up
+        # its own pre-roll before playback resumes.
+        self._primed = False
+
+    def pending_playout_ms(self) -> float:
+        """Return the milliseconds of audio still queued for speaker playback.
+
+        Backed by the outbound frame count so ``await_drain`` can avoid
+        reporting the bot drained while the local speaker buffer is non-empty.
+        """
+        return self._out_queue.qsize() * self._config.frame_duration_ms
 
     def _schedule_audio_delivery(self, queued: _QueuedOutputChunk) -> None:
         loop = self._loop

@@ -40,6 +40,7 @@ from easycat.events import (
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
     PlaybackAcknowledgements,
+    pending_playout_ms,
     playback_acknowledgements,
     transport_reports_audio_delivery,
 )
@@ -321,16 +322,38 @@ class AudioRouter:
         time.  If the transport's ``send_audio`` stays blocked (network
         backpressure, stalled connection) the bounded ``timeout`` prevents
         turn cleanup from hanging indefinitely.
+
+        Transports with a local speaker buffer (duck-typed
+        ``pending_playout_ms``) are additionally waited on so the queue
+        going idle does not report drained while playout is still in
+        progress.  Strict no-op for transports lacking the hook.
         """
-        if not self._outbound_task or self._outbound_task.done():
-            return
-        if self._outbound_in_flight == 0 and self._outbound_queue.empty():
-            return
-        self._update_outbound_idle()
-        try:
-            await asyncio.wait_for(self._outbound_idle.wait(), timeout=timeout)
-        except TimeoutError:
-            logger.warning("Outbound queue drain timed out after %.1fs", timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        if self._outbound_task and not self._outbound_task.done():
+            if self._outbound_in_flight != 0 or not self._outbound_queue.empty():
+                self._update_outbound_idle()
+                try:
+                    await asyncio.wait_for(self._outbound_idle.wait(), timeout=timeout)
+                except TimeoutError:
+                    logger.warning("Outbound queue drain timed out after %.1fs", timeout)
+                    return
+        await self._await_playout_drain(deadline)
+
+    async def _await_playout_drain(self, deadline: float) -> None:
+        """Wait until the transport's local playout buffer empties or time runs out.
+
+        No-op for transports that do not expose ``pending_playout_ms``.
+        """
+        loop = asyncio.get_running_loop()
+        while True:
+            remaining = pending_playout_ms(self._transport)
+            if remaining is None or remaining <= 0:
+                return
+            if loop.time() >= deadline:
+                logger.warning("Transport playout drain timed out")
+                return
+            await asyncio.sleep(0.01)
 
     async def queue_outbound(self, chunk: AudioChunk) -> None:
         """Enqueue a TTS chunk for the outbound drain loop."""

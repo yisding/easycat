@@ -59,6 +59,20 @@ def transport_reports_audio_delivery(provider: Any) -> bool:
     return bool(getattr(provider, "reports_audio_delivery", False))
 
 
+def pending_playout_ms(provider: Any) -> float | None:
+    """Return queued speaker-playout milliseconds when the transport reports it.
+
+    Transports with a local playout buffer (e.g. ``LocalTransport``) can expose
+    ``pending_playout_ms()`` so ``await_drain`` does not report the bot drained
+    while the speaker buffer is still non-empty. Returns ``None`` for transports
+    that lack the hook, keeping the check a strict no-op for them.
+    """
+    hook = getattr(provider, "pending_playout_ms", None)
+    if callable(hook):
+        return float(hook())
+    return None
+
+
 async def clear_audio_if_supported(provider: Any) -> None:
     """Clear outbound audio only when the transport supports it."""
     clear_audio = getattr(provider, "clear_audio", None)

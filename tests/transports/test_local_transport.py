@@ -204,6 +204,87 @@ class TestLocalTransport:
         assert "mic" in received[0].detail
 
     @pytest.mark.asyncio
+    async def test_output_callback_buffers_silence_until_primed(self):
+        """The jitter buffer emits silence until the pre-roll fills, then audio."""
+        np = pytest.importorskip("numpy")
+        from easycat.transports.local import (
+            _OUTPUT_PREROLL_FRAMES,
+            _QueuedOutputChunk,
+        )
+
+        transport = LocalTransport()
+        frame_samples = transport._frame_samples
+
+        def _fresh_outdata():
+            return np.ones((frame_samples, 1), dtype=np.float32)
+
+        # One frame queued is below the pre-roll threshold: still silence.
+        loud = AudioChunk(
+            data=(1000).to_bytes(2, "little", signed=True) * frame_samples,
+            format=transport._audio_format,
+        )
+        transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=loud))
+        assert transport._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES
+
+        outdata = _fresh_outdata()
+        transport._output_callback(np, outdata, frame_samples, None, None)
+        assert not transport._primed
+        assert (outdata == 0).all()  # silence before prime
+        assert transport._out_queue.qsize() == 1  # frame retained, not drained
+
+        # Fill up to the pre-roll target; the next callback primes and drains.
+        while transport._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
+            transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=loud))
+
+        outdata = _fresh_outdata()
+        transport._output_callback(np, outdata, frame_samples, None, None)
+        assert transport._primed
+        assert not (outdata == 0).all()  # real audio after prime
+        assert transport._out_queue.qsize() == _OUTPUT_PREROLL_FRAMES - 1
+
+    @pytest.mark.asyncio
+    async def test_clear_audio_re_primes_jitter_buffer(self):
+        """clear_audio() drops queued audio and re-arms the pre-roll."""
+        transport = LocalTransport()
+        transport._primed = True
+        chunk = _make_chunk(640, sample_rate=24000)
+        from easycat.transports.local import _QueuedOutputChunk
+
+        transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=chunk))
+
+        await transport.clear_audio()
+
+        assert transport._out_queue.empty()
+        assert transport._primed is False
+
+    @pytest.mark.asyncio
+    async def test_connect_re_primes_jitter_buffer(self):
+        """connect() re-arms the pre-roll so each session starts unprimed."""
+        if not _sounddevice_available():
+            pytest.skip("sounddevice not available")
+        transport = LocalTransport()
+        transport._primed = True
+        await _connect_or_skip(transport)
+        try:
+            assert transport._primed is False
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_pending_playout_ms_reflects_queue_depth(self):
+        """pending_playout_ms scales with queued frames and per-frame duration."""
+        transport = LocalTransport()
+        assert transport.pending_playout_ms() == 0.0
+
+        from easycat.transports.local import _QueuedOutputChunk
+
+        chunk = _make_chunk(640, sample_rate=24000)
+        transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=chunk))
+        transport._out_queue.put_nowait(_QueuedOutputChunk(chunk=chunk))
+
+        assert transport.pending_playout_ms() == 2 * transport._config.frame_duration_ms
+
+    @pytest.mark.asyncio
     async def test_schedule_audio_delivery_tracks_emit_task(self):
         """The audio-delivery emit task is retained so it isn't GC'd mid-flight."""
         from easycat.events import TransportAudioDelivered
