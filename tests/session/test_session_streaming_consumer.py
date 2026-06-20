@@ -236,3 +236,129 @@ async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
         timeout=2.0,
     )
     assert result.interrupted is True
+
+
+async def _run_streaming_payloads(deltas: list[str], *, strip_md: bool) -> list[tuple[str, bool]]:
+    """Drive *deltas* through the consumer and return (text, is_final) payloads."""
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        for delta in deltas:
+            yield AgentBridgeEvent(kind="text_delta", text=delta)
+        yield AgentBridgeEvent(kind="done", text="")
+
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+
+    built: list[tuple[str, bool]] = []
+
+    def _prepare(text: str, *, is_streaming: bool = True, is_final: bool = False) -> TTSInput:
+        _ = is_streaming
+        built.append((text, is_final))
+        return TTSInput(text=text)
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=_prepare,
+        strip_md=strip_md,
+        turn=turn,
+    )
+    assert result.error is None
+    # Drain so the queue is left empty for the caller.
+    while True:
+        if await tts_queue.get() is None:
+            break
+    return built
+
+
+async def test_first_payload_emits_clause_before_full_sentence():
+    """The first payload of a turn ships at a clause boundary (earlier TTFA).
+
+    A long opener clause followed by a comma is queued as its own payload
+    before the sentence terminator arrives, instead of waiting for the full
+    sentence.  Later sentences keep full-sentence granularity.
+    """
+    built = await _run_streaming_payloads(
+        [
+            "Let me look into that for you, and I will report back. ",
+            "Here is the second sentence. ",
+        ],
+        strip_md=False,
+    )
+    streaming = [text for text, is_final in built if not is_final]
+    assert streaming, "expected at least one mid-stream payload"
+    # First payload is the early clause, not the whole first sentence.
+    assert streaming[0] == "Let me look into that for you, "
+    # Later payloads use full-sentence granularity: the remainder of the
+    # first sentence and the second sentence ship after the early clause.
+    later = "".join(streaming[1:])
+    assert "and I will report back." in later
+    assert "Here is the second sentence." in later
+    # The early clause text is not duplicated in the later payloads.
+    assert "Let me look into that for you," not in later
+
+
+async def test_first_payload_does_not_ship_clipped_short_opener():
+    """A short opener like "Sure," is never queued as a clipped fragment.
+
+    The first emission falls through to the sentence terminator instead, so
+    no payload is just the truncated opener clause.
+    """
+    built = await _run_streaming_payloads(
+        ["Sure, let me check that for you. ", "All set. "],
+        strip_md=False,
+    )
+    texts = [text for text, _ in built]
+    assert "Sure, " not in texts
+    assert "Sure," not in texts
+    streaming = [text for text, is_final in built if not is_final]
+    # The whole first sentence ships as the first payload (clause guard kept
+    # the clipped "Sure," from going out on its own).
+    assert streaming[0] == "Sure, let me check that for you. "
+
+
+async def test_later_sentences_keep_full_sentence_granularity():
+    """Only the *first* payload uses clause granularity; the rest do not.
+
+    After the first clause is emitted, a later sentence that itself contains
+    an internal comma is shipped whole rather than being split at the comma.
+    """
+    built = await _run_streaming_payloads(
+        [
+            "Let me look into that for you, please. ",
+            "Then, once that finishes, we proceed. ",
+        ],
+        strip_md=False,
+    )
+    streaming = [text for text, is_final in built if not is_final]
+    assert streaming[0] == "Let me look into that for you, "
+    # The later sentence is NOT split at its internal commas: no later payload
+    # is just the comma-truncated "Then," fragment, and the sentence survives
+    # whole inside the later payloads.
+    later = "".join(streaming[1:])
+    assert "Then, once that finishes, we proceed." in later
+    assert "Then, " not in streaming
+
+
+async def test_first_clause_defers_inside_open_markdown_span():
+    """First-clause emission still defers while a markdown span is open.
+
+    A comma inside an unterminated ``**bold**`` run must not trigger an
+    early clause emission; the payload is held until the span closes.
+    """
+    built = await _run_streaming_payloads(
+        ["**Let me look into that for you, ", "please** and continue. "],
+        strip_md=True,
+    )
+    streaming = [text for text, is_final in built if not is_final]
+    # Nothing ships while the bold span is open; the comma inside it does not
+    # leak a partial clause out to TTS.
+    for text, _ in built:
+        assert "**" not in text
+    # The first payload only appears once the span has closed, and it carries
+    # the full bolded clause (not a comma-truncated fragment).
+    assert streaming, "expected emission once the markdown span closed"
+    assert streaming[0].startswith("Let me look into that for you")

@@ -17,6 +17,7 @@ from easycat.session.text import (
     _cleanup_estimation_text,
     _text_for_estimation_timeline,
     split_at_sentence_boundaries,
+    split_first_clause,
 )
 from easycat.tts.input import TTSInput
 
@@ -104,6 +105,47 @@ def test_split_chinese_sentence():
     ready, remaining = split_at_sentence_boundaries(text)
     assert ready == "你好。今天天气不错。"
     assert remaining == "继续"
+
+
+def test_split_first_clause_empty_inputs():
+    assert split_first_clause("") == ("", "")
+    assert split_first_clause("   ") == ("", "   ")
+
+
+def test_split_first_clause_emits_clause_at_comma():
+    # A comma after a sufficiently long clause ships that clause early —
+    # before the full sentence terminator arrives.
+    ready, remaining = split_first_clause(
+        "Let me look into that for you, and I will report back soon."
+    )
+    assert ready == "Let me look into that for you, "
+    assert remaining == "and I will report back soon."
+
+
+def test_split_first_clause_skips_short_opener_fragment():
+    # "Sure," is too short to ship on its own; the split falls through to the
+    # sentence terminator instead of emitting a clipped fragment.
+    ready, remaining = split_first_clause("Sure, let me check that for you.")
+    assert ready == "Sure, let me check that for you."
+    assert remaining == ""
+
+
+def test_split_first_clause_short_opener_alone_waits():
+    # A short opener with no later boundary is not shipped at all; the caller
+    # keeps buffering until a real boundary (or the final flush) arrives.
+    ready, remaining = split_first_clause("Sure, ")
+    assert ready == ""
+    assert remaining == "Sure, "
+
+
+def test_split_first_clause_handles_semicolon_and_colon():
+    ready, remaining = split_first_clause("Here is the plan; we start now.")
+    assert ready == "Here is the plan; "
+    assert remaining == "we start now."
+
+    ready, remaining = split_first_clause("Two options are available: A and B.")
+    assert ready == "Two options are available: "
+    assert remaining == "A and B."
 
 
 def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:

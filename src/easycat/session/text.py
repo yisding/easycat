@@ -31,6 +31,7 @@ import sentencesplit
 
 __all__ = [
     "split_at_sentence_boundaries",
+    "split_first_clause",
     "has_unclosed_markdown_delimiters",
     "markdown_open_state",
 ]
@@ -72,6 +73,53 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
     # string variant of the union is narrowed via suffix length.
     last_start = len(text) - len(last) if isinstance(last, str) else last.start
     return text[:last_start], text[last_start:]
+
+
+# Minimum length (in stripped characters) the first clause must reach before
+# it is shipped on its own; below this we wait for the full sentence so a
+# clipped opener like "Sure," is never sent to TTS by itself.
+_FIRST_CLAUSE_MIN_CHARS = 12
+
+# Clause boundaries used only for the first payload of a turn: the sentence
+# terminators ``split_at_sentence_boundaries`` honours plus mid-sentence
+# punctuation (comma/semicolon/colon) that marks a natural early pause.
+_FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
+
+
+def split_first_clause(text: str) -> tuple[str, str]:
+    """Split text at the first natural clause boundary.
+
+    Returns ``(ready_text, remaining_buffer)``.  Used only for the *first*
+    TTS payload of a turn to cut time-to-first-audio: emit at the first
+    clause boundary (``,``/``;``/``:`` plus the sentence terminators
+    :func:`split_at_sentence_boundaries` honours) instead of waiting for a
+    full sentence.
+
+    ``ready_text`` is non-empty only when the clause has at least
+    ``_FIRST_CLAUSE_MIN_CHARS`` stripped characters, so a clipped opener
+    like ``"Sure,"`` is never shipped on its own; in that case ``("",
+    text)`` is returned and the caller falls back to full-sentence
+    splitting.
+    """
+    if not text:
+        return "", ""
+    if not text.strip():
+        return "", text
+
+    for i, ch in enumerate(text):
+        if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
+            continue
+        # Include any trailing whitespace so the remaining buffer starts at
+        # the next clause's first non-space character.
+        end = i + 1
+        while end < len(text) and text[end].isspace():
+            end += 1
+        ready = text[:end]
+        if len(ready.strip()) >= _FIRST_CLAUSE_MIN_CHARS:
+            return ready, text[end:]
+        # Too short to ship on its own; keep scanning for a later boundary.
+
+    return "", text
 
 
 def _is_word_char(ch: str) -> bool:

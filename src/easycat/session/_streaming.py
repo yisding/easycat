@@ -29,6 +29,7 @@ from easycat.events import (
 from easycat.session.text import (
     markdown_open_state,
     split_at_sentence_boundaries,
+    split_first_clause,
 )
 from easycat.strip_markdown import strip_markdown
 from easycat.tts.input import TTSInput
@@ -52,6 +53,14 @@ _STREAMING_SENTENCE_TRIGGER_CHARS = frozenset(".!?。！？．\n\r")
 # when a later delta contains a character that can plausibly close or otherwise
 # disambiguate a markdown span.
 _MARKDOWN_RECHECK_CHARS = frozenset("`*_~])")
+
+# Mid-sentence clause boundaries used only for the first payload of a turn (see
+# ``_SentenceStreamBuffer._first_payload_pending``).  Kept distinct from
+# ``_STREAMING_SENTENCE_TRIGGER_CHARS`` so the segmenter-terminator superset
+# invariant (test_streaming_trigger_chars_superset_of_segmenter_terminators)
+# is unaffected; while a first clause is pending, a delta carrying one of these
+# also warrants a markdown-mode recheck.
+_FIRST_CLAUSE_TRIGGER_CHARS = frozenset(",;:")
 
 
 @dataclass
@@ -152,6 +161,11 @@ class _SentenceStreamBuffer:
         self._prepare = prepare_tts_payload
         self._strip_md = strip_md
         self._text = ""
+        # The first payload of a turn is split at the first natural clause
+        # boundary (comma/semicolon/colon) instead of a full sentence to cut
+        # time-to-first-audio.  Cleared once the first payload is queued;
+        # every later emission keeps full-sentence granularity.
+        self._first_payload_pending = True
         self._markdown_window_open = False
         # True when ``_markdown_window_open`` is held open solely by a trailing
         # closed link/image label ``[label]`` awaiting its ``(destination)``.  A
@@ -169,7 +183,7 @@ class _SentenceStreamBuffer:
             await self._add_markdown_delta(delta)
             return
         self._text += delta
-        ready, self._text = split_at_sentence_boundaries(self._text)
+        ready, self._text = self._split_pending(self._text)
         if ready:
             await self._put_payload(ready, is_final=False)
 
@@ -193,15 +207,21 @@ class _SentenceStreamBuffer:
                 recheck = any(not ch.isspace() and ch != "(" for ch in delta)
             if not recheck:
                 return
-        elif not any(ch in delta for ch in _STREAMING_SENTENCE_TRIGGER_CHARS):
-            return
+        else:
+            triggers = _STREAMING_SENTENCE_TRIGGER_CHARS
+            if self._first_payload_pending:
+                # The first payload may emit at a clause boundary, so a delta
+                # carrying ``,``/``;``/``:`` is also worth a recheck.
+                triggers = triggers | _FIRST_CLAUSE_TRIGGER_CHARS
+            if not any(ch in delta for ch in triggers):
+                return
 
         self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
         if self._markdown_window_open:
             return
 
         stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
-        ready, remaining = split_at_sentence_boundaries(stripped_window)
+        ready, remaining = self._split_pending(stripped_window)
         if ready:
             await self._put_payload(ready, is_final=False)
         self._text = remaining
@@ -214,6 +234,23 @@ class _SentenceStreamBuffer:
                 text = strip_markdown(text, normalize_code_spans=True)
             await self._put_payload(text, is_final=True)
         self._text = ""
+
+    def _split_pending(self, text: str) -> tuple[str, str]:
+        """Split *text* for emission, honouring the first-payload window.
+
+        While ``_first_payload_pending`` is set, the first emission of the
+        turn is cut at the first natural clause boundary (cutting
+        time-to-first-audio); once a non-empty clause is found the flag is
+        cleared so every later emission keeps full-sentence granularity.
+        Markdown state is always CLOSED at the call sites, so the
+        clause-level split cannot rewrite an open span.
+        """
+        if self._first_payload_pending:
+            ready, remaining = split_first_clause(text)
+            if ready:
+                self._first_payload_pending = False
+                return ready, remaining
+        return split_at_sentence_boundaries(text)
 
     async def _put_payload(self, text: str, *, is_final: bool) -> None:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)

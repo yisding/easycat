@@ -87,9 +87,12 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
   or stream more aggressively.
-- **Sentence-boundary TTS streaming** — EasyCat starts synthesis at the first
-  sentence boundary of the agent stream rather than waiting for the full
-  reply; that behavior is structural, not configurable delay.
+- **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
+  agent stream rather than waiting for the full reply. The *first* payload of a
+  turn is cut at the first natural clause boundary (comma/semicolon/colon, as
+  long as the clause is long enough to not sound clipped) to shave
+  time-to-first-audio; every later payload keeps full-sentence granularity.
+  That behavior is structural, not configurable delay.
 - **Latency budgets observe, they do not speed up** — `latency_budget=
   LatencyBudget(stage="tts", max_ms=500)` tags over-budget records so slow
   turns are findable; see [observability](observability.md) for the budget
