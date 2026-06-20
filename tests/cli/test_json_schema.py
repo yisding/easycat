@@ -869,6 +869,12 @@ def _write_plan_manifest(tmp_path: Path, *, vad: str = "silero") -> Path:
 
 
 def test_plan_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The manifest selects openai (stt/tts), silero (vad), and webrtc (transport);
+    # asserting no blocking errors requires those extras installed. Project CI's
+    # quick lane runs without extras, so skip there rather than fail.
+    pytest.importorskip("openai")
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("aiortc")
     manifest = _write_plan_manifest(tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
 

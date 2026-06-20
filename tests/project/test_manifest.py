@@ -201,7 +201,9 @@ def test_to_easyconfig_coerced_vad_drives_create_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The coerced VADConfig must let create_session build without the str-backend
-    # crash that the raw shortcut caused.
+    # crash that the raw shortcut caused. create_session builds a real Silero VAD,
+    # so gate on its backend (absent in CI's no-extras quick lane).
+    pytest.importorskip("onnxruntime")
     from easycat.config import create_session
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")

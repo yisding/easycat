@@ -78,10 +78,25 @@ def _base_config(**overrides: object) -> EasyConfig:
     return EasyConfig(**kwargs)
 
 
+def _require_extras(*modules: str) -> None:
+    """Skip unless every named provider probe module is importable.
+
+    The parity gate exercises the REAL ``create_session`` (and the planner's
+    ``find_spec`` extra checks) against installed providers, so a "no blocking
+    error" / "create_session succeeds" assertion can only be verified when those
+    extras are present. Project CI's ``validate quick`` lane syncs only
+    ``--group dev`` (no extras), so these assertions must skip there rather than
+    fail — mirroring the ``pytest.importorskip`` convention already used below.
+    """
+    for module in modules:
+        pytest.importorskip(module)
+
+
 # ── Success parity: all 7 roles resolve, create_session succeeds ─────
 
 
 def test_parity_success_all_seven_roles(monkeypatch: pytest.MonkeyPatch) -> None:
+    _require_extras("openai", "onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     config = _base_config()
     plan = build_provider_plan(config, environ=_ENV)
@@ -228,6 +243,7 @@ def test_parity_passthrough_aec_extra_missing_is_warning_not_blocking(
     # The DEFAULT fallback_policy is "passthrough": with livekit absent
     # create_session degrades to PassthroughAEC instead of raising, so the
     # planner must NOT block /health/ready — it reports a non-blocking warning.
+    _require_extras("openai", "onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.echo_cancellation import EchoCancellationConfig
 
@@ -257,6 +273,7 @@ def test_parity_browser_profile_aec_extra_missing_is_warning_not_blocking(
     # A manifest browser profile auto-enables AEC with the passthrough fallback
     # (the manifest cannot pick "error"), so a missing aec extra must stay a
     # warning — otherwise /health/ready would reject a deployable browser server.
+    _require_extras("openai", "onnxruntime", "aiortc")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     from easycat.project.schema import VoiceProfile
 
@@ -302,6 +319,7 @@ def test_parity_auto_passthrough_noise_reducer_missing_is_warning_not_blocking(
     # instead of raising, so the planner must NOT block /health/ready (mirroring
     # the AEC passthrough case). Only an explicit backend="rnnoise" or
     # fallback_policy="error" blocks (covered above).
+    _require_extras("openai", "onnxruntime", "sounddevice")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     # Default NoiseReducerConfig is backend="auto" + fallback_policy="passthrough".
     config = _base_config(enable_noise_reduction=True)
@@ -369,6 +387,9 @@ def test_parity_transport_extra_blocks_readiness_even_though_construction_defers
     # find_spec-checks the transport extra and BLOCKS readiness when it is
     # absent — the correct verdict, since the server can't actually serve. This
     # locks the blocking direction for the deferred transport role.
+    # ``create_session`` below builds the browser default auto-VAD for real, so
+    # gate on its backend being installed (the plan assertions hold regardless).
+    _require_extras("onnxruntime")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     config = EasyConfig.browser(  # WebRTCTransportConfig -> webrtc extra (aiortc)
         openai_api_key="sk-parity-test", agent=_Agent(), debug="off"
@@ -386,6 +407,7 @@ def test_parity_transport_extra_blocks_readiness_even_though_construction_defers
 
 
 def test_parity_agent_is_a_deferred_carveout_not_a_static_blocker() -> None:
+    _require_extras("openai", "onnxruntime", "sounddevice")
     # The planner is side-effect-free: it never imports the agent module, so an
     # UNRESOLVABLE ``python:`` reference is NOT a static blocking error. The
     # divergence (it raises EASYCAT_E605 at connection time via resolve_agent) is
@@ -422,6 +444,9 @@ def test_parity_agent_is_a_deferred_carveout_not_a_static_blocker() -> None:
 
 
 def test_parity_vad_string_coercion_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The create_session leg below builds a real Silero VAD, so gate on its
+    # backend (the to_easyconfig coercion + planner assertions hold regardless).
+    _require_extras("onnxruntime")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
     # The manifest converter coerces vad='silero' -> VADConfig(backend='silero')
     # so create_session no longer raises AttributeError, and the planner reports
