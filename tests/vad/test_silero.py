@@ -100,6 +100,64 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
     assert vad._backend == "onnx"
 
 
+@pytest.mark.asyncio
+async def test_silero_warmup_primes_model_then_resets(monkeypatch: pytest.MonkeyPatch):
+    """warmup() runs one zeroed 16k/512-sample predict then resets state."""
+
+    class _FakeOnnxModel:
+        def __init__(self) -> None:
+            self.predict_calls: list[tuple[int, int]] = []
+            self.reset_calls = 0
+
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            self.predict_calls.append((len(samples), sample_rate))
+            assert all(s == 0.0 for s in samples)
+            return 0.0
+
+        def reset_states(self) -> None:
+            self.reset_calls += 1
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    await vad.warmup()
+
+    assert vad._model.predict_calls == [(512, 16000)]
+    # reset_states is called once by warmup (the __init__ load path resets
+    # internally inside the real model, not through this fake).
+    assert vad._model.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_silero_warmup_swallows_errors(monkeypatch: pytest.MonkeyPatch):
+    """A predict failure during warmup must not propagate to Session.start()."""
+
+    class _ExplodingOnnxModel:
+        def predict(self, samples: list[float], sample_rate: int) -> float:
+            raise RuntimeError("boom")
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _ExplodingOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+    # Returns cleanly despite the predict raising.
+    await vad.warmup()
+
+
 def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should use ONNX if an overridden torch loader fails."""
     monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("torch", "onnx"))

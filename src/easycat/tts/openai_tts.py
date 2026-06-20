@@ -62,6 +62,21 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
         self._response: httpx.Response | None = None
         self._init_emit_tasks()
 
+    async def warmup(self) -> None:
+        """Prime the HTTP connection pool before the first speech request.
+
+        Issues a cheap ``GET /models`` against the same origin the billed
+        ``/audio/speech`` POST reuses, warming DNS/TLS/keep-alive without
+        making a billed synthesis call.  All failures are swallowed: warmup
+        is best-effort and ``WarmupRunner`` re-raises, so an auth/timeout
+        error here must not abort ``Session.start()``.
+        """
+        try:
+            response = await self._client.get("/models")
+            await response.aclose()
+        except Exception as exc:
+            logger.debug("OpenAI TTS warmup skipped: %s", exc)
+
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using OpenAI Audio API with streaming response.
 

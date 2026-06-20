@@ -56,10 +56,14 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     assert calls.index("tts.warmup") < calls.index("transport.warmup")
     assert calls.index("transport.warmup") < calls.index("transport.receive")
     record = next(record for record in journal.read() if record.name == "warmup_completed")
+    # ``AgentRunner`` is now warmupable (it delegates ``warmup()`` to the
+    # wrapped agent), so the default agent wrapper is recorded as warmed even
+    # though ``FakeAgent`` itself has no ``warmup`` hook to forward to.
     assert [component["component"] for component in record.data["components"]] == [
         "stt",
         "tts",
         "transport",
+        "agent",
     ]
 
 

@@ -342,6 +342,19 @@ class AgentRunner:
 
     # ── Lifecycle ──────────────────────────────────────────────
 
+    async def warmup(self) -> None:
+        """Delegate warmup to the wrapped agent when it supports it.
+
+        ``AgentRunner`` is the default wrapper Session builds around every
+        agent, so without this method ``warmupable(AgentRunner)`` is ``None``
+        and the inner bridge never gets a chance to prime its connection
+        pool.  Forwards to the wrapped agent's ``warmup`` only when present;
+        the bridge owns its own swallow-all contract.
+        """
+        fn = getattr(self._agent, "warmup", None)
+        if fn is not None:
+            await fn()
+
     async def aclose(self) -> None:
         """Close the wrapped agent, releasing any held resources."""
         fn = getattr(self._agent, "aclose", None)

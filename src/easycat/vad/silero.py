@@ -223,6 +223,25 @@ class SileroVAD(_VADBase):
             for event in self._evaluate_speech(speech_prob, now):
                 yield event
 
+    async def warmup(self) -> None:
+        """Prime the ONNX session with one zeroed 16 kHz frame.
+
+        The first ``predict`` call pays the onnxruntime graph-allocation and
+        kernel-compilation cost; running it on a silent 512-sample frame at
+        startup keeps that cost off the first real turn.  State is reset
+        afterwards so the warm frame does not leak into live detection.  All
+        failures are swallowed — ``WarmupRunner`` re-raises, so a warmup
+        error here must not abort ``Session.start()``.
+        """
+        if self._model is None:
+            return
+        try:
+            frame = [0.0] * _SILERO_FRAME_SAMPLES_AT[_SILERO_DEFAULT_RATE]
+            self._model.predict(frame, _SILERO_DEFAULT_RATE)
+            self._model.reset_states()
+        except Exception as exc:
+            logger.debug("Silero VAD warmup skipped: %s", exc)
+
     def reset(self) -> None:
         """Reset VAD internal state."""
         super().reset()

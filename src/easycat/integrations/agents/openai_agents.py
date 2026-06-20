@@ -80,6 +80,24 @@ class OpenAIAgentsBridge:
         self._message_history: list[Any] = []
         self._last_output: Any = None
 
+    async def warmup(self) -> None:
+        """Prime DNS/TLS/connection-pool via the SDK's shared OpenAI client.
+
+        Issues a cheap, unbilled ``GET /models`` through the same
+        ``AsyncOpenAI`` client the ``Runner`` reuses, so the first real turn
+        does not pay the cold-connection cost.  This deliberately avoids a
+        billed ``Runner.run``.  All failures are swallowed — ``WarmupRunner``
+        re-raises, so an auth/timeout error here must not abort
+        ``Session.start()``.
+        """
+        try:
+            from agents.models.openai_provider import OpenAIProvider
+
+            client = OpenAIProvider()._get_client()
+            await client.models.list()
+        except Exception as exc:
+            logger.debug("OpenAI Agents warmup skipped: %s", exc)
+
     # ── ExternalAgentBridge interface ─────────────────────────────
 
     async def invoke(

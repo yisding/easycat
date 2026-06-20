@@ -758,6 +758,48 @@ async def test_openai_realtime_receive_loop_end_leaves_resolved_future() -> None
     assert stt._session_ready.result() is None
 
 
+# ── Warmup ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_warmup_connects_handshakes_and_closes():
+    """warmup() opens the socket, completes the session.update handshake,
+    then closes — no persistent socket is held across the warmup."""
+    factory = _MockWSFactory([])
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    stt = OpenAIRealtimeSTT(config)
+
+    await stt.warmup()
+
+    # The handshake session.update was sent during connect.
+    session_msgs = [
+        m
+        for m in factory.connection.sent
+        if isinstance(m, str) and '"type": "session.update"' in m
+    ]
+    assert len(session_msgs) == 1
+    # No persistent socket survives warmup.
+    assert stt._ws is None
+    assert stt._receive_task is None
+    assert factory.connection.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_warmup_swallows_start_errors():
+    """A connect/handshake failure during warmup must not propagate to
+    Session.start() — WarmupRunner re-raises, so warmup must return cleanly."""
+
+    async def _boom() -> None:
+        raise ConnectionError("boom")
+
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test")
+    stt = OpenAIRealtimeSTT(config)
+    stt.start_stream = _boom  # type: ignore[method-assign]
+
+    # Returns cleanly despite start_stream raising.
+    await stt.warmup()
+
+
 # ── Reusability ─────────────────────────────────────────────────
 
 

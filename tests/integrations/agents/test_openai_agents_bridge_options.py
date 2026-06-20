@@ -221,6 +221,63 @@ async def test_mcp_servers_restored_when_stream_iteration_fails(monkeypatch):
     assert agent.mcp_servers == ["stdio://original"]
 
 
+@pytest.mark.asyncio
+async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
+    """warmup() issues a cheap models.list() via the SDK's shared client —
+    never a billed Runner.run."""
+    import agents.models.openai_provider as openai_provider_module
+
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    list_called = {"count": 0}
+
+    class _FakeModels:
+        async def list(self) -> Any:
+            list_called["count"] += 1
+            return SimpleNamespace(data=[])
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.models = _FakeModels()
+
+    class _FakeProvider:
+        def _get_client(self) -> _FakeClient:
+            return _FakeClient()
+
+    monkeypatch.setattr(openai_provider_module, "OpenAIProvider", _FakeProvider)
+    # A sentinel Runner that fails loudly if warmup ever touches it.
+    monkeypatch.setattr(
+        openai_agents_module,
+        "Runner",
+        SimpleNamespace(run=_fail_if_called, run_streamed=_fail_if_called),
+    )
+
+    bridge = OpenAIAgentsBridge(_Agent())
+    await bridge.warmup()
+
+    assert list_called["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_agents_warmup_swallows_errors(monkeypatch):
+    """A client/auth error during warmup must not propagate to Session.start()."""
+    import agents.models.openai_provider as openai_provider_module
+
+    class _BoomProvider:
+        def _get_client(self) -> Any:
+            raise RuntimeError("no api key")
+
+    monkeypatch.setattr(openai_provider_module, "OpenAIProvider", _BoomProvider)
+
+    bridge = OpenAIAgentsBridge(_Agent())
+    # Returns cleanly despite the client construction raising.
+    await bridge.warmup()
+
+
+def _fail_if_called(*_args: Any, **_kwargs: Any) -> Any:
+    raise AssertionError("warmup must not invoke the Runner")
+
+
 def test_openai_agents_event_extractors_map_text_and_tool_deltas():
     text_delta = extract_text_delta(
         SimpleNamespace(type="response.output_text.delta", delta="hello")

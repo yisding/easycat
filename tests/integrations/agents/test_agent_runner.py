@@ -260,6 +260,47 @@ def test_agent_runner_wrapping_a_bridge_delegates_history_ops():
     assert inner.reset_called
 
 
+def test_agent_runner_is_warmupable():
+    """The default wrapper must be warmupable so the inner bridge can warm.
+
+    Without a ``warmup`` method, ``warmupable(AgentRunner)`` is ``None`` and
+    the warmup loop skips the agent entirely.
+    """
+    from easycat.runtime.capabilities import warmupable
+
+    runner = AgentRunner(_FakeBridge())
+    assert warmupable(runner) is not None
+
+
+@pytest.mark.asyncio
+async def test_agent_runner_warmup_delegates_to_inner_warmup():
+    class _WarmupBridge(_FakeBridge):
+        def __init__(self):
+            super().__init__()
+            self.warmed = False
+
+        async def warmup(self):
+            self.warmed = True
+
+    inner = _WarmupBridge()
+    runner = AgentRunner(inner)
+    await runner.warmup()
+    assert inner.warmed is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runner_warmup_noops_without_inner_warmup():
+    """An agent with no ``warmup`` hook makes the runner's warmup a clean no-op."""
+
+    class _PlainAgent:
+        async def run(self, text: str) -> str:
+            return text
+
+    runner = AgentRunner(_PlainAgent())
+    # Returns cleanly; nothing to forward to.
+    await runner.warmup()
+
+
 class _PostDoneHangingBridge:
     COMMITTABLE_BOUNDARIES: dict = {}
 

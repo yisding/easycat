@@ -104,6 +104,48 @@ def _make_provider_with_probability(probability: float, threshold: float) -> Sma
     return provider
 
 
+@pytest.mark.asyncio
+async def test_smart_turn_warmup_loads_and_runs_dummy_inference() -> None:
+    """warmup() loads the model and runs one zeroed-audio inference up front."""
+    provider = SmartTurnONNX(model_path="unused.onnx")
+    loaded = {"called": False}
+    predicted: list[int] = []
+
+    def _fake_ensure_loaded() -> None:
+        loaded["called"] = True
+        # warmup builds the zeroed audio array off ``self._np`` after load.
+        provider._np = SimpleNamespace(
+            zeros=lambda n, dtype=None: [0.0] * n,
+            float32=float,
+        )
+
+    def _fake_predict_sync(audio: Any) -> SmartTurnResult:
+        predicted.append(len(audio))
+        return SmartTurnResult(prediction=0, probability=0.0)
+
+    provider._ensure_loaded = _fake_ensure_loaded  # type: ignore[method-assign]
+    provider._predict_sync = _fake_predict_sync  # type: ignore[method-assign]
+
+    await provider.warmup()
+
+    assert loaded["called"] is True
+    assert predicted == [provider._max_audio_samples]
+
+
+@pytest.mark.asyncio
+async def test_smart_turn_warmup_swallows_load_errors() -> None:
+    """A model-load failure during warmup must not propagate."""
+    provider = SmartTurnONNX(model_path="unused.onnx")
+
+    def _boom() -> None:
+        raise RuntimeError("load failed")
+
+    provider._ensure_loaded = _boom  # type: ignore[method-assign]
+
+    # Returns cleanly despite the load raising.
+    await provider.warmup()
+
+
 def test_predict_boundary_equal_threshold_is_incomplete() -> None:
     """probability == threshold must classify as incomplete (strict-greater)."""
 

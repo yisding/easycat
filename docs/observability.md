@@ -257,9 +257,12 @@ There are three independent knobs, and they control different things:
   `cost_budget_stop_requested` and schedules `stop(force=True)` through the
   runtime task scope. `warmup=True` runs structural provider/model `warmup()`
   hooks during `Session.start()` before audio ingress and emits
-  `warmup_completed` timing records. Provider cost-record emission,
-  first-token/audio runtime budgets, and provider-specific warmup coverage are
-  still planned.
+  `warmup_completed` timing records. The bundled providers now implement those
+  hooks — OpenAI TTS primes its HTTP pool, Silero VAD and Smart Turn prime
+  their ONNX sessions, the OpenAI Realtime STT runs a connect-handshake-close
+  cycle, and the OpenAI Agents bridge primes the SDK's shared client — so the
+  first turn does not pay their cold-start cost. Provider cost-record emission
+  and first-token/audio runtime budgets are still planned.
 
 ### Correlation ids in logs
 

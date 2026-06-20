@@ -288,6 +288,28 @@ class SmartTurnONNX:
         self._np: Any = None  # numpy module (lazy)
         self._detect_semaphore = asyncio.Semaphore(1)
 
+    async def warmup(self) -> None:
+        """Load the ONNX model and run one dummy inference up front.
+
+        The first inference pays the model-load and onnxruntime
+        graph-allocation cost; running it on zeroed audio at startup keeps
+        that cold-start cost off the first real endpoint decision.  Inference
+        is synchronous, so it runs in a thread executor.  All failures are
+        swallowed — ``WarmupRunner`` re-raises, so a load error here must not
+        abort ``Session.start()``.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._warmup_sync)
+        except Exception as exc:
+            logger.debug("Smart-turn warmup skipped: %s", exc)
+
+    def _warmup_sync(self) -> None:
+        """Load the model and run one zeroed-audio inference.  Runs in a thread."""
+        self._ensure_loaded()
+        audio = self._np.zeros(self._max_audio_samples, dtype=self._np.float32)
+        self._predict_sync(audio)
+
     def _ensure_loaded(self) -> None:
         """Lazy-load model and feature extractor on first inference."""
         if self._session is not None:

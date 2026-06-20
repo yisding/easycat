@@ -117,6 +117,26 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         # ``STTFinal`` for the same turn.  Cleared on the next commit.
         self._dropping_pending_final: bool = False
 
+    async def warmup(self) -> None:
+        """Prime DNS/TLS/connection pool with a connect-handshake-close cycle.
+
+        Opens the realtime WebSocket, completes the ``session.update``
+        handshake, then closes immediately — no persistent socket is held
+        across turns, so the lifecycle guards stay intact.  This keeps the
+        cold-connection cost off the first real turn.  All failures are
+        swallowed — ``WarmupRunner`` re-raises, so an auth/timeout error here
+        must not abort ``Session.start()``.
+        """
+        try:
+            await self.start_stream()
+        except Exception as exc:
+            logger.debug("OpenAI Realtime warmup skipped: %s", exc)
+            return
+        try:
+            await self.end_stream()
+        except Exception as exc:
+            logger.debug("OpenAI Realtime warmup close skipped: %s", exc)
+
     def _websocket_url(self) -> str:
         """Build the Realtime WebSocket URL for transcription mode."""
         parts = urlsplit(self._config.ws_url)

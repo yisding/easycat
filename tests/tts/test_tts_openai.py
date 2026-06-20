@@ -202,6 +202,29 @@ class TestOpenAITTS:
             await provider.close()
             mock_close.assert_called_once()
 
+    async def test_warmup_primes_models_endpoint(self):
+        """warmup() issues a cheap GET /models (not a billed speech POST)."""
+        provider = self._make_provider()
+        fake_response = MagicMock()
+        fake_response.aclose = AsyncMock()
+        get_mock = AsyncMock(return_value=fake_response)
+
+        with patch.object(provider._client, "get", get_mock):
+            await provider.warmup()
+
+        get_mock.assert_called_once_with("/models")
+        fake_response.aclose.assert_awaited_once()
+
+    async def test_warmup_swallows_errors(self):
+        """A network/auth failure during warmup must not propagate."""
+        provider = self._make_provider()
+        get_mock = AsyncMock(side_effect=httpx.ConnectError("boom"))
+
+        with patch.object(provider._client, "get", get_mock):
+            # Must return cleanly: WarmupRunner re-raises, so a raise here
+            # would abort Session.start().
+            await provider.warmup()
+
     @pytest.mark.integration_live
     @pytest.mark.provider_openai
     @pytest.mark.surface_tts
