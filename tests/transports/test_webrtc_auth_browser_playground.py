@@ -178,7 +178,29 @@ class TestWebRTCAuthToken:
         assert not stats_path.exists()
 
     @pytest.mark.asyncio
-    async def test_stats_accepts_query_token(self, tmp_path):
+    async def test_stats_accepts_query_token_when_opted_in(self, tmp_path):
+        # Query-token auth is now gated behind ``allow_query_token=True`` (the
+        # default-off browser/dev opt-in). The bundled WebRTC client sends the
+        # ``Authorization`` header and is unaffected.
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(
+                auth_token="sekrit", allow_query_token=True, stats_path=str(stats_path)
+            )
+        )
+        transport._web = _FakeWeb
+
+        response = await transport._handle_stats(
+            _FakeQueryTokenStatsRequest({"kind": "webrtc_client_stats"}, "sekrit")
+        )
+
+        assert response.status == 200
+        assert stats_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_stats_rejects_query_token_by_default(self, tmp_path):
+        # Default-OFF: a correct ``?token=`` value is rejected because
+        # ``allow_query_token`` defaults False. Only the Bearer header authorizes.
         stats_path = tmp_path / "webrtc-stats.jsonl"
         transport = WebRTCTransport(
             WebRTCTransportConfig(auth_token="sekrit", stats_path=str(stats_path))
@@ -189,8 +211,19 @@ class TestWebRTCAuthToken:
             _FakeQueryTokenStatsRequest({"kind": "webrtc_client_stats"}, "sekrit")
         )
 
-        assert response.status == 200
-        assert stats_path.exists()
+        assert response.status == 401
+        assert not stats_path.exists()
+
+    def test_query_token_rejected_by_default_but_accepted_when_opted_in(self):
+        rejecting = WebRTCTransport(WebRTCTransportConfig(auth_token="sekrit"))
+        assert rejecting._request_authorized(_FakeQueryTokenStatsRequest({}, "sekrit")) is False
+
+        accepting = WebRTCTransport(
+            WebRTCTransportConfig(auth_token="sekrit", allow_query_token=True)
+        )
+        assert accepting._request_authorized(_FakeQueryTokenStatsRequest({}, "sekrit")) is True
+        # A wrong query token is still rejected even when opted in.
+        assert accepting._request_authorized(_FakeQueryTokenStatsRequest({}, "wrong")) is False
 
     def test_no_token_means_open_access(self):
         transport = WebRTCTransport()

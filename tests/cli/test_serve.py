@@ -176,6 +176,31 @@ def test_serve_local_mode_omits_browser_output(
     assert "The page shows" not in result.stdout
 
 
+def test_serve_websocket_mode_prints_ws_endpoint(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """WebSocket mode starts a raw WS listener — print a ws:// endpoint, not an HTTP page."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "websocket", "--port", "8765"])
+
+    assert result.exit_code == 0
+    assert "ws://localhost:8765" in result.stdout
+    # The browser playground URL/message must NOT appear for websocket mode.
+    assert "http://" not in result.stdout
+    assert "transcript" not in result.stdout.lower()
+
+
+def test_serve_local_mode_prints_mic_hint_not_url(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
+) -> None:
+    """Local mode has no listener — never print a URL the user cannot use."""
+    result = cli.invoke(typer_app, ["serve", "--mode", "local"])
+
+    assert result.exit_code == 0
+    assert "microphone" in result.stdout.lower()
+    assert "http://" not in result.stdout
+    assert "ws://" not in result.stdout
+
+
 def test_serve_rejects_unknown_mode(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:
@@ -183,6 +208,20 @@ def test_serve_rejects_unknown_mode(
 
     assert result.exit_code == 2
     assert "telepathy" in result.output
+    assert stub_runtime["ran"] == []
+
+
+@pytest.mark.parametrize("mode", ["twilio", "phone"])
+def test_serve_rejects_twilio_modes(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any], mode: str
+) -> None:
+    # twilio/phone are genuine VoiceApp modes but are DELIBERATELY excluded from
+    # the serve CLI (they have their own server shape). Lock the exclusion so the
+    # carve-out cannot regress into a half-wired serve path.
+    result = cli.invoke(typer_app, ["serve", "--mode", mode])
+
+    assert result.exit_code == 2
+    assert mode in result.output
     assert stub_runtime["ran"] == []
 
 
@@ -210,6 +249,8 @@ def test_voice_app_built_with_per_connection_factory(
             captured["config_factory"] = config_factory
             captured["config"] = config
 
+    # The build seam now validates the config up front, which needs a key.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
 
     app = serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
@@ -217,6 +258,46 @@ def test_voice_app_built_with_per_connection_factory(
     assert isinstance(app, StubVoiceApp)
     assert captured["config_factory"] is not None
     assert captured["config"] is None
+
+
+def test_build_voice_app_fails_fast_without_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing OPENAI_API_KEY raises EASYCAT_E203 BEFORE the listener binds."""
+    from easycat.errors import EasyCatError
+
+    captured: dict[str, Any] = {}
+
+    class StubVoiceApp:
+        def __init__(self, *, config_factory: Any = None, config: Any = None) -> None:
+            captured["built"] = True
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
+
+    with pytest.raises(EasyCatError) as excinfo:
+        serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
+
+    assert excinfo.value.code == "EASYCAT_E203"
+    # The VoiceApp/listener was never constructed — validation ran first.
+    assert "built" not in captured
+
+
+def test_serve_cli_fails_fast_without_openai_key(
+    cli: CliRunner, typer_app, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``easycat serve`` exits non-zero on a missing key instead of binding."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+
+    ran: list[Any] = []
+    monkeypatch.setattr(serve_mod, "_run_voice_app", lambda *a, **k: ran.append((a, k)))
+
+    result = cli.invoke(typer_app, ["serve"])
+
+    # EASYCAT_E203 maps to CLI exit code 3; the listener never ran.
+    assert result.exit_code == 3
+    assert ran == []
 
 
 def test_playground_factory_wires_browser_transport_and_playground_agent(

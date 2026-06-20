@@ -39,6 +39,7 @@ def _clear_twilio_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TWILIO_STREAM_URL", raising=False)
     monkeypatch.delenv("TWILIO_STREAM_TOKEN_SECRET", raising=False)
     monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TRUST_PROXY_HEADERS", raising=False)
 
 
 class _FakeTwilioTransport:
@@ -639,6 +640,20 @@ def test_twiml_handler_validates_signature(monkeypatch: pytest.MonkeyPatch) -> N
     assert result["bad"].status == 403
     assert TWILIO_STREAM_TOKEN_PARAMETER not in result["bad"].text
     assert result["missing"].status == 403
+
+
+def test_twilio_server_config_reads_auth_token_and_trust_proxy_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VoiceApp sources the webhook auth token AND trust_proxy_headers from env."""
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "env-twilio-secret")
+    monkeypatch.setenv("TWILIO_STREAM_URL", "wss://example/media")
+    monkeypatch.setenv("TRUST_PROXY_HEADERS", "true")
+
+    config = VoiceApp(agent="a")._twilio_server_config()
+
+    assert config.twilio_auth_token == "env-twilio-secret"
+    assert config.trust_proxy_headers is True
 
 
 # ── Media lifecycle (fake ServerConnection + stubbed session) ─────────

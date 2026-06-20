@@ -29,7 +29,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
@@ -227,11 +227,16 @@ class WebRTCTransportConfig:
         the artifact path without custom app wiring.
     auth_token:
         Optional shared secret required by ``/config``, ``/offer``, and
-        ``/stats``.  Clients present it as ``Authorization: Bearer <token>``
-        or a ``?token=`` query parameter (the bundled client forwards
-        ``?token=`` from the page URL automatically).  Mirrors the
+        ``/stats``.  Clients present it as ``Authorization: Bearer <token>``.
+        A ``?token=`` query parameter is accepted only when
+        ``allow_query_token=True`` (default off).  The bundled WebRTC client
+        sends the ``Authorization`` header, so it is UNAFFECTED.  Mirrors the
         WebSocket/docker ``EASYCAT_WS_TOKEN`` security default — pair it with
         a non-loopback ``host``.
+    allow_query_token:
+        Whether a ``?token=`` query parameter is accepted in addition to the
+        ``Authorization: Bearer`` header.  Default ``False`` (the secure
+        posture): query tokens are a browser/dev opt-in only.
     max_sessions:
         Maximum concurrent browser offers accepted by
         :func:`serve_webrtc_config_sessions`. The single-client
@@ -259,6 +264,7 @@ class WebRTCTransportConfig:
     cors_allowed_origins: tuple[str, ...] = ()
     stats_path: str | None = field(default_factory=_default_webrtc_stats_path)
     auth_token: str | None = None
+    allow_query_token: bool = False
     max_sessions: int = 64
     stats_max_records: int = 1_000
     stats_max_file_bytes: int = 1_048_576
@@ -341,135 +347,62 @@ async def serve_webrtc_config_sessions(
     transport/session instead of replacing a singleton peer connection.
 
     A non-loopback bind requires ``config.auth_token``: binding beyond loopback
-    without a token raises :class:`ValueError` unless ``unsafe_allow_no_auth=True``
-    is passed to explicitly opt into an unauthenticated endpoint (mirroring
-    :func:`~easycat.transports.websocket.serve_websocket_sessions`).
+    without a token raises :class:`ValueError` via the shared
+    :func:`easycat.server.auth.enforce_bind_guard` (the SAME structured guard
+    the WebSocket helper uses) unless ``unsafe_allow_no_auth=True`` is passed to
+    explicitly opt into an unauthenticated endpoint.
+
+    Capacity + draining are owned by the shared
+    :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
+    the inline ``Semaphore``/active-set/``shutting_down`` state) so they behave
+    identically to the WebSocket helper.
+
+    M7 note: the route handlers (``/offer``, ``/config``, ``/stats``, ``/health``,
+    root, CORS) are no longer bound to a throwaway ``WebRTCTransport`` shim. They
+    are lifted into the transport-instance-free
+    :class:`~easycat.server.webrtc_routes.WebRTCRoutes` unit that the shared
+    :class:`~easycat.server.voice_server.VoiceServer` also mounts. This helper
+    delegates to it with ``prefix=""`` so it keeps serving the FLAT
+    ``/offer`` / ``/config`` / ``/stats`` paths the out-of-tree helper API and the
+    bundled client rely on.
     """
-    from easycat.config import create_session
-    from easycat.helpers import attach_runtime_feedback
+    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.transports import CapacityGate
+    from easycat.server.webrtc_routes import WebRTCRoutes
     from easycat.session_manager import SessionManager
 
     settings = config or WebRTCTransportConfig()
-    if (
-        not _is_loopback_host(settings.host)
-        and settings.auth_token is None
-        and not unsafe_allow_no_auth
-    ):
-        raise ValueError(
-            "WebRTCTransportConfig.auth_token is required when binding WebRTC "
-            "signaling to a non-loopback host (or pass unsafe_allow_no_auth=True "
-            "to bind an unauthenticated endpoint)"
-        )
+    # Reconcile the bind guard to the shared structured layer (closes the
+    # asymmetry: this helper previously raised unconditionally with no escape
+    # hatch). A configured ``auth_token`` satisfies the guard; the escape hatch
+    # mirrors the WebSocket helper.
+    bind_auth = (
+        BearerTokenAuth(token=settings.auth_token, allow_query_token=settings.allow_query_token)
+        if settings.auth_token is not None
+        else None
+    )
+    enforce_bind_guard(
+        settings.host,
+        auth=bind_auth,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+    )
     web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
     manager: SessionManager[int] = SessionManager()
-    session_slots = asyncio.Semaphore(settings.max_sessions)
-    cleanup_tasks: set[asyncio.Task[None]] = set()
-    active_sessions: set[int] = set()
-    shutting_down = False
+    gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
 
-    shim = WebRTCTransport(settings)
-    shim._web = web
-    shim._has_bundled_client = False
+    routes = WebRTCRoutes(
+        settings,
+        auth=bind_auth,
+        config_factory=config_factory,
+        gate=gate,
+        manager=manager,
+        runtime_feedback=runtime_feedback,
+    )
 
     app = web.Application()
-
-    async def cleanup_session(key: int, transport: WebRTCTransport) -> None:
-        try:
-            await transport.wait_closed()
-        finally:
-            try:
-                await asyncio.shield(manager.remove(key))
-                active_sessions.discard(key)
-            finally:
-                session_slots.release()
-
-    async def handle_offer(request: Any) -> Any:
-        nonlocal shutting_down
-        if shutting_down:
-            return web.Response(
-                status=503,
-                text=json.dumps({"error": "Server is shutting down"}),
-                content_type="application/json",
-                headers=shim._cors_headers(request),
-            )
-        if session_slots.locked():
-            return web.Response(
-                status=503,
-                text=json.dumps({"error": "Server is at the configured session limit"}),
-                content_type="application/json",
-                headers=shim._cors_headers(request),
-            )
-        await session_slots.acquire()
-        transport = WebRTCTransport(replace(settings, static_dir=None))
-        transport._prepare_external_signaling(web)
-        key = id(transport)
-        session_started = False
-        try:
-            response = await transport._handle_offer(request)
-            if getattr(response, "status", 200) >= 400:
-                await transport.disconnect()
-                session_slots.release()
-                return response
-
-            session = create_session(config_factory(transport))
-            if runtime_feedback:
-                attach_runtime_feedback(session)
-            await manager.add(key, session)
-            session_started = True
-            active_sessions.add(key)
-            transport._ensure_browser_event_forwarder()
-            task = asyncio.create_task(cleanup_session(key, transport))
-            cleanup_tasks.add(task)
-            task.add_done_callback(cleanup_tasks.discard)
-            return response
-        except Exception:
-            if session_started:
-                await manager.remove(key)
-                active_sessions.discard(key)
-            await transport.disconnect()
-            session_slots.release()
-            raise
-
-    async def handle_health(request: Any) -> Any:
-        status = "draining" if shutting_down else "ok"
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {
-                    "status": status,
-                    "active_sessions": len(active_sessions),
-                    "max_sessions": settings.max_sessions,
-                }
-            ),
-            headers=shim._cors_headers(request),
-        )
-
-    app.router.add_post("/offer", handle_offer)
-    app.router.add_post("/stats", shim._handle_stats)
-    app.router.add_get("/config", shim._handle_config)
-    app.router.add_get("/health", handle_health)
-    app.router.add_get("/", shim._handle_root)
-    app.router.add_options("/offer", shim._handle_cors_preflight)
-    app.router.add_options("/stats", shim._handle_cors_preflight)
-    app.router.add_options("/config", shim._handle_cors_preflight)
-
-    static_dir = settings.static_dir
-    if static_dir == WebRTCTransportConfig._USE_BUNDLED:
-        static_dir = WebRTCTransportConfig._BUNDLED_STATIC_DIR
-    if static_dir is not None:
-        static_path = Path(static_dir)
-        if static_path.is_dir():
-            default_client = static_path / "webrtc_client.html"
-            if default_client.is_file():
-                shim._has_bundled_client = True
-            app.router.add_static("/", static_path)
-            logger.info("Serving static files from %s", static_path)
-        else:
-            logger.warning(
-                "Configured static_dir '%s' does not exist or is not a directory; "
-                "static file serving is disabled",
-                static_path,
-            )
+    # ``prefix=""`` keeps the FLAT routes (``/offer`` / ``/config`` / ``/stats``)
+    # the bundled client and the out-of-tree helper API depend on.
+    routes.register(app, prefix="", web=web)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -483,13 +416,10 @@ async def serve_webrtc_config_sessions(
     try:
         await event.wait()
     finally:
-        shutting_down = True
+        gate.start_draining()
         await site.stop()
         await runner.cleanup()
-        for task in list(cleanup_tasks):
-            task.cancel()
-        if cleanup_tasks:
-            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+        await routes.cancel_cleanup_tasks()
         await manager.stop_all()
 
 
@@ -503,7 +433,8 @@ def run_webrtc_config_server(
 ) -> None:
     """Run a multi-session WebRTC signaling server from a synchronous entry point.
 
-    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``.
+    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``
+    (mirrors :func:`run_websocket_config_server`).
     """
     asyncio.run(
         serve_webrtc_config_sessions(
@@ -834,9 +765,11 @@ class WebRTCTransport(AudioQueueMixin):
     def _request_authorized(self, request: Any) -> bool:
         """Authorize a signaling request against the optional shared token.
 
-        Mirrors :func:`easycat.transports.websocket.websocket_server_authorized`:
+        Same contract as the unified :class:`easycat.server.auth.BearerTokenAuth`:
         no configured token means open access; otherwise accept a
-        ``Authorization: Bearer <token>`` header or a ``?token=`` query value.
+        ``Authorization: Bearer <token>`` header. A ``?token=`` query value is
+        accepted ONLY when ``allow_query_token=True`` (default off — the bundled
+        WebRTC client sends the ``Authorization`` header and is unaffected).
         """
         token = self._config.auth_token
         if token is None:
@@ -846,8 +779,10 @@ class WebRTCTransport(AudioQueueMixin):
             scheme, separator, credential = value.partition(" ")
             if separator == " " and scheme.lower() == "bearer":
                 return compare_digest(credential, token)
-        query_token = getattr(request, "query", {}).get("token")
-        return query_token is not None and compare_digest(query_token, token)
+        if self._config.allow_query_token:
+            query_token = getattr(request, "query", {}).get("token")
+            return query_token is not None and compare_digest(query_token, token)
+        return False
 
     def _unauthorized_response(self, request: Any) -> Any:
         web = self._web

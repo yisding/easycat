@@ -170,6 +170,12 @@ var eventsChannel = null;
 // when the server requires one; forward it on every signaling request.
 var authToken = new URLSearchParams(location.search).get("token") || "";
 
+// Signaling route base. The standalone WebRTC serve helper serves flat routes
+// (/offer, /config, /stats), while VoiceServer mounts them under /webrtc/*. The
+// SAME bundled page is served by both, so the base is read from ?webrtc=<prefix>
+// (the server's root redirect appends it); it defaults to "" (flat).
+var WEBRTC_BASE = new URLSearchParams(location.search).get("webrtc") || "";
+
 // ── UI ───────────────────────────────────────────────────────────
 var startBtn     = document.getElementById("startBtn");
 var stopBtn      = document.getElementById("stopBtn");
@@ -298,7 +304,7 @@ function handleServerEvent(raw) {
 // ── Fetch ICE config from server ─────────────────────────────────
 async function fetchIceConfig(baseUrl) {
   try {
-    var response = await fetch(baseUrl + "/config", { headers: authHeaders() });
+    var response = await fetch(baseUrl + WEBRTC_BASE + "/config", { headers: authHeaders() });
     if (response.ok) {
       return await response.json();
     }
@@ -422,7 +428,7 @@ async function postStatsSnapshot(label, peer) {
     var snapshot = await buildStatsSnapshot(label, activePeer);
     if (!snapshot) return;
     var baseUrl = signalingUrl.value.replace(/\/$/, "");
-    await fetch(baseUrl + "/stats", {
+    await fetch(baseUrl + WEBRTC_BASE + "/stats", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(snapshot),
@@ -452,7 +458,7 @@ async function negotiate(offerUrl) {
     }
   });
 
-  var response = await fetch(offerUrl + "/offer", {
+  var response = await fetch(offerUrl + WEBRTC_BASE + "/offer", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({

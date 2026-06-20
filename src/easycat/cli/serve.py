@@ -27,7 +27,6 @@ import typer
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stdout_console
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _DEFAULT_AGENT_MODEL = "gpt-4o-mini"
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful voice assistant. Keep responses concise and conversational."
@@ -42,13 +41,51 @@ def _serve_token_from_env() -> str | None:
     return os.environ.get("EASYCAT_SERVE_TOKEN") or None
 
 
+def _is_loopback(host: str) -> bool:
+    """Reuse the canonical loopback check (covers all 127.0.0.0/8 / ``::1`` /
+    ``::ffff:127.*`` forms, not just the three literals) so the CLI pre-flight
+    guard is never STRICTER than VoiceApp's authoritative one. Imported lazily to
+    keep the CLI module-load light."""
+    from easycat.transports.webrtc import _is_loopback_host
+
+    return _is_loopback_host(host)
+
+
 def _playground_url(host: str, port: int, token: str | None) -> str:
-    display_host = "localhost" if host in _LOOPBACK_HOSTS else host
+    display_host = "localhost" if _is_loopback(host) else host
     url = f"http://{display_host}:{port}"
     if token:
         query = urlencode({"token": token})
         return f"{url}/webrtc_client.html?{query}"
     return url
+
+
+def _websocket_endpoint(host: str, port: int) -> str:
+    display_host = "localhost" if _is_loopback(host) else host
+    return f"ws://{display_host}:{port}"
+
+
+def _announce_serve_endpoint(*, mode: str, host: str, port: int, token: str | None) -> None:
+    """Print a mode-appropriate endpoint hint before the (blocking) server starts.
+
+    Only ``browser`` mode serves the HTTP playground page; ``websocket`` mode
+    starts a raw WebSocket listener (no page) and ``local`` mode opens the
+    microphone with no listener at all. Printing the browser playground URL for
+    the latter two left users staring at an address that cannot work.
+    """
+    if mode in {"local", "mic"}:
+        stdout_console.print("Listening on your microphone. Press Ctrl+C to stop.")
+        return
+    if mode in {"websocket", "ws"}:
+        endpoint = _websocket_endpoint(host, port)
+        stdout_console.print(f"Connect a WebSocket client to {endpoint}")
+        if token:
+            stdout_console.print("Send the token as an `Authorization: Bearer <token>` header.")
+        return
+    stdout_console.print(f"Open {_playground_url(host, port, token)}")
+    stdout_console.print(
+        "The page shows the live transcript, interruption indicator, and per-turn latency."
+    )
 
 
 def _playground_config_factory(
@@ -85,21 +122,6 @@ def _playground_config_factory(
     return factory
 
 
-def _build_voice_app(
-    *,
-    agent_model: str,
-    instructions: str,
-) -> Any:
-    """Build the playground :class:`VoiceApp` (extracted for tests)."""
-    from easycat.voice_app import VoiceApp
-
-    factory = _playground_config_factory(
-        agent_model=agent_model,
-        instructions=instructions,
-    )
-    return VoiceApp(config_factory=factory)
-
-
 def _validate_playground_config() -> None:
     """Surface the playground's credential requirement before serving.
 
@@ -108,13 +130,29 @@ def _validate_playground_config() -> None:
     fail server-side when the first client connects — after the CLI has already
     printed the Open URL and started listening. Construct the same browser preset
     once up front (the per-connection agent/transport do not affect the
-    credential check) so the catalogued missing-key error
-    (``EASYCAT_E203``) fails at startup instead. The throwaway config builds no
-    network clients, so it is safe to discard.
+    credential check) so the catalogued missing-key error (``EASYCAT_E203``)
+    fails at startup instead. The throwaway config builds no network clients, so
+    it is safe to discard.
     """
     from easycat.config import EasyConfig
 
     EasyConfig.browser()
+
+
+def _build_voice_app(
+    *,
+    agent_model: str,
+    instructions: str,
+) -> Any:
+    """Build the playground :class:`VoiceApp` (extracted for tests)."""
+    from easycat.voice_app import VoiceApp
+
+    _validate_playground_config()
+    factory = _playground_config_factory(
+        agent_model=agent_model,
+        instructions=instructions,
+    )
+    return VoiceApp(config_factory=factory)
 
 
 def _run_voice_app(
@@ -182,7 +220,7 @@ def serve(
     if mode not in _SERVE_MODES:
         emit_command_error(
             "serve",
-            f"Unknown --mode {mode!r}. Choose one of: browser, websocket, local.",
+            f"Unknown --mode {mode!r}. Choose one of: {', '.join(sorted(_SERVE_MODES))}.",
             json_output=False,
         )
         raise typer.Exit(2)
@@ -194,7 +232,7 @@ def serve(
     # ``serve --mode local --host 0.0.0.0`` would be rejected for a bind that
     # never happens.
     is_listener_mode = mode not in {"local", "mic"}
-    if is_listener_mode and host not in _LOOPBACK_HOSTS and not token:
+    if is_listener_mode and not _is_loopback(host) and not token:
         emit_command_error(
             "serve",
             f"Refusing to bind {host!r} without a token. Pass --token (or set "
@@ -204,18 +242,14 @@ def serve(
         )
         raise typer.Exit(2)
 
-    # Fail fast on a missing OPENAI_API_KEY: the playground config is built
-    # per-connection, so without this the CLI would announce the Open URL and
-    # start listening, leaving the first client to hit a server-side failure.
+    # Fail fast on a missing OPENAI_API_KEY before announcing an endpoint or
+    # binding a listener — the playground builds its config per-connection, so
+    # without this the first client would hit a server-side failure instead.
     _validate_playground_config()
 
     app = _build_voice_app(agent_model=agent_model, instructions=instructions)
-    # Only browser mode serves the bundled playground page; websocket/local modes
-    # start a raw WebSocket server or a local mic session (each announces itself),
-    # so the playground URL and page instructions would mislead there.
-    if mode == "browser":
-        stdout_console.print(f"Open {_playground_url(host, port, token)}")
-        stdout_console.print(
-            "The page shows the live transcript, interruption indicator, and per-turn latency."
-        )
+    # Mode-appropriate hint: browser prints the playground URL, websocket prints
+    # the ws:// endpoint, local prints the mic message — never the page URL for a
+    # mode that does not serve it.
+    _announce_serve_endpoint(mode=mode, host=host, port=port, token=token)
     _run_voice_app(app, mode=mode, host=host, port=port, token=token)

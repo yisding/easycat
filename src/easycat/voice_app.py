@@ -532,10 +532,23 @@ class VoiceApp:
         stream_token_secret = kwargs.pop("stream_token_secret", None) or os.environ.get(
             "TWILIO_STREAM_TOKEN_SECRET"
         )
+        # The Twilio auth token authenticates the ``POST /twiml`` webhook
+        # (X-Twilio-Signature) before a media-stream token is minted. Source it
+        # from TWILIO_AUTH_TOKEN — the same env var the twilio-phone scaffold
+        # requires — so the secure path is automatic when the operator sets it.
         twilio_auth_token = kwargs.pop("twilio_auth_token", None) or os.environ.get(
             "TWILIO_AUTH_TOKEN"
         )
-        trust_proxy_headers = kwargs.pop("trust_proxy_headers", False)
+        # ``trust_proxy_headers`` honors X-Forwarded-Proto/Host when reconstructing
+        # the signed public URL behind a TLS-terminating proxy. An explicit kwarg
+        # wins; otherwise fall back to the TRUST_PROXY_HEADERS env var.
+        trust_proxy_headers = kwargs.pop("trust_proxy_headers", None)
+        if trust_proxy_headers is None:
+            trust_proxy_headers = os.environ.get("TRUST_PROXY_HEADERS", "").lower() in {
+                "1",
+                "true",
+                "yes",
+            }
         unsafe_allow_unsigned_webhooks = kwargs.pop("unsafe_allow_unsigned_webhooks", False)
         max_sessions = kwargs.pop(
             "max_sessions",
@@ -550,7 +563,7 @@ class VoiceApp:
             stream_url=stream_url,
             stream_token_secret=stream_token_secret,
             twilio_auth_token=twilio_auth_token,
-            trust_proxy_headers=trust_proxy_headers,
+            trust_proxy_headers=bool(trust_proxy_headers),
             unsafe_allow_unsigned_webhooks=unsafe_allow_unsigned_webhooks,
             max_sessions=max_sessions,
         )

@@ -427,6 +427,7 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
+    plan        Show the provider/capability plan for a manifest profile
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps
@@ -483,6 +484,14 @@ Run easycat explain json-schema for CLI JSON.
   indicator, and per-turn latency readout in the page. Needs an OpenAI
   key; a non-loopback `--host` requires `--token` (or
   `EASYCAT_SERVE_TOKEN`).
+- **`uv run easycat plan`** — resolves an `easycat.toml` profile into its
+  provider/capability plan across all seven pipeline roles
+  (`src/easycat/cli/plan.py`), reporting the selected provider per role plus
+  any missing API keys or optional extras — without instantiating providers.
+  It is the side-effect-free, ahead-of-deploy counterpart to a server's
+  `/health/ready` check; add `--json` (`uv run easycat plan --json`) for the
+  standard machine-readable envelope, and `--profile` to plan a non-default
+  `[voice.<profile>]`.
 - **`uv run easycat docs`** — prints the maintained docs map and route
   descriptions so installed users can jump to quickstart, examples, teaching
   chapters, architecture and maintenance guides, deployment, observability,

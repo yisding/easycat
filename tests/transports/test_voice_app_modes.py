@@ -53,6 +53,7 @@ def captured_websocket(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     def _fake_run(factory: Any, config: Any = None, **kwargs: Any) -> None:
         captured["factory"] = factory
         captured["config"] = config
+        captured["kwargs"] = kwargs
 
     monkeypatch.setattr(websocket_module, "run_websocket_config_server", _fake_run)
     return captured

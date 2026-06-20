@@ -14,6 +14,7 @@ See ``TEST_PLANS.md`` §12.
 
 from __future__ import annotations
 
+import ast
 import json
 import shlex
 import zipfile
@@ -745,6 +746,201 @@ def test_replay_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
     assert "code" not in payload
     assert "fix" not in payload
     assert "context" not in payload
+
+
+def _json_command_paths() -> list[tuple[str, ...]]:
+    """Walk the registered CLI tree, returning every command exposing ``--json``.
+
+    Each entry is the command path as a tuple of names (e.g. ``("plan",)`` or
+    ``("validate", "quick")``). A command is included when any of its params
+    declares the ``--json`` flag.
+    """
+    import click
+    from typer.main import get_command
+
+    from easycat.cli._app import _register_commands
+
+    _register_commands()
+    root = get_command(app)
+
+    found: list[tuple[str, ...]] = []
+
+    def _walk(command: click.Command, path: tuple[str, ...]) -> None:
+        if isinstance(command, click.Group):
+            for name, sub in command.commands.items():
+                _walk(sub, (*path, name))
+            return
+        has_json = any("--json" in (p.opts or []) for p in command.params)
+        if has_json:
+            found.append(path)
+
+    for name, sub in root.commands.items():
+        _walk(sub, (name,))
+    return found
+
+
+# Pre-existing ``--json`` commands whose envelope ``command`` token does not
+# match their CLI path and that predate this coverage guard. ``inspect`` and
+# ``latency`` are top-level ALIASES of ``bundles show`` / ``validate latency``,
+# so they emit (and are asserted under) the canonical tokens ``"bundles_show"``
+# / ``"validate latency"`` — never their bare path. (The old substring guard
+# matched them vacuously off unrelated occurrences; the AST guard below requires
+# this explicit acknowledgement.) New ``--json`` commands (like ``plan``) must
+# NOT be added here — they must carry a real envelope assertion instead, which is
+# the whole point of the guard.
+_LEGACY_JSON_COMMANDS_WITHOUT_ENVELOPE_ASSERTION = frozenset(
+    {"diff", "tail", "inspect", "latency"}
+)
+
+
+def _asserted_envelope_command_tokens() -> set[str]:
+    """Command tokens with a real ``_assert_envelope(payload, "<cmd>")`` call.
+
+    Parsed via AST (the ``command`` is the 2nd positional arg) so an incidental
+    substring — a docstring word, an unrelated dict key like ``"plan"`` — cannot
+    satisfy the coverage guard vacuously the way a raw ``in source`` check could.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    tokens: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "_assert_envelope":
+            continue
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            value = node.args[1].value
+            if isinstance(value, str):
+                tokens.add(value)
+    return tokens
+
+
+def test_every_json_command_has_an_envelope_assertion() -> None:
+    """A new ``--json`` command must carry an explicit envelope assertion here.
+
+    ``tests/cli/test_json_schema.py`` is the ONLY guard that exercises the
+    ``--json`` envelope, and it has no registry walk — so a new ``--json``
+    command would otherwise slip past uncovered. This walks the CLI tree and
+    fails when a ``--json``-capable command lacks an ``_assert_envelope(payload,
+    "<command>")`` (or ``"<group> <sub>"``) call in this file (matched by AST,
+    not substring, so the assertion must be real). A small allow-list of legacy
+    commands that predate the guard is excluded; new commands must not be added.
+    """
+    asserted = _asserted_envelope_command_tokens()
+    missing: list[str] = []
+    for path in _json_command_paths():
+        # The envelope ``command`` field uses the space-joined command path
+        # (matching how validate uses "validate quick"); single commands use the
+        # bare name.
+        command_token = " ".join(path)
+        if command_token in _LEGACY_JSON_COMMANDS_WITHOUT_ENVELOPE_ASSERTION:
+            continue
+        if command_token not in asserted:
+            missing.append(command_token)
+    assert not missing, (
+        "These --json commands have no envelope assertion in test_json_schema.py: "
+        + ", ".join(sorted(missing))
+    )
+
+
+def _write_plan_manifest(tmp_path: Path, *, vad: str = "silero") -> Path:
+    manifest = tmp_path / "easycat.toml"
+    manifest.write_text(
+        "\n".join(
+            [
+                "[project]",
+                'name = "plan-test"',
+                "",
+                "[server]",
+                'auth = "bearer-env:EASYCAT_SERVE_TOKEN"',
+                "",
+                "[voice.default]",
+                'transport = "webrtc"',
+                'stt = "openai/realtime"',
+                'tts = "openai"',
+                f'vad = "{vad}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def test_plan_envelope(cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = _write_plan_manifest(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan")
+    assert payload["profile"] == "default"
+    # selected is keyed by role, each carrying the ProviderSelection fields.
+    selected = payload["selected"]
+    assert set(selected) == {
+        "stt",
+        "tts",
+        "vad",
+        "transport",
+        "agent",
+        "noise_reducer",
+        "echo_canceller",
+    }
+    for role, selection in selected.items():
+        assert selection["role"] == role
+        for key in ("provider", "config_type", "extra", "required_env", "capabilities"):
+            assert key in selection
+        assert isinstance(selection["capabilities"], list)
+    assert isinstance(payload["missing_env"], list)
+    assert isinstance(payload["missing_extras"], list)
+    assert isinstance(payload["warnings"], list)
+    assert isinstance(payload["blocking_errors"], list)
+    assert payload["has_blocking_errors"] is False
+
+
+def test_plan_missing_manifest_error_envelope(cli: CliRunner, tmp_path: Path) -> None:
+    missing = tmp_path / "nope.toml"
+
+    result = cli.invoke(app, ["plan", "--manifest", str(missing), "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan", status="error")
+    assert payload["code"] == "EASYCAT_E601"
+    assert payload["exit_code"] != 0
+
+
+def test_plan_unknown_profile_error_envelope(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = _write_plan_manifest(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--profile", "nope", "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan", status="error")
+    assert payload["code"] == "EASYCAT_E602"
+
+
+def test_plan_unresolvable_backend_error_envelope(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An unknown vad backend makes the planner RAISE a bare ValueError; the CLI
+    # must surface a clean coded E602 envelope, not a raw traceback.
+    manifest = _write_plan_manifest(tmp_path, vad="silro")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-stub")
+
+    result = cli.invoke(app, ["plan", "--manifest", str(manifest), "--json"])
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    _assert_envelope(payload, "plan", status="error")
+    assert payload["code"] == "EASYCAT_E602"
 
 
 def test_stdout_is_parseable_json_even_with_stderr_noise(
