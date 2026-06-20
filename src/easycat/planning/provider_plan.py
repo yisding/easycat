@@ -32,7 +32,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from easycat.planning.transport_registry import (
@@ -125,16 +125,28 @@ class ProviderPlan:
         return bool(self.missing_env or self.missing_extras)
 
 
+def _module_available(module: str) -> bool:
+    """Whether ``module`` can be located (find_spec, no import)."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _extra_is_missing(extra: str | None) -> bool:
     """Whether ``extra``'s probe module is absent (find_spec, no import)."""
     probe = probe_module_for_extra(extra)
     if probe is None:
         return False
-    try:
-        return importlib.util.find_spec(probe) is None
-    except (ImportError, ValueError):
-        # A namespace-package parent that fails to import counts as missing.
-        return True
+    return not _module_available(probe)
+
+
+# ``create_vad('auto')`` tries Silero -> FunASR -> TEN -> Krisp and only raises
+# when NONE is importable. These are the probe modules for that union (Silero +
+# FunASR both ride onnxruntime); the planner blocks the ``auto`` VAD only when
+# all are absent. ``silero-vad`` is the extra it recommends installing.
+_AUTO_VAD_PROBE_MODULES: tuple[str, ...] = ("onnxruntime", "ten_vad", "krisp_audio")
+_AUTO_VAD_INSTALL_EXTRA = "silero-vad"
 
 
 # ── STT / TTS catalog resolution ─────────────────────────────────────
@@ -246,7 +258,17 @@ def _select_vad(vad: Any) -> ProviderSelection:
     if backend is None:
         allowed = ", ".join(sorted(VAD_BACKENDS))
         raise ValueError(f"Unknown VAD backend {backend_name!r}. Expected one of: {allowed}.")
-    return _backend_selection("vad", backend_name, backend)
+    selection = _backend_selection("vad", backend_name, backend)
+    if backend_name == "auto":
+        # ``auto`` is satisfiable by ANY backend in the create_vad union, so it
+        # is only a blocking gap when none of the probe modules is importable —
+        # otherwise the static ``silero-vad`` extra would falsely block a server
+        # that ``create_vad`` would happily run on TEN or Krisp. Mirror the union.
+        if any(_module_available(m) for m in _AUTO_VAD_PROBE_MODULES):
+            selection = replace(selection, extra=None)
+        else:
+            selection = replace(selection, extra=_AUTO_VAD_INSTALL_EXTRA)
+    return selection
 
 
 def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
@@ -262,9 +284,12 @@ def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
             capabilities=frozenset({"disabled"}),
         )
     backend_name = DEFAULT_NOISE_REDUCER
+    fallback_policy = "passthrough"
     cfg = config.noise_reduction
-    if cfg is not None and hasattr(cfg, "backend"):
-        backend_name = cfg.backend
+    if cfg is not None:
+        if hasattr(cfg, "backend"):
+            backend_name = cfg.backend
+        fallback_policy = str(getattr(cfg, "fallback_policy", "passthrough"))
     # An UNKNOWN backend RAISES rather than silently falling back to the default
     # while keeping the bad name (the same parity rule as ``_select_vad``):
     # ``create_noise_reducer`` rejects an unknown backend (``ValueError``), so the
@@ -276,7 +301,20 @@ def _select_noise_reducer(config: EasyConfig) -> ProviderSelection:
         raise ValueError(
             f"Unknown noise reducer backend {backend_name!r}. Expected one of: {allowed}."
         )
-    return _backend_selection("noise_reducer", backend_name, backend)
+    selection = _backend_selection("noise_reducer", backend_name, backend)
+    # ``create_noise_reducer`` only degrades gracefully in AUTO mode: it tries
+    # Krisp -> RNNoise and, when neither is installed, honors ``fallback_policy``
+    # ("passthrough" => no-op reducer, "error" => raise). An explicit
+    # ``backend="rnnoise"`` calls ``RNNoiseReducer()`` directly and still raises
+    # when the extra is missing, so only auto+non-error degrades. Mirror that (as
+    # ``_echo_canceller_selection`` does) so a missing ``rnnoise`` extra is a
+    # WARNING — not a blocking gap — exactly when ``create_session`` would degrade
+    # to passthrough rather than raise.
+    if backend_name == "auto" and fallback_policy != "error":
+        selection = replace(
+            selection, capabilities=selection.capabilities | {"degrades_to_passthrough"}
+        )
+    return selection
 
 
 def _echo_canceller_selection(*, enabled: bool, fallback_policy: str) -> ProviderSelection:
@@ -511,26 +549,10 @@ def _select_from_profile(
 
 
 def _is_voice_profile(config: Any) -> bool:
-    """Whether ``config`` is a manifest :class:`VoiceProfile` (duck-typed).
-
-    Deliberately structural rather than ``isinstance``: a sibling test may delete
-    and re-import ``easycat.project.schema`` (the M6a import-boundary guard does
-    exactly this), which mints a fresh ``VoiceProfile`` class object. An identity
-    check would then misclassify a ``VoiceProfile`` instance built from the other
-    copy of the class and fall through to the ``EasyConfig`` branch. A
-    ``VoiceProfile`` carries a ``name`` and a STRING ``transport`` and never the
-    ``enable_noise_reduction`` knob ``EasyConfig`` owns, so that shape is the
-    stable discriminator.
-    """
+    """Whether ``config`` is a manifest :class:`VoiceProfile`."""
     from easycat.project.schema import VoiceProfile
 
-    if isinstance(config, VoiceProfile):
-        return True
-    return (
-        hasattr(config, "name")
-        and isinstance(getattr(config, "transport", None), str)
-        and not hasattr(config, "enable_noise_reduction")
-    )
+    return isinstance(config, VoiceProfile)
 
 
 __all__ = [

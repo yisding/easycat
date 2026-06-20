@@ -765,7 +765,7 @@ class WebRTCTransport(AudioQueueMixin):
     def _request_authorized(self, request: Any) -> bool:
         """Authorize a signaling request against the optional shared token.
 
-        Mirrors :func:`easycat.transports.websocket.websocket_server_authorized`:
+        Same contract as the unified :class:`easycat.server.auth.BearerTokenAuth`:
         no configured token means open access; otherwise accept a
         ``Authorization: Bearer <token>`` header. A ``?token=`` query value is
         accepted ONLY when ``allow_query_token=True`` (default off — the bundled

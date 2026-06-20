@@ -211,6 +211,20 @@ def test_serve_rejects_unknown_mode(
     assert stub_runtime["ran"] == []
 
 
+@pytest.mark.parametrize("mode", ["twilio", "phone"])
+def test_serve_rejects_twilio_modes(
+    cli: CliRunner, typer_app, stub_runtime: dict[str, Any], mode: str
+) -> None:
+    # twilio/phone are genuine VoiceApp modes but are DELIBERATELY excluded from
+    # the serve CLI (they have their own server shape). Lock the exclusion so the
+    # carve-out cannot regress into a half-wired serve path.
+    result = cli.invoke(typer_app, ["serve", "--mode", mode])
+
+    assert result.exit_code == 2
+    assert mode in result.output
+    assert stub_runtime["ran"] == []
+
+
 def test_serve_passes_agent_options_through(
     cli: CliRunner, typer_app, stub_runtime: dict[str, Any]
 ) -> None:

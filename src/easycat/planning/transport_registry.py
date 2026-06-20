@@ -75,12 +75,15 @@ class RoleBackend:
     extra: str | None = None
     required_env: str | None = None
     capabilities: frozenset[str] = field(default_factory=frozenset)
-    # For TRANSPORT backends only: mirrors the transport config's
-    # ``default_echo_cancellation_enabled`` ClassVar (read by
-    # ``EasyConfig._default_echo_cancellation_for_transport`` ->
-    # ``create_session``). The profile planner reads it so its echo-canceller
-    # verdict matches what ``create_session`` auto-enables for the transport,
-    # not just the browser preset. Ignored for the non-transport roles.
+    # For TRANSPORT backends only: the AEC default the MANIFEST path resolves for
+    # this transport — i.e. what ``ProjectManifest.to_easyconfig`` (and thus
+    # ``create_session``) ends up with, which is the transport's preset value, NOT
+    # always the bare transport-config ClassVar. (``WebRTCTransportConfig``'s own
+    # ClassVar is False, but a manifest ``webrtc`` profile routes through
+    # ``EasyConfig.browser`` which forces AEC on, so this is True.) Read by
+    # ``_select_from_profile``; tied to the resolved EasyConfig by
+    # ``test_transport_aec_defaults_match_manifest_resolved_easyconfig`` so it
+    # cannot silently drift from the preset. Ignored for non-transport roles.
     default_echo_cancellation_enabled: bool = False
 
 
@@ -263,14 +266,18 @@ def probe_module_for_extra(extra: str | None) -> str | None:
     that installs no importable package. The planner treats a ``None`` probe as
     "extra is always satisfied" so it never falsely reports it missing.
 
-    Raises:
-        KeyError: when ``extra`` is a non-empty name with no probe mapping — a
-            loud failure so a newly added extra cannot silently skip the
-            find_spec check.
+    Built-in extras have an explicit mapping above (enforced by
+    ``tests/planning/test_transport_registry.py``). A registered third-party
+    STT/TTS provider, however, may carry an ARBITRARY ``extra`` string (via
+    ``register_*_provider`` / entry-point discovery) with no mapping. For those,
+    fall back to probing the extra NAME itself as a best-effort module — so a
+    genuinely-missing third-party install is still flagged. (Returning ``None``
+    would wrongly mark it always-satisfied; a runtime ``KeyError`` would crash
+    the planner and pin ``/health/ready`` for a deployable server.)
     """
     if extra is None:
         return None
-    return EXTRA_PROBE_MODULE[extra]
+    return EXTRA_PROBE_MODULE.get(extra, extra)
 
 
 __all__ = [

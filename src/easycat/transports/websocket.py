@@ -18,10 +18,8 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from hmac import compare_digest
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, ClassVar
-from urllib.parse import parse_qs, urlsplit
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -109,37 +107,6 @@ def _normalize_auth_token(token: str | None) -> str | None:
     return token
 
 
-def websocket_server_authorized(
-    headers: Headers,
-    path: str,
-    token: str | None,
-    *,
-    allow_query_token: bool = False,
-) -> bool:
-    """Authorize a WebSocket request against an optional bearer/query token.
-
-    A ``?token=`` query value is accepted ONLY when ``allow_query_token=True``
-    (default OFF). This is a deliberate breaking change for the bundled WS
-    browser client (``examples/ws_browser_client.html``) — browsers cannot set
-    handshake headers, so they relied on the query token. Pass
-    ``allow_query_token=True`` as the loopback/dev opt-in to keep that client
-    working locally. A blank/whitespace token normalizes to ``None`` (no auth).
-    """
-    token = _normalize_auth_token(token)
-    if token is None:
-        return True
-    value = headers.get("Authorization")
-    if value is not None:
-        scheme, separator, credential = value.partition(" ")
-        if separator == " " and scheme.lower() == "bearer":
-            return compare_digest(credential, token)
-
-    if allow_query_token:
-        query_token = parse_qs(urlsplit(path).query).get("token", [None])[0]
-        return query_token is not None and compare_digest(query_token, token)
-    return False
-
-
 def _plain_response(status: HTTPStatus, body: str) -> Response:
     payload = body.encode()
     return Response(
@@ -212,8 +179,7 @@ async def serve_websocket_sessions(
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
         # Per-handshake authorization routes through the UNIFIED ``AuthPolicy``
-        # (F6) rather than the legacy ``websocket_server_authorized`` path, so
-        # WebSocket and WebRTC share one auth layer. With no token (``auth_policy
+        # (F6) so WebSocket and WebRTC share one auth layer. With no token (``auth_policy
         # is None``) the endpoint stays open (the prior behavior). A valid bearer
         # header is accepted; a missing/invalid credential is rejected; the
         # ``?token=`` query is gated by ``allow_query_token`` (carried on the

@@ -217,22 +217,25 @@ def test_webtransport_server_uses_config_server_helper() -> None:
 
 
 def test_ws_server_authorizes_bearer_or_query_token():
-    from easycat.transports.websocket import websocket_server_authorized
+    # The WebSocket handshake now authorizes through the UNIFIED
+    # ``BearerTokenAuth``/``from_websocket`` path (the old
+    # ``websocket_server_authorized`` helper was removed). Same contract.
+    from easycat.server.auth import BearerTokenAuth, from_websocket
+
+    def authorized(headers: Headers, path: str, *, allow_query_token: bool = False) -> bool:
+        auth = BearerTokenAuth(token="expected-token", allow_query_token=allow_query_token)
+        return auth.authorize(from_websocket(headers, path)).allowed
 
     headers = Headers([("Authorization", "Bearer expected-token")])
 
     # Bearer-header auth works regardless of allow_query_token.
-    assert websocket_server_authorized(headers, "/", "expected-token")
+    assert authorized(headers, "/")
     # ?token= query auth is OFF by default (breaking change) and ON only when
     # allow_query_token=True (the loopback/dev opt-in for the browser client).
-    assert not websocket_server_authorized(Headers(), "/?token=expected-token", "expected-token")
-    assert websocket_server_authorized(
-        Headers(), "/?token=expected-token", "expected-token", allow_query_token=True
-    )
-    assert not websocket_server_authorized(Headers(), "/", "expected-token")
-    assert not websocket_server_authorized(
-        Headers([("Authorization", "Bearer wrong")]), "/", "expected-token"
-    )
+    assert not authorized(Headers(), "/?token=expected-token")
+    assert authorized(Headers(), "/?token=expected-token", allow_query_token=True)
+    assert not authorized(Headers(), "/")
+    assert not authorized(Headers([("Authorization", "Bearer wrong")]), "/")
 
 
 def test_docker_compose_binds_ws_port_to_loopback_and_requires_token():

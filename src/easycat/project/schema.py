@@ -22,7 +22,7 @@ loader can validate a manifest without importing the runtime — exactly the
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from easycat.errors import EASYCAT_E602, EASYCAT_E603, EASYCAT_E604
@@ -151,9 +151,6 @@ class VoiceProfile:
     path: str | None = None
     stream_url: str | None = None
     token: EnvReference | None = None
-    # Any extra ``[voice.<name>]`` keys we recognize but do not special-case are
-    # rejected by the loader (unknown-key strictness), so this stays closed.
-    extra: dict[str, object] = field(default_factory=dict)
 
 
 def validate_transport(value: object, *, profile: str) -> TransportShortcut:

@@ -13,8 +13,8 @@ reconcile to in M5:
 
 Design notes (deliberate divergences from the plan sketch):
 
-* :meth:`AuthPolicy.authorize` is **synchronous**, NOT ``async``. The two
-  existing auth checks it unifies — ``websocket_server_authorized`` and
+* :meth:`AuthPolicy.authorize` is **synchronous**, NOT ``async``. The auth
+  checks it unifies — the WebSocket handshake guard and
   ``WebRTCTransport._request_authorized`` — are both sync and run in sync
   contexts (``process_request`` hooks / sync handler guards). Making
   ``authorize`` async would force an ``await`` into those paths for no benefit
@@ -167,16 +167,33 @@ class BearerTokenAuth:
     unsafe_allow_no_auth: bool = False
 
     def authorize(self, request: RequestLike) -> AuthResult:
+        # A blank/whitespace token is not a usable secret: never authorize
+        # against it. Otherwise ``compare_digest("", "")`` would accept an empty
+        # ``Authorization: Bearer `` credential. No-auth is expressed via
+        # ``NoAuth`` / ``unsafe_allow_no_auth``, never a blank-token policy.
+        if not self.token or not self.token.strip():
+            return _MISSING
         header = request.authorization_header
         if header is not None:
             scheme, separator, credential = header.partition(" ")
             if separator == " " and scheme.lower() == "bearer":
-                return _ALLOWED if compare_digest(credential, self.token) else _INVALID
+                return _ALLOWED if self._token_matches(credential) else _INVALID
         if self.allow_query_token:
             query_token = request.query_token
             if query_token is not None:
-                return _ALLOWED if compare_digest(query_token, self.token) else _INVALID
+                return _ALLOWED if self._token_matches(query_token) else _INVALID
         return _MISSING
+
+    def _token_matches(self, credential: str) -> bool:
+        """Constant-time match guarded against a non-ASCII credential.
+
+        ``hmac.compare_digest`` raises ``TypeError`` on a non-ASCII ``str``, so
+        guard the attacker-controlled credential: a non-ASCII credential can
+        never equal the ASCII token, and an unguarded ``TypeError`` would
+        propagate out of the (try-less) auth check in the WebRTC routes as an
+        HTTP 500 — a DoS / confusing diagnostic — instead of a clean 401.
+        """
+        return credential.isascii() and compare_digest(credential, self.token)
 
 
 def bearer_auth_from_env(

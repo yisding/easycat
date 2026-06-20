@@ -78,6 +78,25 @@ def test_observe_connections_active_emits_gauge(fake_meter: _FakeMeter) -> None:
     assert gauge.collect() == [(3, {"easycat.server_state": "serving"})]
 
 
+def test_connections_active_cleared_resets_both_states(fake_meter: _FakeMeter) -> None:
+    # The drain path never re-emits the gauge, so without an explicit clear the
+    # ``serving`` series would stay pinned at its last non-zero value after stop.
+    # ``_emit_connections_active_cleared`` must zero BOTH label series.
+    from easycat.server.config import VoiceServerConfig
+    from easycat.server.voice_server import VoiceServer
+
+    server = VoiceServer(
+        VoiceServerConfig(host="127.0.0.1", port=0), session_factory=lambda _t: None
+    )
+    server_metrics.observe_connections_active(2, server_state="serving")
+
+    server._emit_connections_active_cleared()
+
+    gauge = fake_meter.gauges["easycat.server.connections.active"]
+    by_state = {attrs["easycat.server_state"]: value for value, attrs in gauge.collect()}
+    assert by_state == {"serving": 0, "draining": 0}
+
+
 def test_observe_draining_emits_zero_one_gauge(fake_meter: _FakeMeter) -> None:
     server_metrics.observe_draining(True)
     gauge = fake_meter.gauges["easycat.server.draining"]

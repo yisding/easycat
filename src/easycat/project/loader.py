@@ -83,9 +83,9 @@ def load_manifest(
     try:
         raw = tomllib.loads(resolved.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
-        raise EASYCAT_E602(path=str(resolved), problem=f"not valid TOML: {exc}")
+        raise EASYCAT_E602(path=str(resolved), problem=f"not valid TOML: {exc}") from exc
     except OSError as exc:
-        raise EASYCAT_E602(path=str(resolved), problem=f"could not read file: {exc}")
+        raise EASYCAT_E602(path=str(resolved), problem=f"could not read file: {exc}") from exc
     return parse_manifest(raw, source_path=resolved)
 
 

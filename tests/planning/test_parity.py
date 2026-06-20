@@ -1,11 +1,32 @@
-"""REQUIRED GATE — planner-vs-``create_session`` parity for all 7 roles.
+"""REQUIRED GATE — planner-vs-``create_session`` parity for the 7 roles.
 
 Because 5 of the 7 planner roles (vad/transport/agent/noise_reducer/
 echo_canceller) hand-roll resolution OUTSIDE any catalog, the planner can
 silently diverge from what ``create_session`` actually does. This test is the
 gate the M6b ``/health/ready`` manifest/plan wiring is guarded behind: the
 planner verdict (provider / config_type / extra / required_env / blocking-error)
-MUST match the ``create_session`` outcome for EVERY one of the seven roles.
+MUST match the ``create_session`` outcome.
+
+The roles split into two parity shapes:
+
+* **Synchronous (stt/tts/vad/noise_reducer/echo_canceller)** — a missing
+  env/extra makes ``create_session`` fail at construction, so the blocking
+  direction is provable BOTH ways (plan blocks AND ``create_session`` raises).
+* **Deferred (transport/agent)** — resolution imports user/SDK code at
+  CONNECTION time, not at ``create_session`` construction, so the
+  "construction raises" shape does not apply. The planner is side-effect-free
+  by design (it never imports the transport SDK or the agent module — see
+  ``tests/planning/test_boundary.py`` / ``tests/project/test_boundary.py``), so:
+  - **transport** — the planner ``find_spec``-checks the transport extra and
+    BLOCKS readiness when it is absent (the correct verdict: the server can't
+    truly serve), even though ``create_session`` *construction* defers the
+    ``require_module`` to the first connection.
+  - **agent** — the planner validates the ``python:`` selection but CANNOT
+    statically import/invoke the agent factory, so an unresolvable reference is
+    NOT a static blocking error; ``manifest.resolve_agent`` raises
+    ``EASYCAT_E605`` only at connection time. This is a documented carve-out
+    (resolving the agent on every readiness poll would import + invoke the
+    user's factory, which a health probe must not do).
 
 Strategy (offline + side-effect-free):
 
@@ -271,6 +292,130 @@ def test_parity_missing_noise_reducer_extra(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(nr, "require_module", boom)
     with pytest.raises((ImportError, RuntimeError)):
         create_session(config)
+
+
+def test_parity_auto_passthrough_noise_reducer_missing_is_warning_not_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The DEFAULT noise reducer is backend="auto" + fallback_policy="passthrough":
+    # with no backend installed, create_session degrades to a passthrough reducer
+    # instead of raising, so the planner must NOT block /health/ready (mirroring
+    # the AEC passthrough case). Only an explicit backend="rnnoise" or
+    # fallback_policy="error" blocks (covered above).
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    # Default NoiseReducerConfig is backend="auto" + fallback_policy="passthrough".
+    config = _base_config(enable_noise_reduction=True)
+
+    # Both auto-chain backends absent: rnnoise probe gone for the planner.
+    _force_find_spec_none(monkeypatch, "pyrnnoise")
+    plan = build_provider_plan(config, environ=_ENV)
+    assert "rnnoise" not in plan.missing_extras
+    assert not plan.has_blocking_errors, plan.blocking_errors()
+    assert any("degraded" in warning for warning in plan.warnings)
+
+    # create_session degrades to PassthroughNoiseReducer (no raise) when neither
+    # Krisp nor RNNoise is importable under the passthrough policy.
+    import easycat.noise_reduction as nr
+
+    def boom(module_name: str, **kwargs: object) -> object:
+        raise ImportError(f"RNNoise requires the {module_name} package.")
+
+    monkeypatch.setattr(nr, "require_module", boom)
+    session = create_session(config)
+    assert session is not None
+
+
+def test_parity_auto_vad_satisfied_by_union_does_not_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ``create_vad('auto')`` tries Silero -> FunASR -> TEN -> Krisp, so it is
+    # satisfiable by ANY of {onnxruntime, ten_vad, krisp_audio}. The planner must
+    # not block the auto VAD on a single missing extra when another union member
+    # is importable — here onnxruntime is gone but ten_vad remains.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    pytest.importorskip("ten_vad")
+    config = _base_config(vad="auto")
+
+    _force_find_spec_none(monkeypatch, "onnxruntime")
+    plan = build_provider_plan(config, environ=_ENV)
+    assert plan.selected["vad"].provider == "auto"
+    assert "silero-vad" not in plan.missing_extras
+    assert not plan.has_blocking_errors, plan.blocking_errors()
+
+
+def test_parity_auto_vad_blocks_only_when_whole_union_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When NONE of the auto-chain union is importable, ``create_vad('auto')``
+    # raises, so the planner must block and recommend the silero-vad extra.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    config = _base_config(vad="auto")
+
+    _force_find_spec_none(monkeypatch, "onnxruntime", "ten_vad", "krisp_audio")
+    plan = build_provider_plan(config, environ=_ENV)
+    assert "silero-vad" in plan.missing_extras
+    assert plan.has_blocking_errors
+
+
+# ── Deferred-resolution carve-outs (transport / agent) ───────────────
+
+
+def test_parity_transport_extra_blocks_readiness_even_though_construction_defers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Transport SDK import is DEFERRED to the first connection (webrtc calls
+    # require_module('aiortc') at connect time, not at EasyConfig construction),
+    # so the "construction raises" parity shape does not apply. The planner still
+    # find_spec-checks the transport extra and BLOCKS readiness when it is
+    # absent — the correct verdict, since the server can't actually serve. This
+    # locks the blocking direction for the deferred transport role.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-parity-test")
+    config = EasyConfig.browser(  # WebRTCTransportConfig -> webrtc extra (aiortc)
+        openai_api_key="sk-parity-test", agent=_Agent(), debug="off"
+    )
+
+    _force_find_spec_none(monkeypatch, "aiortc")
+    plan = build_provider_plan(config, environ=_ENV)
+    assert plan.selected["transport"].provider == "webrtc"
+    assert "webrtc" in plan.missing_extras
+    assert plan.has_blocking_errors
+
+    # Construction itself does NOT raise (aiortc import is deferred) — documented:
+    # the transport failure surfaces at connection time, not here.
+    assert create_session(config) is not None
+
+
+def test_parity_agent_is_a_deferred_carveout_not_a_static_blocker() -> None:
+    # The planner is side-effect-free: it never imports the agent module, so an
+    # UNRESOLVABLE ``python:`` reference is NOT a static blocking error. The
+    # divergence (it raises EASYCAT_E605 at connection time via resolve_agent) is
+    # an intentional, documented carve-out — locked here so the gate's role
+    # coverage stays honest.
+    from easycat.project.manifest import ProjectManifest
+    from easycat.project.schema import ProjectSection, ServerSection, VoiceProfile
+
+    profile = VoiceProfile(
+        name="default",
+        transport="local",
+        stt="openai",
+        tts="openai",
+        agent="python:easycat_nonexistent_module_xyz:create_agent",
+    )
+    plan = build_provider_plan(profile, environ=_ENV)
+    # The agent role resolves to the python backend with no env/extra gap, and
+    # the unresolvable target does NOT block the static plan.
+    assert plan.selected["agent"].provider == "python"
+    assert not plan.has_blocking_errors, plan.blocking_errors()
+
+    # The same unresolvable reference DOES raise at connection-time resolution.
+    manifest = ProjectManifest(
+        project=ProjectSection(),
+        server=ServerSection(),
+        profiles={"default": profile},
+    )
+    with pytest.raises(EasyCatError) as excinfo:
+        manifest.resolve_agent("default")
+    assert excinfo.value.code == "EASYCAT_E605"
 
 
 # ── VAD string-coercion regression (round-trips identically) ─────────

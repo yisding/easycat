@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import is_dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from easycat._extras import require_module
@@ -445,6 +446,9 @@ class VoiceServer:
             )
         self._active_session_objs.clear()
         self._reset_gate_bookkeeping()
+        # Clear the active-connections gauge on both server_state series so the
+        # post-drain reading is 0, not a stale non-zero value (M8 fix).
+        self._emit_connections_active_cleared()
         self._started = False
 
     def _reset_gate_bookkeeping(self) -> None:
@@ -959,7 +963,17 @@ class VoiceServer:
         if not self.config.allow_query_token:
             return
         auth = self.config.auth
-        if auth is not None and hasattr(auth, "allow_query_token"):
+        if auth is None or not hasattr(auth, "allow_query_token"):
+            return
+        if getattr(auth, "allow_query_token"):
+            return  # already opted in — nothing to reconcile
+        # Opt in WITHOUT mutating the caller-owned policy object (a single
+        # ``BearerTokenAuth`` may be shared across servers). Store a fresh copy on
+        # THIS server's config instead; it is read by both the ``/ws`` path and
+        # the WebRTC routes, which are built after this runs.
+        if is_dataclass(auth) and not isinstance(auth, type):
+            self.config.auth = replace(auth, allow_query_token=True)
+        else:  # pragma: no cover - non-dataclass custom policy
             auth.allow_query_token = True
 
     def _websocket_auth_reason(self, ws: Any) -> str:
@@ -1005,6 +1019,21 @@ class VoiceServer:
             server_state=self._server_state(),
         )
 
+    def _emit_connections_active_cleared(self) -> None:
+        """Reset the active-connections gauge to 0 on BOTH ``server_state`` series.
+
+        The gauge is push-cached per ``server_state`` label, but the drain path
+        never calls :meth:`_emit_connections_active` (handlers skip their own
+        release while draining). Without this the ``serving`` series would stay
+        pinned at its last non-zero value indefinitely after a drain — and a
+        later server reusing the same process would inherit the stale reading.
+        Emit 0 for both label values so neither series is left stale.
+        """
+        from easycat.server import metrics as server_metrics
+
+        for state in ("serving", "draining"):
+            server_metrics.observe_connections_active(0, server_state=state)
+
     def _emit_session_rejected(self, *, server_state: str, auth_result: str | None = None) -> None:
         from easycat.server import metrics as server_metrics
 
@@ -1028,16 +1057,3 @@ class VoiceServer:
         if hasattr(result, "start") and hasattr(result, "stop"):
             return result  # type: ignore[return-value]
         return create_session(result)  # type: ignore[arg-type]
-
-    async def _try_acquire_slot(self) -> bool:
-        """Reserve a capacity slot via the shared gate; ``False`` when full/draining.
-
-        Kept as a thin compatibility shim over :meth:`CapacityGate.try_acquire`
-        so existing callers/tests that drive readiness through the slot API stay
-        green after the lift.
-        """
-        return self._gate.try_acquire()
-
-    async def _release_slot(self) -> None:
-        """Return a reserved capacity slot via the shared gate."""
-        self._gate.release()

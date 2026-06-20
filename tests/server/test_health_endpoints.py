@@ -122,14 +122,14 @@ async def test_health_ready_returns_503_at_capacity(client: aiohttp.ClientSessio
     server = await _running_server(VoiceServerConfig(host="127.0.0.1", port=0, max_sessions=1))
     try:
         url = f"{_base_url(server)}/health/ready"
-        # Occupy the single slot via the minimal counter.
-        assert await server._try_acquire_slot() is True
+        # Occupy the single slot via the shared capacity gate.
+        assert server._gate.try_acquire() is True
         async with client.get(url) as resp:
             assert resp.status == 503
             body = await resp.json()
             assert "at_capacity" in body["reasons"]
         # Releasing the slot restores readiness.
-        await server._release_slot()
+        server._gate.release()
         async with client.get(url) as resp:
             assert resp.status == 200
     finally:
@@ -142,7 +142,7 @@ async def test_health_body_never_leaks_session_ids_or_tokens(
 ) -> None:
     server = await _running_server(VoiceServerConfig(host="127.0.0.1", port=0, max_sessions=1))
     try:
-        await server._try_acquire_slot()
+        server._gate.try_acquire()
         async with client.get(f"{_base_url(server)}/health/ready") as resp:
             text = await resp.text()
         # Precondition: we actually exercised the at-capacity not-ready path

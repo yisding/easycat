@@ -72,16 +72,21 @@ def _resolve_python_agent(reference: str) -> Any:
     try:
         module = import_module(module_path)
     except ImportError as exc:
-        raise EASYCAT_E605(reference=reference, detail=f"could not import {module_path!r}: {exc}")
+        raise EASYCAT_E605(
+            reference=reference, detail=f"could not import {module_path!r}: {exc}"
+        ) from exc
     target: Any = module
     for part in attribute_path.split("."):
         try:
             target = getattr(target, part)
-        except AttributeError:
+        except AttributeError as exc:
+            # Name the failing SEGMENT, not the whole dotted path: for
+            # ``Outer.factory`` where ``Outer`` resolves but ``factory`` does
+            # not, "has no attribute 'Outer.factory'" is misleading.
             raise EASYCAT_E605(
                 reference=reference,
-                detail=f"{module_path!r} has no attribute {attribute_path!r}",
-            )
+                detail=f"{module_path!r} attribute path {attribute_path!r} failed at {part!r}",
+            ) from exc
     if callable(target):
         try:
             return target()
@@ -89,7 +94,7 @@ def _resolve_python_agent(reference: str) -> Any:
             raise EASYCAT_E605(
                 reference=reference,
                 detail=f"calling the factory raised {type(exc).__name__}: {exc}",
-            )
+            ) from exc
     return target
 
 

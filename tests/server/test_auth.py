@@ -104,6 +104,48 @@ def test_bearer_header_takes_precedence_over_query() -> None:
     assert result.allowed is True
 
 
+# ── BearerTokenAuth: non-ASCII credential → clean 401, never a TypeError ──
+
+
+def test_bearer_non_ascii_header_credential_is_invalid_not_typeerror() -> None:
+    # ``hmac.compare_digest`` raises TypeError on a non-ASCII str; an attacker
+    # could otherwise force a 500 on the (try-less) WebRTC auth check. A
+    # non-ASCII credential must resolve to a clean 401, never propagate.
+    auth = BearerTokenAuth(token="sekrit")
+    result = auth.authorize(
+        from_aiohttp_request(_AiohttpReq({"Authorization": "Bearer café"}, {}))
+    )
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+def test_bearer_non_ascii_query_credential_is_invalid_not_typeerror() -> None:
+    auth = BearerTokenAuth(token="sekrit", allow_query_token=True)
+    result = auth.authorize(from_aiohttp_request(_AiohttpReq({}, {"token": "café"})))
+    assert result.allowed is False
+    assert result.reason == "invalid"
+
+
+# ── BearerTokenAuth: a blank token never authorizes ──────────────────
+
+
+def test_blank_token_does_not_authorize_empty_credential() -> None:
+    # ``compare_digest("", "")`` is True, so a blank-token policy would otherwise
+    # accept an empty ``Authorization: Bearer `` credential. A blank token is not
+    # a usable secret and must never authorize.
+    auth = BearerTokenAuth(token="")
+    empty = auth.authorize(from_aiohttp_request(_AiohttpReq({"Authorization": "Bearer "}, {})))
+    assert empty.allowed is False
+    bare = auth.authorize(from_aiohttp_request(_AiohttpReq({"Authorization": "Bearer"}, {})))
+    assert bare.allowed is False
+
+
+def test_whitespace_token_does_not_authorize() -> None:
+    auth = BearerTokenAuth(token="   ", allow_query_token=True)
+    result = auth.authorize(from_aiohttp_request(_AiohttpReq({}, {"token": "   "})))
+    assert result.allowed is False
+
+
 # ── NoAuth ───────────────────────────────────────────────────────────
 
 

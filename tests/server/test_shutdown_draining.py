@@ -281,10 +281,12 @@ class _HangingWsServer:
         await asyncio.Event().wait()  # never resolves
 
 
+@pytest.mark.integration_socket
 async def test_wait_closed_is_bounded_by_force_shutdown_timeout() -> None:
     # Independent backstop: even if the raw-ws ``Server.wait_closed`` never
     # resolves (a pathological handler that resists cancellation), ``stop()``
     # must return within ``force_shutdown_timeout_s`` rather than block forever.
+    # Marked integration_socket: ``start()`` binds the aiohttp TCPSite (loopback).
     server = VoiceServer(
         VoiceServerConfig(
             host="127.0.0.1",
@@ -443,13 +445,16 @@ async def test_non_loopback_bind_with_auth_policy_no_token_raises_at_start() -> 
     assert "unsafe_allow_no_auth" in str(exc.value)
 
 
-async def test_non_loopback_bind_with_unsafe_escape_hatch_starts() -> None:
-    server = VoiceServer(
-        VoiceServerConfig(host="0.0.0.0", port=0, unsafe_allow_no_auth=True),
-        session_factory=lambda _t: _FakeSession(),
+def test_non_loopback_bind_with_unsafe_escape_hatch_passes_guard() -> None:
+    # The escape hatch lets a non-loopback bind proceed. Assert the bind guard
+    # ``start()`` applies passes for this config WITHOUT opening a public
+    # ``0.0.0.0`` listener (which would error in no-socket lanes and trip
+    # firewall prompts). The raising side is covered by the start() test above;
+    # the actual listener bind is covered by the loopback start tests.
+    from easycat.server.auth import enforce_bind_guard
+
+    config = VoiceServerConfig(host="0.0.0.0", port=0, unsafe_allow_no_auth=True)
+    # Mirrors VoiceServer.start()'s guard call — must not raise.
+    enforce_bind_guard(
+        config.host, auth=config.auth, unsafe_allow_no_auth=config.unsafe_allow_no_auth
     )
-    try:
-        await server.start()
-        assert server.websocket_address is not None
-    finally:
-        await server.stop()

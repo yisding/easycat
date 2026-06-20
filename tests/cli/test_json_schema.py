@@ -14,6 +14,7 @@ See ``TEST_PLANS.md`` §12.
 
 from __future__ import annotations
 
+import ast
 import json
 import shlex
 import zipfile
@@ -778,11 +779,41 @@ def _json_command_paths() -> list[tuple[str, ...]]:
     return found
 
 
-# Pre-existing ``--json`` commands whose envelope token does not match their
-# command path and that predate this coverage guard. New ``--json`` commands
-# (like ``plan``) must NOT be added here — they must carry a real envelope
-# assertion instead, which is the whole point of the guard.
-_LEGACY_JSON_COMMANDS_WITHOUT_ENVELOPE_ASSERTION = frozenset({"diff", "tail"})
+# Pre-existing ``--json`` commands whose envelope ``command`` token does not
+# match their CLI path and that predate this coverage guard. ``inspect`` and
+# ``latency`` are top-level ALIASES of ``bundles show`` / ``validate latency``,
+# so they emit (and are asserted under) the canonical tokens ``"bundles_show"``
+# / ``"validate latency"`` — never their bare path. (The old substring guard
+# matched them vacuously off unrelated occurrences; the AST guard below requires
+# this explicit acknowledgement.) New ``--json`` commands (like ``plan``) must
+# NOT be added here — they must carry a real envelope assertion instead, which is
+# the whole point of the guard.
+_LEGACY_JSON_COMMANDS_WITHOUT_ENVELOPE_ASSERTION = frozenset(
+    {"diff", "tail", "inspect", "latency"}
+)
+
+
+def _asserted_envelope_command_tokens() -> set[str]:
+    """Command tokens with a real ``_assert_envelope(payload, "<cmd>")`` call.
+
+    Parsed via AST (the ``command`` is the 2nd positional arg) so an incidental
+    substring — a docstring word, an unrelated dict key like ``"plan"`` — cannot
+    satisfy the coverage guard vacuously the way a raw ``in source`` check could.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    tokens: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "_assert_envelope":
+            continue
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+            value = node.args[1].value
+            if isinstance(value, str):
+                tokens.add(value)
+    return tokens
 
 
 def test_every_json_command_has_an_envelope_assertion() -> None:
@@ -791,12 +822,12 @@ def test_every_json_command_has_an_envelope_assertion() -> None:
     ``tests/cli/test_json_schema.py`` is the ONLY guard that exercises the
     ``--json`` envelope, and it has no registry walk — so a new ``--json``
     command would otherwise slip past uncovered. This walks the CLI tree and
-    fails when a ``--json``-capable command lacks an ``_assert_envelope(...,
-    "<command>")`` (or ``"<group> <sub>"``) call in this file's source. A small
-    allow-list of legacy commands that predate the guard is excluded; new
-    commands must not be added to it.
+    fails when a ``--json``-capable command lacks an ``_assert_envelope(payload,
+    "<command>")`` (or ``"<group> <sub>"``) call in this file (matched by AST,
+    not substring, so the assertion must be real). A small allow-list of legacy
+    commands that predate the guard is excluded; new commands must not be added.
     """
-    source = Path(__file__).read_text(encoding="utf-8")
+    asserted = _asserted_envelope_command_tokens()
     missing: list[str] = []
     for path in _json_command_paths():
         # The envelope ``command`` field uses the space-joined command path
@@ -805,8 +836,7 @@ def test_every_json_command_has_an_envelope_assertion() -> None:
         command_token = " ".join(path)
         if command_token in _LEGACY_JSON_COMMANDS_WITHOUT_ENVELOPE_ASSERTION:
             continue
-        needle = f'"{command_token}"'
-        if needle not in source:
+        if command_token not in asserted:
             missing.append(command_token)
     assert not missing, (
         "These --json commands have no envelope assertion in test_json_schema.py: "

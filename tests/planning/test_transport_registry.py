@@ -107,9 +107,36 @@ def test_probe_module_for_extra_resolves() -> None:
     assert probe_module_for_extra("webrtc") == "aiortc"
 
 
-def test_probe_module_for_unknown_extra_raises() -> None:
-    with pytest.raises(KeyError):
-        probe_module_for_extra("not-a-real-extra")
+def test_probe_module_for_unmapped_third_party_extra_falls_back_to_extra_name() -> None:
+    # A registered third-party provider may carry an arbitrary extra with no
+    # built-in mapping. Rather than crash the planner (a KeyError pinned
+    # /health/ready), probe the extra NAME itself so a genuinely-missing install
+    # is still flagged. (Built-in completeness is guarded separately above.)
+    assert probe_module_for_extra("acme-stt") == "acme-stt"
+
+
+def test_transport_aec_defaults_match_manifest_resolved_easyconfig(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The planner's per-transport ``default_echo_cancellation_enabled`` mirror is
+    # consumed ONLY by the manifest path (``_select_from_profile``), so tie it to
+    # what ``to_easyconfig`` ACTUALLY resolves per transport — NOT the bare
+    # transport-config ClassVar, which the browser/phone presets override (webrtc's
+    # ClassVar is False but ``EasyConfig.browser`` forces AEC on). This catches a
+    # silent drift if a preset OR the mirror changes.
+    from easycat.project.manifest import ProjectManifest
+    from easycat.project.schema import ProjectSection, ServerSection, VoiceProfile
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-registry-test")
+
+    for shortcut, backend in TRANSPORT_BACKENDS.items():
+        profile = VoiceProfile(name="default", transport=shortcut)
+        manifest = ProjectManifest(
+            project=ProjectSection(), server=ServerSection(), profiles={"default": profile}
+        )
+        config = manifest.to_easyconfig("default", resolve_agent=False)
+        resolved = bool(config.echo_cancellation and config.echo_cancellation.enabled)
+        assert resolved == backend.default_echo_cancellation_enabled, shortcut
 
 
 def test_non_catalog_roles_are_the_five() -> None:

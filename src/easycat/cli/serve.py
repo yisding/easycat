@@ -27,7 +27,6 @@ import typer
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stdout_console
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _DEFAULT_AGENT_MODEL = "gpt-4o-mini"
 _DEFAULT_INSTRUCTIONS = (
     "You are a helpful voice assistant. Keep responses concise and conversational."
@@ -42,8 +41,18 @@ def _serve_token_from_env() -> str | None:
     return os.environ.get("EASYCAT_SERVE_TOKEN") or None
 
 
+def _is_loopback(host: str) -> bool:
+    """Reuse the canonical loopback check (covers all 127.0.0.0/8 / ``::1`` /
+    ``::ffff:127.*`` forms, not just the three literals) so the CLI pre-flight
+    guard is never STRICTER than VoiceApp's authoritative one. Imported lazily to
+    keep the CLI module-load light."""
+    from easycat.transports.webrtc import _is_loopback_host
+
+    return _is_loopback_host(host)
+
+
 def _playground_url(host: str, port: int, token: str | None) -> str:
-    display_host = "localhost" if host in _LOOPBACK_HOSTS else host
+    display_host = "localhost" if _is_loopback(host) else host
     url = f"http://{display_host}:{port}"
     if token:
         query = urlencode({"token": token})
@@ -52,7 +61,7 @@ def _playground_url(host: str, port: int, token: str | None) -> str:
 
 
 def _websocket_endpoint(host: str, port: int) -> str:
-    display_host = "localhost" if host in _LOOPBACK_HOSTS else host
+    display_host = "localhost" if _is_loopback(host) else host
     return f"ws://{display_host}:{port}"
 
 
@@ -211,7 +220,7 @@ def serve(
     if mode not in _SERVE_MODES:
         emit_command_error(
             "serve",
-            f"Unknown --mode {mode!r}. Choose one of: browser, websocket, local.",
+            f"Unknown --mode {mode!r}. Choose one of: {', '.join(sorted(_SERVE_MODES))}.",
             json_output=False,
         )
         raise typer.Exit(2)
@@ -223,7 +232,7 @@ def serve(
     # ``serve --mode local --host 0.0.0.0`` would be rejected for a bind that
     # never happens.
     is_listener_mode = mode not in {"local", "mic"}
-    if is_listener_mode and host not in _LOOPBACK_HOSTS and not token:
+    if is_listener_mode and not _is_loopback(host) and not token:
         emit_command_error(
             "serve",
             f"Refusing to bind {host!r} without a token. Pass --token (or set "
