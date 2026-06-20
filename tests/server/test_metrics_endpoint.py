@@ -12,10 +12,18 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import aiohttp
 import pytest
 
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - optional extra
+    aiohttp = None  # type: ignore[assignment]
+
 from easycat.server import VoiceServer, VoiceServerConfig
+
+_HAS_AIOHTTP = aiohttp is not None
+
+pytestmark = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 
 # A realistic secret-shaped token (``sk-...``, 24+ chars) so the leak assertions
 # exercise ``redact_value``'s value-policy safety net — not just the structural

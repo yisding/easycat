@@ -10,10 +10,18 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
-import aiohttp
 import pytest
 
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - optional extra
+    aiohttp = None  # type: ignore[assignment]
+
 from easycat.server import VoiceServer, VoiceServerConfig
+
+_HAS_AIOHTTP = aiohttp is not None
+
+pytestmark = pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 
 
 class _FakeSession:
