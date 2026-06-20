@@ -65,6 +65,9 @@ def test_silero_torch_backend_does_not_call_torch_hub(monkeypatch: pytest.Monkey
 @pytest.mark.asyncio
 async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should detect speech with the ONNX fallback backend."""
+    # ``process()`` vectorizes PCM via ``numpy`` (part of the silero-vad
+    # extra), so skip when it is absent (e.g. the minimal validate-quick lane).
+    pytest.importorskip("numpy")
 
     class _FakeOnnxModel:
         def __init__(self) -> None:
@@ -180,6 +183,9 @@ def test_silero_falls_back_to_onnx_after_torch_failure(monkeypatch: pytest.Monke
 @pytest.mark.asyncio
 async def test_silero_downmixes_stereo_to_mono(monkeypatch: pytest.MonkeyPatch):
     """Interleaved stereo input is downmixed before frame slicing."""
+    # ``process()`` vectorizes PCM via ``numpy`` (part of the silero-vad
+    # extra), so skip when it is absent (e.g. the minimal validate-quick lane).
+    pytest.importorskip("numpy")
     from easycat.audio_format import AudioFormat
 
     seen: list[int] = []

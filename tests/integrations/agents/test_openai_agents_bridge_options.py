@@ -225,7 +225,8 @@ async def test_mcp_servers_restored_when_stream_iteration_fails(monkeypatch):
 async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
     """warmup() issues a cheap models.list() via the SDK's shared client —
     never a billed Runner.run."""
-    import agents.models.openai_provider as openai_provider_module
+    # Needs the optional openai-agents SDK; skip in lanes without it.
+    openai_provider_module = pytest.importorskip("agents.models.openai_provider")
 
     import easycat.integrations.agents.openai_agents as openai_agents_module
 
@@ -261,7 +262,8 @@ async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
 @pytest.mark.asyncio
 async def test_openai_agents_warmup_swallows_errors(monkeypatch):
     """A client/auth error during warmup must not propagate to Session.start()."""
-    import agents.models.openai_provider as openai_provider_module
+    # Needs the optional openai-agents SDK; skip in lanes without it.
+    openai_provider_module = pytest.importorskip("agents.models.openai_provider")
 
     class _BoomProvider:
         def _get_client(self) -> Any:
