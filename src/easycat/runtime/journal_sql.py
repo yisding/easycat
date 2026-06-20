@@ -570,8 +570,13 @@ class SqliteJournal(_SqlJournalBase):
                 # working.  The post-finalize branch is intentionally NOT
                 # committed here: it must stay rolled-back-able so a crash after
                 # ``finalize()`` leaves the durable DB looking cleanly closed.
+                #
+                # Permissions are hardened once at open (after the WAL PRAGMAs
+                # create the sidecars) and re-hardened at every checkpoint
+                # boundary (flush/finalize/close); re-chmod'ing on every
+                # per-token COMMIT only adds redundant stat/chmod syscalls to the
+                # hot path, so it is intentionally omitted here.
                 self._conn.execute("COMMIT")
-                harden_sqlite_files(self._db_path)
                 self._conn.execute("BEGIN")
         return seq
 

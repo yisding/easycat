@@ -221,6 +221,13 @@ class AgentStage:
                     kind = getattr(event, "kind", None)
                     text = getattr(event, "text", "")
                     if kind == "text_delta" and text:
+                        # Hand the token off to the sentence buffer/TTS first so
+                        # the journal write never sits in front of the latency-
+                        # critical token handoff.  Exactly one journal append per
+                        # token still happens — only its ordering moves after the
+                        # yield (see PR7 journal hot-path reorder).
+                        yield event
+                        accumulated.append(text)
                         journal_append_event(
                             ctx,
                             stage=self.name,
@@ -228,7 +235,7 @@ class AgentStage:
                             turn_id=turn.id,
                             data_extra={"type": "TEXT_DELTA", "text": text},
                         )
-                        accumulated.append(text)
+                        continue
                     elif kind == "done":
                         if text:
                             journal_append_event(
