@@ -65,7 +65,7 @@ class TurnManagerConfig:
     """Configuration for TurnManager."""
 
     # End-of-turn silence timeout in milliseconds
-    end_of_turn_silence_ms: int = 800
+    end_of_turn_silence_ms: int = 500
     # Silence budget, after VAD stop, before finalizing the current STT segment.
     # 0 means commit the segment immediately when VAD reports a pause.
     #

@@ -40,7 +40,7 @@ class VADConfig:
     krisp_model_path: str | None = None
     # Shared VAD settings
     min_speech_duration_ms: int = 250
-    min_silence_duration_ms: int = 150
+    min_silence_duration_ms: int = 50
     sensitivity: float | None = None
 
     def __post_init__(self) -> None:
