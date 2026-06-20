@@ -93,7 +93,11 @@ Group under `audio_processing=AudioProcessingConfig(...)`:
 - `enable_echo_cancellation` — force AEC on/off; `None` (default) derives a
   transport-aware default (on for the local mic transport).
 - `smart_turn` — `SmartTurnConfig` or bool enabling ONNX endpoint detection
-  for faster turn handoff.
+  for faster turn handoff. When left unset (`None`), it defaults *on* for the
+  local-microphone transport (and `EasyConfig.mic()`) and *off* for the
+  server/browser/telephony transports; the bundled ONNX model is warmed up at
+  startup so the first turn doesn't cold-stall. Pass `smart_turn=False` to opt
+  the local preset out.
 - `smart_turn_sensitivity` — beginner-facing 0–1 shortcut; higher values end
   turns on lower completion probabilities (implies `smart_turn=True`).
 

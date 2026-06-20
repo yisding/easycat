@@ -511,6 +511,42 @@ async def test_openai_realtime_emits_partial_then_final():
     assert finals[0].text == "hello world"
 
 
+def test_openai_realtime_config_final_timeout_default() -> None:
+    """The bounded final-wait defaults to the lowered module constant."""
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test")
+
+    assert config.final_transcript_timeout_s == realtime_provider._FINAL_TRANSCRIPT_TIMEOUT_S
+    assert config.final_transcript_timeout_s == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_promotes_partial_on_final_timeout_via_config_field() -> None:
+    """The config field — not just the module constant — drives the wait."""
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", final_transcript_timeout_s=0.05)
+
+    class _StubWS:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, data: str) -> None:
+            self.sent.append(data)
+
+    stt = OpenAIRealtimeSTT(config)
+    stt._ws = _StubWS()  # type: ignore[assignment]
+    stt._audio_pending_commit = True
+    stt._bytes_since_last_commit = stt._COMMIT_MIN_BYTES
+    stt._partial_text = "hello"
+    emitted: list[STTEvent] = []
+    stt._emit_event = emitted.append  # type: ignore[method-assign]
+
+    result = await stt._send_commit(wait_for_final=True)
+
+    assert result is True
+    finals = [e for e in emitted if e.type == STTEventType.FINAL]
+    assert [f.text for f in finals] == ["hello"]
+    assert stt._dropping_pending_final is True
+
+
 @pytest.mark.asyncio
 async def test_openai_realtime_promotes_partial_on_final_timeout(
     monkeypatch: pytest.MonkeyPatch,

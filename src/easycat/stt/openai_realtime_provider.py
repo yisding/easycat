@@ -33,15 +33,18 @@ from easycat.stt.websocket_base import WebSocketSTTBase
 # OpenAI Realtime API expects 24 kHz PCM16 mono input by default.
 _REALTIME_SAMPLE_RATE = 24000
 
-# How long to wait for ``...transcription.completed`` after an
-# end-of-turn commit before we give up and fall back to the most recent
+# Default wait for ``...transcription.completed`` after an end-of-turn
+# commit before we give up and fall back to the most recent
 # delta-accumulated partial.  OpenAI occasionally stalls for several
 # seconds on this event; waiting it out shows up as a multi-second
 # user-visible pause, so we'd rather ship slightly-less-corrected text
 # quickly than sit on a perfect transcript.  The ``.completed`` message
 # for this commit is still expected to arrive; we discard it so the
-# session doesn't see two ``STTFinal`` events for one turn.
-_FINAL_TRANSCRIPT_TIMEOUT_S = 2.0
+# session doesn't see two ``STTFinal`` events for one turn.  Surfaced as
+# ``OpenAIRealtimeSTTConfig.final_transcript_timeout_s`` for tuning; this
+# module constant is the field's default and remains the monkeypatch
+# seam used by the provider tests.
+_FINAL_TRANSCRIPT_TIMEOUT_S = 0.9
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,13 @@ class OpenAIRealtimeSTTConfig:
     # Supported by OpenAI: minimal, low, medium, high, xhigh.
     delay: str | None = None
     ws_url: str = "wss://api.openai.com/v1/realtime"
+    # Bounded wait (seconds) for OpenAI's end-of-turn
+    # ``...transcription.completed`` before promoting the
+    # delta-accumulated partial to FINAL.  Lower trims the worst-case
+    # end-of-turn pause; see ``_FINAL_TRANSCRIPT_TIMEOUT_S`` above for the
+    # tradeoff.  Defaults to that module constant so the provider tests can
+    # still monkeypatch it.
+    final_transcript_timeout_s: float = field(default_factory=lambda: _FINAL_TRANSCRIPT_TIMEOUT_S)
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
     ws_connect: Any = field(default=None, repr=False)
@@ -336,8 +346,9 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._audio_pending_commit = False
         self._bytes_since_last_commit = 0
         if wait_for_final:
+            timeout_s = self._config.final_transcript_timeout_s
             try:
-                await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
+                await asyncio.wait_for(final_received.wait(), timeout=timeout_s)
             except TimeoutError:
                 # Give up on OpenAI's final and promote whatever we've
                 # streamed via ``...transcription.delta`` so the session
@@ -348,7 +359,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                 logger.warning(
                     "Timed out after %.1fs waiting for OpenAI Realtime final; "
                     "promoting %d-char partial to FINAL",
-                    _FINAL_TRANSCRIPT_TIMEOUT_S,
+                    timeout_s,
                     len(self._partial_text),
                 )
                 if self._partial_text:

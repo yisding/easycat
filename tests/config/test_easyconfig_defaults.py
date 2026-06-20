@@ -381,3 +381,39 @@ def test_easycat_config_echo_cancellation_respects_explicit_override():
     )
 
     assert config.echo_cancellation == EchoCancellationConfig(enabled=False)
+
+
+def test_easycat_config_smart_turn_defaults_on_for_local_transport():
+    config = EasyConfig(openai_api_key="test-key", transport=LocalTransportConfig())
+
+    assert config.smart_turn.enabled is True
+
+
+def test_easycat_config_mic_preset_defaults_smart_turn_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+
+    config = EasyConfig.mic()
+
+    assert config.smart_turn.enabled is True
+
+
+def test_easycat_config_smart_turn_defaults_off_for_non_local_transports():
+    websocket = EasyConfig(openai_api_key="test-key", transport=WebSocketTransportConfig())
+    twilio = EasyConfig(openai_api_key="test-key", transport=TwilioTransportConfig())
+    webrtc = EasyConfig(openai_api_key="test-key", transport=WebRTCTransportConfig())
+
+    assert websocket.smart_turn.enabled is False
+    assert twilio.smart_turn.enabled is False
+    assert webrtc.smart_turn.enabled is False
+
+
+def test_easycat_config_smart_turn_explicit_false_overrides_local_default():
+    config = EasyConfig(
+        openai_api_key="test-key",
+        transport=LocalTransportConfig(),
+        smart_turn=False,
+    )
+
+    assert config.smart_turn.enabled is False

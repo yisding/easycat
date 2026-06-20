@@ -70,7 +70,7 @@ value below is asserted against the code by a guard test
 | `TurnManagerConfig.stt_segment_silence_ms` | `0` | Extra silence budget, after VAD stop, before the current STT segment is finalized. | Already zero — the segment commits as soon as VAD pauses. Raise it only if your STT provider splits sentences too eagerly; every millisecond lands directly on the response path. |
 | `VADConfig.min_silence_duration_ms` | `50` | The VAD must observe this much continuous silence before emitting the stop-of-speech event that *starts* the end-of-turn countdown. | Adds directly in front of `end_of_turn_silence_ms`. Lowering makes endpointing twitchier on breaths and pauses; 50–200 ms is the practical range. |
 | `VADConfig.min_speech_duration_ms` | `250` | Speech must persist this long before the VAD reports start-of-speech. | Delays turn start and barge-in detection slightly. Lowering increases false triggers from coughs and background noise. |
-| `SmartTurnConfig.timeout_s` | `2.0` | Maximum wait to start or finish one smart-turn endpoint inference; on timeout the manager falls back to the silence timer. | Only applies with `smart_turn=True`. The bundled quantized model classifies in tens of milliseconds on CPU, so this ceiling rarely binds; lower it if a slow ONNX runtime should fail fast to the silence timer. |
+| `SmartTurnConfig.timeout_s` | `2.0` | Maximum wait to start or finish one smart-turn endpoint inference; on timeout the manager falls back to the silence timer. | Applies whenever smart-turn is on — which is the default for the local-microphone transport (`EasyConfig.mic()`) and off for the server/browser/telephony transports; pass `smart_turn=False`/`True` to override. The bundled quantized model classifies in tens of milliseconds on CPU, so this ceiling rarely binds; lower it if a slow ONNX runtime should fail fast to the silence timer. |
 | `AgentRunnerConfig.timeout` | `30.0` | Ceiling (seconds) on one wrapped agent run before `AgentTimeoutError`. | A safety net, not added per turn — but it bounds your worst case. If your agent should never take 30 s to speak, lower it so failures surface as errors instead of dead air. |
 | `SessionConfig.interruption_ack_stale_ms` | `500` | On barge-in, playback acks older than this are treated as stale when estimating what the user actually heard. | Affects truncation accuracy after an interruption, not response speed. Tune together with the tail cap below for transports with infrequent acks. |
 | `SessionConfig.interruption_ack_tail_cap_ms` | `500` | Maximum extra playout budget (beyond acked bytes) granted by the timing heuristic when acks are stale. | Larger values assume more audio reached the user before the interruption; keep the default unless transcripts show systematic over- or under-truncation. |
@@ -86,7 +86,13 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively.
+  or stream more aggressively. The one knob here is
+  `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
+  bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
+  provider promotes its delta-accumulated partial to the turn's final. OpenAI
+  occasionally stalls several seconds on that event, so the wait caps the
+  worst-case end-of-turn pause; lower it to trade a little tail correction for
+  snappier handoff, raise it if you see truncated end-of-turn transcripts.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
@@ -104,8 +110,9 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 2. A turn shows `vad_endpoint_to_stt_final_ms: 580` — about 50 ms of VAD
    silence confirmation plus the 500 ms end-of-turn timer plus STT
    finalization. That is the configured floor, not a regression.
-3. Enable `smart_turn=True` (or lower `end_of_turn_silence_ms`) and re-run;
-   the same delta should drop to roughly the STT finalization cost.
+3. Enable `smart_turn=True` (on by default for the local-mic transport) or
+   lower `end_of_turn_silence_ms`, then re-run; the same delta should drop to
+   roughly the STT finalization cost.
 4. If `agent_request_to_first_token_ms` dominates instead, the time is in
    your agent/LLM — no EasyCat default is involved; check the `agent` span
    and your model choice. (A large `stt_final_to_agent_request_ms` instead

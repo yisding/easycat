@@ -199,14 +199,25 @@ def _normalize_smart_turn_config(
     smart_turn: SmartTurnConfig | bool | None,
     *,
     sensitivity: float | None,
+    transport: Any = None,
 ) -> SmartTurnConfig:
-    """Resolve EasyConfig's beginner-facing smart-turn shortcuts."""
+    """Resolve EasyConfig's beginner-facing smart-turn shortcuts.
+
+    When ``smart_turn`` is left unset (``None``) and no sensitivity is
+    given, smart-turn defaults *on* for the local-microphone transport
+    only: a local dev setup is the surface that most benefits from
+    confident endpointing, and the bundled ONNX model is warmed up at
+    startup so the first turn doesn't cold-stall.  Server and telephony
+    presets keep smart-turn off by default — they pick their own
+    endpointing strategy and shouldn't pay the warmup cost implicitly.
+    """
     if isinstance(smart_turn, bool):
         if not smart_turn and sensitivity is not None:
             raise ValueError("smart_turn_sensitivity requires smart_turn=True.")
         config = SmartTurnConfig(enabled=smart_turn)
     elif smart_turn is None:
-        config = SmartTurnConfig(enabled=sensitivity is not None)
+        enabled = sensitivity is not None or isinstance(transport, LocalTransportConfig)
+        config = SmartTurnConfig(enabled=enabled)
     elif isinstance(smart_turn, SmartTurnConfig):
         config = smart_turn
     else:
@@ -762,6 +773,7 @@ class EasyConfig(_AgentSessionConfig):
         self.smart_turn = _normalize_smart_turn_config(
             self.smart_turn,
             sensitivity=self.smart_turn_sensitivity,
+            transport=self.transport,
         )
         _validate_common(
             debug=self.debug,
