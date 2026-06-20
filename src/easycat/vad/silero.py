@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -224,6 +225,13 @@ class SileroVAD(_VADBase):
 
             for event in self._evaluate_speech(speech_prob, now):
                 yield event
+
+            # A transport may deliver many frames in one chunk (e.g. a buffered
+            # WebSocket binary message), so yield to the event loop between
+            # frames to keep the pipeline task from monopolizing it on a large
+            # backlog.  Single-frame chunks (local mic) skip this entirely.
+            if len(self._buffer) >= frame_bytes:
+                await asyncio.sleep(0)
 
     async def warmup(self) -> None:
         """Prime the ONNX session with one zeroed 16 kHz frame.
