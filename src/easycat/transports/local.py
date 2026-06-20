@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue as thread_queue
-import struct
 from dataclasses import dataclass, field
 from functools import partial
 from typing import ClassVar
@@ -152,9 +151,8 @@ class LocalTransport(AudioQueueMixin):
                 return
 
             pcm = queued.chunk.data
-            num_samples = len(pcm) // 2
-            samples = struct.unpack(f"<{num_samples}h", pcm)
-            arr = _np_array(samples, np).astype(np.float32) / 32767.0
+            arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)  # type: ignore[union-attr]
+            arr /= 32767.0
             # Pad / trim to fit outdata
             out_flat = outdata.reshape(-1)  # type: ignore[union-attr]
             n = min(len(arr), len(out_flat))
@@ -289,8 +287,3 @@ class LocalTransport(AudioQueueMixin):
             "api_version": "unknown",
             "sdk_version": sd_ver,
         }
-
-
-def _np_array(samples: tuple[int, ...], np: object) -> object:
-    """Create a numpy array from a tuple — isolated for type-checker friendliness."""
-    return np.array(samples)  # type: ignore[union-attr]

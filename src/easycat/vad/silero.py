@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import struct
 import time
 from collections.abc import AsyncIterator
 from importlib.metadata import version
@@ -194,6 +194,7 @@ class SileroVAD(_VADBase):
         int16 sequence. Interleaved multi-channel input is downmixed to mono
         first so frame boundaries and resampling stay correct.
         """
+        np = require_module("numpy", extra="silero-vad", purpose="Silero VAD ONNX")
         if chunk.format.channels > 1:
             chunk = to_mono_chunk(chunk)
         # Silero v6.2.1 handles 8 kHz and 16 kHz natively.  Anything else (24 k,
@@ -213,11 +214,9 @@ class SileroVAD(_VADBase):
             self._buffer = self._buffer[frame_bytes:]
 
             # Convert PCM16 to float32 tensor
-            n = len(frame_data) // 2
-            samples = struct.unpack(f"<{n}h", frame_data)
-            float_samples = [s / 32768.0 for s in samples]
+            float_samples = np.frombuffer(frame_data, dtype="<i2").astype(np.float32) / 32768.0
 
-            speech_prob = self._model.predict(float_samples, target_rate)
+            speech_prob = await asyncio.to_thread(self._model.predict, float_samples, target_rate)
             now = time.monotonic()
 
             for event in self._evaluate_speech(speech_prob, now):
