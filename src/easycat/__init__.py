@@ -145,6 +145,7 @@ if TYPE_CHECKING:
     )
     from easycat.turn_manager import TurnManagerConfig, TurnMode
     from easycat.vad import VADConfig
+    from easycat.voice_app import VoiceApp
 
 
 def __getattr__(name: str):  # PEP 562

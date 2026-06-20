@@ -206,6 +206,7 @@ src/easycat/cli/
     _guard_commands.py    # generated guard-lane command hints (regen_guard_commands.py)
     console.py            # `easycat console` keyless terminal demo
     serve.py              # `easycat serve` browser voice playground
+    plan.py               # `easycat plan` manifest provider/capability plan
     validate.py           # `easycat validate ...`
     scaffold/
         __init__.py
@@ -922,6 +923,7 @@ EasyCat — voice bot framework
     init        Scaffold a new project from a template
     doctor      Check API keys, optional extras, and provider reachability
     serve       Serve the browser voice playground on localhost
+    plan        Show the provider/capability plan for a manifest profile
 
   Debug with the journal
     bundles     List captured debug bundles and crash dumps

@@ -1,0 +1,185 @@
+"""Unit coverage for the planner core (M6b).
+
+Asserts: STT/TTS selection reads catalog metadata; the 5 net-new roles resolve
+from the declarative tables; missing_env/missing_extras populate WITHOUT
+instantiating providers (find_spec, not require_module); capabilities are the
+declared frozensets; and incompatible-combo warnings surface.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+from easycat.config import EasyConfig
+from easycat.planning import ProviderPlan, ProviderSelection, build_provider_plan
+from easycat.project.schema import VoiceProfile
+from easycat.vad import VADConfig
+
+
+class _Agent:
+    async def run(self, text: str) -> str:  # noqa: D401 - test stub
+        return "ok"
+
+
+def _profile(**overrides: object) -> VoiceProfile:
+    kwargs: dict[str, object] = {"name": "default", "transport": "local"}
+    kwargs.update(overrides)
+    return VoiceProfile(**kwargs)  # type: ignore[arg-type]
+
+
+def test_stt_tts_selection_reads_catalog_metadata() -> None:
+    plan = build_provider_plan(
+        _profile(stt="deepgram", tts="elevenlabs"),
+        environ={"DEEPGRAM_API_KEY": "x", "ELEVENLABS_API_KEY": "y"},
+    )
+    stt = plan.selected["stt"]
+    assert stt.provider == "deepgram"
+    assert stt.config_type == "DeepgramSTTConfig"
+    assert stt.extra == "deepgram"
+    assert stt.required_env == "DEEPGRAM_API_KEY"
+
+    tts = plan.selected["tts"]
+    assert tts.provider == "elevenlabs"
+    assert tts.config_type == "ElevenLabsTTSConfig"
+    assert tts.required_env == "ELEVENLABS_API_KEY"
+
+
+def test_stt_tts_default_to_openai_when_unset() -> None:
+    plan = build_provider_plan(_profile(), environ={"OPENAI_API_KEY": "x"})
+    assert plan.selected["stt"].provider == "openai-realtime"
+    assert plan.selected["tts"].provider == "openai"
+    assert plan.selected["stt"].required_env == "OPENAI_API_KEY"
+
+
+def test_model_token_is_parsed_from_shortcut() -> None:
+    plan = build_provider_plan(
+        _profile(stt="deepgram/nova-2"),
+        environ={"DEEPGRAM_API_KEY": "x", "OPENAI_API_KEY": "y"},
+    )
+    assert plan.selected["stt"].model == "nova-2"
+
+
+def test_five_net_new_roles_resolve_from_tables() -> None:
+    plan = build_provider_plan(
+        _profile(transport="webrtc", vad="silero", agent="python:app:make"),
+        environ={"OPENAI_API_KEY": "x"},
+    )
+    assert plan.selected["transport"].provider == "webrtc"
+    assert plan.selected["transport"].extra == "webrtc"
+    assert plan.selected["vad"].provider == "silero"
+    assert plan.selected["vad"].extra == "silero-vad"
+    assert plan.selected["agent"].provider == "python"
+    assert plan.selected["agent"].extra is None
+    assert plan.selected["noise_reducer"].provider == "off"
+    # webrtc/browser preset auto-enables echo cancellation.
+    assert plan.selected["echo_canceller"].provider == "livekit"
+
+
+def test_capabilities_are_declared_frozensets() -> None:
+    plan = build_provider_plan(_profile(transport="webrtc"), environ={"OPENAI_API_KEY": "x"})
+    transport = plan.selected["transport"]
+    assert isinstance(transport.capabilities, frozenset)
+    assert "browser" in transport.capabilities
+
+
+def test_missing_env_detected_without_instantiating_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No keys at all -> openai stt+tts report OPENAI_API_KEY missing.
+    plan = build_provider_plan(_profile(), environ={})
+    assert "OPENAI_API_KEY" in plan.missing_env
+    assert plan.has_blocking_errors
+
+
+def test_missing_extra_uses_find_spec_not_require_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_find_spec = importlib.util.find_spec
+    seen: list[str] = []
+
+    def fake_find_spec(name: str, package: object = None):  # noqa: ANN202
+        seen.append(name)
+        if name == "aiortc":
+            return None
+        return real_find_spec(name, package)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    plan = build_provider_plan(_profile(transport="webrtc"), environ={"OPENAI_API_KEY": "x"})
+    assert "webrtc" in plan.missing_extras
+    assert plan.has_blocking_errors
+    # find_spec was used to probe the extra (not require_module).
+    assert "aiortc" in seen
+
+
+def test_empty_dependency_extras_are_never_missing() -> None:
+    # deepgram/elevenlabs/cartesia are marker extras with no importable package;
+    # they must never be reported as a missing extra.
+    plan = build_provider_plan(
+        _profile(stt="deepgram", tts="cartesia"),
+        environ={"DEEPGRAM_API_KEY": "x", "CARTESIA_API_KEY": "y", "OPENAI_API_KEY": "z"},
+    )
+    assert "deepgram" not in plan.missing_extras
+    assert "cartesia" not in plan.missing_extras
+
+
+def test_unknown_vad_shortcut_raises_not_silent_auto_fallback() -> None:
+    # Regression: an unknown vad shortcut must NOT silently fall back to the
+    # ``auto`` metadata while keeping the bad name. ``create_vad`` /
+    # ``to_easyconfig`` reject it, so the planner must too — otherwise the plan
+    # would look clean for a profile that crashes on the first connection.
+    with pytest.raises(ValueError, match="Unknown VAD backend 'not-a-backend'"):
+        build_provider_plan(
+            _profile(transport="websocket", vad="not-a-backend"),
+            environ={"OPENAI_API_KEY": "x"},
+        )
+
+
+def test_twilio_combo_emits_warning_not_blocking() -> None:
+    plan = build_provider_plan(
+        _profile(transport="twilio", stt="openai", tts="openai"),
+        environ={"OPENAI_API_KEY": "x"},
+    )
+    assert plan.warnings  # at least the auto-align note
+    # The warning is NOT a blocking error.
+    assert "transport_twilio_audio_format_auto_aligned" in plan.warnings
+
+
+def test_plan_from_easyconfig_input() -> None:
+    config = EasyConfig(
+        stt="openai",
+        tts="openai",
+        vad=VADConfig(backend="silero"),
+        openai_api_key="sk-x",
+        agent=_Agent(),
+        debug="off",
+    )
+    plan = build_provider_plan(config, environ={"OPENAI_API_KEY": "sk-x"})
+    assert plan.selected["stt"].config_type == "OpenAISTTConfig"
+    assert plan.selected["vad"].provider == "silero"
+    assert plan.selected["agent"].provider == "python"
+
+
+def test_provider_plan_dataclasses_are_frozen() -> None:
+    sel = ProviderSelection(
+        role="stt",
+        provider="openai",
+        model=None,
+        config_type="OpenAISTTConfig",
+        extra="openai",
+        required_env="OPENAI_API_KEY",
+        capabilities=frozenset(),
+    )
+    with pytest.raises(Exception):
+        sel.provider = "deepgram"  # type: ignore[misc]
+
+    plan = ProviderPlan(
+        profile="default",
+        selected={"stt": sel},
+        missing_env=(),
+        missing_extras=(),
+        warnings=(),
+    )
+    assert not plan.has_blocking_errors
+    assert plan.blocking_errors() == ()

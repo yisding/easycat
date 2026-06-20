@@ -49,6 +49,19 @@ METRIC_DEFINITIONS: Mapping[str, MetricKind] = {
     "easycat.journal.degraded": "observable_gauge",
     "easycat.interruption.total": "counter",
     "easycat.interruption.cutoff_latency": "histogram",
+    # ── easycat.server.* (M8) — the VoiceServer process layer ─────────
+    # Registered here in the SAME change that first emits them
+    # (``easycat.server.metrics``); ``_record_metric`` raises ``ValueError`` on
+    # any unregistered name, so registration and emission must land together.
+    # ``*.total`` are monotonic counts; ``request.duration`` is a latency
+    # distribution (seconds, matching the ``easycat.*.latency`` convention);
+    # ``connections.active`` and ``draining`` are point-in-time states read at
+    # scrape time (``draining`` is 0/1).
+    "easycat.server.requests.total": "counter",
+    "easycat.server.request.duration": "histogram",
+    "easycat.server.sessions.rejected.total": "counter",
+    "easycat.server.connections.active": "observable_gauge",
+    "easycat.server.draining": "observable_gauge",
 }
 
 LOW_CARDINALITY_ATTRIBUTE_KEYS = frozenset(
@@ -63,6 +76,17 @@ LOW_CARDINALITY_ATTRIBUTE_KEYS = frozenset(
         "easycat.feature_set",
         "easycat.result",
         "easycat.error_type",
+        # ── easycat.server.* labels (M8) ──────────────────────────────
+        # ``easycat.route`` is a ROUTE TEMPLATE (never a raw path):
+        # ``easycat.server.metrics`` asserts the value is in the enumerated
+        # template set before recording. ``easycat.server_state`` is the
+        # ``ServerState`` Literal (``serving``/``draining``); ``easycat.auth_result``
+        # is the ``AuthReason`` Literal (``allowed``/``missing``/``invalid``).
+        # None contain a forbidden substring, so allow-list membership is
+        # sufficient. (``easycat.transport`` is already registered above.)
+        "easycat.route",
+        "easycat.server_state",
+        "easycat.auth_result",
     }
 )
 

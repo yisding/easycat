@@ -84,6 +84,7 @@ PUBLIC_API_SNAPSHOT = (
     "VADProvider",
     "VADStartSpeaking",
     "VADStopSpeaking",
+    "VoiceApp",
     "VoicemailDetectionConfig",
     "WebRTCTransportConfig",
     "WebSocketConnectionTransport",
@@ -123,7 +124,7 @@ TRANSPORT_EXTENSION_SURFACE = (
 
 def test_public_api_snapshot() -> None:
     assert tuple(easycat.__all__) == PUBLIC_API_SNAPSHOT
-    assert len(easycat.__all__) <= 94
+    assert len(easycat.__all__) <= 95
 
 
 def test_public_api_registry_tracks_snapshot() -> None:

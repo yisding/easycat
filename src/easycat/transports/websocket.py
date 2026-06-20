@@ -18,10 +18,8 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from hmac import compare_digest
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, ClassVar
-from urllib.parse import parse_qs, urlsplit
 
 import websockets
 from websockets.asyncio.server import ServerConnection
@@ -97,18 +95,16 @@ def websocket_session_server_config_from_env(
     )
 
 
-def websocket_server_authorized(headers: Headers, path: str, token: str | None) -> bool:
-    """Authorize a WebSocket request against an optional bearer/query token."""
-    if token is None:
-        return True
-    value = headers.get("Authorization")
-    if value is not None:
-        scheme, separator, credential = value.partition(" ")
-        if separator == " " and scheme.lower() == "bearer":
-            return compare_digest(credential, token)
+def _normalize_auth_token(token: str | None) -> str | None:
+    """Treat blank or whitespace-only tokens as no token at all.
 
-    query_token = parse_qs(urlsplit(path).query).get("token", [None])[0]
-    return query_token is not None and compare_digest(query_token, token)
+    An empty string is not a usable secret: ``Authorization: Bearer `` would
+    otherwise pass ``compare_digest("", "")``. Normalizing blank tokens to
+    ``None`` keeps the public-bind guard and request authorization in sync.
+    """
+    if token is None or not token.strip():
+        return None
+    return token
 
 
 def _plain_response(status: HTTPStatus, body: str) -> Response:
@@ -133,6 +129,8 @@ async def serve_websocket_sessions(
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
+    allow_query_token: bool = False,
 ) -> None:
     """Serve one EasyCat session per accepted WebSocket connection.
 
@@ -140,24 +138,70 @@ async def serve_websocket_sessions(
     a created, not-yet-started :class:`~easycat.Session`. This helper owns
     session start/stop, optional bearer-token auth, session-limit rejection,
     and process shutdown.
+
+    A non-loopback bind requires ``config.auth_token``: binding beyond loopback
+    without a token raises :class:`ValueError` via the shared
+    :func:`easycat.server.auth.enforce_bind_guard` (the SAME structured guard
+    :func:`~easycat.transports.webrtc.serve_webrtc_config_sessions` uses) unless
+    ``unsafe_allow_no_auth=True`` is passed to explicitly opt into an
+    unauthenticated endpoint.
+
+    ``allow_query_token`` (default OFF) gates the ``?token=`` query auth. It is
+    OFF by default — a breaking change for the bundled WS browser client, which
+    cannot set handshake headers; pass ``allow_query_token=True`` as the
+    loopback/dev opt-in. Capacity is owned by the shared
+    :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
+    the inline ``Semaphore``) so it behaves identically to the WebRTC helper.
     """
+    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard, from_websocket
+    from easycat.server.transports import CapacityGate
+
     settings = config or WebSocketSessionServerConfig()
+    # The SAME unified policy gates the bind guard AND each handshake (F6): a
+    # configured token builds a ``BearerTokenAuth`` (honoring ``allow_query_token``);
+    # no token leaves ``auth=None`` (an open endpoint, subject to the bind guard).
+    # A blank/whitespace token normalizes to ``None`` first so a misconfigured
+    # empty secret cannot arm a policy that would accept an empty bearer
+    # credential (``compare_digest("", "")``).
+    auth_token = _normalize_auth_token(settings.auth_token)
+    auth_policy = (
+        BearerTokenAuth(token=auth_token, allow_query_token=allow_query_token)
+        if auth_token is not None
+        else None
+    )
+    enforce_bind_guard(
+        settings.host,
+        auth=auth_policy,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+    )
     manager: SessionManager[int] = SessionManager()
-    session_slots = asyncio.Semaphore(settings.max_sessions)
+    gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
-        if not websocket_server_authorized(request.headers, request.path, settings.auth_token):
-            return _plain_response(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n")
+        # Per-handshake authorization routes through the UNIFIED ``AuthPolicy``
+        # (F6) so WebSocket and WebRTC share one auth layer. With no token (``auth_policy
+        # is None``) the endpoint stays open (the prior behavior). A valid bearer
+        # header is accepted; a missing/invalid credential is rejected; the
+        # ``?token=`` query is gated by ``allow_query_token`` (carried on the
+        # policy), preserving the documented default-off posture.
+        if auth_policy is not None:
+            result = auth_policy.authorize(from_websocket(request.headers, request.path))
+            if not result.allowed:
+                return _plain_response(
+                    HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n"
+                )
         return None
 
     async def handle_connection(ws: ServerConnection) -> None:
-        if session_slots.locked():
+        if not gate.try_acquire():
             await ws.close(code=1013, reason="Server is at the configured session limit")
             return
-        async with session_slots:
+        try:
             session = session_factory(ws)
             async with manager.connection(id(ws), session, runtime_feedback=runtime_feedback):
                 await ws.wait_closed()
+        finally:
+            gate.release()
 
     server = await websockets.serve(
         handle_connection,
@@ -187,6 +231,8 @@ async def serve_websocket_config_sessions(
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
+    allow_query_token: bool = False,
 ) -> None:
     """Serve one EasyCat session per connection using an EasyConfig factory.
 
@@ -194,6 +240,10 @@ async def serve_websocket_config_sessions(
     :class:`WebSocketConnectionTransport` and returns the app config passed to
     :func:`easycat.create_session`. Use :func:`serve_websocket_sessions` when
     callers need to construct or own the ``Session`` object directly.
+
+    Like :func:`serve_websocket_sessions`, a non-loopback bind requires a token
+    unless ``unsafe_allow_no_auth=True``, and ``?token=`` query auth is OFF
+    unless ``allow_query_token=True``.
     """
     from easycat.config import create_session
 
@@ -207,6 +257,8 @@ async def serve_websocket_config_sessions(
         stop_event=stop_event,
         runtime_feedback=runtime_feedback,
         announce=announce,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+        allow_query_token=allow_query_token,
     )
 
 
@@ -217,6 +269,8 @@ def run_websocket_config_server(
     transport_config: WebSocketTransportConfig | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
+    allow_query_token: bool = False,
 ) -> None:
     """Run a WebSocket server using ``EASYCAT_WS_*`` env defaults.
 
@@ -224,6 +278,10 @@ def run_websocket_config_server(
     apps. It reads ``EASYCAT_WS_HOST``, ``EASYCAT_WS_PORT``,
     ``EASYCAT_WS_TOKEN``, and ``EASYCAT_WS_MAX_SESSIONS`` when *config* is not
     supplied, then delegates to :func:`serve_websocket_config_sessions`.
+
+    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``.
+    ``?token=`` query auth is OFF unless ``allow_query_token=True`` (the
+    loopback/dev opt-in for the bundled browser client).
     """
     settings = config or websocket_session_server_config_from_env()
     asyncio.run(
@@ -233,6 +291,8 @@ def run_websocket_config_server(
             transport_config=transport_config,
             runtime_feedback=runtime_feedback,
             announce=announce,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+            allow_query_token=allow_query_token,
         )
     )
 

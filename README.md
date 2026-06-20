@@ -4,10 +4,28 @@ Slim, batteries-included voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow.
 
+### Quickstart (VoiceApp)
+`VoiceApp` is the app-first entry point: one noun for your voice product, with
+one-word mode switching. Build it once with your agent, then pick where it runs:
+
+```python
+from agents import Agent
+
+from easycat import VoiceApp
+
+app = VoiceApp(agent=Agent(name="assistant", instructions="You are a helpful voice assistant."))
+app.run("browser")  # or "local", "websocket", "twilio"
+```
+
+`app.run("local")` talks over your mic/speakers; `app.run("websocket")` serves
+per-client WebSocket sessions; `app.run("twilio")` answers phone calls. Run it
+from the CLI with `easycat serve --mode browser`. See
+[examples/voice_app.py](examples/voice_app.py).
+
 ### Quickstart (EasyConfig)
-A voice bot in three lines — `run(EasyConfig.mic(agent=...))` is the one
-canonical shape, identical in this README, `examples/openai_agents_voice.py`,
-and the scaffold that `easycat init my-agent` writes:
+For the lower-level shape, `run(EasyConfig.mic(agent=...))` is the one canonical
+shape — the three-line path identical in `examples/openai_agents_voice.py` and
+the scaffold that `easycat init my-agent` writes:
 
 ```python
 from agents import Agent
@@ -154,6 +172,8 @@ easycat doctor           # check API keys, optional extras, provider reachabilit
 easycat doctor --json    # emit machine-readable environment checks
 easycat doctor --env-file .env --json # emit checks with project .env loaded
 easycat serve            # serve the browser voice playground on localhost
+easycat plan             # show the provider/capability plan for a manifest profile
+easycat plan --json      # emit the machine-readable provider/capability plan
 easycat docs             # show docs for learning, maintenance, validation, operations
 easycat docs --audience learners # filter docs by reader audience or broad role
 easycat docs --audience learners --json # emit a filtered docs route map for learners

@@ -91,6 +91,10 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         help="Serve the browser voice playground on localhost.",
         journey="Serve the browser voice playground on localhost",
     ),
+    "plan": _CommandText(
+        help="Show the provider/capability plan for a manifest profile.",
+        journey="Show the provider/capability plan for a manifest profile",
+    ),
     "explain": _CommandText(
         help="Look up errors and CLI schema topics.",
         journey="Route a call problem by symptom, or look up an error code",
@@ -138,7 +142,7 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
 }
 
 _JOURNEY_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Scaffold", ("console", "init", "doctor", "serve")),
+    ("Scaffold", ("console", "init", "doctor", "serve", "plan")),
     (
         "Debug with the journal",
         (
@@ -945,6 +949,7 @@ def _register_commands() -> None:
     )
     from easycat.cli.diagnose.doctor import doctor as doctor_cmd
     from easycat.cli.diagnose.explain import explain as explain_cmd
+    from easycat.cli.plan import plan as plan_cmd
     from easycat.cli.scaffold.init import init as init_cmd
     from easycat.cli.serve import serve as serve_cmd
     from easycat.cli.validate import validate_app
@@ -953,6 +958,7 @@ def _register_commands() -> None:
     app.command(name="init", help=_COMMAND_TEXT["init"].help)(init_cmd)
     app.command(name="doctor", help=_COMMAND_TEXT["doctor"].help)(doctor_cmd)
     app.command(name="serve", help=_COMMAND_TEXT["serve"].help)(serve_cmd)
+    app.command(name="plan", help=_COMMAND_TEXT["plan"].help)(plan_cmd)
     app.command(name="docs", help=_COMMAND_TEXT["docs"].help)(docs_command)
     app.command(name="explain", help=_COMMAND_TEXT["explain"].help)(explain_cmd)
     app.command(name="inspect", help=_COMMAND_TEXT["inspect"].help)(inspect_bundle)

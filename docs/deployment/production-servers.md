@@ -50,6 +50,63 @@ Set `EASYCAT_WS_TOKEN` before exposing the server beyond loopback, and tune
 `EASYCAT_WS_MAX_SESSIONS` from measured CPU/RAM capacity. Non-browser clients
 should authenticate with `Authorization: Bearer <token>`.
 
+> **Breaking change — `?token=` query auth is now off by default.** The
+> WebSocket and WebRTC serve helpers used to accept a `?token=` query parameter
+> unconditionally whenever a token was set. Query-token auth is now gated behind
+> `allow_query_token` (default **`False`**). Bearer-header clients are
+> unaffected. The bundled WebSocket browser client relies on `?token=` (browsers
+> cannot set headers on the WebSocket handshake), so pass `allow_query_token=True`
+> as a loopback/dev opt-in to keep it working locally:
+>
+> ```python
+> run_websocket_config_server(config, allow_query_token=True)  # dev only
+> ```
+>
+> The bundled WebRTC client sends `Authorization: Bearer` and is **not** affected.
+
+## Unified auth model (`VoiceServer`)
+
+`VoiceServer` (the `easycat.server` process layer) applies one auth policy to
+**both** the WebSocket and WebRTC paths via `easycat.server.auth`:
+
+- `NoAuth` — open access (loopback/dev).
+- `BearerTokenAuth(token=..., allow_query_token=False)` — constant-time
+  (`hmac.compare_digest`) bearer-header auth; `?token=` query auth is opt-in.
+- `bearer_auth_from_env("EASYCAT_SERVE_TOKEN")` — build a `BearerTokenAuth` from
+  the shipped `EASYCAT_SERVE_TOKEN` env var (returns `None` when unset).
+
+```python
+from easycat.server import BearerTokenAuth, VoiceServer, VoiceServerConfig
+
+server = VoiceServer.from_app(
+    app,
+    VoiceServerConfig(host="0.0.0.0", auth=BearerTokenAuth(token="...")),
+)
+server.run()
+```
+
+**Non-loopback binds require a token.** Binding a non-loopback host
+(e.g. `0.0.0.0`) with no token **raises `ValueError` at `start()`** — this is the
+single structured guard applied to every transport, and it closes a previously
+unauthenticated `0.0.0.0` WebSocket voice endpoint. The **only** escape hatch is
+the structured `unsafe_allow_no_auth=True` field (on the auth policy and mirrored
+on `VoiceServerConfig`); never bypass it with prose-only config.
+
+## Graceful shutdown
+
+`VoiceServer.stop()` (and `stop(force=True)`) drain through the shared
+capacity/draining collaborator, not `SessionManager`:
+
+1. Set the draining flag — new connections are rejected (WS close code `1013`,
+   reason `Server is draining`).
+2. Close the aiohttp listeners and the raw-`websockets` `/ws` listener.
+3. Wait for active sessions up to `drain_timeout_s` (graceful `session.stop()`).
+4. Force-escalate (`session.stop(force=True)`) anything still active after the
+   window; `force_shutdown_timeout_s` bounds the forced phase.
+
+`stop(force=True)` collapses the drain window to zero and force-stops
+immediately.
+
 ## WebRTC browser servers
 
 Use `run_webrtc_config_server()` for browser microphone deployments that need
@@ -82,6 +139,28 @@ For public deployments, put the signaling server behind HTTPS so
 `getUserMedia()` works, configure TURN, set `SIGNALING_AUTH_TOKEN` so `/offer`
 and `/stats` require a bearer/query token, and tune `WEBRTC_MAX_SESSIONS` from
 load-test data before raising the default cap.
+
+### Flat routes vs. the `VoiceServer` `/webrtc/*` namespace
+
+The route paths differ by surface, but the handlers are one shared
+implementation (`easycat.server.webrtc_routes.WebRTCRoutes`):
+
+- **Standalone `run_webrtc_config_server()`** keeps the **flat** routes
+  `/offer`, `/config`, `/stats` (and root + bundled client at `/`).
+- **`VoiceServer`** mounts the **namespaced** routes `/webrtc/offer`,
+  `/webrtc/config`, `/webrtc/stats` on the same aiohttp listener as
+  `/health/*`. WebRTC offers reserve through the SAME capacity gate as `/ws`,
+  so capacity, draining, and `stop()` drain span both transports. Enable it via
+  `VoiceServerConfig(enable_webrtc=True)` (the default) with a configured
+  `session_factory`; the unified `AuthPolicy` guards the mounted routes, and the
+  `allow_query_token` default-off posture applies (the WebRTC client uses the
+  `Authorization` header, so it is unaffected).
+
+The SAME bundled client HTML serves both. It resolves its route base from a
+`?webrtc=<prefix>` query parameter (defaulting to `""` for the flat helper);
+`VoiceServer`'s root redirect appends `?webrtc=/webrtc` (preserving any
+`?token=`) so the served client targets the namespaced routes. A custom client
+can target either surface by setting `?webrtc=` (or its own base) accordingly.
 
 ## WebTransport servers
 

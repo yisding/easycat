@@ -1208,6 +1208,7 @@ smart-turn = [
     { name = "onnxruntime" },
 ]
 telephony = [
+    { name = "aiohttp" },
     { name = "fastapi" },
     { name = "phonenumberslite" },
     { name = "python-multipart" },
@@ -1246,6 +1247,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'all'", specifier = ">=3.14.0" },
     { name = "aiohttp", marker = "extra == 'debugger'", specifier = ">=3.14.0" },
+    { name = "aiohttp", marker = "extra == 'telephony'", specifier = ">=3.14.0" },
     { name = "aiohttp", marker = "extra == 'webrtc'", specifier = ">=3.14.0" },
     { name = "aioquic", marker = "extra == 'all'", specifier = ">=1.3.0,<2" },
     { name = "aioquic", marker = "extra == 'webtransport'", specifier = ">=1.3.0,<2" },

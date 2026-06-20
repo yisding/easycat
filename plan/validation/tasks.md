@@ -424,8 +424,8 @@ Dependencies:
 Current verified state:
 
 - `src/easycat/cli/_app.py` registers top-level `console`, `init`, `doctor`,
-  `serve`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`, `tail`,
-  plus the `bundles`, `debugger`, `journal`, and `validate` groups.
+  `serve`, `plan`, `docs`, `explain`, `inspect`, `replay`, `latency`, `diff`,
+  `tail`, plus the `bundles`, `debugger`, `journal`, and `validate` groups.
 - The bare `easycat` journey menu includes `Scaffold`,
   `Debug with the journal`, `Validation`, and `Docs and guidance`; the
   `Validation` section points at `easycat validate`.
@@ -1709,6 +1709,16 @@ Current verified state:
   `easycat.transport.disconnects.total`, `easycat.validation.failures.total`, or
   `easycat.interruption.cutoff_latency` (the barge-in cutoff histogram is
   computed offline by the issues engine, not emitted at the sink).
+- The `easycat.server` process layer (M8) registers and emits five server
+  metrics: counter `easycat.server.requests.total`, histogram
+  `easycat.server.request.duration` (seconds), counter
+  `easycat.server.sessions.rejected.total`, and observable gauges
+  `easycat.server.connections.active` and `easycat.server.draining` (0/1). They
+  are emitted from `src/easycat/server/metrics.py` through
+  `increment_counter(...)` / `record_histogram(...)` / `observe_gauge(...)` (the
+  same `sanitize_attributes` path), and carry the low-cardinality labels
+  `easycat.route` (asserted in an enumerated route-template set before
+  recording), `easycat.server_state`, and `easycat.auth_result`.
 - Metric wiring is present in `src/easycat/_bounded_queue.py`,
   `src/easycat/session/_session.py`, `src/easycat/session/_turn_runner.py`,
   `src/easycat/session/_audio_router.py`, `src/easycat/session/_journal_sink.py`,

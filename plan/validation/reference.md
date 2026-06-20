@@ -699,6 +699,11 @@ Suggested metrics:
 - `easycat.journal.degraded`: observable gauge
 - `easycat.interruption.total`: counter
 - `easycat.interruption.cutoff_latency`: histogram
+- `easycat.server.requests.total`: counter
+- `easycat.server.request.duration`: histogram, seconds
+- `easycat.server.sessions.rejected.total`: counter
+- `easycat.server.connections.active`: observable gauge
+- `easycat.server.draining`: observable gauge (0/1)
 
 Allowed low-cardinality attributes:
 
@@ -712,6 +717,9 @@ Allowed low-cardinality attributes:
 - `easycat.feature_set`
 - `easycat.result`
 - `easycat.error_type`
+- `easycat.route`
+- `easycat.server_state`
+- `easycat.auth_result`
 
 Forbidden metric attributes:
 

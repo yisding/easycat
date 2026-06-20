@@ -164,6 +164,21 @@ production **metrics and traces**.
   attributes — they are logging-only correlation (see below) and would also be
   high-cardinality span attributes.
 
+> **`easycat.server.*` server metrics are registered and emitted (M8).** The
+> `easycat.server` process layer registers its five metric names
+> (`easycat.server.requests.total`, `easycat.server.request.duration`,
+> `easycat.server.sessions.rejected.total`, `easycat.server.connections.active`,
+> `easycat.server.draining`) in `METRIC_DEFINITIONS` and its three new labels
+> (`easycat.route`, `easycat.server_state`, `easycat.auth_result`) in
+> `LOW_CARDINALITY_ATTRIBUTE_KEYS` — in the SAME change that first emits them,
+> because emitting an unregistered name/key raises `ValueError`. Emission lives
+> in `easycat.server.metrics` and routes through the same `sanitize_attributes`
+> path (no bypass); it is a no-op without an SDK but still validates the
+> names/labels. `easycat.route` is constrained to an **enumerated set of route
+> templates** that is asserted before recording, so a raw path (which can carry
+> `?token=` or user content) can never become a label. No token, PII, or raw
+> path is ever a server-metric label.
+
 ## Golden rules
 
 - **Logs are lossy; the journal is complete.** If you need to be sure something
