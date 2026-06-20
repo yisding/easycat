@@ -51,24 +51,23 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     await session.stop(force=True)
 
     assert "transport.receive" in calls
-    # Warmup runs BEFORE the transport is connected so the slow model-load /
-    # handshake cost in warmup() does not execute while a live capture device
-    # is already buffering inbound frames into an undrained queue.  All warmup
-    # hooks therefore precede connect, which precedes the receive (ingress) loop.
+    # Provider/model warmup runs BEFORE the transport is connected so the slow
+    # model-load / handshake cost does not execute while a live capture device
+    # is already buffering inbound frames into an undrained queue.  The
+    # transport's own warmup runs AFTER connect (it may prime connect-created
+    # resources), and both precede the receive (ingress) loop.
     assert calls.index("stt.warmup") < calls.index("tts.warmup")
-    assert calls.index("tts.warmup") < calls.index("transport.warmup")
-    assert calls.index("transport.warmup") < calls.index("transport.connect")
-    assert calls.index("transport.connect") < calls.index("transport.receive")
-    record = next(record for record in journal.read() if record.name == "warmup_completed")
-    # ``AgentRunner`` is now warmupable (it delegates ``warmup()`` to the
-    # wrapped agent), so the default agent wrapper is recorded as warmed even
-    # though ``FakeAgent`` itself has no ``warmup`` hook to forward to.
-    assert [component["component"] for component in record.data["components"]] == [
-        "stt",
-        "tts",
-        "transport",
-        "agent",
-    ]
+    assert calls.index("tts.warmup") < calls.index("transport.connect")
+    assert calls.index("transport.connect") < calls.index("transport.warmup")
+    assert calls.index("transport.warmup") < calls.index("transport.receive")
+    # Two-phase warmup emits one ``warmup_completed`` per phase: providers
+    # before connect, the transport after.  ``AgentRunner`` is warmupable (it
+    # delegates ``warmup()`` to the wrapped agent), so the default agent
+    # wrapper is recorded as warmed even though ``FakeAgent`` itself has no
+    # ``warmup`` hook to forward to.
+    records = [record for record in journal.read() if record.name == "warmup_completed"]
+    warmed = [c["component"] for record in records for c in record.data["components"]]
+    assert warmed == ["stt", "tts", "agent", "transport"]
 
 
 @pytest.mark.asyncio

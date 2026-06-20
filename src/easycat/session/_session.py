@@ -975,8 +975,8 @@ class Session:
         self._health_checkers = []
 
         try:
-            # Prime providers BEFORE attaching the audio device/stream.  The
-            # warmup hooks load ONNX models (Silero, smart-turn) and run
+            # Prime providers/models BEFORE attaching the audio device/stream.
+            # These warmup hooks load ONNX models (Silero, smart-turn) and run
             # network handshakes (TTS pool, realtime STT) and can take several
             # seconds.  ``transport.connect()`` opens the live mic / telephony
             # stream and starts capturing into the bounded inbound queue, but
@@ -984,12 +984,17 @@ class Session:
             # slow warmup between the two overflowed ``_in_queue`` (≈4 s at the
             # 200-frame default), flooding the journal with "inbound queue full
             # — dropping frame" and discarding the first seconds of capture.
-            # No warmup hook needs the transport connected, so warm first, then
-            # connect and start draining back-to-back.
-            await self._warmup.run()
+            # None of these hooks need the transport connected.
+            await self._warmup.run(select=lambda name: name != "transport")
 
             await self.transport.connect()
             transport_connected = True
+
+            # The transport's own warmup runs AFTER connect (and before
+            # ingress) so a transport ``warmup()`` may prime resources that
+            # ``connect()`` initializes (socket/client handles, per-connection
+            # queues).  No-op for transports without a warmup hook.
+            await self._warmup.run(select=lambda name: name == "transport")
 
             if not self._outbound_queue_external:
                 self._outbound_queue = BoundedAudioQueue(

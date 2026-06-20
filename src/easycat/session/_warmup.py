@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -35,14 +35,25 @@ class WarmupRunner:
     journal_sink: JournalSink
     components: Sequence[WarmupComponent]
 
-    async def run(self) -> None:
-        """Execute all supported ``warmup()`` hooks and record startup timing."""
+    async def run(self, *, select: Callable[[str], bool] | None = None) -> None:
+        """Execute supported ``warmup()`` hooks and record startup timing.
+
+        ``select`` filters which components run by name; when ``None`` every
+        component runs.  The session uses it to warm providers/models before
+        the transport is connected and warm the transport afterwards, so a
+        transport ``warmup()`` that primes connect-initialized resources still
+        runs after ``connect()``.  A filtered phase that warms nothing skips
+        the ``warmup_completed`` record so transports without a warmup hook do
+        not emit an empty second record on every startup.
+        """
         if not self.enabled:
             return
 
         started = time.perf_counter()
         warmed: list[dict[str, Any]] = []
         for name, provider in self.components:
+            if select is not None and not select(name):
+                continue
             if warmupable(provider) is None:
                 continue
             component_started = time.perf_counter()
@@ -65,6 +76,9 @@ class WarmupRunner:
                     "elapsed_ms": _elapsed_ms(component_started),
                 }
             )
+
+        if not warmed and select is not None:
+            return
 
         self.journal_sink.append_record(
             name="warmup_completed",
