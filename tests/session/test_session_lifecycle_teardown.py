@@ -51,10 +51,14 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     await session.stop(force=True)
 
     assert "transport.receive" in calls
-    assert calls.index("transport.connect") < calls.index("stt.warmup")
+    # Warmup runs BEFORE the transport is connected so the slow model-load /
+    # handshake cost in warmup() does not execute while a live capture device
+    # is already buffering inbound frames into an undrained queue.  All warmup
+    # hooks therefore precede connect, which precedes the receive (ingress) loop.
     assert calls.index("stt.warmup") < calls.index("tts.warmup")
     assert calls.index("tts.warmup") < calls.index("transport.warmup")
-    assert calls.index("transport.warmup") < calls.index("transport.receive")
+    assert calls.index("transport.warmup") < calls.index("transport.connect")
+    assert calls.index("transport.connect") < calls.index("transport.receive")
     record = next(record for record in journal.read() if record.name == "warmup_completed")
     # ``AgentRunner`` is now warmupable (it delegates ``warmup()`` to the
     # wrapped agent), so the default agent wrapper is recorded as warmed even

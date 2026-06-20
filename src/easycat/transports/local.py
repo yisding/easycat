@@ -138,7 +138,18 @@ class LocalTransport(AudioQueueMixin):
             # transport.  Schedule it onto the loop from the audio thread.
             # ``call_soon_threadsafe`` takes no kwargs, so bind ``context``
             # via ``partial``.
-            loop.call_soon_threadsafe(partial(self._enqueue_chunk, chunk, context="mic"))
+            #
+            # The sounddevice audio thread can fire one more callback after the
+            # loop has been torn down (e.g. an abrupt Ctrl-C that closes the
+            # loop before the input stream is stopped).  Scheduling onto a
+            # closed loop raises ``RuntimeError: Event loop is closed`` from the
+            # cffi callback; guard + swallow it so shutdown stays quiet.
+            if loop.is_closed():
+                return
+            try:
+                loop.call_soon_threadsafe(partial(self._enqueue_chunk, chunk, context="mic"))
+            except RuntimeError:
+                pass
 
         self._input_stream = sd.InputStream(
             samplerate=self._audio_format.sample_rate,
