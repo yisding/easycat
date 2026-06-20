@@ -14,6 +14,8 @@ route discovery or run `uv run easycat explain json-schema`.
 
 ## Rules
 
+- The app-first entry point is `from easycat import VoiceApp`: one noun for a
+  voice product that runs across `local`/`browser`/`websocket`/`twilio` modes.
 - The first-run path is `EasyConfig` plus `run`.
 - Long-running applications should use `create_session` plus
   `easycat.helpers.run_session`, or `create_text_session`.
@@ -116,6 +118,7 @@ custom transport.
 
 ### App Construction
 
+- `VoiceApp`
 - `EasyConfig`
 - `create_session`
 - `create_text_session`

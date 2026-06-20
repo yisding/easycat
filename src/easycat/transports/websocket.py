@@ -33,6 +33,7 @@ from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.session_manager import SessionManager
 from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+from easycat.transports.webrtc import _is_loopback_host
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -97,8 +98,21 @@ def websocket_session_server_config_from_env(
     )
 
 
+def _normalize_auth_token(token: str | None) -> str | None:
+    """Treat blank or whitespace-only tokens as no token at all.
+
+    An empty string is not a usable secret: ``Authorization: Bearer `` would
+    otherwise pass ``compare_digest("", "")``. Normalizing blank tokens to
+    ``None`` keeps the public-bind guard and request authorization in sync.
+    """
+    if token is None or not token.strip():
+        return None
+    return token
+
+
 def websocket_server_authorized(headers: Headers, path: str, token: str | None) -> bool:
     """Authorize a WebSocket request against an optional bearer/query token."""
+    token = _normalize_auth_token(token)
     if token is None:
         return True
     value = headers.get("Authorization")
@@ -133,6 +147,7 @@ async def serve_websocket_sessions(
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
 ) -> None:
     """Serve one EasyCat session per accepted WebSocket connection.
 
@@ -140,13 +155,27 @@ async def serve_websocket_sessions(
     a created, not-yet-started :class:`~easycat.Session`. This helper owns
     session start/stop, optional bearer-token auth, session-limit rejection,
     and process shutdown.
+
+    A non-loopback bind requires ``config.auth_token``: binding beyond loopback
+    without a token raises :class:`ValueError` (mirroring
+    :func:`~easycat.transports.webrtc.serve_webrtc_config_sessions`) unless
+    ``unsafe_allow_no_auth=True`` is passed to explicitly opt into an
+    unauthenticated endpoint.
     """
     settings = config or WebSocketSessionServerConfig()
+    auth_token = _normalize_auth_token(settings.auth_token)
+    if auth_token is None and not _is_loopback_host(settings.host) and not unsafe_allow_no_auth:
+        raise ValueError(
+            f"Refusing to bind {settings.host!r} without a token. Set "
+            "WebSocketSessionServerConfig.auth_token (or EASYCAT_WS_TOKEN) when "
+            "serving beyond loopback, or pass unsafe_allow_no_auth=True to bind "
+            "an unauthenticated endpoint."
+        )
     manager: SessionManager[int] = SessionManager()
     session_slots = asyncio.Semaphore(settings.max_sessions)
 
     def process_request(_ws: ServerConnection, request: Request) -> Response | None:
-        if not websocket_server_authorized(request.headers, request.path, settings.auth_token):
+        if not websocket_server_authorized(request.headers, request.path, auth_token):
             return _plain_response(HTTPStatus.UNAUTHORIZED, "Missing or invalid bearer token.\n")
         return None
 
@@ -187,6 +216,7 @@ async def serve_websocket_config_sessions(
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
 ) -> None:
     """Serve one EasyCat session per connection using an EasyConfig factory.
 
@@ -194,6 +224,9 @@ async def serve_websocket_config_sessions(
     :class:`WebSocketConnectionTransport` and returns the app config passed to
     :func:`easycat.create_session`. Use :func:`serve_websocket_sessions` when
     callers need to construct or own the ``Session`` object directly.
+
+    Like :func:`serve_websocket_sessions`, a non-loopback bind requires a token
+    unless ``unsafe_allow_no_auth=True``.
     """
     from easycat.config import create_session
 
@@ -207,6 +240,7 @@ async def serve_websocket_config_sessions(
         stop_event=stop_event,
         runtime_feedback=runtime_feedback,
         announce=announce,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
     )
 
 
@@ -217,6 +251,7 @@ def run_websocket_config_server(
     transport_config: WebSocketTransportConfig | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
 ) -> None:
     """Run a WebSocket server using ``EASYCAT_WS_*`` env defaults.
 
@@ -224,6 +259,8 @@ def run_websocket_config_server(
     apps. It reads ``EASYCAT_WS_HOST``, ``EASYCAT_WS_PORT``,
     ``EASYCAT_WS_TOKEN``, and ``EASYCAT_WS_MAX_SESSIONS`` when *config* is not
     supplied, then delegates to :func:`serve_websocket_config_sessions`.
+
+    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``.
     """
     settings = config or websocket_session_server_config_from_env()
     asyncio.run(
@@ -233,6 +270,7 @@ def run_websocket_config_server(
             transport_config=transport_config,
             runtime_feedback=runtime_feedback,
             announce=announce,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
     )
 

@@ -18,6 +18,7 @@ from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerCo
 from easycat.integrations.agents._factory import (
     auto_adapt_agent,
     clear_agent_detectors,
+    is_reusable_agent_spec,
     register_agent_detector,
 )
 from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
@@ -52,5 +53,6 @@ __all__ = [
     "RemoteResponsesAPIBridge",
     "auto_adapt_agent",
     "clear_agent_detectors",
+    "is_reusable_agent_spec",
     "register_agent_detector",
 ]
