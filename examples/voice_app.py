@@ -45,7 +45,7 @@ if __name__ == "__main__":
 #   app.run("local")              talk over your mic/speakers, no browser
 #   app.run("websocket")          serve per-client WebSocket sessions
 #   app.run("twilio", stream_url=...)  real phone calls (needs the telephony
-#                                 extra + TWILIO_STREAM_URL; see
-#                                 examples/voice_app_twilio.py)
+#                                 extra + TWILIO_STREAM_URL + TWILIO_AUTH_TOKEN;
+#                                 see examples/voice_app_twilio.py)
 #   VoiceApp(agent=..., stt="deepgram/nova-2", tts="elevenlabs")  swap providers
 #   uv run easycat serve --mode browser   the same path, from the CLI

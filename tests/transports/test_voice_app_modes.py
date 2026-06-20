@@ -121,7 +121,7 @@ def test_browser_factory_builds_fresh_config_per_transport(
     assert config2.transport is t2
     assert config1.agent == "my-agent"
     # Browser preset enables echo cancellation by default.
-    assert config1.enable_echo_cancellation in (True, None) or True
+    assert config1.enable_echo_cancellation is True
 
 
 def test_browser_rejects_static_config() -> None:
@@ -485,3 +485,97 @@ def test_unsafe_allow_no_auth_escape_hatch_websocket(
     VoiceApp(agent="a", host="0.0.0.0").run("websocket", unsafe_allow_no_auth=True)
     config = captured_websocket["config"]
     assert config.auth_token is None
+
+
+# ── Blank/whitespace token must not satisfy the guard ────────────────
+
+
+def test_browser_blank_serve_token_does_not_satisfy_guard(
+    monkeypatch: pytest.MonkeyPatch, captured_webrtc: dict[str, Any]
+) -> None:
+    """A whitespace-only token normalizes to "no token", so the non-loopback
+    bind guard must still fire — otherwise ``"   "`` would arm a truthy bind
+    while the downstream WS authorizer treats it as unauthenticated."""
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    app = VoiceApp(agent="a", host="0.0.0.0", serve_token="   ")
+    with pytest.raises(ValueError) as exc:
+        app.run("browser")
+    assert "0.0.0.0" in str(exc.value)
+    assert captured_webrtc == {}
+
+
+def test_websocket_blank_serve_token_does_not_satisfy_guard(
+    monkeypatch: pytest.MonkeyPatch, captured_websocket: dict[str, Any]
+) -> None:
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    app = VoiceApp(agent="a", host="0.0.0.0", serve_token="   ")
+    with pytest.raises(ValueError) as exc:
+        app.run("websocket")
+    assert "0.0.0.0" in str(exc.value)
+    assert captured_websocket == {}
+
+
+def test_whitespace_env_token_does_not_satisfy_guard(
+    monkeypatch: pytest.MonkeyPatch, captured_webrtc: dict[str, Any]
+) -> None:
+    monkeypatch.setenv("EASYCAT_SERVE_TOKEN", "   ")
+    with pytest.raises(ValueError):
+        VoiceApp(agent="a", host="0.0.0.0").run("browser")
+    assert captured_webrtc == {}
+
+
+def test_wrong_server_token_env_var_does_not_satisfy_guard(
+    monkeypatch: pytest.MonkeyPatch, captured_webrtc: dict[str, Any]
+) -> None:
+    """Only ``EASYCAT_SERVE_TOKEN`` arms the guard; the look-alike
+    ``EASYCAT_SERVER_TOKEN`` must be ignored (guards against a partial rename)."""
+    monkeypatch.delenv("EASYCAT_SERVE_TOKEN", raising=False)
+    monkeypatch.setenv("EASYCAT_SERVER_TOKEN", "wrong-var")
+    with pytest.raises(ValueError) as exc:
+        VoiceApp(agent="a", host="0.0.0.0").run("browser")
+    assert "0.0.0.0" in str(exc.value)
+    assert captured_webrtc == {}
+
+
+# ── serve()/run() announce symmetry ──────────────────────────────────
+
+
+async def test_serve_browser_accepts_announce_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``serve('browser', announce=...)`` must be accepted symmetrically with
+    ``run('browser', announce=...)`` (it previously raised "unknown kwarg")."""
+    calls: dict[str, Any] = {}
+    announced: list[bool] = []
+
+    async def _fake_serve(factory: Any, config: Any = None, **kwargs: Any) -> None:
+        calls["kwargs"] = kwargs
+
+    monkeypatch.setattr(webrtc_module, "serve_webrtc_config_sessions", _fake_serve)
+    monkeypatch.setattr(
+        VoiceApp, "_announce_browser_url", lambda self, cfg: announced.append(True)
+    )
+
+    await VoiceApp(agent="a").serve("browser", announce=False)
+    assert announced == []
+    # The helper's own announce is always suppressed; VoiceApp owns the line.
+    assert calls["kwargs"]["announce"] is False
+
+    await VoiceApp(agent="a").serve("browser", announce=True)
+    assert announced == [True]
+
+
+# ── Fail-loud on a misspelled server kwarg ───────────────────────────
+
+
+def test_browser_run_rejects_unknown_kwarg(captured_webrtc: dict[str, Any]) -> None:
+    """A typo'd ``port``/``serve_token`` must raise, not silently bind the
+    default or run unauthenticated."""
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        VoiceApp(agent="a").run("browser", prot=9000)
+    # The guard fires before the serve helper, so it is never reached.
+    assert "factory" not in captured_webrtc
+
+
+def test_websocket_run_rejects_unknown_kwarg(captured_websocket: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        VoiceApp(agent="a").run("websocket", serve_tokn="secret")
+    assert "factory" not in captured_websocket

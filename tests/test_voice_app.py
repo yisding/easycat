@@ -365,6 +365,44 @@ def test_local_config_factory_receives_local_transport_instance(
     assert config.agent == "fac-agent"
 
 
+# ── Local mode is fail-loud on a stray kwarg (all three styles) ───────
+
+
+def test_session_local_static_config_rejects_stray_kwarg(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    """A static ``config=`` is used verbatim, so a per-call kwarg is a typo and
+    must raise rather than be silently dropped."""
+    app = VoiceApp(config=EasyConfig.mic(agent="a"))
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        app.session("local", bogus_kwarg=123)
+    assert fake_create_session == []
+
+
+def test_session_local_config_factory_rejects_stray_kwarg(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    """A ``config_factory`` owns the config, so a per-call kwarg is a typo."""
+
+    def factory(transport: Any) -> EasyConfig:
+        return EasyConfig(transport=transport, agent="a")
+
+    app = VoiceApp(config_factory=factory)
+    with pytest.raises(ValueError, match="Unknown keyword argument"):
+        app.session("local", bogus_kwarg=123)
+    assert fake_create_session == []
+
+
+def test_run_local_high_level_rejects_stray_kwarg(
+    fake_create_session: list[EasyConfig],
+) -> None:
+    """The high-level path forwards into ``EasyConfig.mic``, which rejects an
+    unknown kwarg (``TypeError``) — so local is fail-loud across all styles."""
+    with pytest.raises(TypeError):
+        VoiceApp(agent="a").run("local", bogus_kwarg=123)
+    assert fake_create_session == []
+
+
 def test_run_local_config_factory_path(
     monkeypatch: pytest.MonkeyPatch, fake_create_session: list[EasyConfig]
 ) -> None:

@@ -296,11 +296,19 @@ class VoiceApp:
 
         if self._config is not None:
             # A static, transport-bearing config is only safe here (local is
-            # single-session, so there is nothing to clone per connection).
+            # single-session, so there is nothing to clone per connection). The
+            # config is used verbatim, so any per-call kwargs would be silently
+            # dropped — fail loud on a typo instead, matching the server modes'
+            # ``_reject_unknown_mode_kwargs`` guard and the high-level branch
+            # below (which raises through ``EasyConfig.mic``).
+            self._reject_unknown_mode_kwargs("local", kwargs)
             return self._config
         if self._config_factory is not None:
             from easycat.transports import LocalTransport
 
+            # Same as the static-config branch: the factory owns the config, so
+            # stray run/serve/session kwargs are typos, not overrides.
+            self._reject_unknown_mode_kwargs("local", kwargs)
             return self._config_factory(LocalTransport())
         return EasyConfig.mic(**{**self._forwardable_config_kwargs(), **kwargs})
 
@@ -311,6 +319,14 @@ class VoiceApp:
         run_session(session)
 
     async def _serve_local(self, **kwargs: Any) -> None:
+        """Run a local-mic session until shutdown on the composable async path.
+
+        Unlike :meth:`_run_local` (which wires console runtime feedback via
+        :func:`easycat.helpers.run_session`), the async ``serve('local')`` path
+        starts the session directly and prints nothing: ``serve`` is the verb
+        for composing a ``VoiceApp`` inside a larger event loop, so any
+        user-facing status output is the caller's responsibility.
+        """
         from easycat.helpers import wait_for_shutdown_signal
 
         session = self._build_local_session(**kwargs)
@@ -330,6 +346,23 @@ class VoiceApp:
             await session.stop(force=True)
 
     # ── Browser mode (WebRTC) ────────────────────────────────────────
+
+    @staticmethod
+    def _reject_unknown_mode_kwargs(mode: str, kwargs: dict[str, Any]) -> None:
+        """Fail loud on a misspelled ``run()``/``serve()`` server field.
+
+        Each mode builder ``pop``s every field it accepts; anything left in
+        ``kwargs`` is a typo (e.g. ``serve_token`` → ``serve_tokn``) that would
+        otherwise be silently dropped — re-binding the default port or, worse,
+        running an unauthenticated server. This mirrors the construction-time
+        allow-list guard so the run/serve entry points are fail-loud too.
+        """
+        if kwargs:
+            raise ValueError(
+                f"Unknown keyword argument(s) for {mode!r} mode: {sorted(kwargs)}. "
+                "Check for a typo; run()/serve() forward only that mode's documented "
+                "server fields."
+            )
 
     def _browser_transport_config(self, **kwargs: Any) -> tuple[Any, bool]:
         """Build the :class:`WebRTCTransportConfig` plus the resolved
@@ -352,6 +385,7 @@ class VoiceApp:
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
+        self._reject_unknown_mode_kwargs("browser", kwargs)
         # Only override the WebRTCTransportConfig default when a limit is given,
         # keeping that dataclass the single source of the default capacity.
         capacity = {} if max_sessions is None else {"max_sessions": max_sessions}
@@ -378,13 +412,19 @@ class VoiceApp:
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
 
-    async def _serve_browser(self, **kwargs: Any) -> None:
+    async def _serve_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
         from easycat.transports.webrtc import serve_webrtc_config_sessions
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
+        # Mirror ``_run_browser``: announce the (token-bearing) URL ourselves and
+        # suppress the helper's plainer "Server ready..." line so the same
+        # ``announce`` knob behaves identically across run() and serve().
+        if announce:
+            self._announce_browser_url(transport_config)
         await serve_webrtc_config_sessions(
             self._browser_factory(),
             transport_config,
+            announce=False,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
 
@@ -426,6 +466,7 @@ class VoiceApp:
             host=host,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
+        self._reject_unknown_mode_kwargs("websocket", kwargs)
         server_config = WebSocketSessionServerConfig(
             host=host, port=port, auth_token=token, max_sessions=max_sessions
         )
@@ -513,6 +554,7 @@ class VoiceApp:
             "max_sessions",
             self._config_kwargs.get("max_sessions", TwilioVoiceServerConfig.max_sessions),
         )
+        self._reject_unknown_mode_kwargs("twilio", kwargs)
         return TwilioVoiceServerConfig(
             host=host,
             media_port=media_port,
