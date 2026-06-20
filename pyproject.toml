@@ -85,14 +85,14 @@ local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 # TEN VAD has a non-permissive license, so we do not vendor its
 # binaries.  Users who accept the license can opt in here.
-ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.26.0", "ten-vad>=1.0.6.8"]
-silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.26.0"]
+ten-vad = ["numpy>=1.24.0", "onnxruntime>=1.27.0", "ten-vad>=1.0.6.8"]
+silero-vad = ["numpy>=1.24.0", "onnxruntime>=1.27.0"]
 funasr-vad = [
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
-    "onnxruntime>=1.26.0",
+    "onnxruntime>=1.27.0",
 ]
-smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.26.0"]
+smart-turn = ["numpy>=1.24.0", "onnxruntime>=1.27.0"]
 # Interactive debugger UI (peripheral-eval-and-debugger-ui.md).
 debugger = [
     "aiohttp>=3.14.0",
@@ -106,7 +106,7 @@ quickstart = [
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "numpy>=1.24.0",
-    "onnxruntime>=1.26.0",
+    "onnxruntime>=1.27.0",
     "livekit>=1.0.0",
 ]
 all = [
@@ -128,7 +128,7 @@ all = [
     "uvicorn>=0.29.0",
     "kaldi-native-fbank>=1.22.3",
     "numpy>=1.24.0",
-    "onnxruntime>=1.26.0",
+    "onnxruntime>=1.27.0",
 ]
 
 [build-system]
