@@ -40,11 +40,12 @@ def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.Monke
     config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
-        # The local transport now enables smart-turn by default, which keeps
-        # VAD on; pin it off so this test exercises the flux-disables-VAD path.
-        smart_turn=False,
         agent=_DummyAgent(),
     )
+
+    # Flux keeps smart-turn off by default (even on the local-mic preset), so
+    # it drives turns from STT finals and never wires a Silero VAD.
+    assert config.smart_turn.enabled is False
 
     session = create_session(config)
 
