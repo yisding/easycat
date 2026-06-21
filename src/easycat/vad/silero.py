@@ -216,11 +216,22 @@ class SileroVAD(_VADBase):
             # Convert PCM16 to float32 tensor
             float_samples = np.frombuffer(frame_data, dtype="<i2").astype(np.float32) / 32768.0
 
-            speech_prob = await asyncio.to_thread(self._model.predict, float_samples, target_rate)
+            # Run predict inline rather than via asyncio.to_thread: the ONNX
+            # call is ~100us at ~31 frames/s (<0.5% of the 32ms frame budget),
+            # so the ~40us thread-hop dispatch adds latency and a context
+            # switch per frame without meaningfully freeing the event loop.
+            speech_prob = self._model.predict(float_samples, target_rate)
             now = time.monotonic()
 
             for event in self._evaluate_speech(speech_prob, now):
                 yield event
+
+            # A transport may deliver many frames in one chunk (e.g. a buffered
+            # WebSocket binary message), so yield to the event loop between
+            # frames to keep the pipeline task from monopolizing it on a large
+            # backlog.  Single-frame chunks (local mic) skip this entirely.
+            if len(self._buffer) >= frame_bytes:
+                await asyncio.sleep(0)
 
     async def warmup(self) -> None:
         """Prime the ONNX session with one zeroed 16 kHz frame.
