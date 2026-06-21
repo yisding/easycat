@@ -195,11 +195,25 @@ def _validate_common(
                 )
 
 
+def _stt_config_is_flux(stt: Any) -> bool:
+    """Whether ``stt`` is a Deepgram Flux config (provider-side endpointing).
+
+    Mirrors ``_should_auto_turn_from_stt_final`` in the factory so the
+    smart-turn default and the auto-turn-from-STT-final decision stay
+    consistent: a Flux config derives turn boundaries from STT finals and
+    needs neither smart-turn nor the VAD that smart-turn pulls in.
+    """
+    from easycat.stt.deepgram_provider import DeepgramSTTConfig
+
+    return isinstance(stt, DeepgramSTTConfig) and stt.is_flux
+
+
 def _normalize_smart_turn_config(
     smart_turn: SmartTurnConfig | bool | None,
     *,
     sensitivity: float | None,
     transport: Any = None,
+    stt_is_flux: bool = False,
 ) -> SmartTurnConfig:
     """Resolve EasyConfig's beginner-facing smart-turn shortcuts.
 
@@ -210,13 +224,21 @@ def _normalize_smart_turn_config(
     startup so the first turn doesn't cold-stall.  Server and telephony
     presets keep smart-turn off by default — they pick their own
     endpointing strategy and shouldn't pay the warmup cost implicitly.
+
+    A Deepgram Flux STT is the exception on the mic preset: it does its own
+    provider-side endpointing, so smart-turn (and the Silero VAD it would
+    pull in) stays off by default and Flux's native end-of-turn signal
+    drives turns.  An explicit ``smart_turn=True`` / ``SmartTurnConfig``
+    still wins.
     """
     if isinstance(smart_turn, bool):
         if not smart_turn and sensitivity is not None:
             raise ValueError("smart_turn_sensitivity requires smart_turn=True.")
         config = SmartTurnConfig(enabled=smart_turn)
     elif smart_turn is None:
-        enabled = sensitivity is not None or isinstance(transport, LocalTransportConfig)
+        enabled = sensitivity is not None or (
+            isinstance(transport, LocalTransportConfig) and not stt_is_flux
+        )
         config = SmartTurnConfig(enabled=enabled)
     elif isinstance(smart_turn, SmartTurnConfig):
         config = smart_turn
@@ -770,11 +792,6 @@ class EasyConfig(_AgentSessionConfig):
         if caller_id_exposure is not None:
             self.caller_id_exposure = caller_id_exposure
 
-        self.smart_turn = _normalize_smart_turn_config(
-            self.smart_turn,
-            sensitivity=self.smart_turn_sensitivity,
-            transport=self.transport,
-        )
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
@@ -816,6 +833,21 @@ class EasyConfig(_AgentSessionConfig):
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
+
+        # Normalize smart-turn AFTER string STT shortcuts resolve to a typed
+        # config.  The mic-preset default skips Deepgram Flux, and Flux can
+        # arrive either typed (``DeepgramSTTConfig``) or as the ``"deepgram/
+        # flux"`` string spec — only resolvable to ``is_flux`` once
+        # ``parse_stt_string`` has run above.  Computing it before string
+        # resolution left the string form with smart-turn (and a Silero VAD)
+        # on, diverging from the typed form.
+        self.smart_turn = _normalize_smart_turn_config(
+            self.smart_turn,
+            sensitivity=self.smart_turn_sensitivity,
+            transport=self.transport,
+            stt_is_flux=_stt_config_is_flux(self.stt),
+        )
+
         # Catalog membership (not an isinstance against the built-in
         # ``TTSConfig`` union) so third-party configs registered via
         # ``register_tts_provider`` take the same alignment path.

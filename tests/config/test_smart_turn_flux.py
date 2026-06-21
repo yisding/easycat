@@ -40,11 +40,51 @@ def test_create_session_disables_vad_for_deepgram_flux(monkeypatch: pytest.Monke
     config = EasyConfig(
         stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
         tts=OpenAITTSConfig(api_key="test-key"),
-        # The local transport now enables smart-turn by default, which keeps
-        # VAD on; pin it off so this test exercises the flux-disables-VAD path.
-        smart_turn=False,
         agent=_DummyAgent(),
     )
+
+    # Flux keeps smart-turn off by default (even on the local-mic preset), so
+    # it drives turns from STT finals and never wires a Silero VAD.
+    assert config.smart_turn.enabled is False
+
+    session = create_session(config)
+
+    assert session._enable_vad is False
+    assert session._auto_turn_from_stt_final is True
+
+
+def test_create_session_disables_vad_for_deepgram_flux_string_shortcut(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The ``"deepgram/flux"`` string spec must match the typed config.
+
+    Smart-turn is normalized after string shortcuts resolve, so the string
+    form is recognized as Flux and keeps smart-turn (and the VAD) off — the
+    same as passing a ``DeepgramSTTConfig`` directly.
+    """
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "easycat.config._factory.create_vad",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("create_vad should not be called")
+        ),
+    )
+
+    class _NoiseReducer:
+        async def process(self, chunk):
+            return chunk
+
+    monkeypatch.setattr(
+        "easycat.config._factory.create_noise_reducer", lambda *_args, **_kwargs: _NoiseReducer()
+    )
+
+    config = EasyConfig(
+        stt="deepgram/flux-general-en",
+        tts=OpenAITTSConfig(api_key="test-key"),
+        agent=_DummyAgent(),
+    )
+
+    assert config.smart_turn.enabled is False
 
     session = create_session(config)
 

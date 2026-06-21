@@ -219,6 +219,9 @@ def test_create_session_accepts_policy_only_custom_tts(
         "easycat.config._factory.create_tts_provider_from_config", _fail_tts_factory
     )
 
+    # Flux STT keeps SmartTurn (and the Silero VAD it pulls in) off by default
+    # even on the local-mic preset, so this TTS-policy test stays free of the
+    # numpy/onnx extras without pinning a transport.
     session = create_session(
         EasyConfig(
             stt=DeepgramSTTConfig(api_key="test-key", model="flux-general-en"),
