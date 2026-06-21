@@ -148,19 +148,19 @@ class TestLocalTransport:
         transport = LocalTransport()
         await _connect_or_skip(transport)
 
-        # Default: 16kHz, 20ms frames → 320 samples → 640 bytes per frame.
-        # Send a 4800-byte chunk (typical TTS size) — should produce 8 pieces.
-        big_chunk = _make_chunk(4800, sample_rate=16000)
+        # Default: 24kHz, 20ms frames → 480 samples → 960 bytes per frame.
+        # send_audio splits by the transport's own frame size, so feed a chunk
+        # at the transport's rate.  Send a 4800-byte chunk (typical TTS size).
+        big_chunk = _make_chunk(4800, sample_rate=24000)
         await transport.send_audio(big_chunk)
 
         pieces: list[bytes] = []
         while not transport._out_queue.empty():
             pieces.append(transport._out_queue.get_nowait().chunk.data)
 
-        # 4800 / 640 = 7.5 → 8 pieces (last one is a 320-byte remainder).
-        assert len(pieces) == 8
-        assert all(len(p) == 640 for p in pieces[:7])
-        assert len(pieces[7]) == 320  # 4800 - 7*640 = 320
+        # 4800 / 960 = 5 → 5 full frames, no remainder.
+        assert len(pieces) == 5
+        assert all(len(p) == 960 for p in pieces)
 
         await transport.disconnect()
 
