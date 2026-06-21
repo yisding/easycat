@@ -792,12 +792,6 @@ class EasyConfig(_AgentSessionConfig):
         if caller_id_exposure is not None:
             self.caller_id_exposure = caller_id_exposure
 
-        self.smart_turn = _normalize_smart_turn_config(
-            self.smart_turn,
-            sensitivity=self.smart_turn_sensitivity,
-            transport=self.transport,
-            stt_is_flux=_stt_config_is_flux(self.stt),
-        )
         _validate_common(
             debug=self.debug,
             journal_backend=self.journal_backend,
@@ -839,6 +833,21 @@ class EasyConfig(_AgentSessionConfig):
                 self.stt = OpenAIRealtimeSTTConfig(api_key=self.openai_api_key)
             if self.tts is None:
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
+
+        # Normalize smart-turn AFTER string STT shortcuts resolve to a typed
+        # config.  The mic-preset default skips Deepgram Flux, and Flux can
+        # arrive either typed (``DeepgramSTTConfig``) or as the ``"deepgram/
+        # flux"`` string spec — only resolvable to ``is_flux`` once
+        # ``parse_stt_string`` has run above.  Computing it before string
+        # resolution left the string form with smart-turn (and a Silero VAD)
+        # on, diverging from the typed form.
+        self.smart_turn = _normalize_smart_turn_config(
+            self.smart_turn,
+            sensitivity=self.smart_turn_sensitivity,
+            transport=self.transport,
+            stt_is_flux=_stt_config_is_flux(self.stt),
+        )
+
         # Catalog membership (not an isinstance against the built-in
         # ``TTSConfig`` union) so third-party configs registered via
         # ``register_tts_provider`` take the same alignment path.
