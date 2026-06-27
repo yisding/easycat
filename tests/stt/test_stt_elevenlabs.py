@@ -276,6 +276,46 @@ async def test_elevenlabs_realtime_commit_segment_keeps_stream_open_for_later_au
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit():
+    # In VAD mode (the realtime default) the server emits committed_transcript
+    # on its own. Once it does, _audio_pending_commit must be cleared so a
+    # later end_stream does not issue a redundant manual commit and block for
+    # the full final-transcript timeout waiting on a final that already came.
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+    assert stt._audio_pending_commit is True
+
+    # Server-driven VAD commit arrives before end_stream.
+    stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
+    assert stt._audio_pending_commit is False
+
+    # Bounded so a regression (redundant commit waiting on a final) fails
+    # loudly instead of hanging the suite for the full timeout.
+    await asyncio.wait_for(stt.end_stream(), timeout=1.0)
+
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert commit_frames == []
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_with_confidence():
     messages = [_el_transcript("test", is_final=True, confidence=0.92)]
     stt, _, _ = _make_el_stt_realtime(messages)

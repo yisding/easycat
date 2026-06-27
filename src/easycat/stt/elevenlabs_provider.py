@@ -359,6 +359,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return
 
         if msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
+            # A committed transcript means the server flushed everything sent
+            # so far — whether we asked for it (manual commit) or its built-in
+            # VAD fired (commit_strategy="vad"). Clear the pending-commit flag
+            # so a later ``end_stream`` doesn't issue a redundant commit and
+            # block for the full final-transcript timeout waiting on a final
+            # that already arrived.
+            self._audio_pending_commit = False
             if self._dropping_pending_final:
                 # A previous ``_send_commit`` already gave up on this
                 # committed transcript and promoted the accumulated partial
