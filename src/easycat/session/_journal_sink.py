@@ -28,6 +28,10 @@ from easycat.events import (
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
     STTFinal,
     STTPartial,
     SupervisorListenerAttached,
@@ -54,6 +58,8 @@ _JOURNAL_ATTRS = (
     "text",
     "track",
     "result",
+    "action",
+    "executor",
     "tool_name",
     "call_id",
     "delta",
@@ -70,7 +76,7 @@ _JOURNAL_ATTRS = (
 # (discarding the model's fields), while the in-memory backend keeps them live
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
-_JSONABLE_ATTRS = frozenset({"structured_output", "result"})
+_JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 
 
@@ -106,9 +112,13 @@ def _to_jsonable(value: Any) -> Any:
             return value
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         try:
-            return dataclasses.asdict(value)
+            data = dataclasses.asdict(value)
         except Exception:
             return value
+        action_type = getattr(value, "type", None)
+        if action_type is not None:
+            data["type"] = getattr(action_type, "value", action_type)
+        return data
     return value
 
 
@@ -177,6 +187,22 @@ class SessionJournalSink:
         self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))
         self._subscribe(ToolCallDelta, self._make_event_handler(evt, "tool_call_delta"))
         self._subscribe(ToolCallResult, self._make_event_handler(evt, "tool_call_result"))
+        self._subscribe(
+            SessionActionRequested,
+            self._make_event_handler(evt, "session_action_requested"),
+        )
+        self._subscribe(
+            SessionActionStarted,
+            self._make_event_handler(evt, "session_action_started"),
+        )
+        self._subscribe(
+            SessionActionCompleted,
+            self._make_event_handler(evt, "session_action_completed"),
+        )
+        self._subscribe(
+            SessionActionFailed,
+            self._make_event_handler(evt, "session_action_failed"),
+        )
         # ReconnectingWebSocket emits these on the bus; journal records make
         # the retry timeline visible in exported bundles.
         self._subscribe(ReconnectAttempt, self._make_event_handler(evt, "ws_reconnect_attempt"))
