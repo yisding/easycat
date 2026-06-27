@@ -120,4 +120,4 @@ def emit_command_error(
             json_envelope(command, status="error", message=message, exit_code=exit_code, **extra)
         )
         return
-    human_console.print(f"  [red]✗[/] {escape(message)}")
+    human_console.print(f"  [red]✗[/] {escape(message)}", soft_wrap=True)

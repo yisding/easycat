@@ -67,7 +67,11 @@ async def test_silero_process_mocked_onnx(monkeypatch: pytest.MonkeyPatch):
     """SileroVAD should detect speech with the ONNX fallback backend."""
     # ``process()`` vectorizes PCM via ``numpy`` (part of the silero-vad
     # extra), so skip when it is absent (e.g. the minimal validate-quick lane).
-    pytest.importorskip("numpy")
+    # RecursionError can occur in numpy 2.x under pytest's import hooks.
+    try:
+        import numpy  # noqa: F401
+    except (ImportError, RecursionError):
+        pytest.skip("numpy not importable")
 
     class _FakeOnnxModel:
         def __init__(self) -> None:
@@ -185,7 +189,11 @@ async def test_silero_downmixes_stereo_to_mono(monkeypatch: pytest.MonkeyPatch):
     """Interleaved stereo input is downmixed before frame slicing."""
     # ``process()`` vectorizes PCM via ``numpy`` (part of the silero-vad
     # extra), so skip when it is absent (e.g. the minimal validate-quick lane).
-    pytest.importorskip("numpy")
+    # RecursionError can occur in numpy 2.x under pytest's import hooks.
+    try:
+        import numpy  # noqa: F401
+    except (ImportError, RecursionError):
+        pytest.skip("numpy not importable")
     from easycat.audio_format import AudioFormat
 
     seen: list[int] = []
