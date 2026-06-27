@@ -50,7 +50,7 @@ class LocalTransportConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     max_pending_in_chunks: int = 200
-    max_pending_out_chunks: int = 200
+    max_pending_out_chunks: int = 500
 
 
 class LocalTransport(AudioQueueMixin):
@@ -298,9 +298,18 @@ class LocalTransport(AudioQueueMixin):
             data[offset : offset + frame_bytes] for offset in range(0, len(data), frame_bytes)
         ]
         available = self._out_queue.maxsize - self._out_queue.qsize()
-        if self._out_queue.maxsize > 0 and len(slices) > available:
+        if self._out_queue.maxsize > 0 and available == 0:
             logger.warning("Output audio queue full — dropped %d frame(s)", len(slices))
             return False
+        if self._out_queue.maxsize > 0 and len(slices) > available:
+            # Partial fit: enqueue what fits, drop only the overflow tail.
+            # Better to play partial audio than to drop the whole chunk.
+            logger.warning(
+                "Output audio queue near full — dropped %d of %d frame(s)",
+                len(slices) - available,
+                len(slices),
+            )
+            slices = slices[:available]
 
         session_id = getattr(chunk, "_easycat_session_id", None)
         turn_id = getattr(chunk, "_easycat_turn_id", None)

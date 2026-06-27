@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.session._types import SessionConfig
 
-_OUTBOUND_QUEUE_MAX_SIZE = 200
+_OUTBOUND_QUEUE_MAX_SIZE = 500
 _OUTBOUND_QUEUE_POLICY = DropPolicy.DROP_NEWEST
 _OUTBOUND_QUEUE_NAME = "outbound_audio"
 

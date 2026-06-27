@@ -95,20 +95,41 @@ class TestLocalTransport:
         assert delivered is False
 
     @pytest.mark.asyncio
-    async def test_send_audio_returns_false_when_output_queue_full(self):
-        """Dropped frames surface as a False return so AudioOut isn't emitted."""
+    async def test_send_audio_returns_false_when_output_queue_completely_full(self):
+        """send_audio returns False only when zero slots are available."""
         if not _sounddevice_available():
             pytest.skip("sounddevice not available")
-        # Tight queue so even a single split chunk overflows.
         config = LocalTransportConfig(max_pending_out_chunks=1)
         transport = LocalTransport(config)
         await _connect_or_skip(transport)
         try:
-            # A 4800-byte chunk splits into ~8 frames; after the first one
-            # the output queue is full and the remainder is dropped.
-            big_chunk = _make_chunk(4800, sample_rate=16000)
+            sr = transport._audio_format.sample_rate
+            frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+            # Fill the single slot with one frame.
+            one_frame = _make_chunk(frame_bytes, sample_rate=sr)
+            assert await transport.send_audio(one_frame) is True
+            # Queue is now completely full (available == 0); any send must return False.
+            another = _make_chunk(frame_bytes, sample_rate=sr)
+            assert await transport.send_audio(another) is False
+        finally:
+            await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_send_audio_partial_fit_when_queue_near_full(self):
+        """send_audio enqueues what fits and drops only the overflow tail."""
+        if not _sounddevice_available():
+            pytest.skip("sounddevice not available")
+        config = LocalTransportConfig(max_pending_out_chunks=2)
+        transport = LocalTransport(config)
+        await _connect_or_skip(transport)
+        try:
+            sr = transport._audio_format.sample_rate
+            frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+            # A 5-frame chunk with only 2 slots: partial fit → True, 2 enqueued.
+            big_chunk = _make_chunk(5 * frame_bytes, sample_rate=sr)
             delivered = await transport.send_audio(big_chunk)
-            assert delivered is False
+            assert delivered is True
+            assert transport._out_queue.qsize() == 2
         finally:
             await transport.disconnect()
 
