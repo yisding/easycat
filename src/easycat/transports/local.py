@@ -50,7 +50,7 @@ class LocalTransportConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     max_pending_in_chunks: int = 200
-    max_pending_out_chunks: int = 500
+    max_pending_out_chunks: int = 2000
 
 
 class LocalTransport(AudioQueueMixin):

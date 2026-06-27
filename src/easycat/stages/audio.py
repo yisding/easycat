@@ -83,10 +83,11 @@ class AudioStage:
         error_provider = type(self._provider).__name__.lower()
         try:
             chunk = input
-            chunk = await self._provider.process(chunk)
             if self._echo_canceller is not None:
                 error_provider = type(self._echo_canceller).__name__.lower()
                 chunk = await self._echo_canceller.process(chunk)
+            error_provider = type(self._provider).__name__.lower()
+            chunk = await self._provider.process(chunk)
             result = chunk
         except Exception as exc:
             result_attr = "fail"
