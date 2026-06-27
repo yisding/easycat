@@ -55,7 +55,9 @@ class ElevenLabsTTSConfig:
     # and rejected on newer accounts (free tier refuses with 1008 policy
     # violation).  ``eleven_flash_v2_5`` is the low-latency option
     # ElevenLabs recommends for voice bots today — keeps first-byte
-    # latency near 75ms.
+    # latency near 75ms, so it stays the default. ``eleven_v3`` is the
+    # latest flagship (richest expressivity) but carries higher latency and
+    # is *not* recommended for realtime/conversational use.
     model_id: str = "eleven_flash_v2_5"
     stability: float = 0.5
     similarity_boost: float = 0.75

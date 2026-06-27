@@ -55,8 +55,20 @@ class ElevenLabsSTTConfig:
     ws_url: str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
     timeout: float = 30.0
     realtime_sample_rate: int = 16000
-    realtime_commit_strategy: str = "manual"  # "manual" or "vad"
+    # Endpointing strategy for the realtime model. ``"vad"`` (default) uses
+    # Scribe v2 Realtime's *built-in* voice-activity detection to commit
+    # segments automatically on detected silence — no external VAD needed.
+    # ``"manual"`` defers every commit to EasyCat's turn manager.
+    realtime_commit_strategy: str = "vad"  # "vad" or "manual"
     realtime_include_timestamps: bool = False
+    # Built-in VAD tuning, applied only when ``realtime_commit_strategy``
+    # is ``"vad"``. ``None`` leaves the server default in place
+    # (vad_threshold≈0.4, vad_silence_threshold_secs≈1.5,
+    # min_speech_duration_ms≈100, min_silence_duration_ms≈100).
+    realtime_vad_threshold: float | None = None
+    realtime_vad_silence_threshold_secs: float | None = None
+    realtime_min_speech_duration_ms: int | None = None
+    realtime_min_silence_duration_ms: int | None = None
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
     max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
@@ -81,7 +93,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
     """ElevenLabs STT supporting realtime WebSocket and batch modes.
 
     In **realtime** mode, a WebSocket connection is opened on ``start_stream``
-    and audio chunks are forwarded in real time.
+    and audio chunks are forwarded in real time. The default model is
+    ``scribe_v2_realtime``, which has *built-in voice-activity detection*;
+    with the default ``realtime_commit_strategy="vad"`` the server commits
+    transcript segments automatically on detected silence, so no external
+    VAD is required. Set ``realtime_commit_strategy="manual"`` to defer all
+    commits to EasyCat's turn manager instead.
 
     In **batch** mode, audio is buffered internally and submitted as a single
     HTTP request when ``end_stream`` is called.
@@ -143,6 +160,18 @@ class ElevenLabsSTT(WebSocketSTTBase):
         }
         if self._config.language:
             params["language_code"] = self._config.language
+        # Built-in VAD tuning is only meaningful under the "vad" commit
+        # strategy; omit any unset param so the server default applies.
+        if self._config.realtime_commit_strategy == "vad":
+            vad_params: dict[str, float | int | None] = {
+                "vad_threshold": self._config.realtime_vad_threshold,
+                "vad_silence_threshold_secs": self._config.realtime_vad_silence_threshold_secs,
+                "min_speech_duration_ms": self._config.realtime_min_speech_duration_ms,
+                "min_silence_duration_ms": self._config.realtime_min_silence_duration_ms,
+            }
+            for name, value in vad_params.items():
+                if value is not None:
+                    params[name] = str(value)
         return f"{self._config.ws_url}?{urlencode(params)}"
 
     @property

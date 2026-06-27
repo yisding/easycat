@@ -140,7 +140,64 @@ async def test_elevenlabs_realtime_connects_with_query_params():
     assert "/v1/speech-to-text/realtime?" in url
     assert "model_id=scribe_v2_realtime" in url
     assert "audio_format=pcm_16000" in url
+    # Built-in VAD commit strategy is the default for the realtime model.
+    assert "commit_strategy=vad" in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_tuning_in_query_params():
+    ws = MockWebSocket([])
+    connect_meta: dict[str, str] = {}
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        connect_meta["url"] = url
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+        realtime_vad_threshold=0.5,
+        realtime_vad_silence_threshold_secs=1.2,
+        realtime_min_speech_duration_ms=120,
+        realtime_min_silence_duration_ms=80,
+    )
+    stt = ElevenLabsSTT(config)
+    await stt.start_stream()
+    await stt.end_stream()
+
+    url = connect_meta["url"]
+    assert "commit_strategy=vad" in url
+    assert "vad_threshold=0.5" in url
+    assert "vad_silence_threshold_secs=1.2" in url
+    assert "min_speech_duration_ms=120" in url
+    assert "min_silence_duration_ms=80" in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_manual_strategy_omits_vad_params():
+    ws = MockWebSocket([])
+    connect_meta: dict[str, str] = {}
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        connect_meta["url"] = url
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="manual",
+        realtime_vad_threshold=0.5,
+    )
+    stt = ElevenLabsSTT(config)
+    await stt.start_stream()
+    await stt.end_stream()
+
+    url = connect_meta["url"]
     assert "commit_strategy=manual" in url
+    assert "vad_threshold" not in url
 
 
 @pytest.mark.asyncio

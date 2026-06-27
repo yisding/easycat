@@ -318,6 +318,43 @@ def test_cartesia_build_url_carries_required_params():
     assert "max_silence_duration_secs=" in url
 
 
+def test_cartesia_build_url_omits_volume_gate_params_for_ink2():
+    # ink-2 endpoints via native semantic turn detection and rejects the
+    # volume-gate params, so they must not appear in the URL.
+    config = CartesiaSTTConfig(api_key="k", model="ink-2", sample_rate=16000)
+    stt = CartesiaSTT(config)
+    url = stt._build_url()
+
+    assert "model=ink-2" in url
+    assert "min_volume=" not in url
+    assert "max_silence_duration_secs=" not in url
+
+
+def test_cartesia_default_model_is_ink2():
+    config = CartesiaSTTConfig(api_key="k")
+    assert config.model == "ink-2"
+    assert config.uses_volume_gate is False
+
+
+async def test_cartesia_ignores_turn_lifecycle_events():
+    # ink-2 emits a turn.* lifecycle alongside transcripts; these carry no
+    # text and must be acknowledged without producing STT events.
+    messages = [
+        json.dumps({"type": "turn.start", "request_id": "r1"}),
+        _transcript_msg("hello", is_final=False),
+        json.dumps({"type": "turn.eager_end", "request_id": "r1"}),
+        _transcript_msg("hello world", is_final=True),
+        json.dumps({"type": "turn.end", "request_id": "r1"}),
+    ]
+    stt, _ = _make_cartesia_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert [e.type for e in events] == [STTEventType.PARTIAL, STTEventType.FINAL]
+    assert events[-1].text == "hello world"
+
+
 # ── Multiple streams ─────────────────────────────────────────────
 
 
@@ -349,7 +386,7 @@ def test_cartesia_version_info_shape():
     stt, _ = _make_cartesia_stt()
     info = stt.version_info()
     assert info["provider"] == "cartesia"
-    assert info["model"] == "ink-whisper"
+    assert info["model"] == "ink-2"
     assert "api_version" in info
     assert "sdk_version" in info
 

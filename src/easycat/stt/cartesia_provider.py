@@ -1,4 +1,4 @@
-"""Cartesia streaming STT (Ink-Whisper) WebSocket provider."""
+"""Cartesia streaming STT (Ink) WebSocket provider."""
 
 from __future__ import annotations
 
@@ -12,23 +12,41 @@ from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
 from easycat.stt.websocket_base import WebSocketSTTBase
 
+# Models whose endpointing is driven by the volume-gate params
+# (``min_volume`` / ``max_silence_duration_secs``).  ``ink-2`` replaces
+# that gate with native semantic turn detection and rejects those query
+# params, so they are only emitted for ``ink-whisper``.
+_VOLUME_GATE_MODELS: frozenset[str] = frozenset({"ink-whisper"})
+
 
 @dataclass
 class CartesiaSTTConfig:
-    """Configuration for the Cartesia STT (Ink-Whisper) provider."""
+    """Configuration for the Cartesia streaming STT provider.
+
+    Defaults to ``ink-2`` — Cartesia's latest streaming model, which ships
+    *built-in semantic turn detection* (its own VAD/endpointing) and emits
+    a ``turn.*`` event lifecycle alongside transcripts.  No external VAD is
+    required for ink-2.  ``ink-whisper`` (the prior Whisper-based model) is
+    still selectable and falls back to the volume-gate endpointing params
+    (``min_volume`` / ``max_silence_duration_secs``), which ink-2 ignores.
+    """
 
     api_key: str = ""
-    model: str = "ink-whisper"
+    # ``ink-2`` is the latest model and the default — lowest WER and best
+    # built-in turn detection.  Use ``ink-whisper`` for the prior-gen,
+    # volume-gated endpointing behavior.
+    model: str = "ink-2"
     language: str = "en"
     encoding: str = "pcm_s16le"
     sample_rate: int = 16000
-    # VAD threshold (0.0–1.0). Kept at 0.0 so EasyCat's own turn
-    # manager owns endpointing decisions; Cartesia won't close the turn
-    # on volume alone at this setting.
+    # VAD threshold (0.0–1.0), ``ink-whisper`` only. Kept at 0.0 so
+    # EasyCat's own turn manager owns endpointing decisions; ink-whisper
+    # won't close the turn on volume alone at this setting. Ignored by
+    # ink-2 (which uses native semantic turn detection instead).
     min_volume: float = 0.0
-    # How long of a silence gap Cartesia waits before emitting a final
+    # How long of a silence gap ink-whisper waits before emitting a final
     # transcript. 5s is intentionally generous so the turn manager's
-    # own silence detection fires first in most cases.
+    # own silence detection fires first in most cases. ``ink-whisper`` only.
     max_silence_duration_secs: float = 5.0
     cartesia_version: str = "2026-03-01"
     base_url: str = "wss://api.cartesia.ai/stt/websocket"
@@ -38,9 +56,18 @@ class CartesiaSTTConfig:
     # Optional EventBus for provider-error observability
     event_bus: Any = field(default=None, repr=False)
 
+    @property
+    def uses_volume_gate(self) -> bool:
+        """True when the model endpoints via the volume-gate params.
+
+        ``ink-2`` uses native semantic turn detection and rejects the
+        volume-gate query params, so they must be omitted for it.
+        """
+        return self.model in _VOLUME_GATE_MODELS
+
 
 class CartesiaSTT(WebSocketSTTBase):
-    """Real-time streaming STT using Cartesia's Ink-Whisper WebSocket API.
+    """Real-time streaming STT using Cartesia's Ink WebSocket API.
 
     Opens a WebSocket on :meth:`start_stream`, forwards audio as binary
     frames, and parses ``transcript`` messages (partial + final) in a
@@ -48,6 +75,14 @@ class CartesiaSTT(WebSocketSTTBase):
     buffered audio mid-stream (used by
     :meth:`~easycat.stt.base.STTBase.commit_segment`); a ``done``
     control message closes the session cleanly.
+
+    With the default ``ink-2`` model, Cartesia also emits a ``turn.*``
+    lifecycle (``turn.start`` / ``turn.update`` / ``turn.eager_end`` /
+    ``turn.resume`` / ``turn.end``) from its built-in semantic turn
+    detection. These are acknowledged but not required by EasyCat: the
+    transcript ``is_final`` flag still drives FINAL emission, so the model's
+    built-in endpointing flows through the normal partial/final path without
+    a separate VAD stage.
     """
 
     def __init__(self, config: CartesiaSTTConfig) -> None:
@@ -97,7 +132,9 @@ class CartesiaSTT(WebSocketSTTBase):
             self._handle_transcript(msg)
         elif msg_type == "error":
             self._emit_provider_error_from_message(msg, default_message="Cartesia STT error")
-        # ``flush_done`` and ``done`` are acks — nothing to do.
+        # ``flush_done`` / ``done`` and the ink-2 ``turn.*`` lifecycle are
+        # acks/signals — nothing to do; transcripts carry the text and the
+        # ``is_final`` flag that drive STT events.
 
     def _handle_transcript(self, msg: dict[str, Any]) -> None:
         text = msg.get("text", "")
@@ -123,9 +160,14 @@ class CartesiaSTT(WebSocketSTTBase):
             "language": self._config.language,
             "encoding": self._config.encoding,
             "sample_rate": str(self._config.sample_rate),
-            "min_volume": str(self._config.min_volume),
-            "max_silence_duration_secs": str(self._config.max_silence_duration_secs),
         }
+        # ``min_volume`` / ``max_silence_duration_secs`` configure the
+        # volume-gate endpointing used by ink-whisper. ink-2 endpoints via
+        # native semantic turn detection and rejects these params, so they
+        # are only sent for the volume-gate models.
+        if self._config.uses_volume_gate:
+            params["min_volume"] = str(self._config.min_volume)
+            params["max_silence_duration_secs"] = str(self._config.max_silence_duration_secs)
         return f"{self._config.base_url}?{urlencode(params)}"
 
     def version_info(self) -> dict[str, str]:
