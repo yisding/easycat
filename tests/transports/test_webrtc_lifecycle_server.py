@@ -389,7 +389,7 @@ class TestWebRTCStatsArtifact:
         # M7: the client paths are templated through a ``?webrtc=`` base so the
         # SAME page serves both the flat helper and the namespaced VoiceServer.
         assert 'fetch(baseUrl + WEBRTC_BASE + "/stats"' in html
-        assert 'new URLSearchParams(location.search).get("webrtc")' in html
+        assert 'safeWebRTCBase(new URLSearchParams(location.search).get("webrtc") || "")' in html
         for label in (
             "before_speech",
             "client_speech_end",

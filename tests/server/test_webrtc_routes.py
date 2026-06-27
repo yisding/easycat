@@ -202,6 +202,26 @@ async def test_root_redirect_appends_webrtc_base_and_preserves_token(
     assert "webrtc=/webrtc" in location
 
 
+@pytest.mark.integration_socket
+async def test_root_redirect_replaces_untrusted_webrtc_base(
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    static_dir = Path(str(tmp_path))
+    (static_dir / "webrtc_client.html").write_text("<html></html>", encoding="utf-8")
+    routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/?webrtc=.attacker.test&token=sekrit", allow_redirects=False)
+        assert resp.status == 302
+        location = resp.headers["Location"]
+
+    assert location == "/webrtc_client.html?token=sekrit&webrtc=/webrtc"
+
+
 # ── Mounted VoiceServer integration tests ────────────────────────────────
 
 

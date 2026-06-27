@@ -67,6 +67,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qsl, urlencode
 
 from easycat.transports.webrtc import (
     _CORS_ALLOW_HEADERS,
@@ -627,11 +628,15 @@ class WebRTCRoutes:
         if self._has_bundled_client:
             location = "/webrtc_client.html"
             query_string = getattr(request, "query_string", "")
-            params = [query_string] if query_string else []
+            params = [
+                (key, value)
+                for key, value in parse_qsl(query_string, keep_blank_values=True)
+                if key != "webrtc"
+            ]
             if self._client_base:
-                params.append(f"webrtc={self._client_base}")
+                params.append(("webrtc", self._client_base))
             if params:
-                location = f"{location}?{'&'.join(params)}"
+                location = f"{location}?{urlencode(params, doseq=True, safe='/')}"
             raise web.HTTPFound(location)
         return web.Response(
             content_type="application/json",

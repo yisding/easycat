@@ -173,8 +173,17 @@ var authToken = new URLSearchParams(location.search).get("token") || "";
 // Signaling route base. The standalone WebRTC serve helper serves flat routes
 // (/offer, /config, /stats), while VoiceServer mounts them under /webrtc/*. The
 // SAME bundled page is served by both, so the base is read from ?webrtc=<prefix>
-// (the server's root redirect appends it); it defaults to "" (flat).
-var WEBRTC_BASE = new URLSearchParams(location.search).get("webrtc") || "";
+// (the server's root redirect appends it); it defaults to "" (flat). Treat this
+// attacker-controllable query value as a same-origin path prefix only.
+function safeWebRTCBase(rawBase) {
+  if (!rawBase) return "";
+  if (rawBase.charAt(0) !== "/") return "";
+  if (rawBase.indexOf("//") === 0) return "";
+  if (rawBase.indexOf("\\") !== -1) return "";
+  if (rawBase.indexOf("?") !== -1 || rawBase.indexOf("#") !== -1) return "";
+  return rawBase.replace(/\/$/, "");
+}
+var WEBRTC_BASE = safeWebRTCBase(new URLSearchParams(location.search).get("webrtc") || "");
 
 // ── UI ───────────────────────────────────────────────────────────
 var startBtn     = document.getElementById("startBtn");
