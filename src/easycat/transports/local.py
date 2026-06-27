@@ -69,6 +69,11 @@ class LocalTransport(AudioQueueMixin):
     default_echo_cancellation_enabled = True
     reports_audio_delivery = True
 
+    # Maximum number of AEC reference frames to buffer between mic callbacks.
+    # At 20 ms/frame this covers ~2 s; excess frames are silently discarded
+    # (same outcome as having no reference for that window).
+    _AEC_REF_QUEUE_MAX = 100
+
     def __init__(self, config: LocalTransportConfig | None = None) -> None:
         self._config = config or LocalTransportConfig()
         self._audio_format = self._config.audio_format
@@ -79,6 +84,19 @@ class LocalTransport(AudioQueueMixin):
         self._out_queue: thread_queue.Queue[_QueuedOutputChunk | None] = thread_queue.Queue(
             maxsize=self._config.max_pending_out_chunks,
         )
+
+        # AEC far-end reference drain queue.  The output callback pushes raw
+        # PCM at actual speaker-playback time (not at send_audio enqueue time).
+        # The async ingress pipeline drains this queue in _process_chunk *before*
+        # AudioStage.execute() so feed_reference() is always called before
+        # AEC.process() for the corresponding mic window, which AEC3 requires to
+        # converge.  Uses a plain thread_queue.Queue because the output callback
+        # runs on the sounddevice audio thread while the drain happens on the
+        # asyncio event loop thread.
+        self._aec_ref_queue: thread_queue.Queue[bytes] = thread_queue.Queue(
+            maxsize=self._AEC_REF_QUEUE_MAX
+        )
+
         self._event_bus: EventBus | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -105,6 +123,7 @@ class LocalTransport(AudioQueueMixin):
 
         self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
+        self._aec_ref_queue = thread_queue.Queue(maxsize=self._AEC_REF_QUEUE_MAX)
         self._primed = False
         self._loop = asyncio.get_running_loop()
 
@@ -209,7 +228,37 @@ class LocalTransport(AudioQueueMixin):
         out_flat[:n] = arr[:n]
         if n < len(out_flat):
             out_flat[n:] = 0
+
+        # Push raw PCM into the AEC reference drain queue at actual playback
+        # time.  The async ingress pipeline drains this before processing the
+        # mic frame so AEC3 always receives the far-end reference before the
+        # near-end signal.  Non-blocking: a full queue silently discards the
+        # frame (same outcome as missing reference — preferable to blocking the
+        # audio thread).
+        try:
+            self._aec_ref_queue.put_nowait(pcm)
+        except thread_queue.Full:
+            pass
+
         self._schedule_audio_delivery(queued)
+
+    def _flush_queues(self) -> None:
+        """Drain all audio queues synchronously (called from disconnect and teardown)."""
+        while not self._in_queue.empty():
+            try:
+                self._in_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        while not self._out_queue.empty():
+            try:
+                self._out_queue.get_nowait()
+            except thread_queue.Empty:
+                break
+        while not self._aec_ref_queue.empty():
+            try:
+                self._aec_ref_queue.get_nowait()
+            except thread_queue.Empty:
+                break
 
     async def disconnect(self) -> None:
         """Close audio devices and release resources."""
@@ -226,19 +275,7 @@ class LocalTransport(AudioQueueMixin):
 
         self._input_stream = None
         self._output_stream = None
-
-        # Drain both queues.
-        while not self._in_queue.empty():
-            try:
-                self._in_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        while not self._out_queue.empty():
-            try:
-                self._out_queue.get_nowait()
-            except thread_queue.Empty:
-                break
-
+        self._flush_queues()
         self._enqueue_sentinel()
         self._connected = False
         self._loop = None
@@ -279,11 +316,37 @@ class LocalTransport(AudioQueueMixin):
             )
         return True
 
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        """Return all pending AEC far-end reference frames, draining the queue.
+
+        Called from the async ingress pipeline in AudioRouter._process_chunk
+        before AudioStage.execute() so the AEC far-end reference is always fed
+        before the corresponding near-end mic frame is processed.
+
+        Thread-safe: the output callback pushes to this queue from the
+        sounddevice audio thread while this method is called from the asyncio
+        event loop thread.
+        """
+        frames: list[bytes] = []
+        while True:
+            try:
+                frames.append(self._aec_ref_queue.get_nowait())
+            except thread_queue.Empty:
+                break
+        return frames
+
     async def clear_audio(self) -> None:
         """Discard queued outbound audio awaiting speaker playback."""
         while not self._out_queue.empty():
             try:
                 self._out_queue.get_nowait()
+            except thread_queue.Empty:
+                break
+        # Discard stale AEC reference frames so the filter does not try to
+        # cancel echo from audio that was never played after barge-in.
+        while not self._aec_ref_queue.empty():
+            try:
+                self._aec_ref_queue.get_nowait()
             except thread_queue.Empty:
                 break
         # Re-prime the jitter buffer so the post-barge-in utterance builds up
