@@ -995,6 +995,10 @@ def _aec_interruption_frames(
     transition *into* ``user_speaking`` while the bot was speaking) is placed at
     the frame whose monotonic timestamp it most closely follows, so self-echo
     detection can tell a true barge-in from the bot hearing itself.
+
+    ``post_aec`` must be the FULL (untruncated) track: ``total_frames`` and the
+    clamp ceiling are derived from it so a barge-in beyond the analyzed prefix
+    keeps its true frame index instead of collapsing onto the prefix tail.
     """
     if not post_aec:
         return []
@@ -1131,8 +1135,13 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
         frame_ms=frame_ms,
     )
     double_talk = _detect_double_talk(ref_rms, mic_rms)
+    # Frame interruptions against the FULL (untruncated) post-AEC track. Passing
+    # the clipped prefix would shrink ``total_frames`` and clamp a real barge-in
+    # that lands after the prefix onto the last analyzed frame, planting a
+    # phantom guard window that suppresses genuine self-echo in the prefix tail.
+    # Only ``len(pcm)`` is read here (no decode/join), so the memory bound holds.
     interruption_frames = _aec_interruption_frames(
-        records, turn_id, post_aec, frame_ms=frame_ms, fmt=fmt
+        records, turn_id, post_aec_all, frame_ms=frame_ms, fmt=fmt
     )
     self_echo = _detect_self_echo(
         post_pcm,

@@ -568,3 +568,48 @@ def test_aec_diagnostics_truncates_oversized_tracks(monkeypatch):
         assert out["tracks"][track]["byte_count"] == 1280
         assert out["tracks"][track]["analyzed_byte_count"] == cap
     assert out["erle"]["frames"] == [pytest.approx(0.0, abs=0.5)]
+
+
+def test_aec_diagnostics_late_interruption_not_clamped_into_prefix(monkeypatch):
+    """A real barge-in *after* the truncated prefix must not hide self-echo.
+
+    Regression: framing interruptions against the clipped prefix shrank
+    ``total_frames`` and clamped the late ``turn_state_changed`` onto the last
+    analyzed frame, planting a phantom guard window that suppressed the genuine
+    self-echo spike in the analyzed tail (truncated diagnostics under-reported).
+    """
+    from easycat.debugger import server as debugger_server
+
+    cap = 5 * 640  # five 20ms frames at 16 kHz, int16 mono
+    monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)
+
+    # 30-frame post-AEC track: a lone self-echo spike at frame 4 (the last
+    # analyzed frame) surrounded by silence.
+    post_pcm = _tone_pcm(0, 320 * 4) + _tone_pcm(8000, 320) + _tone_pcm(0, 320 * 25)
+    fmt = {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2}
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "output_ref": "post",
+            "data": fmt,
+            "timing": {"mono_ns": 0},
+        },
+        # Barge-in 20 frames in — far beyond the 5-frame analyzed prefix.
+        {
+            "sequence": 2,
+            "name": "turn_state_changed",
+            "turn_id": "t1",
+            "data": {"to": "user_speaking"},
+            "timing": {"mono_ns": 20 * 20_000_000},
+        },
+    ]
+    source = _DictSource(records, {"post": post_pcm})
+
+    out = debugger_server._aec_diagnostics_for_turn(source, "t1")
+
+    # The late barge-in keeps its true frame index (not clamped to the prefix).
+    assert out["interruption_frames"] == [20]
+    # The self-echo spike in the analyzed tail is reported, not suppressed.
+    assert [hit["frame"] for hit in out["self_echo"]] == [4]
