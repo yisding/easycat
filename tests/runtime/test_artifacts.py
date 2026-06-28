@@ -109,6 +109,17 @@ class TestFilesystemArtifactStore:
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         assert store.get("nonexistent") is None
 
+    def test_get_head_tail_reads_bounded_window(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        payload = b"a" * 10 + b"middle" * 20 + b"z" * 10
+        ref = store.put(payload)
+        assert store.get_head_tail(ref, byte_cap=10) == b"a" * 10 + b"z" * 10
+
+    def test_get_head_tail_returns_small_payloads_unchanged(self, tmp_path):
+        store = FilesystemArtifactStore("sess", data_dir=tmp_path)
+        ref = store.put(b"small")
+        assert store.get_head_tail(ref, byte_cap=10) == b"small"
+
     def test_permissions(self, tmp_path):
         store = FilesystemArtifactStore("sess", data_dir=tmp_path)
         ref = store.put(b"secret data")

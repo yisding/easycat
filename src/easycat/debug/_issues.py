@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.debug._audio_health import (
+    AudioSampleCache,
     collect_caller_silence,
     collect_clipping,
     detect_dead_air,
@@ -406,12 +407,14 @@ def _audio_health_cards(
     ``audio_stride`` plus a per-blob byte cap.
     """
     issues: list[dict[str, Any]] = []
+    sample_cache = AudioSampleCache(artifact_resolver, stride=thresholds.audio_stride)
 
     for side, turn_id, sequence in collect_clipping(
         records,
         artifact_resolver,
         stride=thresholds.audio_stride,
         clip_consecutive=thresholds.clip_consecutive,
+        sample_cache=sample_cache,
     ):
         who = "bot output" if side == "bot" else "caller input"
         issues.append(
@@ -436,6 +439,7 @@ def _audio_health_cards(
         artifact_resolver,
         stride=thresholds.audio_stride,
         silence_rms=thresholds.silence_rms,
+        sample_cache=sample_cache,
     ).items():
         issues.append(
             _issue(

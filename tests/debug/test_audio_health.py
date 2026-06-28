@@ -227,3 +227,29 @@ def test_build_issues_skips_mulaw_artifacts() -> None:
     records = [_tts_frame(1, "bot", sample_width=1, encoding="mulaw")]
     report = build_issues(records, artifact_resolver=blobs.get)
     assert [i for i in report["issues"] if i["code"].startswith("clipping")] == []
+
+
+def test_build_issues_caches_audio_artifacts_across_collectors() -> None:
+    blob = _silent_blob()
+    calls: list[str] = []
+
+    def resolver(ref: str) -> bytes | None:
+        calls.append(ref)
+        return blob
+
+    records = [
+        _stt_start(1, "shared", turn_id="quiet"),
+        _stt_start(2, "shared", turn_id="quiet"),
+    ]
+    report = build_issues(records, artifact_resolver=resolver)
+    assert [issue for issue in report["issues"] if issue["code"] == "near_silent_capture"]
+    assert calls == ["shared"]
+
+
+def test_build_issues_skips_oversized_artifact_refs() -> None:
+    def resolver(_ref: str) -> bytes | None:
+        raise AssertionError("oversized refs must not be resolved")
+
+    records = [_stt_start(1, "x" * 129, turn_id="quiet")]
+    report = build_issues(records, artifact_resolver=resolver)
+    assert [issue for issue in report["issues"] if issue["code"] == "near_silent_capture"] == []

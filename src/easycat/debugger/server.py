@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
 from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
@@ -178,6 +179,7 @@ class DebuggerSource:
     _records_fn: Any = field(repr=False)
     _artifact_fn: Any = field(repr=False)
     _manifest_fn: Any = field(repr=False)
+    _artifact_analysis_fn: Any | None = field(default=None, repr=False)
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
@@ -237,6 +239,11 @@ class DebuggerSource:
 
     def artifact(self, ref: str) -> bytes | None:
         return self._artifact_fn(ref)
+
+    def artifact_for_analysis(self, ref: str) -> bytes | None:
+        if self._artifact_analysis_fn is not None:
+            return self._artifact_analysis_fn(ref)
+        return self.artifact(ref)
 
     def manifest(self) -> dict[str, Any]:
         return dict(self._manifest_fn())
@@ -460,6 +467,15 @@ def _session_source(session: Any) -> DebuggerSource:
             return None
         return store.get(ref)
 
+    def _artifact_for_analysis(ref: str) -> bytes | None:
+        store = getattr(session, "_artifact_store", None)
+        if store is None:
+            return None
+        bounded = getattr(store, "get_head_tail", None)
+        if callable(bounded):
+            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
+        return store.get(ref)
+
     def _manifest() -> dict[str, Any]:
         return {
             "source": "session",
@@ -483,6 +499,7 @@ def _session_source(session: Any) -> DebuggerSource:
         _records_since_fn=_records_since,
         _artifact_fn=_artifact,
         _manifest_fn=_manifest,
+        _artifact_analysis_fn=_artifact_for_analysis,
         _bundle_fn=None,
         _replay_fn=None,
         is_live=True,
@@ -1518,7 +1535,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
 
     async def issues(_request: Any) -> Any:
         return web.json_response(
-            _build_issues(source.records(), artifact_resolver=source.artifact)
+            _build_issues(source.records(), artifact_resolver=source.artifact_for_analysis)
         )
 
     async def artifact(request: Any) -> Any:

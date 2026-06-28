@@ -46,6 +46,10 @@ class ArtifactStore(Protocol):
         """Retrieve a previously stored artifact by ref, or ``None``."""
         ...
 
+    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+        """Retrieve at most the first and last ``byte_cap`` bytes of an artifact."""
+        ...
+
     def has(self, ref: str) -> bool:
         """Check whether *ref* exists in the store."""
         ...
@@ -106,6 +110,15 @@ class InMemoryArtifactStore:
         with self._lock:
             return self._store.get(ref)
 
+    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+        with self._lock:
+            data = self._store.get(ref)
+        if data is None:
+            return None
+        if byte_cap <= 0 or len(data) <= 2 * byte_cap:
+            return data
+        return data[:byte_cap] + data[-byte_cap:]
+
     def has(self, ref: str) -> bool:
         with self._lock:
             return ref in self._store
@@ -152,6 +165,14 @@ class SnapshotArtifactStore:
 
     def get(self, ref: str) -> bytes | None:
         return self._store.get(ref)
+
+    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+        data = self._store.get(ref)
+        if data is None:
+            return None
+        if byte_cap <= 0 or len(data) <= 2 * byte_cap:
+            return data
+        return data[:byte_cap] + data[-byte_cap:]
 
     def has(self, ref: str) -> bool:
         return ref in self._store
@@ -238,6 +259,21 @@ class FilesystemArtifactStore:
         path = self._ref_path(ref)
         try:
             return path.read_bytes()
+        except OSError:
+            return None
+
+    def get_head_tail(self, ref: str, *, byte_cap: int) -> bytes | None:
+        """Read a bounded head/tail window without materializing the whole file."""
+        path = self._ref_path(ref)
+        try:
+            size = path.stat().st_size
+            if byte_cap <= 0 or size <= 2 * byte_cap:
+                return path.read_bytes()
+            with path.open("rb") as fh:
+                head = fh.read(byte_cap)
+                fh.seek(-byte_cap, os.SEEK_END)
+                tail = fh.read(byte_cap)
+            return head + tail
         except OSError:
             return None
 
