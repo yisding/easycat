@@ -9,6 +9,7 @@ and event-bus subscription handlers.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ _JOURNAL_ATTRS = (
     "queue_size",
     "dropped_frames",
     "reason",
+    "error",
     "structured_output",
 )
 
@@ -88,12 +90,30 @@ def _truncate_transport_degraded_detail(detail: str) -> str:
     return f"{detail[:_MAX_TRANSPORT_DEGRADED_DETAIL_CHARS]}… (truncated {omitted} chars)"
 
 
+def _coerce_json_native(value: Any) -> Any:
+    """Recursively coerce *value* to a JSON-native structure.
+
+    ``dataclasses.asdict`` / ``model_dump`` only rebuild the container tree;
+    non-JSON-native leaves (a ``set`` / ``bytes`` / ``datetime`` inside a
+    ``CustomAction.payload`` dict, say) survive as live Python objects.  The
+    persistent backend then ``json.dumps(default=str)``-stringifies them while
+    the in-memory backend keeps them live, so the same record would round-trip
+    to a different shape per backend.  Round-tripping through ``json`` here
+    forces an identical JSON-native shape for every backend.
+    """
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return value
+
+
 def _to_jsonable(value: Any) -> Any:
     """Best-effort conversion of *value* to a JSON-native structure.
 
-    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; everything
-    else is returned unchanged (the journal's ``json.dumps`` default-handler
-    still catches anything left non-serializable).
+    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; both are
+    then recursively coerced so non-JSON-native leaves can't diverge per
+    backend.  Anything else is returned unchanged (the journal's ``json.dumps``
+    default-handler still catches whatever is left non-serializable).
     """
     # Common case (a plain string/number/bool result) is already JSON-native;
     # skip the model_dump/dataclass probing entirely.
@@ -105,7 +125,7 @@ def _to_jsonable(value: Any) -> Any:
             return dump(mode="json")
         except TypeError:
             try:
-                return dump()
+                return _coerce_json_native(dump())
             except Exception:
                 return value
         except Exception:
@@ -118,7 +138,7 @@ def _to_jsonable(value: Any) -> Any:
         action_type = getattr(value, "type", None)
         if action_type is not None:
             data["type"] = getattr(action_type, "value", action_type)
-        return data
+        return _coerce_json_native(data)
     return value
 
 
