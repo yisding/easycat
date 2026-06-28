@@ -2248,17 +2248,25 @@ function filterRecordsByTurn(turnId) {
   _writeHash();
 }
 
+// Quote a value as one POSIX-shell argument.  Debug bundles and journal
+// records are untrusted, so every data-derived value included in a copied
+// command must be quoted before it reaches a reviewer shell.
+function _shellQuoteArg(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
 // Build and copy an ``easycat replay … --turn <id>`` command for one turn so
 // a reviewer can reproduce it from the shell.  Bundles carry a file name in
 // the manifest; live sessions have no on-disk path yet, so we emit a
-// ``<bundle>`` placeholder for the reader to fill in.  The string only ever
-// reaches the clipboard or ``textContent`` (alert fallback) — never innerHTML
-// or a URL attribute.
+// ``<bundle>`` placeholder for the reader to fill in.  Data-derived arguments
+// are shell-quoted because bundle names and turn ids can come from untrusted
+// debug data.  The string only ever reaches the clipboard or ``textContent``
+// (alert fallback) — never innerHTML or a URL attribute.
 function _copyReplayCommand(turnId) {
   const name = state.manifest && state.manifest.source === "bundle" && state.manifest.name
     ? state.manifest.name
     : "<bundle>";
-  const cmd = `easycat replay ${name} --turn ${turnId}`;
+  const cmd = `easycat replay ${_shellQuoteArg(name)} --turn ${_shellQuoteArg(turnId)}`;
   const fallback = () => alert(cmd);
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(cmd).catch(fallback);
