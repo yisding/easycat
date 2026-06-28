@@ -9,6 +9,7 @@ and event-bus subscription handlers.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -29,6 +30,10 @@ from easycat.events import (
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
     STTFinal,
     STTPartial,
     SupervisorListenerAttached,
@@ -55,6 +60,8 @@ _JOURNAL_ATTRS = (
     "text",
     "track",
     "result",
+    "action",
+    "executor",
     "tool_name",
     "call_id",
     "delta",
@@ -62,6 +69,7 @@ _JOURNAL_ATTRS = (
     "queue_size",
     "dropped_frames",
     "reason",
+    "error",
     "structured_output",
 )
 
@@ -71,7 +79,7 @@ _JOURNAL_ATTRS = (
 # (discarding the model's fields), while the in-memory backend keeps them live
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
-_JSONABLE_ATTRS = frozenset({"structured_output", "result"})
+_JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 
 
@@ -83,12 +91,30 @@ def _truncate_transport_degraded_detail(detail: str) -> str:
     return f"{detail[:_MAX_TRANSPORT_DEGRADED_DETAIL_CHARS]}… (truncated {omitted} chars)"
 
 
+def _coerce_json_native(value: Any) -> Any:
+    """Recursively coerce *value* to a JSON-native structure.
+
+    ``dataclasses.asdict`` / ``model_dump`` only rebuild the container tree;
+    non-JSON-native leaves (a ``set`` / ``bytes`` / ``datetime`` inside a
+    ``CustomAction.payload`` dict, say) survive as live Python objects.  The
+    persistent backend then ``json.dumps(default=str)``-stringifies them while
+    the in-memory backend keeps them live, so the same record would round-trip
+    to a different shape per backend.  Round-tripping through ``json`` here
+    forces an identical JSON-native shape for every backend.
+    """
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return value
+
+
 def _to_jsonable(value: Any) -> Any:
     """Best-effort conversion of *value* to a JSON-native structure.
 
-    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; everything
-    else is returned unchanged (the journal's ``json.dumps`` default-handler
-    still catches anything left non-serializable).
+    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; both are
+    then recursively coerced so non-JSON-native leaves can't diverge per
+    backend.  Anything else is returned unchanged (the journal's ``json.dumps``
+    default-handler still catches whatever is left non-serializable).
     """
     # Common case (a plain string/number/bool result) is already JSON-native;
     # skip the model_dump/dataclass probing entirely.
@@ -100,16 +126,20 @@ def _to_jsonable(value: Any) -> Any:
             return dump(mode="json")
         except TypeError:
             try:
-                return dump()
+                return _coerce_json_native(dump())
             except Exception:
                 return value
         except Exception:
             return value
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         try:
-            return dataclasses.asdict(value)
+            data = dataclasses.asdict(value)
         except Exception:
             return value
+        action_type = getattr(value, "type", None)
+        if action_type is not None:
+            data["type"] = getattr(action_type, "value", action_type)
+        return _coerce_json_native(data)
     return value
 
 
@@ -178,6 +208,22 @@ class SessionJournalSink:
         self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))
         self._subscribe(ToolCallDelta, self._make_event_handler(evt, "tool_call_delta"))
         self._subscribe(ToolCallResult, self._make_event_handler(evt, "tool_call_result"))
+        self._subscribe(
+            SessionActionRequested,
+            self._make_event_handler(evt, "session_action_requested"),
+        )
+        self._subscribe(
+            SessionActionStarted,
+            self._make_event_handler(evt, "session_action_started"),
+        )
+        self._subscribe(
+            SessionActionCompleted,
+            self._make_event_handler(evt, "session_action_completed"),
+        )
+        self._subscribe(
+            SessionActionFailed,
+            self._make_event_handler(evt, "session_action_failed"),
+        )
         # ReconnectingWebSocket emits these on the bus; journal records make
         # the retry timeline visible in exported bundles.
         self._subscribe(ReconnectAttempt, self._make_event_handler(evt, "ws_reconnect_attempt"))

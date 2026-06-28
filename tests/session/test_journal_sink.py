@@ -267,6 +267,85 @@ async def test_journal_sink_normalizes_structured_output() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_journal_sink_records_session_action_failure_reason() -> None:
+    """A failed session action must journal *why* it failed, not just that it
+    did. ``SessionActionFailed`` carries its detail in an ``error`` str (no
+    ``exception`` attribute), so the reason has to land in the record data.
+    """
+    from easycat.events import SessionActionFailed
+    from easycat.session.actions import CustomAction
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        SessionActionFailed(
+            action=CustomAction(name="unsupported"),
+            error="No session action executor supports CustomAction",
+        )
+    )
+
+    records = journal.read()
+    assert len(records) == 1
+    record = records[0]
+    assert record.name == "session_action_failed"
+    assert record.data is not None
+    assert record.data["error"] == "No session action executor supports CustomAction"
+    assert record.data["action"]["type"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_coerces_non_json_native_action_payload() -> None:
+    """``CustomAction.payload`` may carry non-JSON-native leaves (a set /
+    datetime). ``asdict`` alone leaves them live, so the in-memory backend
+    keeps the live object while a persistent backend
+    ``json.dumps(default=str)``-stringifies it — divergent shapes. The sink
+    must coerce them so every backend stores an identical JSON-native shape.
+    """
+    import datetime
+    import json
+
+    from easycat.events import SessionActionRequested
+    from easycat.session.actions import CustomAction
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    payload = {
+        "tags": {"vip"},
+        "scheduled_at": datetime.datetime(2026, 6, 28, 12, 0, 0),
+    }
+    await bus.emit(SessionActionRequested(action=CustomAction(name="schedule", payload=payload)))
+
+    record = journal.read()[0]
+    assert record.name == "session_action_requested"
+    # The persistent backend's json.dumps(default=str) round-trip is now a
+    # no-op, so the in-memory and persistent backends store an identical shape.
+    assert record.data == json.loads(json.dumps(record.data, default=str))
+    coerced_payload = record.data["action"]["payload"]
+    # The set / datetime leaves were coerced to JSON-native strings, not kept
+    # as live Python objects.
+    assert isinstance(coerced_payload["tags"], str)
+    assert isinstance(coerced_payload["scheduled_at"], str)
+
+
 def test_journal_sink_stores_artifact_refs_before_record() -> None:
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(artifact_store=artifact_store)
