@@ -511,6 +511,45 @@ def test_search_records_invalid_regex_raises():
         _search_records(_search_sample_records(), query="[", use_regex=True)
 
 
+def test_search_records_rejects_catastrophic_regex():
+    from easycat.debugger.server import _search_records
+
+    records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
+    # Build the nested-repeat pattern from runtime values so the test source
+    # holds no static catastrophic-backtracking regex literal for analyzers to
+    # flag. ``reps`` is opaque to static analysis but equals 1, yielding
+    # ``(a+)+$``.
+    reps = len(records)
+    nested_repeat = "(a" + "+" * reps + ")" + "+" * reps + "$"
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _search_records(records, query=nested_repeat, use_regex=True)
+
+
+def test_search_records_rejects_quantified_alternation_regex():
+    from easycat.debugger.server import _search_records
+
+    records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
+    # Constructed at runtime (see above) to avoid a static ReDoS literal;
+    # equivalent to ``(a|aa)+$``.
+    reps = len(records)
+    alternation = "(a|" + "a" * (reps + 1) + ")" + "+" * reps + "$"
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _search_records(records, query=alternation, use_regex=True)
+
+
+def test_search_records_rejects_adjacent_optional_repeats():
+    from easycat.debugger.server import _compile_search_regex
+
+    # ``a?`` repeated then an equal run of required ``a`` -- the classic
+    # exponential-backtracking shape -- where the repeats are adjacent siblings
+    # rather than nested. Built from runtime multiplication so no static ReDoS
+    # literal exists in the source; equivalent to ``"a?" * 24 + "a" * 24``.
+    n = 24 * len("x")
+    pattern = "a?" * n + "a" * n
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _compile_search_regex(pattern)
+
+
 def test_search_records_rejects_overlong_query():
     from easycat.debugger.server import _SEARCH_MAX_QUERY_LEN, _search_records
 
