@@ -140,7 +140,64 @@ async def test_elevenlabs_realtime_connects_with_query_params():
     assert "/v1/speech-to-text/realtime?" in url
     assert "model_id=scribe_v2_realtime" in url
     assert "audio_format=pcm_16000" in url
+    # Built-in VAD commit strategy is the default for the realtime model.
+    assert "commit_strategy=vad" in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_tuning_in_query_params():
+    ws = MockWebSocket([])
+    connect_meta: dict[str, str] = {}
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        connect_meta["url"] = url
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+        realtime_vad_threshold=0.5,
+        realtime_vad_silence_threshold_secs=1.2,
+        realtime_min_speech_duration_ms=120,
+        realtime_min_silence_duration_ms=80,
+    )
+    stt = ElevenLabsSTT(config)
+    await stt.start_stream()
+    await stt.end_stream()
+
+    url = connect_meta["url"]
+    assert "commit_strategy=vad" in url
+    assert "vad_threshold=0.5" in url
+    assert "vad_silence_threshold_secs=1.2" in url
+    assert "min_speech_duration_ms=120" in url
+    assert "min_silence_duration_ms=80" in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_manual_strategy_omits_vad_params():
+    ws = MockWebSocket([])
+    connect_meta: dict[str, str] = {}
+
+    async def mock_connect(url: str, **kwargs) -> MockWebSocket:
+        connect_meta["url"] = url
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="manual",
+        realtime_vad_threshold=0.5,
+    )
+    stt = ElevenLabsSTT(config)
+    await stt.start_stream()
+    await stt.end_stream()
+
+    url = connect_meta["url"]
     assert "commit_strategy=manual" in url
+    assert "vad_threshold" not in url
 
 
 @pytest.mark.asyncio
@@ -216,6 +273,159 @@ async def test_elevenlabs_realtime_commit_segment_keeps_stream_open_for_later_au
         if m.get("message_type") == "input_audio_chunk" and m.get("commit") is True
     ]
     assert len(commit_msgs) == 2
+
+
+def test_elevenlabs_realtime_url_carries_keyterms_and_no_verbatim():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        realtime_keyterms=["EasyCat", "Cartesia"],
+        realtime_no_verbatim=True,
+    )
+    url = ElevenLabsSTT(config)._build_realtime_ws_url()
+
+    # keyterms is one repeated query param per term.
+    assert url.count("keyterms=") == 2
+    assert "keyterms=EasyCat" in url
+    assert "keyterms=Cartesia" in url
+    assert "no_verbatim=true" in url
+
+
+def test_elevenlabs_realtime_url_omits_keyterms_and_verbatim_by_default():
+    url = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))._build_realtime_ws_url()
+    assert "keyterms=" not in url
+    assert "no_verbatim" not in url
+
+
+def test_elevenlabs_rejects_too_many_keyterms():
+    with pytest.raises(ValueError, match="at most 50 terms"):
+        ElevenLabsSTTConfig(api_key="k", realtime_keyterms=[f"t{i}" for i in range(51)])
+
+
+def test_elevenlabs_rejects_overlong_keyterm():
+    with pytest.raises(ValueError, match="<= 20 characters"):
+        ElevenLabsSTTConfig(api_key="k", realtime_keyterms=["x" * 21])
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit():
+    # In VAD mode (the realtime default) the server emits committed_transcript
+    # on its own. Once it does, _audio_pending_commit must be cleared so a
+    # later end_stream does not issue a redundant manual commit and block for
+    # the full final-transcript timeout waiting on a final that already came.
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+    assert stt._audio_pending_commit is True
+
+    # The server transcribes (partial) then VAD-commits the segment it covers.
+    stt._handle_json_message(json.loads(_el_transcript("hello", is_final=False)))
+    stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
+    assert stt._audio_pending_commit is False
+
+    # Bounded so a regression (redundant commit waiting on a final) fails
+    # loudly instead of hanging the suite for the full timeout.
+    await asyncio.wait_for(stt.end_stream(), timeout=1.0)
+
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert commit_frames == []
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monkeypatch):
+    # Race: commit_segment() then more audio is sent, then the *prior*
+    # segment's committed_transcript arrives. The late ack must NOT clear the
+    # newer audio's pending state, so end_stream still commits it.
+    monkeypatch.setattr(elevenlabs_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime", ws_connect=mock_connect)
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt.send_audio(chunk)  # segment 1 audio
+    assert await stt.commit_segment() is True  # manual commit for segment 1
+    await stt.send_audio(chunk)  # segment 2 audio (after the commit)
+    assert stt._audio_pending_commit is True
+
+    # The late committed_transcript for segment 1 arrives now.
+    stt._handle_json_message(json.loads(_el_transcript("segment one", is_final=True)))
+
+    # Segment 2 audio is still uncommitted — pending must survive.
+    assert stt._audio_pending_commit is True
+
+    await asyncio.wait_for(stt.end_stream(), timeout=2.0)
+
+    # end_stream must have issued a commit to flush segment 2 (commit:true frame
+    # beyond the one commit_segment() already sent).
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert len(commit_frames) == 2
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_keeps_pending_for_trailing_audio():
+    # A VAD commit covers only what the server transcribed (up to the last
+    # partial). Audio streamed after that must keep pending set so end_stream
+    # still commits it — even if no later partial re-arms the flag first.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+    stt._ws = MockWebSocket([])  # let _send_realtime stream + bump the epoch
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    stt._final_received = None  # no manual commit in flight (pure VAD)
+    # Segment 1 audio, a partial for it, then segment 2 audio (trailing).
+    await stt._send_realtime(chunk)
+    stt._handle_json_message(json.loads(_el_transcript("seg one", is_final=False)))
+    await stt._send_realtime(chunk)
+    assert stt._audio_pending_commit is True
+
+    # Late VAD commit for segment 1 must NOT clear pending for segment 2.
+    stt._handle_json_message(json.loads(_el_transcript("seg one", is_final=True)))
+    assert stt._audio_pending_commit is True
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_partial_after_vad_commit_rearms_pending():
+    # VAD auto-commit clears pending; if speech resumes (a new partial) the
+    # pending flag must re-arm so the resumed audio is committed at end-of-turn.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+
+    stt._audio_pending_commit = True
+    # Unsolicited VAD commit (no manual commit in flight) clears pending.
+    stt._handle_json_message(json.loads(_el_transcript("first", is_final=True)))
+    assert stt._audio_pending_commit is False
+
+    # Speech resumes: a partial re-arms pending.
+    stt._handle_json_message(json.loads(_el_transcript("second...", is_final=False)))
+    assert stt._audio_pending_commit is True
 
 
 @pytest.mark.asyncio

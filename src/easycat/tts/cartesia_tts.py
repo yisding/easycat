@@ -38,7 +38,8 @@ class CartesiaTTSConfig:
     MODEL_FIELD: ClassVar[str] = "model_id"
 
     api_key: str = ""
-    # Sonic-3 is the default — best quality/latency balance. Use
+    # Sonic-3 is the default — best quality/latency balance (~90ms TTFA).
+    # Use ``sonic-3.5`` for Cartesia's latest, highest-naturalness profile,
     # ``sonic-turbo`` (~40ms TTFA) for latency-critical templates, or
     # ``sonic-2`` for the prior-gen quality profile.
     model_id: str = "sonic-3"
@@ -53,6 +54,13 @@ class CartesiaTTSConfig:
     base_url: str = "wss://api.cartesia.ai/tts/websocket"
     add_timestamps: bool = True
     max_buffer_delay_ms: int | None = None
+    # Sonic-3/3.5 generation controls, sent under ``generation_config`` only
+    # when set. ``speed`` ∈ [0.6, 1.5], ``volume`` ∈ [0.5, 2.0], ``emotion``
+    # is a named mood ("neutral", "angry", "excited", "sad", …). ``None``
+    # leaves the model default in place.
+    speed: float | None = None
+    volume: float | None = None
+    emotion: str | None = None
     output_format: AudioFormat = field(default_factory=lambda: PCM16_MONO_24K)
     event_bus: object | None = None
     # Reconnect tuning for the synthesis WebSocket. Defaults match
@@ -71,6 +79,10 @@ class CartesiaTTSConfig:
                 "μ-law / float32 support is tracked separately in "
                 "peripheral-telephony-tts-output.md."
             )
+        if self.speed is not None and not 0.6 <= self.speed <= 1.5:
+            raise ValueError(f"Cartesia speed must be in [0.6, 1.5], got {self.speed}")
+        if self.volume is not None and not 0.5 <= self.volume <= 2.0:
+            raise ValueError(f"Cartesia volume must be in [0.5, 2.0], got {self.volume}")
 
 
 class CartesiaTTS(_WSTTSBase):
@@ -159,6 +171,20 @@ class CartesiaTTS(_WSTTSBase):
         }
         if self._config.max_buffer_delay_ms is not None:
             request["max_buffer_delay_ms"] = self._config.max_buffer_delay_ms
+        # Sonic-3/3.5 speed/volume/emotion controls travel under
+        # ``generation_config``; only include the keys the caller set so the
+        # model default applies otherwise.
+        generation_config = {
+            key: value
+            for key, value in (
+                ("speed", self._config.speed),
+                ("volume", self._config.volume),
+                ("emotion", self._config.emotion),
+            )
+            if value is not None
+        }
+        if generation_config:
+            request["generation_config"] = generation_config
         return request
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:

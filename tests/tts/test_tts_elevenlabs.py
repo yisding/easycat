@@ -174,6 +174,10 @@ class TestElevenLabsTTSValidation:
             provider = ElevenLabsTTS(ElevenLabsTTSConfig(api_key="key", output_format=fmt))
             assert provider._source_format.sample_rate == int(fmt.split("_")[1])
 
+    def test_invalid_text_normalization_rejected(self):
+        with pytest.raises(ValueError, match="apply_text_normalization must be"):
+            ElevenLabsTTSConfig(api_key="key", apply_text_normalization="sometimes")
+
 
 class TestElevenLabsTTSHTTP:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
@@ -226,6 +230,21 @@ class TestElevenLabsTTSHTTP:
         assert body["model_id"] == "test-model"
         assert body["voice_settings"]["stability"] == 0.7
         assert body["voice_settings"]["similarity_boost"] == 0.8
+        # Default normalization mode is sent so callers can override it.
+        assert body["apply_text_normalization"] == "auto"
+
+    async def test_synthesize_http_sends_text_normalization_override(self):
+        provider = self._make_provider(apply_text_normalization="off")
+        fake_response = FakeHTTPStreamResponse([_pcm16_bytes(10)])
+        client = provider._get_http_client()
+        mock_stream = MagicMock(return_value=fake_response)
+
+        with patch.object(client, "stream", mock_stream):
+            async for _ in provider.synthesize("Test"):
+                pass
+
+        body = mock_stream.call_args[1]["json"]
+        assert body["apply_text_normalization"] == "off"
 
     async def test_synthesize_http_cancel(self):
         provider = self._make_provider()
@@ -308,8 +327,20 @@ class TestElevenLabsTTSWebSocket:
 
         audio_events = [e for e in events if e.type == TTSEventType.AUDIO]
         assert len(audio_events) == 2
-        chunks = extract_audio_chunks(events)
+        chunks = extract_audio_chunks(audio_events)
         assert verify_pcm16_audio(chunks)
+
+    async def test_synthesize_ws_url_includes_text_normalization(self):
+        provider = self._make_provider(apply_text_normalization="on")
+        fake_ws = FakeReconnectingWS(messages=[self._final_message()])
+        mock_ctor = MagicMock(return_value=fake_ws)
+
+        with patch("easycat.tts.elevenlabs_tts.ReconnectingWebSocket", mock_ctor):
+            async for _ in provider.synthesize("Hello"):
+                pass
+
+        url = mock_ctor.call_args.kwargs["url"]
+        assert "apply_text_normalization=on" in url
 
     async def test_synthesize_ws_sends_init_text_and_eos(self):
         provider = self._make_provider()
