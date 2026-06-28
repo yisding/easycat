@@ -253,3 +253,31 @@ def test_build_issues_skips_oversized_artifact_refs() -> None:
     records = [_stt_start(1, "x" * 129, turn_id="quiet")]
     report = build_issues(records, artifact_resolver=resolver)
     assert [issue for issue in report["issues"] if issue["code"] == "near_silent_capture"] == []
+
+
+def test_build_issues_bot_clipping_refs_do_not_starve_silence_budget() -> None:
+    """A flood of bot-output (TTS) artifacts must not exhaust the ref budget the
+    caller-input silence pass needs.
+
+    With a single shared budget, the clipping pass spends every
+    ``_MAX_ANALYZED_REFS`` slot on bot-output refs before the silence pass runs,
+    so a later quiet caller turn silently misses ``near_silent_capture``.  The
+    bot and caller refs are budgeted separately to keep that from happening.
+    """
+    from easycat.debug._audio_health import _MAX_ANALYZED_REFS
+
+    def resolver(ref: str) -> bytes | None:
+        if ref == "quiet":
+            return _silent_blob()
+        return _pcm16([0, 0])  # tiny bot blob: counts toward budget, no clipping
+
+    # Enough distinct bot-output refs to fill a single shared budget, followed
+    # by one quiet caller turn that must still be flagged.
+    records: list[dict] = [
+        _tts_frame(seq, f"tts{seq}", turn_id=f"t{seq}") for seq in range(_MAX_ANALYZED_REFS)
+    ]
+    records.append(_stt_start(_MAX_ANALYZED_REFS, "quiet", turn_id="quiet"))
+
+    report = build_issues(records, artifact_resolver=resolver)
+    flagged = [i["turn_id"] for i in report["issues"] if i["code"] == "near_silent_capture"]
+    assert flagged == ["quiet"]

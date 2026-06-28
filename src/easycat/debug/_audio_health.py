@@ -46,6 +46,11 @@ _CLIP_LEVEL = 32760
 # empty string mean "unspecified", which is the common in-tree default.
 _PCM16_ENCODINGS = frozenset({"", "pcm", "pcm16", "pcm_s16le", "linear16"})
 _MAX_ARTIFACT_REF_LEN = 128
+# Per-partition cap on distinct artifact refs resolved during one issues scan.
+# Bot-output and caller-input audio are budgeted separately (see
+# ``AudioSampleCache``) so a flood of one side's artifacts cannot exhaust the
+# budget the other side needs.  The scan stays bounded at this many refs per
+# partition, i.e. a small constant number of partitions overall.
 _MAX_ANALYZED_REFS = 512
 
 
@@ -59,22 +64,30 @@ class AudioSampleCache:
 
     The cache ensures repeated journal records that point at the same artifact
     are resolved and decoded at most once during a scan.  It also limits the
-    number of distinct refs analyzed so attacker-influenced journals cannot
-    force unbounded resolver calls.
+    number of distinct refs analyzed *per partition* so attacker-influenced
+    journals cannot force unbounded resolver calls.
+
+    Refs are budgeted per ``partition`` (e.g. ``"bot"`` output vs ``"caller"``
+    input) so the clipping pass cannot spend the whole budget on bot-output
+    artifacts and starve the later caller-input silence pass.  Decoded samples
+    are still shared across partitions by ref, so a caller-input artifact
+    decoded once during clipping is reused for free by the silence scan.
     """
 
     def __init__(self, resolver: Callable[[str], bytes | None], *, stride: int) -> None:
         self._resolver = resolver
         self._stride = stride
         self._samples: dict[str, array[int] | None] = {}
+        self._partition_counts: dict[str, int] = {}
 
-    def resolve(self, ref: str) -> array[int] | None:
+    def resolve(self, ref: str, *, partition: str) -> array[int] | None:
         if not _valid_artifact_ref(ref):
             return None
         if ref in self._samples:
             return self._samples[ref]
-        if len(self._samples) >= _MAX_ANALYZED_REFS:
+        if self._partition_counts.get(partition, 0) >= _MAX_ANALYZED_REFS:
             return None
+        self._partition_counts[partition] = self._partition_counts.get(partition, 0) + 1
         blob = self._resolver(ref)
         if not blob:
             self._samples[ref] = None
@@ -180,12 +193,15 @@ def _resolve_samples(
     resolver: Callable[[str], bytes | None],
     *,
     stride: int,
+    partition: str,
     sample_cache: AudioSampleCache | None = None,
 ) -> array[int] | None:
     """Resolve *ref_key* on *record* to decoded PCM16 samples, or ``None``.
 
     Returns ``None`` (skip) when the record is not PCM16 mono, the ref is
     missing, the artifact cannot be resolved, or it decodes to no samples.
+    ``partition`` selects the cache's per-side ref budget (e.g. ``"bot"`` vs
+    ``"caller"``) so one side's artifacts cannot starve the other's.
     """
     data = _record_data(record)
     if not _is_pcm16_mono(data):
@@ -194,7 +210,7 @@ def _resolve_samples(
     if not isinstance(ref, str) or not ref:
         return None
     if sample_cache is not None:
-        return sample_cache.resolve(ref)
+        return sample_cache.resolve(ref, partition=partition)
     if not _valid_artifact_ref(ref):
         return None
     blob = resolver(ref)
@@ -227,7 +243,7 @@ def collect_clipping(
         else:
             continue
         samples = _resolve_samples(
-            record, ref_key, resolver, stride=stride, sample_cache=sample_cache
+            record, ref_key, resolver, stride=stride, partition=side, sample_cache=sample_cache
         )
         if samples is None:
             continue
@@ -265,7 +281,12 @@ def collect_caller_silence(
         if turn_id is None:
             continue
         samples = _resolve_samples(
-            record, "input_ref", resolver, stride=stride, sample_cache=sample_cache
+            record,
+            "input_ref",
+            resolver,
+            stride=stride,
+            partition="caller",
+            sample_cache=sample_cache,
         )
         if samples is None:
             continue
