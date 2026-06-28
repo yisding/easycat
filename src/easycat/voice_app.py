@@ -416,33 +416,41 @@ class VoiceApp:
         from easycat.transports.webrtc import serve_webrtc_config_sessions
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
-        # Unlike ``_run_browser``, this async helper can delegate announcement to
-        # the underlying serve helper.  That helper prints only the origin (no
-        # token-bearing query string), which keeps composable ``serve()`` calls
-        # from leaking bearer tokens into application logs by default.
+        # Mirror ``_run_browser``: announce the URL ourselves and suppress the
+        # helper's plainer "Server ready..." line so the same ``announce`` knob
+        # behaves identically across run() and serve(). Delegating to the helper
+        # would print only the bare origin, so following that hint on a
+        # token-protected serve opens the bundled page unauthenticated (→ 401).
+        # ``_announce_browser_url`` keeps the token value out of logs.
+        if announce:
+            self._announce_browser_url(transport_config)
         await serve_webrtc_config_sessions(
             self._browser_factory(),
             transport_config,
-            announce=announce,
+            announce=False,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
 
     def _announce_browser_url(self, transport_config: Any) -> None:
-        from urllib.parse import urlencode
-
         from easycat.cli._output import stdout_console
 
         host = transport_config.host
         port = transport_config.port
         display_host = "localhost" if host in {"127.0.0.1", "localhost", "::1"} else host
-        url = f"http://{display_host}:{port}"
-        if transport_config.auth_token:
-            # URL-encode the token so query-special characters (``+``, ``&``,
-            # ``#``, spaces) survive into the bundled client's ``?token=`` read,
-            # matching the CLI ``serve`` path (``cli/serve.py``).
-            query = urlencode({"token": transport_config.auth_token})
-            url = f"{url}/webrtc_client.html?{query}"
-        stdout_console.print(f"Open {url}")
+        base_url = f"http://{display_host}:{port}"
+        if not transport_config.auth_token:
+            stdout_console.print(f"Open {base_url}")
+            return
+        # A serve token is configured (and required for non-loopback binds), but
+        # it must never be written to logs. Print a ready-to-edit URL with a
+        # placeholder so the operator pastes their own token in its place; the
+        # bundled client reads the bearer token solely from the ``?token=``
+        # query, and ``/config`` / ``/offer`` answer 401 without it.
+        stdout_console.print(f"Open {base_url}/webrtc_client.html?token=<your serve token>")
+        stdout_console.print(
+            "Replace <your serve token> with the serve token you configured "
+            "(the page reads it from the ?token= query; keep it secret)."
+        )
 
     # ── WebSocket mode ───────────────────────────────────────────────
 
