@@ -85,11 +85,11 @@ def _make_routes(
 # ── Decoupling unit tests (no WebRTCTransport instance, no socket) ───────
 
 
-async def _aiohttp_app_with_routes(routes: WebRTCRoutes) -> object:
+async def _aiohttp_app_with_routes(routes: WebRTCRoutes, *, prefix: str = "/webrtc") -> object:
     from aiohttp import web
 
     app = web.Application()
-    routes.register(app, prefix="/webrtc", web=web)
+    routes.register(app, prefix=prefix, web=web)
     return app
 
 
@@ -220,6 +220,67 @@ async def test_root_redirect_replaces_untrusted_webrtc_base(
         location = resp.headers["Location"]
 
     assert location == "/webrtc_client.html?token=sekrit&webrtc=/webrtc"
+
+
+@pytest.mark.integration_socket
+async def test_root_redirect_preserves_sanitized_flat_base(
+    tmp_path: object,
+) -> None:
+    # Flat mode (``prefix=""``) has no trusted mount base to substitute, so a
+    # clean same-origin ``?webrtc=/proxy`` (e.g. a reverse-proxy path prefix)
+    # must be PRESERVED — dropping it would break ``/proxy/offer`` routing.
+    from pathlib import Path
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    static_dir = Path(str(tmp_path))
+    (static_dir / "webrtc_client.html").write_text("<html></html>", encoding="utf-8")
+    routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
+    app = await _aiohttp_app_with_routes(routes, prefix="")
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/?webrtc=/proxy/&token=sekrit", allow_redirects=False)
+        assert resp.status == 302
+        location = resp.headers["Location"]
+
+    # Trailing slash trimmed; same-origin prefix kept; token preserved.
+    assert location == "/webrtc_client.html?token=sekrit&webrtc=/proxy"
+
+
+@pytest.mark.integration_socket
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "/../x",  # path traversal
+        "//evil.test",  # protocol-relative (cross-origin)
+        "https://evil.test",  # absolute cross-origin URL
+        "evil",  # not absolute path
+        "/a/../b",  # mid-path traversal
+        r"/\evil.test",  # backslash host trick
+    ],
+)
+async def test_root_redirect_rejects_unsafe_flat_base(
+    tmp_path: object,
+    raw: str,
+) -> None:
+    # Flat mode must reject any non-same-origin / traversal ``?webrtc=`` value:
+    # no trusted base means the redirect carries NO ``webrtc`` param at all.
+    from pathlib import Path
+    from urllib.parse import urlencode
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    static_dir = Path(str(tmp_path))
+    (static_dir / "webrtc_client.html").write_text("<html></html>", encoding="utf-8")
+    routes = _make_routes(WebRTCTransportConfig(static_dir=str(static_dir)))
+    app = await _aiohttp_app_with_routes(routes, prefix="")
+    query = urlencode({"webrtc": raw, "token": "sekrit"})
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get(f"/?{query}", allow_redirects=False)
+        assert resp.status == 302
+        location = resp.headers["Location"]
+
+    assert "webrtc=" not in location
+    assert location == "/webrtc_client.html?token=sekrit"
 
 
 # ── Mounted VoiceServer integration tests ────────────────────────────────
