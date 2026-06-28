@@ -544,23 +544,58 @@ async def test_serve_browser_accepts_announce_kwarg(monkeypatch: pytest.MonkeyPa
     """``serve('browser', announce=...)`` must be accepted symmetrically with
     ``run('browser', announce=...)`` (it previously raised "unknown kwarg")."""
     calls: dict[str, Any] = {}
-    announced: list[bool] = []
+    token_bearing_announcements: list[bool] = []
 
     async def _fake_serve(factory: Any, config: Any = None, **kwargs: Any) -> None:
         calls["kwargs"] = kwargs
 
     monkeypatch.setattr(webrtc_module, "serve_webrtc_config_sessions", _fake_serve)
     monkeypatch.setattr(
-        VoiceApp, "_announce_browser_url", lambda self, cfg: announced.append(True)
+        VoiceApp,
+        "_announce_browser_url",
+        lambda self, cfg: token_bearing_announcements.append(True),
     )
 
     await VoiceApp(agent="a").serve("browser", announce=False)
-    assert announced == []
-    # The helper's own announce is always suppressed; VoiceApp owns the line.
+    assert token_bearing_announcements == []
     assert calls["kwargs"]["announce"] is False
 
     await VoiceApp(agent="a").serve("browser", announce=True)
-    assert announced == [True]
+    assert token_bearing_announcements == []
+    # Async serve delegates announcement to the helper, whose line omits the
+    # token-bearing query string so embedded applications do not leak bearer
+    # tokens into stdout/application logs by default.
+    assert calls["kwargs"]["announce"] is True
+
+
+async def test_serve_browser_does_not_announce_token_bearing_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async browser ``serve()`` must not print the auth token itself.
+
+    The underlying serve helper may emit its generic origin-only readiness line;
+    VoiceApp must not call ``_announce_browser_url`` because that URL embeds the
+    bearer token as ``?token=...`` for browser convenience.
+    """
+    calls: dict[str, Any] = {}
+    token_bearing_announcements: list[Any] = []
+
+    async def _fake_serve(factory: Any, config: Any = None, **kwargs: Any) -> None:
+        calls["config"] = config
+        calls["kwargs"] = kwargs
+
+    monkeypatch.setattr(webrtc_module, "serve_webrtc_config_sessions", _fake_serve)
+    monkeypatch.setattr(
+        VoiceApp,
+        "_announce_browser_url",
+        lambda self, cfg: token_bearing_announcements.append(cfg),
+    )
+
+    await VoiceApp(agent="a", serve_token="s3+cr et&x").serve("browser")
+
+    assert calls["config"].auth_token == "s3+cr et&x"
+    assert calls["kwargs"]["announce"] is True
+    assert token_bearing_announcements == []
 
 
 # ── Fail-loud on a misspelled server kwarg ───────────────────────────

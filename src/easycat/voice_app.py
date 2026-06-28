@@ -416,15 +416,14 @@ class VoiceApp:
         from easycat.transports.webrtc import serve_webrtc_config_sessions
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
-        # Mirror ``_run_browser``: announce the (token-bearing) URL ourselves and
-        # suppress the helper's plainer "Server ready..." line so the same
-        # ``announce`` knob behaves identically across run() and serve().
-        if announce:
-            self._announce_browser_url(transport_config)
+        # Unlike ``_run_browser``, this async helper can delegate announcement to
+        # the underlying serve helper.  That helper prints only the origin (no
+        # token-bearing query string), which keeps composable ``serve()`` calls
+        # from leaking bearer tokens into application logs by default.
         await serve_webrtc_config_sessions(
             self._browser_factory(),
             transport_config,
-            announce=False,
+            announce=announce,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
         )
 
