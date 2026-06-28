@@ -58,6 +58,21 @@ def test_decode_pcm_peaks_pads_short_or_empty_audio():
     assert len(peaks) == 6
 
 
+def test_decode_pcm_peaks_large_mono_does_not_materialise_python_int_list():
+    import tracemalloc
+
+    pcm = array("h", [1000]) * 1_000_000
+    blob = pcm.tobytes()
+    tracemalloc.start()
+    try:
+        peaks = decode_pcm_peaks(blob, sample_width=2, channels=1, buckets=8)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peaks == [(1000, 1000)] * 8
+    assert peak < 16 * 1024 * 1024
+
+
 def test_decode_pcm_peaks_downmixes_stereo_by_averaging():
     # Interleaved L/R: (100,300) -> 200, (-100,-300) -> -200.
     stereo = array("h", [100, 300, -100, -300]).tobytes()
