@@ -48,6 +48,11 @@ SCHEMA_VERSION = 1
 # blob into the sidecar.
 _MAX_NOTES_LEN = 4000
 
+# Keep annotation sidecars bounded: callers read and rewrite the whole JSON
+# envelope, so cap both record count and serialized bytes.
+MAX_ANNOTATIONS = 1000
+MAX_SIDECAR_BYTES = 5 * 1024 * 1024
+
 # Valid score band (inclusive).  ``None`` means "no score given".
 _SCORE_MIN = 1
 _SCORE_MAX = 5
@@ -126,12 +131,14 @@ def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     """
     path = sidecar_path(bundle_path)
     try:
+        if path.stat().st_size > MAX_SIDECAR_BYTES:
+            return {}
         raw = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return {}
     try:
         payload = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, RecursionError, ValueError):
         return {}
     if not isinstance(payload, dict):
         return {}
@@ -145,7 +152,12 @@ def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def save_annotation(bundle_path: str | Path, annotation: Annotation) -> dict[str, Any]:
+def save_annotation(
+    bundle_path: str | Path,
+    annotation: Annotation,
+    *,
+    allowed_turn_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """Persist *annotation* into the sidecar, returning its stored record.
 
     Read-modify-write: load the existing map, upsert the record for
@@ -154,12 +166,21 @@ def save_annotation(bundle_path: str | Path, annotation: Annotation) -> dict[str
     leaves the prior sidecar intact.  Never touches the bundle or its
     journal.
     """
+    if allowed_turn_ids is not None and annotation.turn_id not in allowed_turn_ids:
+        raise AnnotationError(f"turn_id does not exist in bundle: {annotation.turn_id!r}")
+
     path = sidecar_path(bundle_path)
     existing = load_annotations(bundle_path)
+    is_new_turn = annotation.turn_id not in existing
+    if is_new_turn and len(existing) >= MAX_ANNOTATIONS:
+        raise AnnotationError(f"annotation sidecar is limited to {MAX_ANNOTATIONS} turns")
     record = annotation.to_record()
     record["updated_at"] = datetime.now(UTC).isoformat()
     existing[annotation.turn_id] = record
     payload = {"schema_version": SCHEMA_VERSION, "annotations": existing}
+    serialized = json.dumps(payload, indent=2)
+    if len(serialized.encode("utf-8")) > MAX_SIDECAR_BYTES:
+        raise AnnotationError(f"annotation sidecar is limited to {MAX_SIDECAR_BYTES} bytes")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_name: str | None = None
@@ -169,7 +190,7 @@ def save_annotation(bundle_path: str | Path, annotation: Annotation) -> dict[str
         )
         tmp_name = tmp.name
         try:
-            json.dump(payload, tmp, indent=2)
+            tmp.write(serialized)
         finally:
             tmp.close()
         Path(tmp_name).replace(path)
