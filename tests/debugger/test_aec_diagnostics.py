@@ -530,3 +530,86 @@ async def test_api_audio_reference_track_404_without_reference_frames(tmp_path):
         assert resp.status == 404
         resp = await client.get(f"/api/audio/waveform/{turn_id}?track=reference")
         assert resp.status == 404
+
+
+def test_aec_diagnostics_truncates_oversized_tracks(monkeypatch):
+    from easycat.debugger import server as debugger_server
+
+    cap = 640  # one 20ms frame at 16 kHz, int16 mono
+    monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)
+    records = []
+    blobs = {}
+    for idx, (name, ref_key, ref_value) in enumerate(
+        [
+            ("stage_start", "input_ref", "mic"),
+            (AEC_REFERENCE_FRAME_NAME, "output_ref", "ref"),
+            ("stage_complete", "output_ref", "post"),
+        ],
+        start=1,
+    ):
+        record = {
+            "sequence": idx,
+            "name": name,
+            "turn_id": "t1",
+            ref_key: ref_value,
+            "data": {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+            "timing": {"mono_ns": idx * 20_000_000},
+        }
+        records.append(record)
+        blobs[ref_value] = _tone_pcm(4000, 640)  # two frames, twice the cap
+    source = _DictSource(records, blobs)
+
+    out = debugger_server._aec_diagnostics_for_turn(source, "t1")
+
+    assert out["diagnostics_truncated"] is True
+    assert out["max_track_bytes"] == cap
+    for track in ("mic_in", "reference", "post_aec"):
+        assert out["tracks"][track]["truncated"] is True
+        assert out["tracks"][track]["byte_count"] == 1280
+        assert out["tracks"][track]["analyzed_byte_count"] == cap
+    assert out["erle"]["frames"] == [pytest.approx(0.0, abs=0.5)]
+
+
+def test_aec_diagnostics_late_interruption_not_clamped_into_prefix(monkeypatch):
+    """A real barge-in *after* the truncated prefix must not hide self-echo.
+
+    Regression: framing interruptions against the clipped prefix shrank
+    ``total_frames`` and clamped the late ``turn_state_changed`` onto the last
+    analyzed frame, planting a phantom guard window that suppressed the genuine
+    self-echo spike in the analyzed tail (truncated diagnostics under-reported).
+    """
+    from easycat.debugger import server as debugger_server
+
+    cap = 5 * 640  # five 20ms frames at 16 kHz, int16 mono
+    monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)
+
+    # 30-frame post-AEC track: a lone self-echo spike at frame 4 (the last
+    # analyzed frame) surrounded by silence.
+    post_pcm = _tone_pcm(0, 320 * 4) + _tone_pcm(8000, 320) + _tone_pcm(0, 320 * 25)
+    fmt = {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2}
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_complete",
+            "turn_id": "t1",
+            "output_ref": "post",
+            "data": fmt,
+            "timing": {"mono_ns": 0},
+        },
+        # Barge-in 20 frames in — far beyond the 5-frame analyzed prefix.
+        {
+            "sequence": 2,
+            "name": "turn_state_changed",
+            "turn_id": "t1",
+            "data": {"to": "user_speaking"},
+            "timing": {"mono_ns": 20 * 20_000_000},
+        },
+    ]
+    source = _DictSource(records, {"post": post_pcm})
+
+    out = debugger_server._aec_diagnostics_for_turn(source, "t1")
+
+    # The late barge-in keeps its true frame index (not clamped to the prefix).
+    assert out["interruption_frames"] == [20]
+    # The self-echo spike in the analyzed tail is reported, not suppressed.
+    assert [hit["frame"] for hit in out["self_echo"]] == [4]
