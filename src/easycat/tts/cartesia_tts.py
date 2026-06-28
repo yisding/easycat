@@ -14,6 +14,7 @@ from easycat._provider_helpers import get_package_version
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import TTSEvent
 from easycat.reconnecting_ws import ReconnectConfig, ReconnectingWebSocket
+from easycat.tts._multi_context_ws import MultiContextAdapter, MultiContextWSManager, _Context
 from easycat.tts._ws_base import _WSTTSBase
 from easycat.tts.input import TTSInput, coerce_tts_input
 
@@ -69,6 +70,19 @@ class CartesiaTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
+    # Opt-in persistent multi-context socket. Default ``False`` preserves the
+    # current one-shot-per-synthesize behavior byte-for-byte (no manager is
+    # created). When ``True`` one WebSocket is reused across turns, each
+    # utterance scoped by a fresh context_id, and barge-in cancels just the
+    # context (falling back to a full socket close) rather than tearing the
+    # socket down. Accepted tradeoff: a mid-stream reconnect replays the
+    # context from the top (audible repetition). Socket warmth between turns
+    # relies on WebSocket-level ping/pong; after a very long idle gap the socket
+    # may be closed server-side and is transparently reconnected on the next
+    # utterance.
+    persistent_ws: bool = False
+    # Bounded per-context queue for the persistent demux reader.
+    context_queue_maxsize: int = 256
 
     def __post_init__(self) -> None:
         if self.encoding not in _ENCODING_SAMPLE_WIDTH:
@@ -114,8 +128,14 @@ class CartesiaTTS(_WSTTSBase):
         # is re-emitted after the restart (audible repetition), not a seamless
         # resume.
         self._pending_request: str | None = None
+        # The in-flight persistent context, tracked so stop()/cancel() can
+        # target it. Only used when ``persistent_ws`` is enabled.
+        self._current_ctx: _Context | None = None
 
     def _create_ws(self) -> ReconnectingWebSocket:
+        return self._build_ws(self._replay_request)
+
+    def _build_ws(self, on_reconnect) -> ReconnectingWebSocket:
         return ReconnectingWebSocket(
             url=self._config.base_url,
             config=ReconnectConfig(
@@ -129,8 +149,47 @@ class CartesiaTTS(_WSTTSBase):
             ),
             event_bus=self._config.event_bus,
             provider_name="cartesia_tts",
-            on_reconnect=self._replay_request,
+            on_reconnect=on_reconnect,
         )
+
+    def _get_mgr(self) -> MultiContextWSManager:
+        """Build the persistent multi-context manager on first use."""
+        if self._mgr is None:
+            adapter = MultiContextAdapter(
+                # The socket is built with the MANAGER's reconnect hook (which
+                # replays every live context) instead of the single-context
+                # _replay_request, so the two replay paths do not collide.
+                connect_factory=lambda on_reconnect: self._build_ws(on_reconnect),
+                route_key=self._route_key,
+                context_cancel_frames=lambda ctx_id: [
+                    json.dumps({"context_id": ctx_id, "cancel": True})
+                ],
+                on_context_replay=lambda _ctx_id: self._reset_audio_alignment(),
+                socket_close_frames=lambda: [],
+                on_global_frame=self._on_global_frame,
+                context_queue_maxsize=self._config.context_queue_maxsize,
+            )
+            self._mgr = MultiContextWSManager(adapter)
+        return self._mgr
+
+    @staticmethod
+    def _route_key(frame: Any) -> str | None:
+        if not isinstance(frame, str):
+            return None
+        try:
+            return json.loads(frame).get("context_id")
+        except json.JSONDecodeError:
+            return None
+
+    def _on_global_frame(self, frame: Any) -> None:
+        if not isinstance(frame, str):
+            return
+        try:
+            msg = json.loads(frame)
+        except json.JSONDecodeError:
+            return
+        if msg.get("type") == "error":
+            self._emit_provider_error_from_msg(msg)
 
     async def _replay_request(self) -> None:
         """Re-send the in-flight synthesis request after a reconnect.
@@ -190,8 +249,13 @@ class CartesiaTTS(_WSTTSBase):
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         # SSML is not supported (``supports_ssml`` is ``False``), so the
         # scheduler always delivers a plain-text payload here.
-        self._start_synthesis()
         text = coerce_tts_input(payload).text
+        if self._persistent_enabled():
+            async for event in self._synthesize_persistent(text):
+                yield event
+            return
+
+        self._start_synthesis()
 
         self._ws = self._create_ws()
         context_id = str(uuid4())
@@ -252,7 +316,75 @@ class CartesiaTTS(_WSTTSBase):
             self._pending_request = None
             self._end_synthesis()
 
+    async def _synthesize_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Synthesize over the shared persistent multi-context socket.
+
+        The decode loop body is identical to the default one-shot path; only
+        the transport (a reused socket + per-context queue) differs, plus the
+        mandatory recv-side context_id guard that drops a stray late frame from
+        a prior/cancelled context.
+        """
+        self._start_synthesis()
+        mgr = self._get_mgr()
+        ctx = await mgr.open_context()
+        self._current_ctx = ctx
+        self._context_id = ctx.context_id
+
+        try:
+            await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
+
+            async for message in ctx.frames():
+                if self._cancelled:
+                    break
+                if not isinstance(message, str):
+                    continue
+                try:
+                    msg = json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+
+                # Mandatory recv-side guard: drop any frame whose context_id
+                # does not match the active utterance.
+                if msg.get("context_id") not in (None, ctx.context_id):
+                    continue
+
+                msg_type = msg.get("type")
+                if msg_type == "chunk":
+                    data_b64 = msg.get("data")
+                    if data_b64:
+                        audio_bytes = base64.b64decode(data_b64)
+                        if audio_bytes:
+                            yield self._make_audio_event(audio_bytes, self._source_format)
+                    if msg.get("done"):
+                        break
+                elif msg_type == "timestamps":
+                    word_ts = msg.get("word_timestamps")
+                    if word_ts:
+                        yield self._make_markers_event([word_ts])
+                elif msg_type == "done":
+                    break
+                elif msg_type == "error":
+                    self._emit_provider_error_from_msg(msg)
+                    break
+
+        except Exception as exc:
+            if not self._cancelled:
+                logger.error("Cartesia TTS error: %s", exc)
+                self._emit_provider_error(exc)
+                raise
+        finally:
+            mgr.finish_context(ctx)
+            self._current_ctx = None
+            self._context_id = None
+            self._end_synthesis()
+
     async def stop(self) -> None:
+        if self._persistent_enabled():
+            await super().stop()
+            ctx = self._current_ctx
+            if ctx is not None and self._mgr is not None:
+                await self._mgr.cancel_context(ctx)
+            return
         await super().stop()
         await self._close_ws()
 
@@ -261,6 +393,14 @@ class CartesiaTTS(_WSTTSBase):
         # loop treats any in-flight chunk as discarded.
         was_active = self._active
         await super().cancel()
+        if self._persistent_enabled():
+            # Context-scoped barge-in: cancel just the in-flight context and
+            # keep the shared socket open (the manager falls back to a full
+            # socket close if the cancel send fails).
+            ctx = self._current_ctx
+            if was_active and ctx is not None and self._mgr is not None:
+                await self._mgr.cancel_context(ctx)
+            return
         ws = self._ws
         ctx_id = self._context_id
         if was_active and ws is not None and ctx_id is not None:

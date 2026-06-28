@@ -558,6 +558,153 @@ class TestElevenLabsTTSWebSocket:
         assert fake_ws._closed
 
 
+class FakePersistentWS:
+    """Fake multi-context socket for the persistent ElevenLabs path."""
+
+    def __init__(self, on_reconnect=None, *, fail_send_at=None):
+        self.on_reconnect = on_reconnect
+        self.sent: list[str] = []
+        self._send_count = 0
+        self._fail_send_at = fail_send_at or set()
+        self.closed = False
+        self._queue: asyncio.Queue = asyncio.Queue()
+
+    async def connect(self) -> None:
+        return None
+
+    async def send(self, message: str) -> None:
+        self._send_count += 1
+        if self._send_count in self._fail_send_at:
+            raise RuntimeError("send failed")
+        self.sent.append(message)
+        msg = json.loads(message)
+        # Respond to the EOS frame (empty text) with audio + isFinal for ctx.
+        if msg.get("text") == "" and "context_id" in msg:
+            ctx_id = msg["context_id"]
+            audio = base64.b64encode(_pcm16_bytes(120)).decode()
+            await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
+            await self._queue.put(json.dumps({"isFinal": True, "contextId": ctx_id}))
+
+    async def recv_iter(self):
+        while True:
+            frame = await self._queue.get()
+            if frame is None:
+                return
+            yield frame
+
+    async def close(self) -> None:
+        self.closed = True
+        await self._queue.put(None)
+
+
+class TestElevenLabsPersistent:
+    def _make_provider(self, **kwargs) -> ElevenLabsTTS:
+        config = ElevenLabsTTSConfig(
+            api_key="test-key",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=True,
+            **kwargs,
+        )
+        return ElevenLabsTTS(config)
+
+    def test_persistent_with_http_raises(self):
+        with pytest.raises(ValueError, match="requires stream_mode=WEBSOCKET"):
+            ElevenLabsTTSConfig(
+                api_key="k",
+                stream_mode=ElevenLabsStreamMode.HTTP,
+                persistent_ws=True,
+            )
+
+    def test_multi_stream_url_includes_inactivity_timeout(self):
+        provider = self._make_provider(inactivity_timeout=25)
+        url = provider._multi_stream_url()
+        assert "/multi-stream-input?" in url
+        assert "inactivity_timeout=25" in url
+
+    async def test_per_context_init_text_eos(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            async for _ in provider.synthesize("Hello"):
+                pass
+
+        frames = [json.loads(s) for s in fake.sent]
+        # init(space) + text + EOS, all carrying the same context_id.
+        init, text, eos = frames[0], frames[1], frames[2]
+        assert init["text"] == " "
+        assert "voice_settings" in init
+        assert text["text"] == "Hello"
+        assert eos["text"] == ""
+        ctx_id = init["context_id"]
+        assert text["context_id"] == ctx_id
+        assert eos["context_id"] == ctx_id
+        await provider.close()
+
+    async def test_one_socket_across_two_calls(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_multi_ws", factory):
+            async for _ in provider.synthesize("first"):
+                pass
+            async for _ in provider.synthesize("second"):
+                pass
+
+        assert factory.call_count == 1
+        ctx_ids = {
+            json.loads(s)["context_id"]
+            for s in fake.sent
+            if json.loads(s).get("text") not in (None,) and "context_id" in json.loads(s)
+        }
+        # Two distinct contexts across the two utterances.
+        assert len(ctx_ids) == 2
+        await provider.close()
+
+    async def test_synthesize_yields_audio(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            audio = [e async for e in provider.synthesize("hi") if e.type == TTSEventType.AUDIO]
+        assert len(audio) == 1
+        assert verify_pcm16_audio(extract_audio_chunks(audio))
+        await provider.close()
+
+    async def test_cancel_sends_close_context_without_socket_close(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            async for event in provider.synthesize("long"):
+                if event.type == TTSEventType.AUDIO:
+                    await provider.cancel()
+
+            assert not fake.closed
+            close_ctx = [
+                json.loads(s) for s in fake.sent if json.loads(s).get("close_context") is True
+            ]
+            assert close_ctx and close_ctx[0]["close_context"] is True
+        await provider.close()
+
+    async def test_close_sends_close_socket(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_multi_ws", return_value=fake):
+            async for _ in provider.synthesize("hi"):
+                pass
+            await provider.close()
+
+        assert fake.closed
+        assert any(json.loads(s).get("close_socket") for s in fake.sent)
+
+    def test_version_info_still_websockets(self):
+        provider = self._make_provider()
+        assert provider.version_info()["sdk_version"] == get_package_version("websockets")
+
+
 class TestElevenLabsTTSGeneral:
     async def test_close_cleans_up(self):
         config = ElevenLabsTTSConfig(api_key="test-key")
