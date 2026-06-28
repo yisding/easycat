@@ -1235,7 +1235,7 @@ def export_bundle(
         raise typer.Exit(0)
 
     success(f"Wrote context pack to {destination}")
-    stdout_console.print(escape(str(destination)))
+    stdout_console.print(escape(str(destination)), soft_wrap=True)
 
 
 def _render_replay_summary(

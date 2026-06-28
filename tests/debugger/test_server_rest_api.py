@@ -730,17 +730,65 @@ def test_coerce_frames_to_format_lenient_resamples_with_audioop():
     assert len(blobs[1]) > len(frames[1][1])
 
 
-def test_coerce_frames_to_format_lenient_skips_when_audioop_missing(monkeypatch):
-    """When audioop is unavailable, a width mismatch is skipped, not raised."""
+def test_coerce_frames_to_format_lenient_skips_when_no_helper(monkeypatch):
+    """When no audio helper is available, a format mismatch is skipped, not raised."""
     monkeypatch.setattr(_server, "_audioop", None)
+    monkeypatch.setattr(_server, "_np", None)
     fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
     frames = [
         (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
-        (2, b"\x01" * 160, {"sample_rate": 16000, "channels": 1, "sample_width": 1}),
+        (2, b"\x02" * 320, {"sample_rate": 8000, "channels": 1, "sample_width": 2}),
     ]
     blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
     assert blobs == [frames[0][1]]
     assert dropped == 1
+
+
+def test_coerce_frames_to_format_lenient_resamples_with_numpy(monkeypatch):
+    """Lenient (mic) path resamples a differing rate via numpy when audioop is absent."""
+    if _server._np is None:  # pragma: no cover
+        pytest.skip("numpy unavailable")
+    monkeypatch.setattr(_server, "_audioop", None)
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x02" * 320, {"sample_rate": 8000, "channels": 1, "sample_width": 2}),
+    ]
+    blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
+    assert dropped == 0
+    assert len(blobs) == 2
+    assert len(blobs[1]) > len(frames[1][1])
+
+
+def test_np_pcm_dtype_uses_little_endian_specs(monkeypatch):
+    """Multi-byte PCM artifacts are little-endian even on big-endian hosts."""
+    requested: list[str] = []
+
+    class FakeNumpy:
+        def dtype(self, spec: str) -> str:
+            requested.append(spec)
+            return f"dtype:{spec}"
+
+    monkeypatch.setattr(_server, "_np", FakeNumpy())
+
+    assert _server._np_pcm_dtype(1) == "dtype:int8"
+    assert _server._np_pcm_dtype(2) == "dtype:<i2"
+    assert _server._np_pcm_dtype(4) == "dtype:<i4"
+    assert requested == ["int8", "<i2", "<i4"]
+
+
+def test_np_tomono_uses_wide_sum_for_int32_peak_values():
+    """The numpy fallback must not overflow before averaging int32 stereo samples."""
+    if _server._np is None:  # pragma: no cover
+        pytest.skip("numpy unavailable")
+    import struct
+
+    peak = 2_147_483_647
+    data = struct.pack("<ii", peak, peak)
+
+    mono = _server._np_tomono(data, 4)
+
+    assert struct.unpack("<i", mono) == (peak,)
 
 
 def test_collect_audio_frames_mic_selects_stt_stage_start():

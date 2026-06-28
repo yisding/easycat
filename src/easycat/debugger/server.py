@@ -86,14 +86,58 @@ from easycat.runtime.costs import (
 )
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
-# ``audioop`` was removed from the stdlib in Python 3.13.  Mic-track audio
-# stitching uses it for best-effort resample/downmix, but the debugger must
-# import cleanly without it — when absent we skip format-mismatched frames
-# rather than coercing them.
+# ``audioop`` was removed from the stdlib in Python 3.13.  Fall back to numpy
+# (optional extra) for mic-track resample/downmix; skip mismatched frames only
+# when neither helper is available.
 try:
     import audioop as _audioop
 except ImportError:  # pragma: no cover - exercised on 3.13+
     _audioop = None  # type: ignore[assignment]
+
+try:
+    import numpy as _np
+except (ImportError, RecursionError):  # pragma: no cover
+    _np = None  # type: ignore[assignment]
+
+
+def _np_pcm_dtype(width: int) -> Any:
+    """Return the signed little-endian numpy dtype for raw PCM samples."""
+    _dtypes = {1: "int8", 2: "<i2", 4: "<i4"}
+    spec = _dtypes.get(width)
+    if spec is None:
+        raise ValueError(f"unsupported sample width {width}")
+    return _np.dtype(spec)  # type: ignore[union-attr]
+
+
+def _np_tomono(data: bytes, width: int) -> bytes:
+    """Average stereo channels into mono using numpy (int8/16/32 PCM)."""
+    dt = _np_pcm_dtype(width)
+    arr = _np.frombuffer(data, dtype=dt)  # type: ignore[union-attr]
+    stereo = arr.reshape(-1, 2).astype(_np.int64)  # type: ignore[union-attr]
+    mono = ((stereo[:, 0] + stereo[:, 1]) >> 1).astype(dt)
+    return mono.tobytes()
+
+
+def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: int) -> bytes:
+    """Linearly interpolate PCM from *inrate* to *outrate* using numpy."""
+    dt = _np_pcm_dtype(width)
+    arr = _np.frombuffer(data, dtype=dt).astype(_np.float64)  # type: ignore[union-attr]
+    n_frames = len(arr) // nchannels
+    if n_frames == 0:
+        return b""
+    n_out = max(1, round(n_frames * outrate / inrate))
+    x_in = _np.arange(n_frames)  # type: ignore[union-attr]
+    x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
+    if nchannels == 1:
+        out = _np.interp(x_out, x_in, arr)  # type: ignore[union-attr]
+    else:
+        frames = arr.reshape(n_frames, nchannels)
+        out = _np.column_stack(  # type: ignore[union-attr]
+            [_np.interp(x_out, x_in, frames[:, ch]) for ch in range(nchannels)]  # type: ignore[union-attr]
+        ).ravel()
+    info = _np.iinfo(dt)  # type: ignore[union-attr]
+    return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
+
 
 logger = logging.getLogger(__name__)
 
@@ -816,11 +860,12 @@ def _coerce_frames_to_format(
 
     - ``strict=True`` (TTS) raises :class:`ValueError` — the bot's own output
       should never splice across formats, and the route maps this to a 409.
-    - ``strict=False`` (mic) makes a best-effort conversion with stdlib
-      :mod:`audioop` (resample / downmix) when ``sample_width`` matches, and
-      otherwise *skips* the blob (incrementing the dropped counter) so a noisy
-      caller capture never aborts the whole turn.  When :mod:`audioop` is
-      unavailable (Python 3.13+) any mismatch is skipped.
+    - ``strict=False`` (mic) makes a best-effort conversion with
+      :mod:`audioop` (stdlib, removed in 3.13) or :mod:`numpy` (optional
+      extra) when ``sample_width`` matches, and otherwise *skips* the blob
+      (incrementing the dropped counter) so a noisy caller capture never
+      aborts the whole turn.  When neither helper is available any mismatch
+      is skipped.
     """
     blobs: list[bytes] = []
     dropped = 0
@@ -839,24 +884,30 @@ def _coerce_frames_to_format(
                 "tts_frame format mismatch: cannot stitch frames with differing "
                 "sample_rate/channels/sample_width"
             )
-        # Non-strict (mic): convert when the sample widths line up and audioop
-        # is present; otherwise drop the blob rather than corrupt the stream.
-        if _audioop is None or width != target_width or width <= 0:
+        # Non-strict (mic): convert when sample widths match and at least one
+        # audio helper is present; otherwise drop rather than corrupt the stream.
+        if (_audioop is None and _np is None) or width != target_width or width <= 0:
             dropped += 1
             continue
         try:
             converted = blob
             if channels == 2 and target_channels == 1:
-                converted = _audioop.tomono(converted, width, 0.5, 0.5)
+                if _audioop is not None:
+                    converted = _audioop.tomono(converted, width, 0.5, 0.5)
+                else:
+                    converted = _np_tomono(converted, width)
             elif channels != target_channels:
                 dropped += 1
                 continue
             if rate > 0 and rate != target_rate:
-                converted, _ = _audioop.ratecv(
-                    converted, width, target_channels, rate, target_rate, None
-                )
+                if _audioop is not None:
+                    converted, _ = _audioop.ratecv(
+                        converted, width, target_channels, rate, target_rate, None
+                    )
+                else:
+                    converted = _np_ratecv(converted, width, target_channels, rate, target_rate)
         except Exception:
-            # audioop rejects malformed PCM lengths; never abort the turn.
+            # audio helpers reject malformed PCM lengths; never abort the turn.
             dropped += 1
             continue
         blobs.append(converted)
