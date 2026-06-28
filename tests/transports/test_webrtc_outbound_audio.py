@@ -194,6 +194,42 @@ class TestOutboundAudioAecReference:
         assert not source._pending
         assert source.drain_aec_reference_frames() == captured
 
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_silent_recv_after_audio_appends_silence_reference(self):
+        """A fully-silent render frame still appends a session-rate silence
+        reference so the far/near streams stay 1:1 during pauses (matching the
+        LocalTransport per-callback reference)."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        # Transport (48k) frame is 1920 bytes; the session-rate (16k) chunk is
+        # 640 bytes / 20 ms.
+        session_data = bytes([0x11]) * 640
+        transport_data = bytes([0x11]) * (960 * 2)
+        source.enqueue(
+            transport_data,
+            original_chunk=AudioChunk(data=session_data, format=PCM16_MONO_16K),
+        )
+        await source._recv()  # plays real audio -> real reference
+        await source._recv()  # queue empty -> silence reference
+
+        frames = source.drain_aec_reference_frames()
+        assert len(frames) == 2
+        assert frames[0] == session_data
+        # 20 ms of 16 kHz mono silence = 320 samples * 2 bytes.
+        assert frames[-1] == bytes(320 * 2)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_silent_recv_before_any_audio_appends_nothing(self):
+        """Before any audio has played there is no echo and no known session
+        rate, so silent render frames append no reference."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        await source._recv()
+        await source._recv()
+        assert source.drain_aec_reference_frames() == []
+
     def test_transport_drain_is_declared_capability(self):
         """The router detects drain via ``getattr`` — it must be a callable
         returning ``list[bytes]`` even with no peer connected."""

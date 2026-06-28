@@ -489,8 +489,13 @@ class _OutboundAudioSource:
         # (session-rate) chunk at playback time; AudioRouter drains it via
         # ``drain_aec_reference_frames`` before AudioStage.execute() so the AEC
         # far-end reference is always fed before the corresponding near-end mic
-        # frame is processed.
+        # frame is processed.  Fully-silent render frames append a session-rate
+        # silence frame too, so the far/near streams stay 1:1 during pauses.
         self._aec_ref_queue: deque[bytes] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
+        # Session-rate format of the most recently delivered far-end frame, used
+        # to size silence reference frames during fully-silent ``_recv`` calls.
+        # ``None`` until audio has played (no echo to cancel before then).
+        self._ref_format: AudioFormat | None = None
 
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
@@ -605,6 +610,7 @@ class _OutboundAudioSource:
                 # frame by AudioRouter (shared AEC reference capability).
                 if delivered_data:
                     self._aec_ref_queue.append(delivered_data)
+                    self._ref_format = queued.original_chunk.format
                 queued.original_reported = reported
 
             if queued.transport_offset >= len(queued.transport_data):
@@ -615,6 +621,17 @@ class _OutboundAudioSource:
             buf.extend(bytes(frame_bytes - len(buf)))
 
         pcm_data = bytes(buf)
+
+        # Silence-frame alignment: a render frame that carried no real audio
+        # (queue empty) still played 20 ms of silence into the speaker, so
+        # append a matching session-rate silence reference.  This keeps the
+        # far-end stream 1:1 with the near-end mic stream during pauses,
+        # mirroring LocalTransport's per-callback reference.  Skipped until a
+        # session rate is known (nothing has played yet -> no echo to cancel).
+        if not delivered_chunks and self._ref_format is not None:
+            fmt = self._ref_format
+            silence_samples = fmt.sample_rate * _FRAME_SAMPLES // _WEBRTC_SAMPLE_RATE
+            self._aec_ref_queue.append(bytes(silence_samples * fmt.frame_size))
 
         frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
         frame.sample_rate = _WEBRTC_SAMPLE_RATE
