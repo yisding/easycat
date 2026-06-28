@@ -113,6 +113,14 @@ class ElevenLabsTTSConfig:
                 "ElevenLabs persistent_ws=True requires stream_mode=WEBSOCKET; "
                 "persistence is meaningless on the HTTP path."
             )
+        # Fail fast on the documented /multi-stream-input inactivity_timeout
+        # range (1–180s) when opting into the persistent path, rather than
+        # deferring to a runtime API rejection.
+        if self.persistent_ws and not 1 <= self.inactivity_timeout <= 180:
+            raise ValueError(
+                "ElevenLabs inactivity_timeout must be in [1, 180] seconds for "
+                f"persistent_ws=True, got {self.inactivity_timeout}"
+            )
 
 
 class ElevenLabsTTS(_WSTTSBase):
@@ -442,41 +450,24 @@ class ElevenLabsTTS(_WSTTSBase):
         """
         self._start_synthesis()
         mgr = self._get_mgr()
-        ctx = await mgr.open_context()
-        self._current_ctx = ctx
-        self._context_id = ctx.context_id
-
-        pending = [
-            self._context_init_frame(ctx.context_id),
-            json.dumps({"text": text, "context_id": ctx.context_id}),
-            json.dumps({"text": "", "context_id": ctx.context_id}),
-        ]
-
+        # open_context() performs the initial /multi-stream-input connect when
+        # the socket is cold, so it lives INSIDE the guarded block: a failed
+        # first connect must still emit the provider error and run
+        # _end_synthesis() (clearing is_active), like the one-shot path.
+        ctx: _Context | None = None
         try:
+            ctx = await mgr.open_context()
+            self._current_ctx = ctx
+            self._context_id = ctx.context_id
+            pending = [
+                self._context_init_frame(ctx.context_id),
+                json.dumps({"text": text, "context_id": ctx.context_id}),
+                json.dumps({"text": "", "context_id": ctx.context_id}),
+            ]
             await mgr.send(ctx, pending)
 
-            async for message in ctx.frames():
-                if self._cancelled:
-                    break
-                if not isinstance(message, str):
-                    continue
-                try:
-                    data = json.loads(message)
-                except json.JSONDecodeError:
-                    continue
-
-                # Mandatory recv-side guard: drop frames for a different context.
-                if data.get("contextId") not in (None, ctx.context_id):
-                    continue
-
-                if data.get("audio"):
-                    audio_bytes = base64.b64decode(data["audio"])
-                    if audio_bytes:
-                        yield self._make_audio_event(audio_bytes, self._source_format)
-                if data.get("alignment"):
-                    yield self._make_markers_event([data["alignment"]])
-                if data.get("isFinal"):
-                    break
+            async for event in self._decode_persistent_frames(ctx):
+                yield event
 
         except Exception as exc:
             if not self._cancelled:
@@ -485,10 +476,38 @@ class ElevenLabsTTS(_WSTTSBase):
                 self._emit_provider_error(exc, ws_close_code=close_code)
                 raise
         finally:
-            mgr.finish_context(ctx)
+            if ctx is not None:
+                mgr.finish_context(ctx)
             self._current_ctx = None
             self._context_id = None
             self._end_synthesis()
+
+    async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:
+        """Decode one context's frames into TTSEvents (persistent WS path).
+
+        Mirrors the one-shot WS decode body, plus the mandatory recv-side
+        ``contextId`` guard that drops a stray late frame from another context.
+        """
+        async for message in ctx.frames():
+            if self._cancelled:
+                return
+            if not isinstance(message, str):
+                continue
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+            # Drop frames for a different context.
+            if data.get("contextId") not in (None, ctx.context_id):
+                continue
+            if data.get("audio"):
+                audio_bytes = base64.b64decode(data["audio"])
+                if audio_bytes:
+                    yield self._make_audio_event(audio_bytes, self._source_format)
+            if data.get("alignment"):
+                yield self._make_markers_event([data["alignment"]])
+            if data.get("isFinal"):
+                return
 
     async def _replay_request(self) -> None:
         """Re-send the init/text/EOS frames after a reconnect.

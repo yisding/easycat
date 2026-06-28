@@ -326,11 +326,15 @@ class CartesiaTTS(_WSTTSBase):
         """
         self._start_synthesis()
         mgr = self._get_mgr()
-        ctx = await mgr.open_context()
-        self._current_ctx = ctx
-        self._context_id = ctx.context_id
-
+        # open_context() performs the initial connect when the socket is cold,
+        # so it lives INSIDE the guarded block: a failed first connect must
+        # still emit the provider error and run _end_synthesis() (clearing
+        # is_active), exactly like the one-shot path.
+        ctx: _Context | None = None
         try:
+            ctx = await mgr.open_context()
+            self._current_ctx = ctx
+            self._context_id = ctx.context_id
             await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
 
             async for message in ctx.frames():
@@ -373,7 +377,8 @@ class CartesiaTTS(_WSTTSBase):
                 self._emit_provider_error(exc)
                 raise
         finally:
-            mgr.finish_context(ctx)
+            if ctx is not None:
+                mgr.finish_context(ctx)
             self._current_ctx = None
             self._context_id = None
             self._end_synthesis()

@@ -238,6 +238,24 @@ class TestCartesiaPersistent:
         assert fake.closed
         assert provider._mgr is not None and provider._mgr._closed
 
+    async def test_persistent_connect_failure_ends_synthesis(self):
+        # A failed initial connect on the persistent path must emit the error
+        # and clear is_active (run _end_synthesis), like the one-shot path —
+        # not leave the provider stuck active.
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        with patch.object(provider, "_build_ws", return_value=FailingConnectWS()):
+            with pytest.raises(RuntimeError, match="connect boom"):
+                async for _ in provider.synthesize("hi"):
+                    pass
+
+        assert not provider.is_active
+        await provider.close()
+
 
 class TestCartesiaPersistentEquivalence:
     """Persistent transport must not change the emitted audio bytes."""

@@ -161,6 +161,74 @@ class TestMultiContextWSManager:
         assert all(f["context_id"] == ctx_b.context_id for f in b_frames)
         await mgr.aclose()
 
+    async def test_ensure_socket_clears_failed_socket_so_next_open_retries(self):
+        class FailingConnectWS(FakeMultiContextWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect failed")
+
+        good = FakeMultiContextWS()
+        sockets: list[FakeMultiContextWS] = [FailingConnectWS(), good]
+        adapter = _make_adapter(good, connect_factory=lambda _hook: sockets.pop(0))
+        mgr = MultiContextWSManager(adapter)
+
+        # First open: the initial connect fails and must NOT leave a dead socket.
+        with pytest.raises(RuntimeError, match="connect failed"):
+            await mgr.open_context()
+        assert mgr._ws is None
+
+        # Second open reconnects a fresh (good) socket instead of early-returning.
+        ctx = await mgr.open_context()
+        assert ctx is not None
+        assert mgr._ws is good
+        await mgr.aclose()
+
+    async def test_backpressure_delivers_done_under_full_queue(self):
+        # maxsize=1 forces the reader to block on put when the consumer is slow;
+        # every frame (incl. the terminal done) must still be delivered, never
+        # silently dropped.
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws, context_queue_maxsize=1))
+        ctx = await mgr.open_context()
+        ws._script = [_chunk(ctx.context_id) for _ in range(4)] + [
+            _chunk(ctx.context_id, done=True)
+        ]
+        await mgr._cancel_background_tasks()
+        ws._gate = asyncio.Event()
+        mgr._reader_task = asyncio.create_task(mgr._reader_loop())
+
+        async def _collect() -> list[dict]:
+            out = []
+            async for frame in ctx.frames():
+                out.append(json.loads(frame))
+                await asyncio.sleep(0)  # yield so the reader has to backpressure
+                if out[-1].get("done"):
+                    break
+            return out
+
+        frames = await asyncio.wait_for(_collect(), timeout=2.0)
+        assert len(frames) == 5
+        assert frames[-1]["done"] is True
+        await mgr.aclose()
+
+    async def test_finish_context_delivers_terminal_when_queue_full(self):
+        # If the queue is full at teardown, the terminal must still land (the
+        # buffered frames are drained to make room) so frames() cannot hang.
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws, context_queue_maxsize=1))
+        ctx = await mgr.open_context()
+        ctx.queue.put_nowait(_chunk(ctx.context_id))  # fill to capacity
+        assert ctx.queue.full()
+
+        mgr.finish_context(ctx)
+
+        async def _drain() -> list:
+            return [f async for f in ctx.frames()]
+
+        # Returns promptly (terminal delivered); buffered frame was drained.
+        got = await asyncio.wait_for(_drain(), timeout=1.0)
+        assert got == []
+        await mgr.aclose()
+
     async def test_send_lock_serializes_concurrent_sends(self):
         order: list[str] = []
 

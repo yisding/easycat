@@ -227,8 +227,19 @@ class MultiContextWSManager:
     async def _ensure_socket(self) -> None:
         if self._ws is not None:
             return
-        self._ws = self._adapter.connect_factory(self._on_reconnect)
-        await self._ws.connect()
+        ws = self._adapter.connect_factory(self._on_reconnect)
+        self._ws = ws
+        try:
+            await ws.connect()
+        except BaseException:
+            # The initial connect failed (retries exhausted). Leave no failed
+            # wrapper behind, or the next open_context() would early-return and
+            # send() would run against a socket that never connected; clear it
+            # so the next open reconnects a fresh one.
+            self._ws = None
+            with contextlib.suppress(Exception):
+                await ws.close()
+            raise
         self._reader_task = asyncio.create_task(self._reader_loop())
 
     async def _send_frames(self, frames: list[str]) -> None:
@@ -258,8 +269,16 @@ class MultiContextWSManager:
                 if ctx.cancelled:
                     # Drop frames for a superseded/cancelled context.
                     continue
-                with contextlib.suppress(asyncio.QueueFull):
-                    ctx.queue.put_nowait(frame)
+                # Backpressure rather than drop: a blocking put means a slow
+                # consumer stalls THIS reader, which stops draining recv_iter
+                # and lets TCP backpressure flow to the server — mirroring the
+                # one-shot path. Never silently drop a frame (e.g. the terminal
+                # done/isFinal). finish_context() drains the queue to release a
+                # reader blocked here on cancel/teardown, and cancelling the
+                # reader task (aclose/_close_socket_only) unblocks it too.
+                # (EasyCat drives one active context at a time, so head-of-line
+                # blocking across contexts is not a concern here.)
+                await ctx.queue.put(frame)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -276,6 +295,14 @@ class MultiContextWSManager:
         """Push the terminal sentinel and unregister the context (idempotent)."""
         if not ctx.done.is_set():
             ctx.done.set()
+            # Drain any buffered frames first so a reader blocked in
+            # ``queue.put()`` (slow/abandoned/cancelled consumer) unblocks, and
+            # so the terminal sentinel always has room to land.
+            while True:
+                try:
+                    ctx.queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
             with contextlib.suppress(asyncio.QueueFull):
                 ctx.queue.put_nowait(_TERMINAL)
         self._contexts.pop(ctx.context_id, None)

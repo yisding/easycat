@@ -621,6 +621,27 @@ class TestElevenLabsPersistent:
         assert "/multi-stream-input?" in url
         assert "inactivity_timeout=25" in url
 
+    def test_persistent_rejects_out_of_range_inactivity_timeout(self):
+        with pytest.raises(ValueError, match=r"inactivity_timeout must be in \[1, 180\]"):
+            ElevenLabsTTSConfig(api_key="k", persistent_ws=True, inactivity_timeout=600)
+
+    async def test_persistent_connect_failure_ends_synthesis(self):
+        # A failed initial /multi-stream-input connect must emit the error and
+        # clear is_active (run _end_synthesis), not leave the provider stuck.
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        with patch.object(provider, "_build_multi_ws", return_value=FailingConnectWS()):
+            with pytest.raises(RuntimeError, match="connect boom"):
+                async for _ in provider.synthesize("hi"):
+                    pass
+
+        assert not provider.is_active
+        await provider.close()
+
     async def test_per_context_init_text_eos(self):
         provider = self._make_provider()
         fake = FakePersistentWS()
