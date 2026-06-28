@@ -448,8 +448,13 @@ _DOCS_LINKS: list[_DocsLink] = [
             "uv run pytest tests/debug/test_testing_helpers.py",
             "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
             "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
             "uv run easycat validate latency --smoke",
+            "uv run --env-file .env easycat validate latency --smoke",
             "uv run easycat validate live --provider openai",
+            "uv run --env-file .env easycat validate live --provider openai --strict",
+            "uv run easycat validate report .easycat/validation/latest.json",
         ),
     },
     {
@@ -818,6 +823,9 @@ def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None 
     routes = "\n".join(_format_docs_entry(entry, label_width=label_width) for entry in entries)
     available_audiences = ", ".join(_available_docs_audiences())
     available_filters = ", ".join(_available_docs_audience_filters())
+    filtered_json_audience = (
+        _docs_audience_filter_alias(audience_filter) if audience_filter is not None else "learners"
+    )
     filter_note = (
         f"Audience filter: {audience_filter}\n"
         if audience_filter is not None
@@ -829,7 +837,7 @@ def _format_docs_menu(entries: list[_DocsEntry], *, audience_filter: str | None 
 
 Online source: {_DOCS_SOURCE_URL}
 Machine-readable routes, audiences, and command hints: easycat docs --json
-Filtered machine-readable routes: easycat docs --audience maintainers --json
+Filtered machine-readable routes: easycat docs --audience {filtered_json_audience} --json
 Available audiences: {available_audiences}
 Available filters: {available_filters}
 {_DOCS_AUDIENCE_ALIAS_NOTE}
