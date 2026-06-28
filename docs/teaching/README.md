@@ -5,8 +5,11 @@ through EasyCat. Modeled after *Crafting Interpreters*, *Ray
 Tracer in One Weekend*, and the `nanoGPT` tradition.
 
 Each chapter is a **self-contained folder** under `docs/teaching/`
-with a narrative `README.md` and a runnable `main.py` (or a couple
-of scripts). Chapter `N+1` copies chapter `N`'s code as its starting
+with a narrative `README.md` and a `main.py` entry point. Chapters
+that demonstrate multiple approaches (9, 11) also include named
+companion scripts; chapter 12 has several standalone analysis scripts
+and no single `main.py` — its README lists which to run and in what
+order. Chapter `N+1` copies chapter `N`'s code as its starting
 point and evolves from there — so every chapter folder is a frozen,
 runnable artifact you can visit independently.
 
