@@ -78,8 +78,9 @@ class ElevenLabsSTTConfig:
     # Include the detected language code on committed transcripts (realtime).
     realtime_include_language_detection: bool = False
     # Zero-retention mode: when False, ElevenLabs does not store request audio
-    # or transcripts (history/abuse logging off). Applied to both realtime
-    # (query param) and batch (form field). ``True`` keeps the server default.
+    # or transcripts (history/abuse logging off). Sent as a query param on both
+    # the realtime WebSocket and the batch /speech-to-text request. ``True``
+    # keeps the server default.
     enable_logging: bool = True
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
