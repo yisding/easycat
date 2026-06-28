@@ -145,6 +145,11 @@ def load_annotations(bundle_path: str | Path) -> dict[str, dict[str, Any]]:
     annotations = payload.get("annotations")
     if not isinstance(annotations, dict):
         return {}
+    # Mirror the byte cap: a sidecar with more records than the write path
+    # ever produces is treated as corrupt so downstream consumers stay
+    # bounded and ``save_annotation`` is not locked out by the count cap.
+    if len(annotations) > MAX_ANNOTATIONS:
+        return {}
     out: dict[str, dict[str, Any]] = {}
     for turn_id, record in annotations.items():
         if isinstance(turn_id, str) and isinstance(record, dict):

@@ -165,6 +165,25 @@ def test_load_annotations_rejects_oversized_sidecar_before_reading(tmp_path: Pat
     assert load_annotations(bundle) == {}
 
 
+def test_load_annotations_rejects_over_count_cap_sidecar(tmp_path: Path) -> None:
+    # A compact sidecar can stay under the byte cap while holding far more
+    # records than the count cap; load must bound it like a corrupt file so
+    # downstream consumers stay bounded and the write path is not locked out.
+    import json
+
+    bundle = tmp_path / "call.zip"
+    annotations = {f"t{i}": {"passed": True} for i in range(MAX_ANNOTATIONS + 1)}
+    sidecar_path(bundle).write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION, "annotations": annotations}),
+        encoding="utf-8",
+    )
+    assert load_annotations(bundle) == {}
+    # The count-cap lockout is gone: a fresh annotation can still be saved,
+    # rewriting the oversized sidecar down to a bounded map.
+    save_annotation(bundle, Annotation(turn_id="fresh", passed=True))
+    assert set(load_annotations(bundle)) == {"fresh"}
+
+
 def test_load_annotations_tolerates_deep_json_recursion(tmp_path: Path) -> None:
     bundle = tmp_path / "call.zip"
     sidecar_path(bundle).write_text(
