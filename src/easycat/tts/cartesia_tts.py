@@ -157,6 +157,7 @@ class CartesiaTTS(_WSTTSBase):
                 # replays every live context) instead of the single-context
                 # _replay_request, so the two replay paths do not collide.
                 connect_factory=lambda on_reconnect: self._build_ws(on_reconnect),
+                parse_frame=self._parse_frame,
                 route_key=self._route_key,
                 context_cancel_frames=lambda ctx_id: [
                     json.dumps({"context_id": ctx_id, "cancel": True})
@@ -170,27 +171,49 @@ class CartesiaTTS(_WSTTSBase):
         return self._mgr
 
     @staticmethod
-    def _route_key(frame: Any) -> str | None:
+    def _parse_frame(frame: Any) -> dict[str, Any] | None:
+        """Parse a raw wire frame to a dict once (None for non-text/non-object)."""
         if not isinstance(frame, str):
             return None
         try:
             parsed = json.loads(frame)
         except json.JSONDecodeError:
             return None
-        # Valid-but-non-object JSON (a bare number, array, null, quoted
-        # keepalive, …) has no context_id; return None so it routes as a
-        # global frame instead of raising AttributeError in the reader.
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _route_key(parsed: Any) -> str | None:
         return parsed.get("context_id") if isinstance(parsed, dict) else None
 
-    def _on_global_frame(self, frame: Any) -> None:
-        if not isinstance(frame, str):
-            return
-        try:
-            msg = json.loads(frame)
-        except json.JSONDecodeError:
-            return
-        if msg.get("type") == "error":
+    def _on_global_frame(self, parsed: Any) -> None:
+        if isinstance(parsed, dict) and parsed.get("type") == "error":
+            self._emit_provider_error_from_msg(parsed)
+
+    def _decode_message(self, msg: dict[str, Any]) -> tuple[list[TTSEvent], bool]:
+        """Decode one parsed Cartesia message into (events, is_terminal).
+
+        Single source of the chunk/timestamps/done/error wire decoding, shared
+        by the one-shot ``synthesize`` loop and the persistent path so they
+        cannot drift. Emits a provider error internally for ``error`` frames.
+        """
+        msg_type = msg.get("type")
+        if msg_type == "chunk":
+            events: list[TTSEvent] = []
+            data_b64 = msg.get("data")
+            if data_b64:
+                audio_bytes = base64.b64decode(data_b64)
+                if audio_bytes:
+                    events.append(self._make_audio_event(audio_bytes, self._source_format))
+            return events, bool(msg.get("done"))
+        if msg_type == "timestamps":
+            word_ts = msg.get("word_timestamps")
+            return ([self._make_markers_event([word_ts])] if word_ts else []), False
+        if msg_type == "done":
+            return [], True
+        if msg_type == "error":
             self._emit_provider_error_from_msg(msg)
+            return [], True
+        return [], False
 
     async def _replay_request(self) -> None:
         """Re-send the in-flight synthesis request after a reconnect.
@@ -280,30 +303,13 @@ class CartesiaTTS(_WSTTSBase):
             async for message in self._ws.recv_iter():
                 if self._cancelled:
                     break
-                if not isinstance(message, str):
+                msg = self._parse_frame(message)
+                if msg is None:
                     continue
-                try:
-                    msg = json.loads(message)
-                except json.JSONDecodeError:
-                    continue
-
-                msg_type = msg.get("type")
-                if msg_type == "chunk":
-                    data_b64 = msg.get("data")
-                    if data_b64:
-                        audio_bytes = base64.b64decode(data_b64)
-                        if audio_bytes:
-                            yield self._make_audio_event(audio_bytes, self._source_format)
-                    if msg.get("done"):
-                        break
-                elif msg_type == "timestamps":
-                    word_ts = msg.get("word_timestamps")
-                    if word_ts:
-                        yield self._make_markers_event([word_ts])
-                elif msg_type == "done":
-                    break
-                elif msg_type == "error":
-                    self._emit_provider_error_from_msg(msg)
+                events, terminal = self._decode_message(msg)
+                for event in events:
+                    yield event
+                if terminal:
                     break
 
         except Exception as exc:
@@ -320,10 +326,10 @@ class CartesiaTTS(_WSTTSBase):
     async def _synthesize_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
         """Synthesize over the shared persistent multi-context socket.
 
-        The decode loop body is identical to the default one-shot path; only
-        the transport (a reused socket + per-context queue) differs, plus the
-        mandatory recv-side context_id guard that drops a stray late frame from
-        a prior/cancelled context.
+        Decoding is shared with the one-shot path via ``_decode_message``; only
+        the transport (a reused socket + per-context queue of already-parsed
+        frames) differs, plus the mandatory recv-side context_id guard that
+        drops a stray late frame from a prior/cancelled context.
         """
         self._start_synthesis()
         mgr = self._get_mgr()
@@ -336,38 +342,21 @@ class CartesiaTTS(_WSTTSBase):
             ctx = await mgr.open_context()
             await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
 
-            async for message in ctx.frames():
+            # Frames arrive already parsed (the manager parses once); decode is
+            # shared with the one-shot path.
+            async for msg in ctx.frames():
                 if self._cancelled:
                     break
-                if not isinstance(message, str):
+                if not isinstance(msg, dict):
                     continue
-                try:
-                    msg = json.loads(message)
-                except json.JSONDecodeError:
-                    continue
-
                 # Mandatory recv-side guard: drop any frame whose context_id
                 # does not match the active utterance.
                 if msg.get("context_id") not in (None, ctx.context_id):
                     continue
-
-                msg_type = msg.get("type")
-                if msg_type == "chunk":
-                    data_b64 = msg.get("data")
-                    if data_b64:
-                        audio_bytes = base64.b64decode(data_b64)
-                        if audio_bytes:
-                            yield self._make_audio_event(audio_bytes, self._source_format)
-                    if msg.get("done"):
-                        break
-                elif msg_type == "timestamps":
-                    word_ts = msg.get("word_timestamps")
-                    if word_ts:
-                        yield self._make_markers_event([word_ts])
-                elif msg_type == "done":
-                    break
-                elif msg_type == "error":
-                    self._emit_provider_error_from_msg(msg)
+                events, terminal = self._decode_message(msg)
+                for event in events:
+                    yield event
+                if terminal:
                     break
 
         except Exception as exc:

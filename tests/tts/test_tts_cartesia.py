@@ -194,6 +194,37 @@ class TestCartesiaPersistent:
         assert verify_pcm16_audio(chunks)
         await provider.close()
 
+    async def test_stray_non_object_frame_does_not_break_stream(self):
+        # A valid-but-non-object JSON frame on the shared socket (exercising the
+        # REAL Cartesia adapter) must be dropped, not crash the reader: audio
+        # still flows and the turn completes.
+        fake = FakePersistentWS()
+
+        async def _send_with_stray(message: str) -> None:
+            fake.sent.append(message)
+            msg = json.loads(message)
+            if "transcript" in msg:
+                ctx_id = msg["context_id"]
+                await fake._queue.put('"pong"')  # stray keepalive-ish frame
+                await fake._queue.put(
+                    json.dumps(
+                        {
+                            "type": "chunk",
+                            "context_id": ctx_id,
+                            "data": base64.b64encode(_pcm16_bytes(120)).decode("ascii"),
+                            "done": True,
+                        }
+                    )
+                )
+
+        provider = self._make_provider()
+        with patch.object(provider, "_build_ws", return_value=fake):
+            fake.send = _send_with_stray  # type: ignore[method-assign]
+            audio = [e async for e in provider.synthesize("hi") if e.type == TTSEventType.AUDIO]
+        assert len(audio) == 1
+        assert not fake.closed  # socket survived the stray frame
+        await provider.close()
+
     async def test_cancel_sends_cancel_and_keeps_socket_open(self):
         provider = self._make_provider()
         fake = FakePersistentWS()

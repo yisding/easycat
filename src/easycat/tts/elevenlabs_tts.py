@@ -246,25 +246,17 @@ class ElevenLabsTTS(_WSTTSBase):
         try:
             ws = await self._start_ws_stream(text)
 
-            # Receive audio chunks
+            # Receive audio chunks; decode is shared with the persistent path.
             async for message in ws.recv_iter():
                 if self._cancelled:
                     break
-
-                if not isinstance(message, str):
+                data = self._parse_frame(message)
+                if data is None:
                     continue
-                try:
-                    data = json.loads(message)
-                except json.JSONDecodeError:
-                    continue
-
-                if data.get("audio"):
-                    audio_bytes = base64.b64decode(data["audio"])
-                    if audio_bytes:
-                        yield self._make_audio_event(audio_bytes, self._source_format)
-                if data.get("alignment"):
-                    yield self._make_markers_event([data["alignment"]])
-                if data.get("isFinal"):
+                events, terminal = self._decode_message(data)
+                for event in events:
+                    yield event
+                if terminal:
                     break
 
         except Exception as exc:
@@ -400,6 +392,7 @@ class ElevenLabsTTS(_WSTTSBase):
         if self._mgr is None:
             adapter = MultiContextAdapter(
                 connect_factory=lambda on_reconnect: self._build_multi_ws(on_reconnect),
+                parse_frame=self._parse_frame,
                 route_key=self._route_key,
                 context_cancel_frames=lambda ctx_id: [
                     json.dumps({"context_id": ctx_id, "close_context": True})
@@ -413,29 +406,48 @@ class ElevenLabsTTS(_WSTTSBase):
         return self._mgr
 
     @staticmethod
-    def _route_key(frame: Any) -> str | None:
-        # ElevenLabs responses carry the context id under camelCase ``contextId``
-        # (requests use snake_case ``context_id``).
+    def _parse_frame(frame: Any) -> dict[str, Any] | None:
+        """Parse a raw wire frame to a dict once (None for non-text/non-object)."""
         if not isinstance(frame, str):
             return None
         try:
             parsed = json.loads(frame)
         except json.JSONDecodeError:
             return None
-        # Valid-but-non-object JSON has no contextId; return None so it routes as
-        # a global frame instead of raising AttributeError in the reader.
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _route_key(parsed: Any) -> str | None:
+        # ElevenLabs responses carry the context id under camelCase ``contextId``
+        # (requests use snake_case ``context_id``).
         return parsed.get("contextId") if isinstance(parsed, dict) else None
 
-    def _on_global_frame(self, frame: Any) -> None:
-        if not isinstance(frame, str):
+    def _on_global_frame(self, parsed: Any) -> None:
+        if not isinstance(parsed, dict):
             return
-        try:
-            data = json.loads(frame)
-        except json.JSONDecodeError:
-            return
-        message = data.get("message") or data.get("error")
+        message = parsed.get("message") or parsed.get("error")
         if message:
             self._emit_provider_error(RuntimeError(f"ElevenLabs TTS error: {message}"))
+
+    def _decode_message(self, data: dict[str, Any]) -> tuple[list[TTSEvent], bool]:
+        """Decode one parsed ElevenLabs message into (events, is_terminal).
+
+        Shared by the one-shot and persistent paths so their wire decoding
+        cannot drift. A context-scoped error frame is surfaced as a provider
+        error and ends the turn.
+        """
+        if data.get("error") or data.get("message"):
+            detail = data.get("error") or data.get("message")
+            self._emit_provider_error(RuntimeError(f"ElevenLabs TTS error: {detail}"))
+            return [], True
+        events: list[TTSEvent] = []
+        if data.get("audio"):
+            audio_bytes = base64.b64decode(data["audio"])
+            if audio_bytes:
+                events.append(self._make_audio_event(audio_bytes, self._source_format))
+        if data.get("alignment"):
+            events.append(self._make_markers_event([data["alignment"]]))
+        return events, bool(data.get("isFinal"))
 
     async def _synthesize_ws_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
         """Synthesize over the shared persistent multi-stream-input socket.
@@ -474,38 +486,24 @@ class ElevenLabsTTS(_WSTTSBase):
             self._end_synthesis()
 
     async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:
-        """Decode one context's frames into TTSEvents (persistent WS path).
+        """Decode one context's already-parsed frames into TTSEvents.
 
-        Mirrors the one-shot WS decode body, plus the mandatory recv-side
+        Decoding (incl. context-scoped error surfacing) is shared with the
+        one-shot path via ``_decode_message``; this adds the mandatory recv-side
         ``contextId`` guard that drops a stray late frame from another context.
         """
-        async for message in ctx.frames():
+        async for data in ctx.frames():
             if self._cancelled:
                 return
-            if not isinstance(message, str):
-                continue
-            try:
-                data = json.loads(message)
-            except json.JSONDecodeError:
+            if not isinstance(data, dict):
                 continue
             # Drop frames for a different context.
             if data.get("contextId") not in (None, ctx.context_id):
                 continue
-            # A context-scoped error frame (routed here because it carries this
-            # contextId) must be surfaced and end the turn — otherwise the loop
-            # would await frames() forever (no isFinal) or end as a clean,
-            # truncated completion with the server's reason lost.
-            if data.get("error") or data.get("message"):
-                detail = data.get("error") or data.get("message")
-                self._emit_provider_error(RuntimeError(f"ElevenLabs TTS error: {detail}"))
-                return
-            if data.get("audio"):
-                audio_bytes = base64.b64decode(data["audio"])
-                if audio_bytes:
-                    yield self._make_audio_event(audio_bytes, self._source_format)
-            if data.get("alignment"):
-                yield self._make_markers_event([data["alignment"]])
-            if data.get("isFinal"):
+            events, terminal = self._decode_message(data)
+            for event in events:
+                yield event
+            if terminal:
                 return
 
     async def _replay_request(self) -> None:

@@ -66,10 +66,23 @@ def _chunk(ctx_id: str, key: str = "context_id", *, done: bool = False) -> str:
     return json.dumps({key: ctx_id, "type": "chunk", "done": done})
 
 
+def _default_parse(frame):
+    """Parse a raw JSON wire frame to a dict, or None (mirrors providers)."""
+    if not isinstance(frame, str):
+        return None
+    try:
+        parsed = json.loads(frame)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _make_adapter(ws, **overrides) -> MultiContextAdapter:
     defaults = dict(
         connect_factory=lambda _hook: ws,
-        route_key=lambda f: json.loads(f).get("context_id") if isinstance(f, str) else None,
+        parse_frame=_default_parse,
+        # route_key receives the *parsed* object now (parse happens once).
+        route_key=lambda d: d.get("context_id") if isinstance(d, dict) else None,
         context_cancel_frames=lambda cid: [json.dumps({"context_id": cid, "cancel": True})],
         on_context_replay=lambda _id: None,
         socket_close_frames=lambda: [],
@@ -103,7 +116,7 @@ class TestMultiContextWSManager:
 
         frames = []
         async for frame in ctx.frames():
-            frames.append(json.loads(frame))
+            frames.append(frame)
             if frames[-1].get("done"):
                 break
         assert len(frames) == 2
@@ -114,7 +127,7 @@ class TestMultiContextWSManager:
         mgr = MultiContextWSManager(
             _make_adapter(
                 ws,
-                route_key=lambda f: json.loads(f).get("contextId"),
+                route_key=lambda d: d.get("contextId") if isinstance(d, dict) else None,
             )
         )
         ctx = await mgr.open_context()
@@ -125,7 +138,7 @@ class TestMultiContextWSManager:
 
         got = []
         async for frame in ctx.frames():
-            got.append(json.loads(frame))
+            got.append(frame)
             if got[-1].get("isFinal"):
                 break
         assert got[0]["contextId"] == ctx.context_id
@@ -148,12 +161,12 @@ class TestMultiContextWSManager:
 
         a_frames = []
         async for frame in ctx_a.frames():
-            a_frames.append(json.loads(frame))
+            a_frames.append(frame)
             if a_frames[-1].get("done"):
                 break
         b_frames = []
         async for frame in ctx_b.frames():
-            b_frames.append(json.loads(frame))
+            b_frames.append(frame)
             if b_frames[-1].get("done"):
                 break
 
@@ -199,7 +212,7 @@ class TestMultiContextWSManager:
         async def _collect() -> list[dict]:
             out = []
             async for frame in ctx.frames():
-                out.append(json.loads(frame))
+                out.append(frame)
                 await asyncio.sleep(0)  # yield so the reader has to backpressure
                 if out[-1].get("done"):
                     break
@@ -343,30 +356,86 @@ class TestMultiContextWSManager:
         await mgr.aclose()
 
     async def test_non_object_json_frame_does_not_kill_reader(self):
-        # A valid-but-non-object JSON frame (bare number / quoted keepalive)
-        # must route as a global frame, not raise AttributeError in the reader
-        # and tear down the shared socket.
+        # A valid-but-non-object JSON frame (bare number / quoted keepalive) is
+        # parsed to None by parse_frame and dropped — it must NOT reach
+        # on_global_frame, raise, or tear down the shared socket.
         ws = FakeMultiContextWS()
         globals_seen: list = []
         mgr = MultiContextWSManager(
             _make_adapter(ws, on_global_frame=lambda f: globals_seen.append(f))
         )
         ctx = await mgr.open_context()
-        ws._script = ["123", '"pong"', _chunk(ctx.context_id, done=True)]
+        ws._script = ["123", '"pong"', "[]", _chunk(ctx.context_id, done=True)]
         await mgr._cancel_background_tasks()
         ws._gate = asyncio.Event()
         mgr._reader_task = asyncio.create_task(mgr._reader_loop())
 
         frames = []
         async for frame in ctx.frames():
-            frames.append(json.loads(frame))
+            frames.append(frame)
             if frames[-1].get("done"):
                 break
-        # The stray non-object frames went to on_global_frame; the socket
-        # survived and the real frame was still delivered.
+        # The stray non-object frames were dropped (parse_frame → None); the
+        # socket survived and the real frame was still delivered.
         assert frames and frames[-1]["done"] is True
-        assert "123" in globals_seen and '"pong"' in globals_seen
+        assert globals_seen == []
         assert mgr._ws is ws  # reader still alive, socket not torn down
+        await mgr.aclose()
+
+    async def test_on_global_frame_raising_does_not_kill_reader(self):
+        # Even if a provider's on_global_frame raises on a routable-less (global)
+        # frame, the reader must survive (the call is guarded), keep the socket,
+        # and keep delivering frames to live contexts.
+        ws = FakeMultiContextWS()
+
+        def _boom(_parsed):
+            raise RuntimeError("on_global_frame boom")
+
+        mgr = MultiContextWSManager(_make_adapter(ws, on_global_frame=_boom))
+        ctx = await mgr.open_context()
+        # A valid dict with no context_id -> routed to on_global_frame (raises),
+        # then a real frame for ctx.
+        ws._script = [json.dumps({"type": "error"}), _chunk(ctx.context_id, done=True)]
+        await mgr._cancel_background_tasks()
+        ws._gate = asyncio.Event()
+        mgr._reader_task = asyncio.create_task(mgr._reader_loop())
+
+        frames = []
+        async for frame in ctx.frames():
+            frames.append(frame)
+            if frames[-1].get("done"):
+                break
+        assert frames and frames[-1]["done"] is True
+        assert mgr._ws is ws  # reader survived the raising global handler
+        await mgr.aclose()
+
+    async def test_buffered_terminal_survives_socket_close(self):
+        # F1 edge: a COMPLETED utterance whose terminal (done) is still buffered
+        # when the socket closes must NOT be reported as an error or lose its
+        # tail — the consumer drains the buffered done and completes cleanly.
+        class EndingWS(FakeMultiContextWS):
+            async def recv_iter(self):
+                for frame in self._script:
+                    yield frame
+                # stream ends right after the buffered frames (clean close)
+
+        ws = EndingWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        ws._script = [_chunk(ctx.context_id), _chunk(ctx.context_id, done=True)]
+        await mgr._cancel_background_tasks()
+        ws._gate = asyncio.Event()
+        mgr._reader_task = asyncio.create_task(mgr._reader_loop())
+        await asyncio.sleep(0.01)  # let the reader buffer both frames then end
+
+        # Both frames (incl. the terminal done) are delivered; no error raised.
+        frames = []
+        async for frame in ctx.frames():
+            frames.append(frame)
+            if frames[-1].get("done"):
+                break
+        assert len(frames) == 2
+        assert frames[-1]["done"] is True
         await mgr.aclose()
 
     async def test_deliberate_aclose_ends_frames_without_error(self):

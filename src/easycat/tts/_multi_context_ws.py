@@ -13,11 +13,14 @@ Design goals and the correctness hardenings baked in:
   shapes, base64, or terminators. All provider-specific behaviour lives in the
   frozen :class:`MultiContextAdapter` callback bundle, so each provider keeps
   its decode/encode logic verbatim.
-- **Single demux reader.** Exactly ONE background task iterates the socket's
-  ``recv_iter()`` and routes each frame to the owning context's bounded queue
-  via :meth:`MultiContextAdapter.route_key`. A persistent socket can never have
-  two concurrent ``recv_iter()`` calls — the classic concurrent-recv hazard on
-  ``websockets`` — because the reader is the sole consumer.
+- **Single demux reader, parse once.** Exactly ONE background task iterates the
+  socket's ``recv_iter()``, parses each frame ONCE via
+  :meth:`MultiContextAdapter.parse_frame`, routes the parsed object to the owning
+  context's bounded queue via :meth:`MultiContextAdapter.route_key`, and queues
+  the parsed object so the consumer's decode loop never re-parses. A persistent
+  socket can never have two concurrent ``recv_iter()`` calls — the classic
+  concurrent-recv hazard on ``websockets`` — because the reader is the sole
+  consumer.
 - **Send serialization.** The persistent model has genuinely concurrent
   senders: the reader-driven reconnect replay hook and the ``synthesize()``
   caller. A single :class:`asyncio.Lock` serializes every ``ws.send`` so frames
@@ -72,8 +75,13 @@ class MultiContextAdapter:
     # ``on_reconnect`` hook here (passed in as the single argument), not its own
     # single-context replay, so reconnect replays every live context.
     connect_factory: Callable[[Callable[[], Awaitable[None]]], Any]
-    # Map an incoming frame to the context id that owns it, or ``None`` for a
-    # global/unroutable frame (errors, etc.).
+    # Parse a raw wire frame into the provider's decoded object (a dict), or
+    # ``None`` to ignore it (non-text/binary, unparseable). The frame is parsed
+    # exactly ONCE here; the parsed object is what gets routed, queued, and
+    # handed to the consumer — the decode loop never re-parses.
+    parse_frame: Callable[[Any], Any | None]
+    # Map a *parsed* frame to the context id that owns it, or ``None`` for a
+    # global/unroutable frame (errors without a context, etc.).
     route_key: Callable[[Any], str | None]
     # Frames to cancel/close a single context without closing the socket.
     context_cancel_frames: Callable[[str], list[str]]
@@ -81,7 +89,7 @@ class MultiContextAdapter:
     on_context_replay: Callable[[str], None]
     # Frames to send to gracefully close the whole socket.
     socket_close_frames: Callable[[], list[str]]
-    # Handle a frame with no routable context id (e.g. emit a provider error).
+    # Handle a *parsed* frame with no routable context id (e.g. emit an error).
     on_global_frame: Callable[[Any], None]
     # Bounded per-context queue size for the demux reader.
     context_queue_maxsize: int = 256
@@ -114,6 +122,14 @@ class _Context:
         sentinel so the caller sees a real failure rather than a clean end.
         """
         while True:
+            # Drain whatever is buffered first. If the socket died but a
+            # terminal frame (done/isFinal) was already buffered, the consumer
+            # processes it and completes normally — so only a genuine truncation
+            # (queue fully drained with no terminal consumed) surfaces the error.
+            if self.queue.empty() and self.done.is_set():
+                if self.error is not None and not self.cancelled:
+                    raise self.error
+                return
             item = await self.queue.get()
             if item is _TERMINAL:
                 if self.error is not None and not self.cancelled:
@@ -297,20 +313,33 @@ class MultiContextWSManager:
             self._finalize_reader(err)
 
     async def _dispatch_frame(self, frame: Any) -> None:
-        """Route one incoming frame to its owning context (or global)."""
-        # route_key must never crash the reader (which would tear down the
+        """Parse one incoming frame ONCE and route it to its owning context."""
+        # Parsing/routing must never crash the reader (which would tear down the
         # shared socket and silently truncate every live context). A
-        # valid-but-non-object JSON frame, etc., is treated as global.
+        # valid-but-non-object frame, etc., is treated as global/ignored.
         try:
-            key = self._adapter.route_key(frame)
+            parsed = self._adapter.parse_frame(frame)
+        except Exception:
+            logger.debug("Multi-context parse_frame raised; ignoring frame")
+            return
+        if parsed is None:
+            # Non-text / unparseable / ignorable frame.
+            return
+        try:
+            key = self._adapter.route_key(parsed)
         except Exception:
             logger.debug("Multi-context route_key raised; treating as global")
             key = None
         ctx = self._contexts.get(key) if key is not None else None
         if ctx is None:
             # Unroutable / unknown / stray context: treat as global so errors
-            # surface rather than vanishing.
-            self._adapter.on_global_frame(frame)
+            # surface rather than vanishing. on_global_frame must never crash the
+            # reader (that would tear down the shared socket and, post-F1,
+            # abort the live turn with a spurious error).
+            try:
+                self._adapter.on_global_frame(parsed)
+            except Exception:
+                logger.debug("Multi-context on_global_frame raised; ignoring", exc_info=True)
             return
         if ctx.cancelled:
             # Drop frames for a superseded/cancelled context.
@@ -322,8 +351,9 @@ class MultiContextWSManager:
         # finish_context() drains the queue to release a reader blocked here on
         # cancel/teardown, and cancelling the reader task unblocks it too.
         # (EasyCat drives one active context at a time, so head-of-line blocking
-        # across contexts is not a concern here.)
-        await ctx.queue.put(frame)
+        # across contexts is not a concern here.) The PARSED object is queued so
+        # the consumer never re-parses the frame.
+        await ctx.queue.put(parsed)
 
     def _finalize_reader(self, err: BaseException | None) -> None:
         """Tear down after the reader loop exits (clean or error).
@@ -341,21 +371,32 @@ class MultiContextWSManager:
             for ctx in list(self._contexts.values()):
                 if not ctx.cancelled:
                     ctx.error = terminal_error
+        # Do NOT drain here: the reader has stopped (no producer to unblock), so
+        # preserve whatever is buffered. If a terminal frame (done/isFinal) was
+        # already queued, the consumer drains it and completes successfully — the
+        # error attached above only surfaces for a genuine truncation (frames()
+        # exits on done+empty). Draining would discard the buffered terminal and
+        # tail audio, turning a finished turn into a spurious failure.
         for ctx in list(self._contexts.values()):
-            self._finish_context(ctx)
+            self._finish_context(ctx, drain=False)
 
-    def _finish_context(self, ctx: _Context) -> None:
-        """Push the terminal sentinel and unregister the context (idempotent)."""
+    def _finish_context(self, ctx: _Context, *, drain: bool = True) -> None:
+        """Terminate one context's iterator and unregister it (idempotent).
+
+        ``drain=True`` (cancel / aclose) discards buffered frames so a reader
+        blocked in ``queue.put()`` is released and the terminal sentinel has
+        room to land. ``drain=False`` (reader-end finalize) preserves buffered
+        frames so the consumer can still drain a buffered terminal + tail audio;
+        ``frames()`` exits on done+empty even if the sentinel can't be enqueued.
+        """
         if not ctx.done.is_set():
             ctx.done.set()
-            # Drain any buffered frames first so a reader blocked in
-            # ``queue.put()`` (slow/abandoned/cancelled consumer) unblocks, and
-            # so the terminal sentinel always has room to land.
-            while True:
-                try:
-                    ctx.queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+            if drain:
+                while True:
+                    try:
+                        ctx.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
             with contextlib.suppress(asyncio.QueueFull):
                 ctx.queue.put_nowait(_TERMINAL)
         self._contexts.pop(ctx.context_id, None)
