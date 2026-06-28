@@ -120,6 +120,10 @@ class TestLocalTransport:
     async def test_send_audio_partial_fit_when_queue_near_full(self):
         """send_audio enqueues what fits and drops only the overflow tail.
 
+        The frames that fit are still queued (the bot plays as much as it can),
+        but ``send_audio`` returns ``False`` because the dropped tail was not
+        delivered — so the transport stage records an honest drop.
+
         No sounddevice stream is started, so nothing drains the queue during the
         assertions (deterministic on any host).
         """
@@ -127,18 +131,19 @@ class TestLocalTransport:
         transport._connected = True
         sr = transport._audio_format.sample_rate
         frame_bytes = transport._frame_samples * transport._audio_format.frame_size
-        # A 5-frame chunk with only 2 slots: partial fit → True, 2 enqueued.
+        # A 5-frame chunk with only 2 slots: partial fit → 2 enqueued, False.
         big_chunk = _make_chunk(5 * frame_bytes, sample_rate=sr)
         delivered = await transport.send_audio(big_chunk)
-        assert delivered is True
-        assert transport._out_queue.qsize() == 2
+        assert delivered is False  # tail dropped → reported as not delivered
+        assert transport._out_queue.qsize() == 2  # but what fit is still queued
 
     @pytest.mark.asyncio
     async def test_send_audio_available_one_keeps_head_slice(self):
         """available == 1 boundary: exactly the HEAD frame is enqueued.
 
         Proves ``slices[:available]`` keeps the head of the chunk, not the tail,
-        when only a single slot is free on an empty maxsize=1 queue.
+        when only a single slot is free on an empty maxsize=1 queue.  The
+        truncated send reports ``False`` because the tail was dropped.
         """
         transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=1))
         transport._connected = True
@@ -149,7 +154,7 @@ class TestLocalTransport:
         tail = b"\x05\x06" * (frame_bytes // 2)
         chunk = AudioChunk(data=head + mid + tail, format=transport._audio_format)
         delivered = await transport.send_audio(chunk)
-        assert delivered is True
+        assert delivered is False  # tail dropped → reported as not delivered
         assert transport._out_queue.qsize() == 1
         queued = transport._out_queue.get_nowait()
         # The head slice is retained, not the tail.
@@ -164,6 +169,8 @@ class TestLocalTransport:
         """
         np = pytest.importorskip("numpy")
         transport = LocalTransport()
+        # A consumer (AudioRouter) has attached: the first drain arms capture.
+        transport.drain_aec_reference_frames()
         frame_samples = transport._frame_samples
         frame_bytes = frame_samples * transport._audio_format.frame_size
         outdata = np.ones((frame_samples, 1), dtype=np.float32)
@@ -176,6 +183,24 @@ class TestLocalTransport:
         assert all(len(f) == frame_bytes for f in frames)
 
     @pytest.mark.asyncio
+    async def test_output_callback_skips_reference_until_consumer_attached(self):
+        """The hot output callback does no per-frame reference work when AEC is
+        off (no consumer has drained), then begins capturing once one attaches."""
+        np = pytest.importorskip("numpy")
+        transport = LocalTransport()
+        frame_samples = transport._frame_samples
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+
+        # No consumer yet: pushes are skipped, nothing buffered.
+        transport._output_callback(np, outdata.copy(), frame_samples, None, None)
+        assert transport._aec_ref_queue.empty()
+
+        # A consumer attaches by draining; subsequent callbacks capture.
+        transport.drain_aec_reference_frames()
+        transport._output_callback(np, outdata.copy(), frame_samples, None, None)
+        assert not transport._aec_ref_queue.empty()
+
+    @pytest.mark.asyncio
     async def test_clear_audio_keeps_aec_reference_queue(self):
         """Barge-in must keep already-played references whose echo still arrives.
 
@@ -185,6 +210,8 @@ class TestLocalTransport:
         """
         np = pytest.importorskip("numpy")
         transport = LocalTransport()
+        # A consumer (AudioRouter) has attached: the first drain arms capture.
+        transport.drain_aec_reference_frames()
         frame_samples = transport._frame_samples
         outdata = np.ones((frame_samples, 1), dtype=np.float32)
         transport._output_callback(np, outdata, frame_samples, None, None)

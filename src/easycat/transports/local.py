@@ -50,7 +50,14 @@ class LocalTransportConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     max_pending_in_chunks: int = 200
-    max_pending_out_chunks: int = 2000
+    # ~10 s of speaker buffer at 20 ms/frame.  Sized to absorb faster-than-
+    # real-time TTS bursts for typical responses without dropping the tail,
+    # while keeping ``await_drain``'s playout wait (which is proportional to the
+    # queued backlog) bounded to a sane few seconds rather than the ~40 s a much
+    # larger cap would allow.  A genuine overflow now surfaces honestly via the
+    # partial-fit drop in ``send_audio`` instead of being hidden behind a giant
+    # buffer.
+    max_pending_out_chunks: int = 500
 
 
 class LocalTransport(AudioQueueMixin):
@@ -97,6 +104,13 @@ class LocalTransport(AudioQueueMixin):
             maxsize=self._AEC_REF_QUEUE_MAX
         )
 
+        # Far-end reference capture is armed only once a consumer (the
+        # AudioRouter) first drains via ``drain_aec_reference_frames()``.  Until
+        # then the hot output callback skips the per-frame reference push
+        # entirely, so a session running without AEC does no per-frame allocation
+        # or queue churn on the audio thread.
+        self._aec_reference_enabled: bool = False
+
         self._event_bus: EventBus | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -124,6 +138,9 @@ class LocalTransport(AudioQueueMixin):
         self._reset_audio_queue()
         self._out_queue = thread_queue.Queue(maxsize=self._config.max_pending_out_chunks)
         self._aec_ref_queue = thread_queue.Queue(maxsize=self._AEC_REF_QUEUE_MAX)
+        # A fresh session starts with capture disarmed; the AudioRouter re-arms
+        # it on its first reference drain when AEC is wired.
+        self._aec_reference_enabled = False
         self._primed = False
         self._loop = asyncio.get_running_loop()
 
@@ -234,7 +251,8 @@ class LocalTransport(AudioQueueMixin):
         if not self._primed:
             if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
                 outdata[:] = 0  # type: ignore[index]
-                self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
+                if self._aec_reference_enabled:
+                    self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
                 return
             self._primed = True
 
@@ -245,7 +263,8 @@ class LocalTransport(AudioQueueMixin):
 
         if queued is None:
             outdata[:] = 0  # type: ignore[index]
-            self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
+            if self._aec_reference_enabled:
+                self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
             return
 
         pcm = queued.chunk.data
@@ -262,12 +281,14 @@ class LocalTransport(AudioQueueMixin):
         # one full frame so it matches the bytes actually emitted to the speaker
         # (and stays 1:1 with the mic frame).  The async ingress pipeline drains
         # this before processing the mic frame so AEC3 always receives the
-        # far-end reference before the near-end signal.
-        if len(pcm) < frame_bytes:
-            ref = pcm + bytes(frame_bytes - len(pcm))
-        else:
-            ref = pcm[:frame_bytes]
-        self._push_aec_reference(ref)
+        # far-end reference before the near-end signal.  Skipped (no allocation)
+        # until an AEC consumer has attached.
+        if self._aec_reference_enabled:
+            if len(pcm) < frame_bytes:
+                ref = pcm + bytes(frame_bytes - len(pcm))
+            else:
+                ref = pcm[:frame_bytes]
+            self._push_aec_reference(ref)
 
         self._schedule_audio_delivery(queued)
 
@@ -316,8 +337,10 @@ class LocalTransport(AudioQueueMixin):
         piece fits exactly into the output buffer without truncation.
 
         Returns ``False`` if the device is disconnected or if the playback
-        queue lacks capacity for the full chunk, so callers don't credit
-        the caller with hearing audio that was never scheduled.
+        queue lacks capacity for the full chunk, so callers don't credit the
+        caller with hearing audio that was never scheduled.  A partial fit still
+        enqueues the frames that fit (so the bot plays as much as possible) but
+        also reports ``False``, because the dropped tail was not delivered.
         """
         if not self._connected:
             return False
@@ -330,15 +353,20 @@ class LocalTransport(AudioQueueMixin):
         if self._out_queue.maxsize > 0 and available == 0:
             logger.warning("Output audio queue full — dropped %d frame(s)", len(slices))
             return False
+        truncated = False
         if self._out_queue.maxsize > 0 and len(slices) > available:
-            # Partial fit: enqueue what fits, drop only the overflow tail.
-            # Better to play partial audio than to drop the whole chunk.
+            # Partial fit: enqueue what fits and drop only the overflow tail so
+            # the bot still plays as much as possible — but report the drop
+            # honestly by returning ``False`` below.  The tail was never
+            # scheduled, so the transport stage must record a drop (not a clean
+            # delivery) and callers must not credit unplayed audio.
             logger.warning(
                 "Output audio queue near full — dropped %d of %d frame(s)",
                 len(slices) - available,
                 len(slices),
             )
             slices = slices[:available]
+            truncated = True
 
         session_id = getattr(chunk, "_easycat_session_id", None)
         turn_id = getattr(chunk, "_easycat_turn_id", None)
@@ -352,7 +380,9 @@ class LocalTransport(AudioQueueMixin):
                     turn_ref=turn_ref,
                 )
             )
-        return True
+        # ``False`` when any frame was dropped (the queue lacked capacity for the
+        # full chunk), matching the docstring so the drop metric stays honest.
+        return not truncated
 
     def drain_aec_reference_frames(self) -> list[bytes]:
         """Return all pending AEC far-end reference frames, draining the queue.
@@ -371,7 +401,12 @@ class LocalTransport(AudioQueueMixin):
         Thread-safe: the output callback pushes to this queue from the
         sounddevice audio thread while this method is called from the asyncio
         event loop thread.
+
+        Calling this also *arms* reference capture: the output callback only
+        buffers far-end frames once a consumer has started draining, so a
+        session without AEC never pays the per-frame push cost.
         """
+        self._aec_reference_enabled = True
         frames: list[bytes] = []
         while True:
             try:
