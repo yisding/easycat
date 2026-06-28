@@ -2,6 +2,17 @@
 
 Status: active implementation plan.
 
+> **Stale (runtime budgets removed):** the runtime budget code this plan treats
+> as *existing* foundations — `LatencyBudgetMonitor`
+> (`session/_latency_budget.py`), `CostBudgetEnforcer` (`session/_cost_budget.py`),
+> `cost_budget_status` / `runtime/costs.py`, the debugger `/api/cost` rollup +
+> Cost tab, and the `_budget_matches_stage` stage-record tagging — was removed.
+> `LatencyBudget` (`easycat.validation.latency`) still exists. Treat every
+> reference below to the removed symbols as net-new (rebuild from scratch), and
+> note the overall budgets direction (especially cost budgets and
+> `max_session_cost_usd`) needs re-scoping against the "report latency, no
+> runtime/cost budgets" decision before this workstream is implemented.
+
 ## Goal
 
 Make EasyCat’s journal/replay/debugger stack the default development and CI
