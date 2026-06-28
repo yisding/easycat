@@ -69,6 +69,12 @@ class ElevenLabsSTTConfig:
     realtime_vad_silence_threshold_secs: float | None = None
     realtime_min_speech_duration_ms: int | None = None
     realtime_min_silence_duration_ms: int | None = None
+    # Bias Scribe v2 Realtime toward domain vocabulary (names, jargon).
+    # Up to 50 terms of up to 20 characters each; sent as repeated query
+    # params. ``None`` sends none.
+    realtime_keyterms: list[str] | None = None
+    # Strip filler words, false starts, and disfluencies from transcripts.
+    realtime_no_verbatim: bool = False
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
     max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
@@ -87,6 +93,18 @@ class ElevenLabsSTTConfig:
         STTBase._validate_positive_limit(
             "ElevenLabsSTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
         )
+        if self.realtime_keyterms is not None:
+            if len(self.realtime_keyterms) > 50:
+                raise ValueError(
+                    "ElevenLabsSTTConfig.realtime_keyterms accepts at most 50 terms, "
+                    f"got {len(self.realtime_keyterms)}"
+                )
+            for term in self.realtime_keyterms:
+                if len(term) > 20:
+                    raise ValueError(
+                        "ElevenLabsSTTConfig.realtime_keyterms entries must be <= 20 "
+                        f"characters, got {term!r}"
+                    )
 
 
 class ElevenLabsSTT(WebSocketSTTBase):
@@ -172,7 +190,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
             for name, value in vad_params.items():
                 if value is not None:
                     params[name] = str(value)
-        return f"{self._config.ws_url}?{urlencode(params)}"
+        if self._config.realtime_no_verbatim:
+            params["no_verbatim"] = "true"
+        # ``keyterms`` is sent as one repeated query param per term, so build
+        # the query with ``doseq`` and pass the list through as-is.
+        query: dict[str, str | list[str]] = dict(params)
+        if self._config.realtime_keyterms:
+            query["keyterms"] = self._config.realtime_keyterms
+        return f"{self._config.ws_url}?{urlencode(query, doseq=True)}"
 
     @property
     def mode(self) -> str:

@@ -62,6 +62,11 @@ class ElevenLabsTTSConfig:
     stability: float = 0.5
     similarity_boost: float = 0.75
     output_format: str = "pcm_24000"
+    # Controls spelling-out of numbers, dates, currency, etc.
+    # "auto" (default) lets the model decide, "on" forces normalization,
+    # "off" disables it. Note: "on" requires an Enterprise plan for
+    # ``eleven_flash_v2_5``.
+    apply_text_normalization: str = "auto"
     stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.WEBSOCKET
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
@@ -81,6 +86,11 @@ class ElevenLabsTTSConfig:
                 f"Unsupported ElevenLabs output_format: {self.output_format!r}. "
                 f"Only PCM formats are supported: {supported}. "
                 f"Non-PCM formats (mp3, opus, etc.) would require a decoder."
+            )
+        if self.apply_text_normalization not in {"auto", "on", "off"}:
+            raise ValueError(
+                "ElevenLabs apply_text_normalization must be 'auto', 'on', or 'off', "
+                f"got {self.apply_text_normalization!r}"
             )
 
 
@@ -151,6 +161,7 @@ class ElevenLabsTTS(_WSTTSBase):
                     "stability": self._config.stability,
                     "similarity_boost": self._config.similarity_boost,
                 },
+                "apply_text_normalization": self._config.apply_text_normalization,
             }
 
             url = f"/text-to-speech/{self._config.voice_id}/stream"
@@ -292,6 +303,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"/text-to-speech/{self._config.voice_id}"
             f"/stream-input?model_id={self._config.model_id}"
             f"&output_format={self._config.output_format}"
+            f"&apply_text_normalization={self._config.apply_text_normalization}"
         )
 
         self._ws = ReconnectingWebSocket(

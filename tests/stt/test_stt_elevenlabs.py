@@ -275,6 +275,38 @@ async def test_elevenlabs_realtime_commit_segment_keeps_stream_open_for_later_au
     assert len(commit_msgs) == 2
 
 
+def test_elevenlabs_realtime_url_carries_keyterms_and_no_verbatim():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        realtime_keyterms=["EasyCat", "Cartesia"],
+        realtime_no_verbatim=True,
+    )
+    url = ElevenLabsSTT(config)._build_realtime_ws_url()
+
+    # keyterms is one repeated query param per term.
+    assert url.count("keyterms=") == 2
+    assert "keyterms=EasyCat" in url
+    assert "keyterms=Cartesia" in url
+    assert "no_verbatim=true" in url
+
+
+def test_elevenlabs_realtime_url_omits_keyterms_and_verbatim_by_default():
+    url = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))._build_realtime_ws_url()
+    assert "keyterms=" not in url
+    assert "no_verbatim" not in url
+
+
+def test_elevenlabs_rejects_too_many_keyterms():
+    with pytest.raises(ValueError, match="at most 50 terms"):
+        ElevenLabsSTTConfig(api_key="k", realtime_keyterms=[f"t{i}" for i in range(51)])
+
+
+def test_elevenlabs_rejects_overlong_keyterm():
+    with pytest.raises(ValueError, match="<= 20 characters"):
+        ElevenLabsSTTConfig(api_key="k", realtime_keyterms=["x" * 21])
+
+
 @pytest.mark.asyncio
 async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit():
     # In VAD mode (the realtime default) the server emits committed_transcript

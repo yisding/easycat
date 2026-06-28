@@ -113,6 +113,24 @@ class TestCartesiaTTSConfig:
         with pytest.raises(ValueError, match="Unsupported Cartesia encoding"):
             CartesiaTTSConfig(api_key="k", encoding="pcm_mulaw")
 
+    def test_rejects_out_of_range_speed(self):
+        with pytest.raises(ValueError, match="speed must be in"):
+            CartesiaTTSConfig(api_key="k", speed=2.0)
+
+    def test_rejects_out_of_range_volume(self):
+        with pytest.raises(ValueError, match="volume must be in"):
+            CartesiaTTSConfig(api_key="k", volume=0.1)
+
+    def test_generation_config_omitted_when_unset(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
+        request = provider._build_request("hi", "ctx-1")
+        assert "generation_config" not in request
+
+    def test_generation_config_includes_only_set_controls(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", speed=1.2, emotion="excited"))
+        request = provider._build_request("hi", "ctx-1")
+        assert request["generation_config"] == {"speed": 1.2, "emotion": "excited"}
+
     def test_custom_values(self):
         config = CartesiaTTSConfig(
             api_key="k",
