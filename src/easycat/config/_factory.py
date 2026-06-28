@@ -211,18 +211,25 @@ def _create_artifact_store(
 
 
 def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
-    """Whether this session should derive turn boundaries from STT finals."""
-    from easycat.stt.deepgram_provider import DeepgramSTTConfig
+    """Whether this session should derive turn boundaries from STT finals.
 
-    if not isinstance(config.stt, DeepgramSTTConfig):
-        return False
+    True for STT providers that do their own endpointing (Deepgram Flux,
+    Cartesia ink-2, ElevenLabs realtime VAD) — unless an explicit endpointing
+    choice overrides it: push-to-talk, smart-turn, or a telephony voicemail
+    detector all keep EasyCat's own VAD + commit path. When True, the caller
+    disables the Silero VAD stage (``enable_vad = not auto_turn``) and the STT
+    committer stops driving manual commits, so the provider's native VAD is the
+    single source of turn boundaries (no double endpointing / duplicate FINALs).
+    """
+    from .easy import _stt_uses_native_endpointing
+
     if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
         return False
     if config.smart_turn.enabled:
         return False
     if config.telephony and config.telephony.enable_voicemail_detector:
         return False
-    return config.stt.is_flux
+    return _stt_uses_native_endpointing(config.stt)
 
 
 def _validate_agent_shape(adapted: Any, *, wrap_agent: bool) -> None:

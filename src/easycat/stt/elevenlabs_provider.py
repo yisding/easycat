@@ -142,6 +142,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # actually covers the latest audio — never unconditionally.
         self._audio_epoch: int = 0
         self._committed_through_epoch: int = 0
+        # Audio epoch the server has demonstrably *transcribed* (bounded by the
+        # latest partial_transcript). An unsolicited VAD commit covers up to
+        # here — not necessarily the newest audio — so trailing audio streamed
+        # after the server's commit decision is not treated as committed.
+        self._transcribed_through_epoch: int = 0
         # Manual commits (commit_segment / end-of-turn) we've sent and are
         # awaiting an ack for. Distinguishes a manual-commit ack from an
         # unsolicited server VAD commit in the committed_transcript handler.
@@ -257,6 +262,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._dropping_pending_final = False
         self._audio_epoch = 0
         self._committed_through_epoch = 0
+        self._transcribed_through_epoch = 0
         self._manual_commit_inflight = 0
         await self._connect_websocket(
             url=self._build_realtime_ws_url(),
@@ -392,80 +398,91 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("message_type") or msg.get("type", "")
-
         if msg_type == "partial_transcript":
-            text = msg.get("text", "")
-            if not text:
-                return
-            self._partial_text = text
-            # A partial means the server is transcribing audio it has not yet
-            # committed, so there is genuinely uncommitted audio. Re-arm the
-            # pending flag — this recovers the case where an earlier (stale)
-            # committed_transcript optimistically cleared it while speech had
-            # already resumed.
-            self._audio_pending_commit = True
-            self._emit_event(
-                STTEvent(
-                    type=STTEventType.PARTIAL,
-                    text=text,
-                    confidence=msg.get("confidence"),
-                    language=msg.get("language_code") or self._config.language,
-                )
-            )
+            self._handle_partial_transcript(msg)
+        elif msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
+            self._handle_committed_transcript(msg)
+
+    def _handle_partial_transcript(self, msg: dict[str, Any]) -> None:
+        text = msg.get("text", "")
+        if not text:
             return
-
-        if msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
-            # Clear the pending-commit flag only when this committed transcript
-            # actually covers the latest audio we've streamed. A committed
-            # transcript can arrive *after* newer audio was sent (manual
-            # commit_segment() then more send_audio(), or a VAD auto-commit
-            # while speech resumed); clearing unconditionally would make
-            # _end_realtime() skip the final commit for that newer audio and
-            # drop the trailing segment.
-            if self._manual_commit_inflight > 0:
-                # Ack of a manual commit we sent. Clear only if no audio was
-                # streamed after that commit was requested; otherwise the newer
-                # audio is still uncommitted and must be flushed at end-of-turn.
-                self._manual_commit_inflight -= 1
-                if self._audio_epoch <= self._committed_through_epoch:
-                    self._audio_pending_commit = False
-            else:
-                # Unsolicited server VAD commit: assume it covers everything
-                # sent so far so a redundant end-of-turn commit doesn't stall.
-                # If speech had already resumed, a following partial_transcript
-                # re-arms the pending flag.
-                self._committed_through_epoch = self._audio_epoch
-                self._audio_pending_commit = False
-            if self._dropping_pending_final:
-                # A previous ``_send_commit`` already gave up on this
-                # committed transcript and promoted the accumulated partial
-                # to a FINAL, so silently discard this late revision to
-                # avoid emitting a second FINAL for the same turn.
-                logger.debug(
-                    "Dropping late ElevenLabs committed_transcript (already promoted partial)"
-                )
-                self._dropping_pending_final = False
-                self._partial_text = ""
-                if self._final_received is not None:
-                    self._final_received.set()
-                return
-
-            text = msg.get("text", "")
-            if not text:
-                return
-
-            self._emit_event(
-                STTEvent(
-                    type=STTEventType.FINAL,
-                    text=text,
-                    confidence=msg.get("confidence"),
-                    language=msg.get("language_code") or self._config.language,
-                    word_timestamps=word_timestamps_from_words(msg.get("words")),
-                )
+        self._partial_text = text
+        # A partial means the server is transcribing audio it has not yet
+        # committed, so there is genuinely uncommitted audio. Re-arm the
+        # pending flag — this recovers the case where an earlier (stale)
+        # committed_transcript optimistically cleared it while speech had
+        # already resumed.
+        self._audio_pending_commit = True
+        # The server has now transcribed through the latest audio epoch; a
+        # subsequent VAD commit covers at most this much.
+        self._transcribed_through_epoch = self._audio_epoch
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.PARTIAL,
+                text=text,
+                confidence=msg.get("confidence"),
+                language=msg.get("language_code") or self._config.language,
             )
+        )
+
+    def _reconcile_pending_commit_on_committed(self) -> None:
+        """Clear the pending-commit flag only when the committed transcript
+        actually covers the latest audio we've streamed.
+
+        A committed transcript can arrive *after* newer audio was sent (manual
+        commit_segment() then more send_audio(), or a VAD auto-commit while
+        speech resumed); clearing unconditionally would make _end_realtime()
+        skip the final commit for that newer audio and drop the trailing
+        segment.
+        """
+        if self._manual_commit_inflight > 0:
+            # Ack of a manual commit we sent. Clear only if no audio was
+            # streamed after that commit was requested; otherwise the newer
+            # audio is still uncommitted and must be flushed at end-of-turn.
+            self._manual_commit_inflight -= 1
+        else:
+            # Unsolicited server VAD commit. It covers what the server has
+            # transcribed (bounded by the latest partial), not necessarily the
+            # newest audio.
+            self._committed_through_epoch = max(
+                self._committed_through_epoch, self._transcribed_through_epoch
+            )
+        if self._audio_epoch <= self._committed_through_epoch:
+            self._audio_pending_commit = False
+
+    def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
+        self._reconcile_pending_commit_on_committed()
+        if self._dropping_pending_final:
+            # A previous ``_send_commit`` already gave up on this committed
+            # transcript and promoted the accumulated partial to a FINAL, so
+            # silently discard this late revision to avoid emitting a second
+            # FINAL for the same turn.
+            logger.debug(
+                "Dropping late ElevenLabs committed_transcript (already promoted partial)"
+            )
+            self._dropping_pending_final = False
             self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
+            return
+
+        text = msg.get("text", "")
+        if not text:
+            return
+
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=text,
+                confidence=msg.get("confidence"),
+                language=msg.get("language_code") or self._config.language,
+                word_timestamps=word_timestamps_from_words(msg.get("words")),
+            )
+        )
+        self._partial_text = ""
+        if self._final_received is not None:
+            self._final_received.set()
 
     # -- Batch (HTTP) mode -------------------------------------------------
 

@@ -331,7 +331,8 @@ async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit
     await stt.send_audio(chunk)
     assert stt._audio_pending_commit is True
 
-    # Server-driven VAD commit arrives before end_stream.
+    # The server transcribes (partial) then VAD-commits the segment it covers.
+    stt._handle_json_message(json.loads(_el_transcript("hello", is_final=False)))
     stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
     assert stt._audio_pending_commit is False
 
@@ -386,6 +387,28 @@ async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monk
         if m.get("commit") is True
     ]
     assert len(commit_frames) == 2
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_keeps_pending_for_trailing_audio():
+    # A VAD commit covers only what the server transcribed (up to the last
+    # partial). Audio streamed after that must keep pending set so end_stream
+    # still commits it — even if no later partial re-arms the flag first.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+    stt._ws = MockWebSocket([])  # let _send_realtime stream + bump the epoch
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    stt._final_received = None  # no manual commit in flight (pure VAD)
+    # Segment 1 audio, a partial for it, then segment 2 audio (trailing).
+    await stt._send_realtime(chunk)
+    stt._handle_json_message(json.loads(_el_transcript("seg one", is_final=False)))
+    await stt._send_realtime(chunk)
+    assert stt._audio_pending_commit is True
+
+    # Late VAD commit for segment 1 must NOT clear pending for segment 2.
+    stt._handle_json_message(json.loads(_el_transcript("seg one", is_final=True)))
+    assert stt._audio_pending_commit is True
 
 
 @pytest.mark.asyncio

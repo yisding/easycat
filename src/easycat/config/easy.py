@@ -195,17 +195,32 @@ def _validate_common(
                 )
 
 
-def _stt_config_is_flux(stt: Any) -> bool:
-    """Whether ``stt`` is a Deepgram Flux config (provider-side endpointing).
+def _stt_uses_native_endpointing(stt: Any) -> bool:
+    """Whether ``stt`` does its own turn endpointing (provider-side VAD).
 
-    Mirrors ``_should_auto_turn_from_stt_final`` in the factory so the
-    smart-turn default and the auto-turn-from-STT-final decision stay
-    consistent: a Flux config derives turn boundaries from STT finals and
-    needs neither smart-turn nor the VAD that smart-turn pulls in.
+    Shared by the smart-turn default here and
+    ``_should_auto_turn_from_stt_final`` in the factory so both stay
+    consistent: such providers derive turn boundaries from their own
+    endpointing, so EasyCat should drive turns from STT finals and run
+    neither smart-turn nor the Silero VAD it pulls in (which would otherwise
+    double-endpoint and produce duplicate FINAL transcripts).
+
+    Covers:
+      - Deepgram **Flux** (native end-of-turn signal),
+      - Cartesia **ink-2** (native semantic turn detection), and
+      - ElevenLabs realtime with the built-in **VAD** commit strategy.
     """
+    from easycat.stt.cartesia_provider import CartesiaSTTConfig
     from easycat.stt.deepgram_provider import DeepgramSTTConfig
+    from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 
-    return isinstance(stt, DeepgramSTTConfig) and stt.is_flux
+    if isinstance(stt, DeepgramSTTConfig):
+        return stt.is_flux
+    if isinstance(stt, CartesiaSTTConfig):
+        return stt.resolved_model == "ink-2"
+    if isinstance(stt, ElevenLabsSTTConfig):
+        return stt.mode == "realtime" and stt.realtime_commit_strategy == "vad"
+    return False
 
 
 def _normalize_smart_turn_config(
@@ -213,7 +228,7 @@ def _normalize_smart_turn_config(
     *,
     sensitivity: float | None,
     transport: Any = None,
-    stt_is_flux: bool = False,
+    stt_native_endpointing: bool = False,
 ) -> SmartTurnConfig:
     """Resolve EasyConfig's beginner-facing smart-turn shortcuts.
 
@@ -225,11 +240,12 @@ def _normalize_smart_turn_config(
     presets keep smart-turn off by default — they pick their own
     endpointing strategy and shouldn't pay the warmup cost implicitly.
 
-    A Deepgram Flux STT is the exception on the mic preset: it does its own
-    provider-side endpointing, so smart-turn (and the Silero VAD it would
-    pull in) stays off by default and Flux's native end-of-turn signal
-    drives turns.  An explicit ``smart_turn=True`` / ``SmartTurnConfig``
-    still wins.
+    A provider-side-endpointing STT (Deepgram Flux, Cartesia ink-2, or
+    ElevenLabs realtime with the built-in VAD commit strategy) is the
+    exception on the mic preset: it does its own endpointing, so smart-turn
+    (and the Silero VAD it would pull in) stays off by default and the
+    provider's native end-of-turn signal drives turns.  An explicit
+    ``smart_turn=True`` / ``SmartTurnConfig`` still wins.
     """
     if isinstance(smart_turn, bool):
         if not smart_turn and sensitivity is not None:
@@ -237,7 +253,7 @@ def _normalize_smart_turn_config(
         config = SmartTurnConfig(enabled=smart_turn)
     elif smart_turn is None:
         enabled = sensitivity is not None or (
-            isinstance(transport, LocalTransportConfig) and not stt_is_flux
+            isinstance(transport, LocalTransportConfig) and not stt_native_endpointing
         )
         config = SmartTurnConfig(enabled=enabled)
     elif isinstance(smart_turn, SmartTurnConfig):
@@ -835,17 +851,17 @@ class EasyConfig(_AgentSessionConfig):
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
 
         # Normalize smart-turn AFTER string STT shortcuts resolve to a typed
-        # config.  The mic-preset default skips Deepgram Flux, and Flux can
-        # arrive either typed (``DeepgramSTTConfig``) or as the ``"deepgram/
-        # flux"`` string spec — only resolvable to ``is_flux`` once
-        # ``parse_stt_string`` has run above.  Computing it before string
-        # resolution left the string form with smart-turn (and a Silero VAD)
-        # on, diverging from the typed form.
+        # config.  The mic-preset default skips provider-side-endpointing STTs
+        # (Deepgram Flux, Cartesia ink-2, ElevenLabs realtime VAD), which can
+        # arrive either typed or as a ``"provider/model"`` string spec — only
+        # recognizable once ``parse_stt_string`` has run above.  Computing it
+        # before string resolution left the string form with smart-turn (and a
+        # Silero VAD) on, diverging from the typed form.
         self.smart_turn = _normalize_smart_turn_config(
             self.smart_turn,
             sensitivity=self.smart_turn_sensitivity,
             transport=self.transport,
-            stt_is_flux=_stt_config_is_flux(self.stt),
+            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
         )
 
         # Catalog membership (not an isinstance against the built-in

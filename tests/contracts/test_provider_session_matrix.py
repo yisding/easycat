@@ -92,7 +92,19 @@ _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
 def _build_stt_config(config_cls: type) -> Any:
     # All STT configs take api_key as the only required field; defaults
     # handle the rest. Pass a sentinel key since the provider is stubbed.
-    return config_cls(api_key="test-key")
+    #
+    # The Phase-2 smoke drives turns with a scripted VAD, so pin the providers
+    # whose *default* now enables provider-side endpointing to their
+    # VAD-driven variant (mirrors Deepgram, whose default model is already
+    # non-Flux). The auto-turn wiring + lifecycle are covered separately by
+    # tests/config/test_native_endpointing_wiring.py and the
+    # test_auto_turn_from_stt_final_mode integration test.
+    kwargs: dict[str, Any] = {"api_key": "test-key"}
+    if config_cls is CartesiaSTTConfig:
+        kwargs["model"] = "ink-whisper"
+    elif config_cls is ElevenLabsSTTConfig:
+        kwargs["realtime_commit_strategy"] = "manual"
+    return config_cls(**kwargs)
 
 
 def _build_tts_config(config_cls: type) -> Any:
