@@ -654,7 +654,11 @@ def _filter_and_paginate(
 
 
 def _regex_tree_has_unsafe_backtracking(
-    tokens: Any, *, inside_repeat: bool = False, repeated_token: bool = False
+    tokens: Any,
+    *,
+    inside_repeat: bool = False,
+    repeated_token: bool = False,
+    optional_repeats: list[int] | None = None,
 ) -> bool:
     """Return true when parsed regex tokens can cause exponential backtracking.
 
@@ -662,7 +666,17 @@ def _regex_tree_has_unsafe_backtracking(
     repeats, quantified alternations, backreferences, and assertions can all
     make Python's ``re`` engine spend unbounded CPU on a single haystack, so
     reject them instead of trying to sandbox individual ``search()`` calls.
+
+    A single repeat is fine, but two or more *optional* (``min == 0``) repeats
+    in the same sibling sequence -- e.g. ``a?a?...aaa`` or its grouped twin
+    ``(a?)(a?)...`` -- let the engine explore every "skip vs. match" subset and
+    blow up exponentially even though no repeat is nested inside another. The
+    ``optional_repeats`` accumulator counts those siblings; ``SUBPATTERN`` reuses
+    the parent's counter (transparent groups stay in the same sequence) while
+    branches and repeat children start a fresh count for their own scope.
     """
+    if optional_repeats is None:
+        optional_repeats = [0]
     for op, arg in tokens:
         op_name = str(op)
         if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
@@ -678,16 +692,23 @@ def _regex_tree_has_unsafe_backtracking(
                 return True
             continue
         if op_name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
-            _min_repeat, _max_repeat, child = arg
+            min_repeat, _max_repeat, child = arg
             if inside_repeat:
                 return True
+            if min_repeat == 0:
+                optional_repeats[0] += 1
+                if optional_repeats[0] > 1:
+                    return True
             if _regex_tree_has_unsafe_backtracking(child, inside_repeat=True, repeated_token=True):
                 return True
             continue
         if op_name == "SUBPATTERN":
             child = arg[-1]
             if _regex_tree_has_unsafe_backtracking(
-                child, inside_repeat=inside_repeat, repeated_token=repeated_token
+                child,
+                inside_repeat=inside_repeat,
+                repeated_token=repeated_token,
+                optional_repeats=optional_repeats,
             ):
                 return True
     return False
