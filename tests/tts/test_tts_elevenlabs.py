@@ -25,6 +25,12 @@ def _pcm16_bytes(n_samples: int = 240) -> bytes:
     return struct.pack(f"<{n_samples}h", *([300] * n_samples))
 
 
+async def _drain(agen) -> None:
+    """Consume a synthesize() async generator to completion."""
+    async for _ in agen:
+        pass
+
+
 class FakeHTTPStreamResponse:
     """Mock httpx streaming response for ElevenLabs HTTP mode."""
 
@@ -640,6 +646,60 @@ class TestElevenLabsPersistent:
                     pass
 
         assert not provider.is_active
+        await provider.close()
+
+    async def test_persistent_context_error_frame_surfaced(self):
+        # A context-scoped error frame (carrying contextId, no isFinal) must be
+        # surfaced as a provider error and end the turn — not hang awaiting more
+        # frames or end as a clean truncation.
+        from easycat.events import Error, EventBus
+
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = self._make_provider(event_bus=bus)
+
+        class ErrorFrameWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") == "" and "context_id" in msg:
+                    await self._queue.put(
+                        json.dumps({"contextId": msg["context_id"], "error": "boom"})
+                    )
+
+        with patch.object(provider, "_build_multi_ws", return_value=ErrorFrameWS()):
+            await asyncio.wait_for(_drain(provider.synthesize("hi")), timeout=2.0)
+        await asyncio.sleep(0)  # let the fire-and-forget Error task run
+        assert any("boom" in str(e.exception) for e in errors)
+        await provider.close()
+
+    async def test_persistent_midstream_socket_death_surfaces_error(self):
+        # The socket dies mid-utterance (recv_iter ends before isFinal); the
+        # persistent path must surface a provider error + raise, like one-shot.
+        from easycat.events import Error, EventBus
+
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+        provider = self._make_provider(event_bus=bus)
+
+        class DyingWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") == "" and "context_id" in msg:
+                    # One audio frame, then the socket dies (no isFinal).
+                    cid = msg["context_id"]
+                    audio = base64.b64encode(_pcm16_bytes(80)).decode()
+                    await self._queue.put(json.dumps({"audio": audio, "contextId": cid}))
+                    await self._queue.put(None)  # end recv_iter mid-utterance
+
+        with patch.object(provider, "_build_multi_ws", return_value=DyingWS()):
+            with pytest.raises(Exception):
+                await asyncio.wait_for(_drain(provider.synthesize("hi")), timeout=2.0)
+        await asyncio.sleep(0)
+        assert errors  # a provider Error was emitted
         await provider.close()
 
     async def test_per_context_init_text_eos(self):

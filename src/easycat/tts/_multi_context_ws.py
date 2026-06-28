@@ -98,16 +98,26 @@ class _Context:
     # ``None`` until the caller's frames have been sent successfully; once
     # armed, the reconnect hook replays them.
     pending_frames: list[str] | None = None
+    # Terminal failure (connection death / reconnect-budget exhaustion) recorded
+    # by the reader when the socket dies mid-utterance. Re-raised from frames()
+    # so the persistent path surfaces a provider error + raise, matching the
+    # one-shot path instead of looking like a clean truncated completion.
+    error: BaseException | None = None
 
     async def frames(self):
         """Yield raw frames until a terminal sentinel.
 
         Frames are silently dropped once the context is cancelled so a stray
-        late frame from a superseded turn cannot leak to the caller.
+        late frame from a superseded turn cannot leak to the caller. If the
+        reader recorded a terminal error (socket died mid-utterance) and the
+        context was not deliberately cancelled, that error is raised after the
+        sentinel so the caller sees a real failure rather than a clean end.
         """
         while True:
             item = await self.queue.get()
             if item is _TERMINAL:
+                if self.error is not None and not self.cancelled:
+                    raise self.error
                 return
             if self.cancelled:
                 continue
@@ -126,6 +136,10 @@ class MultiContextWSManager:
         # synthesize() caller.
         self._send_lock = asyncio.Lock()
         self._closed = False
+        # Set during deliberate teardown (aclose / cancel-fallback socket close)
+        # so the reader's exit does NOT surface a spurious error on contexts —
+        # only an unexpected socket death does.
+        self._closing = False
 
     # ── public surface ────────────────────────────────────────────
 
@@ -181,6 +195,18 @@ class MultiContextWSManager:
                     await self._close_socket_only()
         self._finish_context(ctx)
 
+    async def cancel_all(self) -> None:
+        """Cancel every live context (barge-in/stop), keeping the socket open.
+
+        Providers call this instead of tracking the in-flight context in a
+        shared field that the synthesize task's ``finally`` can null underneath
+        a concurrent ``cancel()`` — so a barge-in always reaches whatever
+        context is actually live.
+        """
+        for ctx in list(self._contexts.values()):
+            if not ctx.cancelled:
+                await self.cancel_context(ctx)
+
     def finish_context(self, ctx: _Context) -> None:
         """Terminate one context's iterator and unregister it (idempotent).
 
@@ -194,6 +220,7 @@ class MultiContextWSManager:
         if self._closed:
             return
         self._closed = True
+        self._closing = True
         close_frames = self._adapter.socket_close_frames()
         if close_frames and self._ws is not None:
             with contextlib.suppress(Exception):
@@ -255,41 +282,67 @@ class MultiContextWSManager:
         ws = self._ws
         if ws is None:
             return
+        err: BaseException | None = None
         try:
             async for frame in ws.recv_iter():
-                key = self._adapter.route_key(frame)
-                if key is None:
-                    self._adapter.on_global_frame(frame)
-                    continue
-                ctx = self._contexts.get(key)
-                if ctx is None:
-                    # Unknown/stray context: treat as global so errors surface.
-                    self._adapter.on_global_frame(frame)
-                    continue
-                if ctx.cancelled:
-                    # Drop frames for a superseded/cancelled context.
-                    continue
-                # Backpressure rather than drop: a blocking put means a slow
-                # consumer stalls THIS reader, which stops draining recv_iter
-                # and lets TCP backpressure flow to the server — mirroring the
-                # one-shot path. Never silently drop a frame (e.g. the terminal
-                # done/isFinal). finish_context() drains the queue to release a
-                # reader blocked here on cancel/teardown, and cancelling the
-                # reader task (aclose/_close_socket_only) unblocks it too.
-                # (EasyCat drives one active context at a time, so head-of-line
-                # blocking across contexts is not a concern here.)
-                await ctx.queue.put(frame)
+                await self._dispatch_frame(frame)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            # Connection death / reconnect-budget exhaustion / on_reconnect
+            # raising: record it so live contexts surface a real failure.
+            err = exc
             logger.debug("Multi-context reader loop ended on error", exc_info=True)
         finally:
-            # recv_iter ended (clean close or reconnect-budget exhaustion):
-            # terminate every live context's iterator and drop the socket so
-            # the next open_context reconnects a fresh one.
-            self._ws = None
+            self._finalize_reader(err)
+
+    async def _dispatch_frame(self, frame: Any) -> None:
+        """Route one incoming frame to its owning context (or global)."""
+        # route_key must never crash the reader (which would tear down the
+        # shared socket and silently truncate every live context). A
+        # valid-but-non-object JSON frame, etc., is treated as global.
+        try:
+            key = self._adapter.route_key(frame)
+        except Exception:
+            logger.debug("Multi-context route_key raised; treating as global")
+            key = None
+        ctx = self._contexts.get(key) if key is not None else None
+        if ctx is None:
+            # Unroutable / unknown / stray context: treat as global so errors
+            # surface rather than vanishing.
+            self._adapter.on_global_frame(frame)
+            return
+        if ctx.cancelled:
+            # Drop frames for a superseded/cancelled context.
+            return
+        # Backpressure rather than drop: a blocking put means a slow consumer
+        # stalls THIS reader, which stops draining recv_iter and lets TCP
+        # backpressure flow to the server — mirroring the one-shot path. Never
+        # silently drop a frame (e.g. the terminal done/isFinal).
+        # finish_context() drains the queue to release a reader blocked here on
+        # cancel/teardown, and cancelling the reader task unblocks it too.
+        # (EasyCat drives one active context at a time, so head-of-line blocking
+        # across contexts is not a concern here.)
+        await ctx.queue.put(frame)
+
+    def _finalize_reader(self, err: BaseException | None) -> None:
+        """Tear down after the reader loop exits (clean or error).
+
+        Drops the socket so the next open_context reconnects a fresh one, and
+        terminates every live context. Unless this was a deliberate teardown
+        (aclose / cancel-fallback), surfaces a terminal error on still-live
+        contexts so a mid-utterance socket death is not downgraded to a clean
+        truncated completion — matching the one-shot path, where recv_iter
+        raising aborts synthesize().
+        """
+        self._ws = None
+        if not self._closing:
+            terminal_error = err or ConnectionError("TTS WebSocket closed mid-stream")
             for ctx in list(self._contexts.values()):
-                self._finish_context(ctx)
+                if not ctx.cancelled:
+                    ctx.error = terminal_error
+        for ctx in list(self._contexts.values()):
+            self._finish_context(ctx)
 
     def _finish_context(self, ctx: _Context) -> None:
         """Push the terminal sentinel and unregister the context (idempotent)."""
@@ -314,7 +367,15 @@ class MultiContextWSManager:
         reconnects a fresh socket.
         """
         ws = self._ws
-        await self._cancel_background_tasks()
+        # Mark this as a deliberate teardown so the reader's finally does not
+        # surface a spurious connection-death error on still-live contexts;
+        # reset afterwards since the manager stays reusable (the awaited task
+        # cancel guarantees the reader's finally has already run).
+        self._closing = True
+        try:
+            await self._cancel_background_tasks()
+        finally:
+            self._closing = False
         self._ws = None
         if ws is not None:
             with contextlib.suppress(Exception):

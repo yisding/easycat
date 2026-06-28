@@ -319,9 +319,11 @@ class TestMultiContextWSManager:
         # Idempotent.
         await mgr.aclose()
 
-    async def test_reconnect_budget_exhaustion_ends_frames(self):
-        # recv_iter ends (no gate wait) simulating budget exhaustion / clean
-        # server close: every live context's frames() iterator terminates.
+    async def test_reconnect_budget_exhaustion_surfaces_error(self):
+        # recv_iter ends mid-utterance (no gate wait) simulating budget
+        # exhaustion / unexpected server close while a context is live: this is
+        # a truncation, so frames() must raise (not end cleanly) so the provider
+        # surfaces a real failure — matching the one-shot path.
         class EndingWS(FakeMultiContextWS):
             async def recv_iter(self):
                 for frame in self._script:
@@ -334,10 +336,48 @@ class TestMultiContextWSManager:
         # Reader started with empty script -> ends immediately and finishes ctx.
         await asyncio.sleep(0.01)
 
-        frames = [f async for f in ctx.frames()]
-        assert frames == []
+        with pytest.raises(ConnectionError):
+            async for _ in ctx.frames():
+                pass
         assert mgr._ws is None
         await mgr.aclose()
+
+    async def test_non_object_json_frame_does_not_kill_reader(self):
+        # A valid-but-non-object JSON frame (bare number / quoted keepalive)
+        # must route as a global frame, not raise AttributeError in the reader
+        # and tear down the shared socket.
+        ws = FakeMultiContextWS()
+        globals_seen: list = []
+        mgr = MultiContextWSManager(
+            _make_adapter(ws, on_global_frame=lambda f: globals_seen.append(f))
+        )
+        ctx = await mgr.open_context()
+        ws._script = ["123", '"pong"', _chunk(ctx.context_id, done=True)]
+        await mgr._cancel_background_tasks()
+        ws._gate = asyncio.Event()
+        mgr._reader_task = asyncio.create_task(mgr._reader_loop())
+
+        frames = []
+        async for frame in ctx.frames():
+            frames.append(json.loads(frame))
+            if frames[-1].get("done"):
+                break
+        # The stray non-object frames went to on_global_frame; the socket
+        # survived and the real frame was still delivered.
+        assert frames and frames[-1]["done"] is True
+        assert "123" in globals_seen and '"pong"' in globals_seen
+        assert mgr._ws is ws  # reader still alive, socket not torn down
+        await mgr.aclose()
+
+    async def test_deliberate_aclose_ends_frames_without_error(self):
+        # A deliberate aclose() is NOT a failure: live contexts end cleanly.
+        ws = FakeMultiContextWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+        ctx = await mgr.open_context()
+        await mgr.aclose()
+        frames = [f async for f in ctx.frames()]
+        assert frames == []
+        assert ctx.error is None
 
 
 @pytest.mark.asyncio

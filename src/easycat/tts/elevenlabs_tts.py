@@ -149,12 +149,6 @@ class ElevenLabsTTS(_WSTTSBase):
         # emitted before the drop is re-emitted (audible repetition), not a
         # seamless resume.
         self._pending_messages: tuple[str, ...] | None = None
-        # The in-flight persistent context, tracked so stop()/cancel() can
-        # target it. Only used when ``persistent_ws`` is enabled.
-        self._current_ctx: _Context | None = None
-        # Active context id, set while a persistent utterance is in flight (for
-        # parity with Cartesia). Only used when ``persistent_ws`` is enabled.
-        self._context_id: str | None = None
 
     def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
@@ -340,6 +334,27 @@ class ElevenLabsTTS(_WSTTSBase):
         for message in messages:
             await ws.send(message)
 
+    def _make_ws(self, url: str, on_reconnect) -> ReconnectingWebSocket:
+        """Build a ReconnectingWebSocket with the shared auth/retry config.
+
+        Single source of the headers/retry tuning/event-bus/provider-name so the
+        one-shot ``/stream-input`` and persistent ``/multi-stream-input`` sockets
+        can't drift apart when one is later tuned. Only the URL and reconnect
+        hook differ.
+        """
+        return ReconnectingWebSocket(
+            url=url,
+            config=ReconnectConfig(
+                extra_headers={"xi-api-key": self._config.api_key},
+                max_retries=self._config.reconnect_max_retries,
+                base_delay=self._config.reconnect_base_delay,
+                max_delay=self._config.reconnect_max_delay,
+            ),
+            event_bus=self._config.event_bus,
+            provider_name="elevenlabs_tts",
+            on_reconnect=on_reconnect,
+        )
+
     async def _connect_ws(self) -> ReconnectingWebSocket:
         """Create and connect a fresh WebSocket for one synthesis request."""
         ws_url = (
@@ -349,19 +364,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"&output_format={self._config.output_format}"
             f"&apply_text_normalization={self._config.apply_text_normalization}"
         )
-
-        self._ws = ReconnectingWebSocket(
-            url=ws_url,
-            config=ReconnectConfig(
-                extra_headers={"xi-api-key": self._config.api_key},
-                max_retries=self._config.reconnect_max_retries,
-                base_delay=self._config.reconnect_base_delay,
-                max_delay=self._config.reconnect_max_delay,
-            ),
-            event_bus=self._config.event_bus,
-            provider_name="elevenlabs_tts",
-            on_reconnect=self._replay_request,
-        )
+        self._ws = self._make_ws(ws_url, self._replay_request)
         await self._ws.connect()
         return self._ws
 
@@ -378,18 +381,7 @@ class ElevenLabsTTS(_WSTTSBase):
         )
 
     def _build_multi_ws(self, on_reconnect) -> ReconnectingWebSocket:
-        return ReconnectingWebSocket(
-            url=self._multi_stream_url(),
-            config=ReconnectConfig(
-                extra_headers={"xi-api-key": self._config.api_key},
-                max_retries=self._config.reconnect_max_retries,
-                base_delay=self._config.reconnect_base_delay,
-                max_delay=self._config.reconnect_max_delay,
-            ),
-            event_bus=self._config.event_bus,
-            provider_name="elevenlabs_tts",
-            on_reconnect=on_reconnect,
-        )
+        return self._make_ws(self._multi_stream_url(), on_reconnect)
 
     def _context_init_frame(self, ctx_id: str) -> str:
         return json.dumps(
@@ -427,9 +419,12 @@ class ElevenLabsTTS(_WSTTSBase):
         if not isinstance(frame, str):
             return None
         try:
-            return json.loads(frame).get("contextId")
+            parsed = json.loads(frame)
         except json.JSONDecodeError:
             return None
+        # Valid-but-non-object JSON has no contextId; return None so it routes as
+        # a global frame instead of raising AttributeError in the reader.
+        return parsed.get("contextId") if isinstance(parsed, dict) else None
 
     def _on_global_frame(self, frame: Any) -> None:
         if not isinstance(frame, str):
@@ -457,8 +452,6 @@ class ElevenLabsTTS(_WSTTSBase):
         ctx: _Context | None = None
         try:
             ctx = await mgr.open_context()
-            self._current_ctx = ctx
-            self._context_id = ctx.context_id
             pending = [
                 self._context_init_frame(ctx.context_id),
                 json.dumps({"text": text, "context_id": ctx.context_id}),
@@ -478,8 +471,6 @@ class ElevenLabsTTS(_WSTTSBase):
         finally:
             if ctx is not None:
                 mgr.finish_context(ctx)
-            self._current_ctx = None
-            self._context_id = None
             self._end_synthesis()
 
     async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:
@@ -500,6 +491,14 @@ class ElevenLabsTTS(_WSTTSBase):
             # Drop frames for a different context.
             if data.get("contextId") not in (None, ctx.context_id):
                 continue
+            # A context-scoped error frame (routed here because it carries this
+            # contextId) must be surfaced and end the turn — otherwise the loop
+            # would await frames() forever (no isFinal) or end as a clean,
+            # truncated completion with the server's reason lost.
+            if data.get("error") or data.get("message"):
+                detail = data.get("error") or data.get("message")
+                self._emit_provider_error(RuntimeError(f"ElevenLabs TTS error: {detail}"))
+                return
             if data.get("audio"):
                 audio_bytes = base64.b64decode(data["audio"])
                 if audio_bytes:
@@ -543,9 +542,8 @@ class ElevenLabsTTS(_WSTTSBase):
         """
         await super().stop()
         if self._persistent_enabled():
-            ctx = self._current_ctx
-            if ctx is not None and self._mgr is not None:
-                await self._mgr.cancel_context(ctx)
+            if self._mgr is not None:
+                await self._mgr.cancel_all()
             return
         if self._response is not None:
             await self._response.aclose()
@@ -555,11 +553,13 @@ class ElevenLabsTTS(_WSTTSBase):
         """Immediately cancel synthesis and close connections."""
         await super().cancel()
         if self._persistent_enabled():
-            # Context-scoped barge-in: close just the in-flight context and
-            # keep the shared socket open.
-            ctx = self._current_ctx
-            if ctx is not None and self._mgr is not None:
-                await self._mgr.cancel_context(ctx)
+            # Context-scoped barge-in: close the live context(s) via the manager
+            # (keeping the shared socket open). Targeting the manager's live
+            # contexts rather than a shared self._current_ctx field the
+            # synthesize task's finally can null underneath us avoids a
+            # cross-task race where the cancel frame is never sent.
+            if self._mgr is not None:
+                await self._mgr.cancel_all()
             return
         resp = self._response
         self._response = None

@@ -128,9 +128,6 @@ class CartesiaTTS(_WSTTSBase):
         # is re-emitted after the restart (audible repetition), not a seamless
         # resume.
         self._pending_request: str | None = None
-        # The in-flight persistent context, tracked so stop()/cancel() can
-        # target it. Only used when ``persistent_ws`` is enabled.
-        self._current_ctx: _Context | None = None
 
     def _create_ws(self) -> ReconnectingWebSocket:
         return self._build_ws(self._replay_request)
@@ -177,9 +174,13 @@ class CartesiaTTS(_WSTTSBase):
         if not isinstance(frame, str):
             return None
         try:
-            return json.loads(frame).get("context_id")
+            parsed = json.loads(frame)
         except json.JSONDecodeError:
             return None
+        # Valid-but-non-object JSON (a bare number, array, null, quoted
+        # keepalive, …) has no context_id; return None so it routes as a
+        # global frame instead of raising AttributeError in the reader.
+        return parsed.get("context_id") if isinstance(parsed, dict) else None
 
     def _on_global_frame(self, frame: Any) -> None:
         if not isinstance(frame, str):
@@ -333,8 +334,6 @@ class CartesiaTTS(_WSTTSBase):
         ctx: _Context | None = None
         try:
             ctx = await mgr.open_context()
-            self._current_ctx = ctx
-            self._context_id = ctx.context_id
             await mgr.send(ctx, [json.dumps(self._build_request(text, ctx.context_id))])
 
             async for message in ctx.frames():
@@ -379,16 +378,13 @@ class CartesiaTTS(_WSTTSBase):
         finally:
             if ctx is not None:
                 mgr.finish_context(ctx)
-            self._current_ctx = None
-            self._context_id = None
             self._end_synthesis()
 
     async def stop(self) -> None:
         if self._persistent_enabled():
             await super().stop()
-            ctx = self._current_ctx
-            if ctx is not None and self._mgr is not None:
-                await self._mgr.cancel_context(ctx)
+            if self._mgr is not None:
+                await self._mgr.cancel_all()
             return
         await super().stop()
         await self._close_ws()
@@ -399,12 +395,14 @@ class CartesiaTTS(_WSTTSBase):
         was_active = self._active
         await super().cancel()
         if self._persistent_enabled():
-            # Context-scoped barge-in: cancel just the in-flight context and
-            # keep the shared socket open (the manager falls back to a full
-            # socket close if the cancel send fails).
-            ctx = self._current_ctx
-            if was_active and ctx is not None and self._mgr is not None:
-                await self._mgr.cancel_context(ctx)
+            # Context-scoped barge-in: cancel the live context(s) via the
+            # manager and keep the shared socket open (the manager falls back to
+            # a full socket close if the cancel send fails). Targeting the
+            # manager's live contexts — not a shared self._current_ctx field the
+            # synthesize task's finally can null underneath us — avoids a
+            # cross-task race where the cancel frame is never sent.
+            if was_active and self._mgr is not None:
+                await self._mgr.cancel_all()
             return
         ws = self._ws
         ctx_id = self._context_id
