@@ -760,6 +760,23 @@ def test_coerce_frames_to_format_lenient_resamples_with_numpy(monkeypatch):
     assert len(blobs[1]) > len(frames[1][1])
 
 
+def test_np_pcm_dtype_uses_little_endian_specs(monkeypatch):
+    """Multi-byte PCM artifacts are little-endian even on big-endian hosts."""
+    requested: list[str] = []
+
+    class FakeNumpy:
+        def dtype(self, spec: str) -> str:
+            requested.append(spec)
+            return f"dtype:{spec}"
+
+    monkeypatch.setattr(_server, "_np", FakeNumpy())
+
+    assert _server._np_pcm_dtype(1) == "dtype:int8"
+    assert _server._np_pcm_dtype(2) == "dtype:<i2"
+    assert _server._np_pcm_dtype(4) == "dtype:<i4"
+    assert requested == ["int8", "<i2", "<i4"]
+
+
 def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     """The numpy fallback must not overflow before averaging int32 stereo samples."""
     if _server._np is None:  # pragma: no cover

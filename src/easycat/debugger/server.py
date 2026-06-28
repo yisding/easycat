@@ -100,12 +100,18 @@ except (ImportError, RecursionError):  # pragma: no cover
     _np = None  # type: ignore[assignment]
 
 
+def _np_pcm_dtype(width: int) -> Any:
+    """Return the signed little-endian numpy dtype for raw PCM samples."""
+    _dtypes = {1: "int8", 2: "<i2", 4: "<i4"}
+    spec = _dtypes.get(width)
+    if spec is None:
+        raise ValueError(f"unsupported sample width {width}")
+    return _np.dtype(spec)  # type: ignore[union-attr]
+
+
 def _np_tomono(data: bytes, width: int) -> bytes:
     """Average stereo channels into mono using numpy (int8/16/32 PCM)."""
-    _dtypes = {1: _np.int8, 2: _np.int16, 4: _np.int32}  # type: ignore[union-attr]
-    dt = _dtypes.get(width)
-    if dt is None:
-        raise ValueError(f"unsupported sample width {width}")
+    dt = _np_pcm_dtype(width)
     arr = _np.frombuffer(data, dtype=dt)  # type: ignore[union-attr]
     stereo = arr.reshape(-1, 2).astype(_np.int64)  # type: ignore[union-attr]
     mono = ((stereo[:, 0] + stereo[:, 1]) >> 1).astype(dt)
@@ -114,10 +120,7 @@ def _np_tomono(data: bytes, width: int) -> bytes:
 
 def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: int) -> bytes:
     """Linearly interpolate PCM from *inrate* to *outrate* using numpy."""
-    _dtypes = {1: _np.int8, 2: _np.int16, 4: _np.int32}  # type: ignore[union-attr]
-    dt = _dtypes.get(width)
-    if dt is None:
-        raise ValueError(f"unsupported sample width {width}")
+    dt = _np_pcm_dtype(width)
     arr = _np.frombuffer(data, dtype=dt).astype(_np.float64)  # type: ignore[union-attr]
     n_frames = len(arr) // nchannels
     if n_frames == 0:
