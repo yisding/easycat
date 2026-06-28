@@ -560,10 +560,8 @@ low-level internals:
 - `runtime_mode="chained_pipeline" | "text_session"`
 - `smart_turn=True` with `smart_turn_sensitivity=0.5` (shipped)
 - `backchannel_filter=True`
-- `latency_budget=LatencyBudget(...)`
 - `warmup=True`
 - `mcp_servers=[...]`
-- `max_session_cost_usd=0.50`
 
 ## Quickstart Guardrails
 

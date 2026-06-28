@@ -731,8 +731,8 @@ opening the debugger UI. Turns are aligned positionally (turn 0 of A vs turn
 0 of B); ragged turn counts pad the missing side and mark the pair
 `unmatched` so a dropped or extra turn is obvious. Milestone keys are read
 dynamically from `debug/_turn_diff.diff_bundles`, which reuses the shared
-`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` /
-`turn_cost_rollup` rollups so the diff never reimplements the math.
+`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` rollups so
+the diff never reimplements the math.
 
 ```
 Usage: easycat diff [OPTIONS] PATH_A PATH_B
