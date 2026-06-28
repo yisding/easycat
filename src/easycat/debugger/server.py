@@ -2112,6 +2112,19 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.json_response(
                 {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
             )
+        allowed_turn_ids = {
+            turn["turn_id"]
+            for turn in _summarise_turns(source.records())
+            if isinstance(turn.get("turn_id"), str)
+        }
+        if turn_id not in allowed_turn_ids:
+            return web.json_response(
+                {
+                    "error_code": "BAD_REQUEST",
+                    "message": f"turn_id does not exist in bundle: {turn_id!r}",
+                },
+                status=400,
+            )
         try:
             annotation = Annotation(
                 turn_id=turn_id,
@@ -2125,7 +2138,11 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
             )
         try:
-            record = save_annotation(annotate_path, annotation)
+            record = save_annotation(annotate_path, annotation, allowed_turn_ids=allowed_turn_ids)
+        except AnnotationError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
         except OSError:
             logger.exception("Annotation write failed")
             return web.Response(status=500, text="annotation write failed")
