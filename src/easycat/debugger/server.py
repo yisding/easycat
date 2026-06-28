@@ -135,6 +135,7 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
     info = _np.iinfo(dt)  # type: ignore[union-attr]
     return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
 
+
 logger = logging.getLogger(__name__)
 
 
