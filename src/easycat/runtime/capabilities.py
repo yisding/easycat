@@ -73,6 +73,24 @@ def pending_playout_ms(provider: Any) -> float | None:
     return None
 
 
+def drain_aec_reference_frames(provider: Any) -> list[bytes] | None:
+    """Drain the transport's playback-time far-end (speaker) reference frames.
+
+    Transports that capture a far-end reference at playback time (e.g.
+    ``LocalTransport`` and the WebRTC outbound source) can expose
+    ``drain_aec_reference_frames()`` returning and draining the reference frames
+    accumulated since the last call. ``AudioRouter`` drains them before the
+    near-end mic frame so the echo canceller sees far-end audio before the
+    matching near-end audio. Returns ``None`` for transports that lack the hook,
+    keeping the check a strict no-op for them; optional — transports that cannot
+    provide a playback-time reference omit it entirely.
+    """
+    hook = getattr(provider, "drain_aec_reference_frames", None)
+    if callable(hook):
+        return list(hook())
+    return None
+
+
 async def clear_audio_if_supported(provider: Any) -> None:
     """Clear outbound audio only when the transport supports it."""
     clear_audio = getattr(provider, "clear_audio", None)
