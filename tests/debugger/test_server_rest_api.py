@@ -566,47 +566,6 @@ def test_collect_concat_pcm_joins_frames():
     assert empty_pcm == b"" and empty_fmt == {}
 
 
-async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):
-    """Cost panel must degrade gracefully — a bundle with no CostRecord
-    events still returns a well-formed totals dict."""
-    bundle_path = await _build_voice_bundle(tmp_path)
-    source = _bundle_source(bundle_path)
-    app = _make_app(source)
-    from aiohttp.test_utils import TestClient, TestServer
-
-    async with TestClient(TestServer(app)) as client:
-        body = await (await client.get("/api/cost")).json()
-        assert "totals" in body and "per_turn" in body
-        for k in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            assert body["totals"][k] == 0
-        assert body["budget"]["configured"] is False
-
-
-async def test_api_cost_reports_budget_from_manifest():
-    source = DebuggerSource(
-        label="budget-source",
-        _records_fn=lambda: [
-            {
-                "sequence": 1,
-                "name": "cost",
-                "turn_id": "turn-1",
-                "data": {"usd": 0.85, "stt_seconds": 2.5},
-            }
-        ],
-        _artifact_fn=lambda _ref: None,
-        _manifest_fn=lambda: {"config_snapshot": {"max_session_cost_usd": "1.0"}},
-    )
-    app = _make_app(source)
-    from aiohttp.test_utils import TestClient, TestServer
-
-    async with TestClient(TestServer(app)) as client:
-        body = await (await client.get("/api/cost")).json()
-        assert body["totals"]["usd"] == pytest.approx(0.85)
-        assert body["per_turn"]["turn-1"]["stt_seconds"] == pytest.approx(2.5)
-        assert body["budget"]["status"] == "warning"
-        assert body["budget"]["usage_fraction"] == pytest.approx(0.85)
-
-
 async def test_api_health_returns_ok(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)

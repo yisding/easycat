@@ -4,7 +4,7 @@ Adapts a :class:`DebuggerSource` (a bundle on disk, an in-memory
 :class:`RunBundle`, or a live :class:`Session`) into a JSON HTTP API,
 WebSocket push channel, and single-page HTML UI rendering the
 timeline, per-stage waterfall, pipeline graph, transcript, audio
-playback, replay surface, cost rollup, and bundle export.
+playback, replay surface, and bundle export.
 
 Routes:
 
@@ -14,7 +14,6 @@ Routes:
 - ``GET  /api/turns``                 — per-turn rollup with stage counts
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
-- ``GET  /api/cost``                  — cost rollup and budget status
 - ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
@@ -54,7 +53,6 @@ from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
-from easycat.debug._turn_timeline import turn_cost_rollup as _turn_cost_rollup
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.annotations import (
     Annotation,
@@ -80,10 +78,6 @@ from easycat.debugger._aec import (
 )
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
-from easycat.runtime.costs import (
-    cost_budget_status,
-    max_session_cost_usd_from_snapshot,
-)
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
 # ``audioop`` was removed from the stdlib in Python 3.13.  Mic-track audio
@@ -779,28 +773,6 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     wrapper keeps the historical name the SPA routes call.
     """
     return _extract_turn_transcripts(records)
-
-
-def _cost_rollup(
-    records: list[dict[str, Any]],
-    *,
-    config_snapshot: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Aggregate ``CostRecord``-style entries.  Degrades to zero when absent.
-
-    Cost records are owned by the peripheral observability/cost plan so
-    they may not exist in any given bundle.  The endpoint returns a
-    well-formed shape with zeroes rather than 404'ing so the UI can
-    always render the panel.  The per-turn / total aggregation is the shared
-    :func:`easycat.debug._turn_timeline.turn_cost_rollup`; only the budget
-    evaluation (which needs the config snapshot) stays here.
-    """
-    by_turn, totals = _turn_cost_rollup(records)
-    budget = cost_budget_status(
-        totals["usd"],
-        max_session_cost_usd_from_snapshot(config_snapshot),
-    )
-    return {"per_turn": by_turn, "totals": totals, "budget": budget}
 
 
 def _coerce_frames_to_format(
@@ -1511,11 +1483,6 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     async def transcript(_request: Any) -> Any:
         return web.json_response({"transcripts": _build_transcript(source.records())})
 
-    async def cost(_request: Any) -> Any:
-        manifest = source.manifest()
-        config_snapshot = manifest.get("config_snapshot") if isinstance(manifest, dict) else None
-        return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
-
     async def issues(_request: Any) -> Any:
         return web.json_response(
             _build_issues(source.records(), artifact_resolver=source.artifact)
@@ -2015,7 +1982,6 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/turns", turns)
     app.router.add_get("/api/timeline", timeline)
     app.router.add_get("/api/transcript", transcript)
-    app.router.add_get("/api/cost", cost)
     app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)

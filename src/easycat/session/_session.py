@@ -329,7 +329,6 @@ class Session:
         self._run_ctx = components.run_ctx
         self._no_turn = components.no_turn
         self._journal_sink = components.journal_sink
-        self._cost_budget = components.cost_budget
         self._warmup = components.warmup
         self._outbound_queue = components.outbound_queue
         self._stt_stage = components.stt_stage

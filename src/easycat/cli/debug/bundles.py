@@ -1563,9 +1563,9 @@ def latency_command(
 # ── `easycat diff` ───────────────────────────────────────────────
 
 # Transcript fields whose free-form text must be redacted before any diff
-# row is emitted (JSON envelope or human table).  A regressed milestone or a
-# cost delta is just numbers; only the transcript can carry a phone number or
-# secret a caller said aloud.
+# row is emitted (JSON envelope or human table).  A regressed milestone is
+# just numbers; only the transcript can carry a phone number or secret a
+# caller said aloud.
 _DIFF_TRANSCRIPT_TEXT_FIELDS = ("user_a", "user_b", "agent_a", "agent_b")
 
 
@@ -1575,7 +1575,7 @@ def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
     The diff carries raw user/agent transcripts so the ``changed`` flag is
     meaningful, but the CLI must never print unredacted caller text.  Each
     transcript cell's text fields are passed through :func:`redact_text`;
-    milestones, costs, and the summary are numbers and pass through untouched.
+    milestones and the summary are numbers and pass through untouched.
     """
     for turn in result.get("turns", ()):
         transcript = turn.get("transcript")
@@ -1606,15 +1606,15 @@ def _diff_turn_filter(result: dict[str, Any], turn: str | None) -> dict[str, Any
 
 
 def _diff_table(turns: list[dict[str, Any]]) -> Table:
-    """Render the per-turn diff: regressed milestones in red, cost delta, drift.
+    """Render the per-turn diff: regressed milestones in red, drift.
 
     One row per aligned turn pair: the positional index, both turn ids, each
-    milestone's ``a→b`` delta (red when it regressed), whether the transcript
-    changed, and the cost delta.  Unmatched turns (a dropped or extra turn)
-    render the missing side as ``-``.
+    milestone's ``a→b`` delta (red when it regressed), and whether the
+    transcript changed.  Unmatched turns (a dropped or extra turn) render the
+    missing side as ``-``.
     """
     table = Table(
-        title="Two-source diff (ms / USD) — regressions in red",
+        title="Two-source diff (ms) — regressions in red",
         show_header=True,
         header_style="bold",
         box=None,
@@ -1625,7 +1625,6 @@ def _diff_table(turns: list[dict[str, Any]]) -> Table:
     table.add_column("turn (a→b)", no_wrap=True, overflow="fold")
     table.add_column("milestones (Δms)", overflow="fold")
     table.add_column("transcript", no_wrap=True)
-    table.add_column("cost Δ", justify="right", no_wrap=True)
     for turn in turns:
         turn_a = turn.get("turn_id_a")
         turn_b = turn.get("turn_id_b")
@@ -1642,13 +1641,11 @@ def _diff_table(turns: list[dict[str, Any]]) -> Table:
         milestone_text = ", ".join(cells) if cells else "[dim](none)[/]"
         transcript = turn.get("transcript") or {}
         drift = "[yellow]changed[/]" if transcript.get("changed") else "same"
-        cost_delta = (turn.get("cost") or {}).get("delta")
         table.add_row(
             str(turn.get("index", "")),
             turn_label,
             milestone_text,
             drift,
-            f"{cost_delta:+.4f}" if isinstance(cost_delta, int | float) else "-",
         )
     return table
 
@@ -1670,13 +1667,13 @@ def diff_command(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Diff two bundles turn-by-turn: milestone, transcript, and cost deltas.
+    """Diff two bundles turn-by-turn: milestone and transcript deltas.
 
     Aligns turns positionally (turn 0 of A vs turn 0 of B) and reports each
     milestone's ``b - a`` delta, whether it regressed (default: >10% AND >5ms
-    slower), whether the transcript drifted, and the per-turn cost delta.
-    The summary names the single worst regression across the whole run.
-    Transcript text is redacted before it is printed.  See docs/latency.md.
+    slower), and whether the transcript drifted.  The summary names the single
+    worst regression across the whole run.  Transcript text is redacted before
+    it is printed.  See docs/latency.md.
     """
     bundle_a = _load_bundle_or_journal(path_a, command="diff", json_output=json_output)
     bundle_b = _load_bundle_or_journal(path_b, command="diff", json_output=json_output)

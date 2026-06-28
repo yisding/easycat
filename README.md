@@ -620,7 +620,7 @@ uv run easycat debugger serve .easycat/journals/<session_id>.sqlite --no-open-br
 
 The debugger UI is the during-call/post-call workspace: an overview dashboard,
 live event lanes, per-turn latency waterfalls, transcripts with audio playback,
-raw record inspection with paging, deterministic issue cards, cost rollups,
+raw record inspection with paging, deterministic issue cards,
 replay, and live-session bundle export.
 
 ### Hook directly into agent/tool events

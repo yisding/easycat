@@ -931,7 +931,7 @@ EasyCat — voice bot framework
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
-    diff        Diff two bundles turn-by-turn for milestone and cost regressions
+    diff        Diff two bundles turn-by-turn for milestone regressions
     journal     Search and tail captured journals and crash dumps
     tail        Live-tail a SQLite journal as it grows
     explain     Route a call problem by symptom, or look up an error code
