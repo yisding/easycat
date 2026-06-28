@@ -132,6 +132,7 @@ class TestOutboundAudioAecReference:
     async def test_drain_matches_delivered_chunks_and_clears(self):
         source = _OutboundAudioSource()
         _disable_pacing(source)
+        source.drain_aec_reference_frames()  # arm capture: a consumer has attached
         bus = EventBus()
         delivered: list[TransportAudioDelivered] = []
         bus.subscribe(TransportAudioDelivered, lambda e: delivered.append(e))
@@ -170,6 +171,7 @@ class TestOutboundAudioAecReference:
     async def test_clear_keeps_reference_but_drops_pending_audio(self):
         source = _OutboundAudioSource()
         _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
         frame_bytes = 960 * 2
 
         played = bytes([0xAA]) * frame_bytes
@@ -202,6 +204,7 @@ class TestOutboundAudioAecReference:
         LocalTransport per-callback reference)."""
         source = _OutboundAudioSource()
         _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
         # Transport (48k) frame is 1920 bytes; the session-rate (16k) chunk is
         # 640 bytes / 20 ms.
         session_data = bytes([0x11]) * 640
@@ -226,6 +229,7 @@ class TestOutboundAudioAecReference:
         rate, so silent render frames append no reference."""
         source = _OutboundAudioSource()
         _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
         await source._recv()
         await source._recv()
         assert source.drain_aec_reference_frames() == []
@@ -246,6 +250,7 @@ class TestOutboundAudioAecReference:
         transport = WebRTCTransport()
         source = transport._outbound
         _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
 
         frame_bytes = 960 * 2
         played = bytes([0xCC]) * frame_bytes
@@ -265,6 +270,7 @@ class TestOutboundAudioAecReference:
         transport = WebRTCTransport()
         source = transport._outbound
         _disable_pacing(source)
+        source._aec_reference_enabled = True  # arm capture: a consumer has attached
 
         frame_bytes = 960 * 2
         played = bytes([0xDD]) * frame_bytes

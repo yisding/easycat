@@ -496,6 +496,11 @@ class _OutboundAudioSource:
         # to size silence reference frames during fully-silent ``_recv`` calls.
         # ``None`` until audio has played (no echo to cancel before then).
         self._ref_format: AudioFormat | None = None
+        # Reference capture is armed only once a consumer (the AudioRouter)
+        # first drains via ``drain_aec_reference_frames()``.  Until then ``_recv``
+        # skips appending references entirely, so a session without AEC does no
+        # per-frame reference allocation or deque churn.
+        self._aec_reference_enabled: bool = False
 
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
@@ -608,7 +613,19 @@ class _OutboundAudioSource:
                 # session-rate format/order previously fed via the router's
                 # _handle_audio_delivery path.  Drained before the near-end
                 # frame by AudioRouter (shared AEC reference capability).
-                if delivered_data:
+                #
+                # KNOWN LIMITATION (server-side AEC is best-effort): this
+                # captures the reference at the server's RTP *send* time, not at
+                # the remote peer's actual speaker playout.  For a remote WebRTC
+                # peer the true echo path adds the peer's jitter buffer, speaker,
+                # room acoustics, and return-network latency, so this reference
+                # may not align with the echo arriving back at the near end and
+                # server-side AEC may not converge.  It is primarily effective
+                # for local-mic / co-located setups where send time ≈ playout
+                # time; remote-peer echo alignment is not guaranteed.  Most
+                # browsers already run their own near-end AEC, so this is a
+                # best-effort supplement rather than a guarantee.
+                if delivered_data and self._aec_reference_enabled:
                     self._aec_ref_queue.append(delivered_data)
                     self._ref_format = queued.original_chunk.format
                 queued.original_reported = reported
@@ -628,7 +645,7 @@ class _OutboundAudioSource:
         # far-end stream 1:1 with the near-end mic stream during pauses,
         # mirroring LocalTransport's per-callback reference.  Skipped until a
         # session rate is known (nothing has played yet -> no echo to cancel).
-        if not delivered_chunks and self._ref_format is not None:
+        if self._aec_reference_enabled and not delivered_chunks and self._ref_format is not None:
             fmt = self._ref_format
             silence_samples = fmt.sample_rate * _FRAME_SAMPLES // _WEBRTC_SAMPLE_RATE
             self._aec_ref_queue.append(bytes(silence_samples * fmt.frame_size))
@@ -659,7 +676,12 @@ class _OutboundAudioSource:
         Each element is session-rate PCM16 captured at playback time, oldest
         first.  The LiveKitAEC reframes internally, so variable-size elements
         are fine.
+
+        Calling this also *arms* reference capture: ``_recv`` only buffers
+        far-end frames once a consumer has started draining, so a session
+        without AEC never pays the per-frame reference cost.
         """
+        self._aec_reference_enabled = True
         frames = list(self._aec_ref_queue)
         self._aec_ref_queue.clear()
         return frames
