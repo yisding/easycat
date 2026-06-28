@@ -327,8 +327,11 @@ async def test_elevenlabs_batch_sends_zero_retention_flag():
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    data = mock_client.post.call_args.kwargs.get("data", {})
-    assert data["enable_logging"] == "false"
+    # enable_logging is a query parameter on /v1/speech-to-text, not a
+    # multipart form field (where it would be ignored).
+    call = mock_client.post.call_args
+    assert call.kwargs["params"] == {"enable_logging": "false"}
+    assert "enable_logging" not in call.kwargs.get("data", {})
 
 
 @pytest.mark.asyncio
@@ -340,8 +343,10 @@ async def test_elevenlabs_batch_omits_logging_flag_by_default():
     pcm = generate_pcm_sine(duration_ms=100)
     await collect_stt_events(stt, make_audio_chunks(pcm))
 
-    data = mock_client.post.call_args.kwargs.get("data", {})
-    assert "enable_logging" not in data
+    call = mock_client.post.call_args
+    # No zero-retention requested → no enable_logging anywhere (server default).
+    assert call.kwargs.get("params") is None
+    assert "enable_logging" not in call.kwargs.get("data", {})
 
 
 def test_elevenlabs_rejects_too_many_keyterms():

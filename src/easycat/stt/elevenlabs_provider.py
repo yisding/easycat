@@ -536,10 +536,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         data["model"] = self._resolved_model()
         if self._config.language:
             data["language"] = self._config.language
-        # Zero-retention mode: opt-in, only sent when disabled so the default
-        # request keeps the server default (logging on).
-        if not self._config.enable_logging:
-            data["enable_logging"] = "false"
+        # Zero-retention mode is a *query* parameter on /v1/speech-to-text (the
+        # multipart schema has no such field), so send it via ``params`` — in
+        # ``data`` it would be silently ignored. Opt-in: only sent when
+        # disabled so the default request keeps the server default (logging on).
+        params = {"enable_logging": "false"} if not self._config.enable_logging else None
 
         client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
         owns_client = self._config.http_client is None
@@ -547,6 +548,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             response = await client.post(
                 url,
                 headers=headers,
+                params=params,
                 files={"file": ("audio.wav", wav_data, "audio/wav")},
                 data=data,
             )
