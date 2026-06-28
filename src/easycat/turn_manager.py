@@ -109,15 +109,6 @@ class TurnManagerConfig:
     # ``smart_turn.threshold`` knob is authoritative and the two cannot
     # diverge by accident; setting both to different values logs a warning.
     endpoint_threshold: float | None = None
-    # Milliseconds after bot speech starts during which barge-in is suppressed.
-    # AEC3 needs time to converge on the echo path before it can suppress the
-    # bot's own voice.  During this window the adaptive filter is still
-    # learning, so even correctly-timed reference frames produce some residual
-    # echo that can trigger a false VAD barge-in.  Setting this to ~1000 ms
-    # lets AEC3 reach near-full convergence before the first real interruption
-    # is accepted, without permanently disabling barge-in for long responses.
-    # 0 (default) leaves current behaviour unchanged.
-    barge_in_holdoff_ms: int = 0
 
     def __post_init__(self) -> None:
         if self.end_of_turn_silence_ms < 0:
@@ -188,10 +179,6 @@ class TurnManager:
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
-
-        # Monotonic timestamp set when the bot starts speaking (BOT_SPEAKING
-        # entry).  Used by _handle_barge_in to enforce barge_in_holdoff_ms.
-        self._bot_speaking_start: float | None = None
 
         # Optional endpoint detector (smart-turn model)
         self._endpoint_detector: SmartTurnProvider | None = self._config.endpoint_detector
@@ -572,15 +559,6 @@ class TurnManager:
         queued session action has ``no_interrupt=True``).  In that case we
         do **not** start a new turn — the current bot playback continues.
         """
-        # Suppress barge-in during the AEC convergence window at the start of
-        # each bot utterance.  The adaptive filter needs time to model the echo
-        # path; until it converges, residual echo can look like speech to VAD.
-        holdoff_ms = self._config.barge_in_holdoff_ms
-        if holdoff_ms > 0 and self._bot_speaking_start is not None:
-            elapsed_ms = (time.monotonic() - self._bot_speaking_start) * 1000
-            if elapsed_ms < holdoff_ms:
-                return
-
         # Cancel current bot output via the session callback.
         # The callback is responsible for emitting the Interruption event.
         if self._cancel_turn_callback:
@@ -682,7 +660,6 @@ class TurnManager:
         # turn is complete, but cancel any stale timer to avoid cross-turn
         # races in non-standard/manual integrations.
         self._cancel_silence_timer()
-        self._bot_speaking_start = time.monotonic()
         self._transition(
             TurnManagerState.BOT_SPEAKING,
             reason="bot_started",

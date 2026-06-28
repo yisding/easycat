@@ -192,6 +192,27 @@ class LocalTransport(AudioQueueMixin):
         self._output_stream.start()  # type: ignore[union-attr]
         self._connected = True
 
+    def _push_aec_reference(self, frame: bytes) -> None:
+        """Push one far-end reference frame with a drop-oldest overflow policy.
+
+        Called from the sounddevice audio thread on every output callback so the
+        far-end (reference) stream stays sample-aligned 1:1 with the near-end
+        (mic) stream.  When the queue is full the oldest frame is evicted so the
+        freshest reference is always retained — stale references are useless to
+        AEC3, which only cancels echo of audio that is about to arrive.
+        """
+        try:
+            self._aec_ref_queue.put_nowait(frame)
+        except thread_queue.Full:
+            try:
+                self._aec_ref_queue.get_nowait()  # drop oldest, keep freshest
+            except thread_queue.Empty:
+                pass
+            try:
+                self._aec_ref_queue.put_nowait(frame)
+            except thread_queue.Full:
+                pass
+
     def _output_callback(
         self, np: object, outdata: object, frames: int, time_info: object, status: object
     ) -> None:
@@ -200,13 +221,20 @@ class LocalTransport(AudioQueueMixin):
         ``np`` is bound via ``partial`` at ``connect()`` time so this stays a
         plain method (testable without ``sounddevice``) while sounddevice still
         sees the four-argument callback signature it expects.
+
+        Every return path pushes exactly one full-frame far-end reference (real
+        audio, pre-roll silence, or underrun silence) so the AEC reference
+        stream stays 1:1 with the mic stream and AEC3 keeps converging.
         """
+        frame_bytes = self._frame_samples * self._audio_format.frame_size
+
         # Jitter-buffer pre-roll: emit silence until enough frames have queued,
         # then drain one frame per callback. Re-primes after every
         # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
         if not self._primed:
             if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
                 outdata[:] = 0  # type: ignore[index]
+                self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
                 return
             self._primed = True
 
@@ -217,6 +245,7 @@ class LocalTransport(AudioQueueMixin):
 
         if queued is None:
             outdata[:] = 0  # type: ignore[index]
+            self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
             return
 
         pcm = queued.chunk.data
@@ -229,16 +258,16 @@ class LocalTransport(AudioQueueMixin):
         if n < len(out_flat):
             out_flat[n:] = 0
 
-        # Push raw PCM into the AEC reference drain queue at actual playback
-        # time.  The async ingress pipeline drains this before processing the
-        # mic frame so AEC3 always receives the far-end reference before the
-        # near-end signal.  Non-blocking: a full queue silently discards the
-        # frame (same outcome as missing reference — preferable to blocking the
-        # audio thread).
-        try:
-            self._aec_ref_queue.put_nowait(pcm)
-        except thread_queue.Full:
-            pass
+        # Push the far-end reference at actual playback time, padded/trimmed to
+        # one full frame so it matches the bytes actually emitted to the speaker
+        # (and stays 1:1 with the mic frame).  The async ingress pipeline drains
+        # this before processing the mic frame so AEC3 always receives the
+        # far-end reference before the near-end signal.
+        if len(pcm) < frame_bytes:
+            ref = pcm + bytes(frame_bytes - len(pcm))
+        else:
+            ref = pcm[:frame_bytes]
+        self._push_aec_reference(ref)
 
         self._schedule_audio_delivery(queued)
 
@@ -328,9 +357,16 @@ class LocalTransport(AudioQueueMixin):
     def drain_aec_reference_frames(self) -> list[bytes]:
         """Return all pending AEC far-end reference frames, draining the queue.
 
+        This is the shared AEC reference capability used by both the local and
+        webrtc transports: any ``reports_audio_delivery`` transport that exposes
+        it has its far-end reference drained and fed by the router before the
+        near-end mic frame is processed.
+
         Called from the async ingress pipeline in AudioRouter._process_chunk
         before AudioStage.execute() so the AEC far-end reference is always fed
         before the corresponding near-end mic frame is processed.
+
+        Frames are returned oldest-first.
 
         Thread-safe: the output callback pushes to this queue from the
         sounddevice audio thread while this method is called from the asyncio
@@ -351,13 +387,12 @@ class LocalTransport(AudioQueueMixin):
                 self._out_queue.get_nowait()
             except thread_queue.Empty:
                 break
-        # Discard stale AEC reference frames so the filter does not try to
-        # cancel echo from audio that was never played after barge-in.
-        while not self._aec_ref_queue.empty():
-            try:
-                self._aec_ref_queue.get_nowait()
-            except thread_queue.Empty:
-                break
+        # Deliberately do NOT drain ``_aec_ref_queue`` here: the already-played
+        # reference frames describe the bot's last words, whose echo is still
+        # arriving at the mic during the barge-in.  Retaining them lets AEC
+        # cancel that residual echo instead of mistaking it for fresh speech.
+        # The queue stays bounded by the drop-oldest policy in
+        # ``_push_aec_reference``; a full disconnect/_flush_queues clears it.
         # Re-prime the jitter buffer so the post-barge-in utterance builds up
         # its own pre-roll before playback resumes.
         self._primed = False

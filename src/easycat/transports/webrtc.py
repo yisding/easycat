@@ -471,6 +471,12 @@ class _OutboundAudioSource:
     to obtain an aiortc track that delegates ``recv()`` back to this source.
     """
 
+    # Maximum number of AEC far-end reference frames buffered between mic
+    # frames.  ``_recv`` runs on the event loop (no thread crossing), so the
+    # ``deque(maxlen=...)`` drops the OLDEST entry on overflow for free, which
+    # keeps the freshest reference available for cancellation.
+    _AEC_REF_QUEUE_MAX: ClassVar[int] = 100
+
     def __init__(self) -> None:
         self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
         self._pending: deque[_QueuedOutboundChunk] = deque()
@@ -479,6 +485,12 @@ class _OutboundAudioSource:
         self._event_bus: EventBus | None = None
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
+        # AEC far-end reference drain queue.  ``_recv`` appends each delivered
+        # (session-rate) chunk at playback time; AudioRouter drains it via
+        # ``drain_aec_reference_frames`` before AudioStage.execute() so the AEC
+        # far-end reference is always fed before the corresponding near-end mic
+        # frame is processed.
+        self._aec_ref_queue: deque[bytes] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
 
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
@@ -574,10 +586,11 @@ class _OutboundAudioSource:
                     int((queued.transport_offset / len(queued.transport_data)) * original_size),
                 )
             if reported > queued.original_reported:
+                delivered_data = queued.original_chunk.data[queued.original_reported : reported]
                 delivered_chunks.append(
                     (
                         AudioChunk(
-                            data=queued.original_chunk.data[queued.original_reported : reported],
+                            data=delivered_data,
                             format=queued.original_chunk.format,
                             timestamp=queued.original_chunk.timestamp,
                         ),
@@ -586,6 +599,12 @@ class _OutboundAudioSource:
                         queued.turn_ref,
                     )
                 )
+                # Capture the far-end reference at playback time in the same
+                # session-rate format/order previously fed via the router's
+                # _handle_audio_delivery path.  Drained before the near-end
+                # frame by AudioRouter (shared AEC reference capability).
+                if delivered_data:
+                    self._aec_ref_queue.append(delivered_data)
                 queued.original_reported = reported
 
             if queued.transport_offset >= len(queued.transport_data):
@@ -617,8 +636,25 @@ class _OutboundAudioSource:
                     )
         return frame
 
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        """Return all pending AEC far-end reference frames, draining the queue.
+
+        Each element is session-rate PCM16 captured at playback time, oldest
+        first.  The LiveKitAEC reframes internally, so variable-size elements
+        are fine.
+        """
+        frames = list(self._aec_ref_queue)
+        self._aec_ref_queue.clear()
+        return frames
+
     def clear(self) -> None:
-        """Discard all queued audio data (used for barge-in / interruption)."""
+        """Discard all queued audio data (used for barge-in / interruption).
+
+        The AEC reference deque is intentionally *not* cleared: residual echo
+        of already-played audio is still arriving at the mic, so those refs
+        must remain available for cancellation.  The deque is bounded, so it
+        cannot grow without limit.
+        """
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
@@ -1019,6 +1055,20 @@ class WebRTCTransport(AudioQueueMixin):
     async def clear_audio(self) -> None:
         """Discard queued outbound audio (useful during barge-in)."""
         self._outbound.clear()
+
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        """Return and clear pending AEC far-end reference frames, oldest first.
+
+        Shared AEC reference capability drained by AudioRouter before the
+        near-end mic frame is processed, so the far-end reference is always fed
+        to the echo canceller ahead of the corresponding near-end frame.
+
+        Returns an empty list when the outbound source is not present.
+        """
+        outbound = self._outbound
+        if outbound is None:
+            return []
+        return outbound.drain_aec_reference_frames()
 
     async def _send_client_event(self, payload: dict[str, Any]) -> None:
         """Push one JSON event message over the browser's "events" data channel."""

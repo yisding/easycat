@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-from easycat.transports.webrtc import _OutboundAudioSource
+from easycat.events import EventBus, TransportAudioDelivered
+from easycat.transports.webrtc import WebRTCTransport, _OutboundAudioSource
 
 from ._webrtc_fakes import _HAS_WEBRTC_DEPS
 
@@ -109,3 +111,137 @@ class TestOutboundAudioSource:
         frame = await source._recv()
         data = bytes(frame.planes[0])
         assert data == bytes(960 * 2)  # silence
+
+
+def _disable_pacing(source: _OutboundAudioSource) -> None:
+    """Backdate the pacing clock so ``_recv`` never sleeps for real time."""
+    source._start = time.monotonic() - 1000.0
+
+
+class TestOutboundAudioAecReference:
+    """Issue H: WebRTC captures session-rate AEC far-end reference at playback.
+
+    The outbound source records the delivered (session-rate) chunk at ``_recv``
+    playback time, and ``WebRTCTransport.drain_aec_reference_frames()`` exposes
+    it as the shared AEC reference capability the AudioRouter feeds *before* the
+    near-end mic frame (mirroring the LocalTransport fix).
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_drain_matches_delivered_chunks_and_clears(self):
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+        bus.subscribe(TransportAudioDelivered, lambda e: delivered.append(e))
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        # Two distinct chunks spanning multiple frames so order matters.
+        chunk_a = bytes([0xAA]) * (frame_bytes + frame_bytes // 2)
+        chunk_b = bytes([0xBB]) * (frame_bytes * 2)
+        source.enqueue(chunk_a, original_chunk=AudioChunk(data=chunk_a, format=PCM16_MONO_16K))
+        source.enqueue(chunk_b, original_chunk=AudioChunk(data=chunk_b, format=PCM16_MONO_16K))
+
+        # Pump until everything queued/pending has been produced.
+        for _ in range(6):
+            await source._recv()
+            if source._queue.empty() and not source._pending:
+                break
+
+        # Let the queued TransportAudioDelivered emits run.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        delivered_bytes = b"".join(e.chunk.data for e in delivered)
+        ref_frames = source.drain_aec_reference_frames()
+        assert isinstance(ref_frames, list)
+        assert all(isinstance(f, bytes) for f in ref_frames)
+        # Same order and content as the delivered session-rate audio.
+        assert b"".join(ref_frames) == delivered_bytes
+        assert delivered_bytes == chunk_a + chunk_b
+
+        # Draining clears the queue.
+        assert source.drain_aec_reference_frames() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_clear_keeps_reference_but_drops_pending_audio(self):
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        frame_bytes = 960 * 2
+
+        played = bytes([0xAA]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+        # Produce the played frame so its reference is captured.
+        await source._recv()
+        assert source.drain_aec_reference_frames.__self__ is source  # bound method sanity
+
+        # Enqueue more audio that has NOT been played yet.
+        future = bytes([0xBB]) * frame_bytes
+        source.enqueue(future, original_chunk=AudioChunk(data=future, format=PCM16_MONO_16K))
+
+        # Capture the already-played reference before barge-in.
+        captured = list(source._aec_ref_queue)
+        assert captured == [played]
+
+        # Barge-in: clear() drops pending outbound audio but keeps the
+        # already-played reference whose echo is still arriving at the mic.
+        source.clear()
+
+        assert source._queue.empty()
+        assert not source._pending
+        assert source.drain_aec_reference_frames() == captured
+
+    def test_transport_drain_is_declared_capability(self):
+        """The router detects drain via ``getattr`` — it must be a callable
+        returning ``list[bytes]`` even with no peer connected."""
+        transport = WebRTCTransport()
+        drain = getattr(transport, "drain_aec_reference_frames", None)
+        assert callable(drain)
+        frames = drain()
+        assert isinstance(frames, list)
+        assert frames == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_transport_drain_returns_played_reference(self):
+        transport = WebRTCTransport()
+        source = transport._outbound
+        _disable_pacing(source)
+
+        frame_bytes = 960 * 2
+        played = bytes([0xCC]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+        await source._recv()
+
+        frames = transport.drain_aec_reference_frames()
+        assert isinstance(frames, list)
+        assert all(isinstance(f, bytes) for f in frames)
+        assert b"".join(frames) == played
+        # Drained.
+        assert transport.drain_aec_reference_frames() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_transport_clear_audio_keeps_reference(self):
+        transport = WebRTCTransport()
+        source = transport._outbound
+        _disable_pacing(source)
+
+        frame_bytes = 960 * 2
+        played = bytes([0xDD]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+        await source._recv()
+
+        # Queue audio that barge-in will discard.
+        future = bytes([0xEE]) * frame_bytes
+        source.enqueue(future, original_chunk=AudioChunk(data=future, format=PCM16_MONO_16K))
+
+        await transport.clear_audio()
+
+        assert source._queue.empty()
+        assert not source._pending
+        # The already-played reference survives barge-in.
+        assert transport.drain_aec_reference_frames() == [played]

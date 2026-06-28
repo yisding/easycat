@@ -40,6 +40,7 @@ from easycat.events import (
 from easycat.providers import Transport
 from easycat.runtime.capabilities import (
     PlaybackAcknowledgements,
+    drain_aec_reference_frames,
     pending_playout_ms,
     playback_acknowledgements,
     transport_reports_audio_delivery,
@@ -336,7 +337,13 @@ class AudioRouter:
         Transports with a local speaker buffer (duck-typed
         ``pending_playout_ms``) are additionally waited on so the queue
         going idle does not report drained while playout is still in
-        progress.  Strict no-op for transports lacking the hook.
+        progress.  Because the local output queue can buffer far more than
+        ``timeout`` seconds of audio, the playout wait uses a deadline
+        derived from the transport's queued ``pending_playout_ms`` (plus a
+        small margin) instead of the fixed ``timeout``, so teardown waits
+        for *actual* speaker playout rather than truncating the tail.  The
+        local output queue is bounded, so this deadline stays finite.
+        Strict no-op for transports lacking the hook.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
@@ -348,7 +355,15 @@ class AudioRouter:
                 except TimeoutError:
                     logger.warning("Outbound queue drain timed out after %.1fs", timeout)
                     return
-        await self._await_playout_drain(deadline)
+        # The queue is drained, but a local speaker buffer may still hold
+        # seconds of audio.  Extend the playout deadline to cover the
+        # transport's reported queued playout (with a ~0.5s margin) so the
+        # tail is not cut off; keep at least the original ``timeout``.
+        playout_deadline = deadline
+        remaining_ms = pending_playout_ms(self._transport)
+        if remaining_ms is not None and remaining_ms > 0:
+            playout_deadline = max(deadline, loop.time() + remaining_ms / 1000.0 + 0.5)
+        await self._await_playout_drain(playout_deadline)
 
     async def _await_playout_drain(self, deadline: float) -> None:
         """Wait until the transport's local playout buffer empties or time runs out.
@@ -503,7 +518,7 @@ class AudioRouter:
     # ── Internal: ingress loop ─────────────────────────────────
 
     async def _run_pipeline(self) -> None:
-        """Main audio receive loop: Transport -> Noise Reduction -> AEC -> VAD -> STT."""
+        """Main audio receive loop: Transport -> AEC -> Noise Reduction -> VAD -> STT."""
         # Tracks consecutive per-chunk failures.  Reset to 0 after every
         # frame that processes cleanly so only a sustained run trips the
         # fatal threshold.
@@ -570,42 +585,70 @@ class AudioRouter:
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)
 
-    def _feed_transport_aec_reference(self, mic_chunk: AudioChunk) -> None:
+    def _feed_reference_or_disable(self, chunk: AudioChunk, turn: TurnContext | None) -> None:
+        """Feed one far-end reference frame into AEC, latching off on failure.
+
+        Single owner of the far-end feed, shared by both reference-feed
+        paths: the drain path (``_feed_transport_aec_reference``, used by
+        delivery-reporting transports that expose
+        ``drain_aec_reference_frames()`` — local + webrtc) and the
+        non-drain path (``_handle_audio_delivery``).  A feed failure (most
+        commonly a near/far sample-rate mismatch, which LiveKitAEC rejects
+        with a ValueError) latches ``_aec_reference_failed`` so the
+        actionable cause is logged exactly once and no further feeds are
+        attempted for the rest of the session.  On a successful feed it
+        journals the decimated reference frame when capture is opted in and
+        an artifact store is present — the far-end leg is the one AEC track
+        the pipeline never journals on its own.
+        """
+        if self._aec_reference_failed:
+            return
+        try:
+            self._echo_canceller.feed_reference(chunk)
+        except Exception:
+            self._aec_reference_failed = True
+            logger.warning(
+                "AEC reference disabled for this session: feed_reference failed "
+                "(commonly a near/far sample-rate mismatch). Echo cancellation will "
+                "not subtract bot playback. Align the TTS/transport output rate with "
+                "the mic rate or resample before AEC.",
+                exc_info=True,
+            )
+            return
+        if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
+            self._maybe_record_aec_reference(chunk, turn)
+
+    def _feed_transport_aec_reference(
+        self, mic_chunk: AudioChunk, turn: TurnContext | None
+    ) -> None:
         """Drain the transport's AEC reference queue and feed each frame.
 
         Called from _process_chunk before AudioStage.execute() so the AEC3
         adaptive filter always receives the far-end reference before the
-        near-end mic frame for the same time window.  Guards on
+        near-end mic frame for the same time window.  Applies to
+        delivery-reporting transports that expose
+        ``drain_aec_reference_frames()`` (local + webrtc).  Guards on
         _enable_aec(), _transport_has_aec_drain, and _aec_reference_failed
         so it is safe to call unconditionally when the audio stage runs.
-        Sets _aec_reference_failed on the first exception so future calls
-        are skipped without repeated log spam.
+        Each drained frame is fed (and journaled) through
+        ``_feed_reference_or_disable``, which latches _aec_reference_failed
+        on the first exception so future calls are skipped without log spam.
         """
         if (
             not self._enable_aec()
             or not self._transport_has_aec_drain
             or self._aec_reference_failed
-        ):  # noqa: E501
+        ):
             return
-        drain_fn = getattr(self._transport, "drain_aec_reference_frames", None)
-        if drain_fn is None:
+        frames = drain_aec_reference_frames(self._transport)
+        if not frames:
             return
-        for ref_data in drain_fn():
+        for ref_data in frames:
             if self._aec_reference_failed:
                 break
-            try:
-                self._echo_canceller.feed_reference(
-                    AudioChunk(data=ref_data, format=mic_chunk.format)
-                )
-            except Exception:
-                self._aec_reference_failed = True
-                logger.warning(
-                    "AEC reference disabled for this session: feed_reference failed "
-                    "at drain time (commonly a near/far sample-rate mismatch). "
-                    "Echo cancellation will not subtract bot playback. Align the "
-                    "TTS/transport output rate with the mic rate or resample before AEC.",
-                    exc_info=True,
-                )
+            self._feed_reference_or_disable(
+                AudioChunk(data=ref_data, format=mic_chunk.format), turn
+            )
 
     async def _process_chunk(self, chunk: AudioChunk) -> None:
         """Run a single received frame through the stage pipeline.
@@ -641,14 +684,16 @@ class AudioRouter:
                 )
             await self._emit(AudioIn(chunk=chunk))
 
-        # Stages 1-2: Noise reduction + Echo cancellation via AudioStage.
+        # Stages 1-2: Echo cancellation + Noise reduction via AudioStage.
         # AudioStage wraps both so a single journal record covers the pair
-        # as one replay stage.  For transports that expose a synchronous AEC
-        # reference drain queue (local-transport path), feed all far-end frames
-        # accumulated since the last mic callback *before* AudioStage.execute()
-        # so AEC3 always receives the far-end signal before the near-end echo.
+        # as one replay stage.  For delivery-reporting transports that expose
+        # a synchronous AEC reference drain queue via
+        # drain_aec_reference_frames() (local + webrtc), feed all far-end
+        # frames accumulated since the last mic callback *before*
+        # AudioStage.execute() so AEC3 always receives the far-end signal
+        # before the near-end echo.
         if self._enable_noise_reduction() or self._enable_aec():
-            self._feed_transport_aec_reference(chunk)
+            self._feed_transport_aec_reference(chunk, turn)
             chunk = await self._audio_stage.execute(chunk, self._run_ctx, turn)
 
         # Stage 3: VAD (optional) via VADStage.
@@ -800,38 +845,16 @@ class AudioRouter:
         # accounting.  Isolate it here: log the real cause once and continue
         # with the bot's audio still being delivered and tracked.
         #
-        # Transports with drain_aec_reference_frames() feed the reference in
-        # _process_chunk (before the near-end mic frame is processed) so
-        # AEC3 receives the far-end signal before the near-end echo for every
-        # mic window.  Skip the feed here for those transports to avoid
-        # double-feeding the same audio through the adaptive filter.
+        # Delivery-reporting transports that expose drain_aec_reference_frames()
+        # (local + webrtc) feed the reference in _process_chunk (before the
+        # near-end mic frame is processed) so AEC3 receives the far-end signal
+        # before the near-end echo for every mic window.  Skip the feed here for
+        # those transports to avoid double-feeding the same audio through the
+        # adaptive filter; non-drain transports feed (and journal) it here via
+        # the shared _feed_reference_or_disable owner.
         skip_feed = self._aec_reference_failed or self._transport_has_aec_drain
         if self._enable_aec() and not skip_feed:
-            try:
-                self._echo_canceller.feed_reference(chunk)
-            except Exception:
-                self._aec_reference_failed = True
-                logger.warning(
-                    "AEC reference disabled for this session: feed_reference failed "
-                    "(commonly a near/far sample-rate mismatch). Echo cancellation will "
-                    "not subtract bot playback. Align the TTS/transport output rate with "
-                    "the mic rate or resample before AEC.",
-                    exc_info=True,
-                )
-            else:
-                # The far-end reference is the one AEC leg the pipeline never
-                # journals on its own (mic-in/post-AEC are already captured by
-                # AudioStage.execute).  Journaling it lets the debugger align
-                # all three tracks and compute ERLE — but it is one artifact +
-                # journal row per frame (~50/sec/session), so it is strictly
-                # opt-in (``_capture_aec_reference``) and decimated to ~1/sec
-                # rather than on by default with ``debug="full"``.  Strictly
-                # additive: gated on the opt-in and an artifact store being
-                # present, and a capture failure here must NEVER raise, never
-                # disable AEC (do not set ``_aec_reference_failed``), and never
-                # be attributed to "Failed to send audio".
-                if self._capture_aec_reference and self._run_ctx.artifact_store is not None:
-                    self._maybe_record_aec_reference(chunk, turn)
+            self._feed_reference_or_disable(chunk, turn)
 
         sent_size = len(chunk.data)
         # Never accrue byte counters on the long-lived _no_turn singleton

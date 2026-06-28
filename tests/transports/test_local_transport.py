@@ -96,42 +96,104 @@ class TestLocalTransport:
 
     @pytest.mark.asyncio
     async def test_send_audio_returns_false_when_output_queue_completely_full(self):
-        """send_audio returns False only when zero slots are available."""
-        if not _sounddevice_available():
-            pytest.skip("sounddevice not available")
-        config = LocalTransportConfig(max_pending_out_chunks=1)
-        transport = LocalTransport(config)
-        await _connect_or_skip(transport)
-        try:
-            sr = transport._audio_format.sample_rate
-            frame_bytes = transport._frame_samples * transport._audio_format.frame_size
-            # Fill the single slot with one frame.
-            one_frame = _make_chunk(frame_bytes, sample_rate=sr)
-            assert await transport.send_audio(one_frame) is True
-            # Queue is now completely full (available == 0); any send must return False.
-            another = _make_chunk(frame_bytes, sample_rate=sr)
-            assert await transport.send_audio(another) is False
-        finally:
-            await transport.disconnect()
+        """send_audio returns False (and enqueues nothing) when no slots are free.
+
+        Marks the transport connected WITHOUT starting sounddevice so no audio
+        thread drains ``_out_queue`` mid-test; ``qsize()`` is then deterministic
+        on any host (no hardware required).
+        """
+        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=1))
+        transport._connected = True
+        sr = transport._audio_format.sample_rate
+        frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+        # Fill the single slot with one frame.
+        one_frame = _make_chunk(frame_bytes, sample_rate=sr)
+        assert await transport.send_audio(one_frame) is True
+        assert transport._out_queue.qsize() == 1
+        # Queue is now completely full (available == 0); the next send must
+        # return False and enqueue nothing.
+        another = _make_chunk(frame_bytes, sample_rate=sr)
+        assert await transport.send_audio(another) is False
+        assert transport._out_queue.qsize() == 1
 
     @pytest.mark.asyncio
     async def test_send_audio_partial_fit_when_queue_near_full(self):
-        """send_audio enqueues what fits and drops only the overflow tail."""
-        if not _sounddevice_available():
-            pytest.skip("sounddevice not available")
-        config = LocalTransportConfig(max_pending_out_chunks=2)
-        transport = LocalTransport(config)
-        await _connect_or_skip(transport)
-        try:
-            sr = transport._audio_format.sample_rate
-            frame_bytes = transport._frame_samples * transport._audio_format.frame_size
-            # A 5-frame chunk with only 2 slots: partial fit → True, 2 enqueued.
-            big_chunk = _make_chunk(5 * frame_bytes, sample_rate=sr)
-            delivered = await transport.send_audio(big_chunk)
-            assert delivered is True
-            assert transport._out_queue.qsize() == 2
-        finally:
-            await transport.disconnect()
+        """send_audio enqueues what fits and drops only the overflow tail.
+
+        No sounddevice stream is started, so nothing drains the queue during the
+        assertions (deterministic on any host).
+        """
+        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=2))
+        transport._connected = True
+        sr = transport._audio_format.sample_rate
+        frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+        # A 5-frame chunk with only 2 slots: partial fit → True, 2 enqueued.
+        big_chunk = _make_chunk(5 * frame_bytes, sample_rate=sr)
+        delivered = await transport.send_audio(big_chunk)
+        assert delivered is True
+        assert transport._out_queue.qsize() == 2
+
+    @pytest.mark.asyncio
+    async def test_send_audio_available_one_keeps_head_slice(self):
+        """available == 1 boundary: exactly the HEAD frame is enqueued.
+
+        Proves ``slices[:available]`` keeps the head of the chunk, not the tail,
+        when only a single slot is free on an empty maxsize=1 queue.
+        """
+        transport = LocalTransport(LocalTransportConfig(max_pending_out_chunks=1))
+        transport._connected = True
+        frame_bytes = transport._frame_samples * transport._audio_format.frame_size
+        # Three distinct frames so head vs tail are distinguishable.
+        head = b"\x01\x02" * (frame_bytes // 2)
+        mid = b"\x03\x04" * (frame_bytes // 2)
+        tail = b"\x05\x06" * (frame_bytes // 2)
+        chunk = AudioChunk(data=head + mid + tail, format=transport._audio_format)
+        delivered = await transport.send_audio(chunk)
+        assert delivered is True
+        assert transport._out_queue.qsize() == 1
+        queued = transport._out_queue.get_nowait()
+        # The head slice is retained, not the tail.
+        assert queued.chunk.data == head
+
+    @pytest.mark.asyncio
+    async def test_output_callback_pushes_reference_during_preroll_silence(self):
+        """Pre-roll silence still pushes one full-frame reference per callback.
+
+        Keeps the far-end (reference) stream 1:1 with the near-end (mic) stream
+        even before the jitter buffer primes.
+        """
+        np = pytest.importorskip("numpy")
+        transport = LocalTransport()
+        frame_samples = transport._frame_samples
+        frame_bytes = frame_samples * transport._audio_format.frame_size
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+        # No queued audio: every callback emits silence but still pushes a ref.
+        for _ in range(3):
+            transport._output_callback(np, outdata.copy(), frame_samples, None, None)
+        assert not transport._primed  # never primed without queued audio
+        frames = transport.drain_aec_reference_frames()
+        assert len(frames) == 3
+        assert all(len(f) == frame_bytes for f in frames)
+
+    @pytest.mark.asyncio
+    async def test_clear_audio_keeps_aec_reference_queue(self):
+        """Barge-in must keep already-played references whose echo still arrives.
+
+        ``clear_audio()`` drops queued playback and re-primes, but it must NOT
+        drain ``_aec_ref_queue`` — the residual echo of the bot's last words is
+        still reaching the mic.
+        """
+        np = pytest.importorskip("numpy")
+        transport = LocalTransport()
+        frame_samples = transport._frame_samples
+        outdata = np.ones((frame_samples, 1), dtype=np.float32)
+        transport._output_callback(np, outdata, frame_samples, None, None)
+        assert not transport._aec_ref_queue.empty()
+
+        await transport.clear_audio()
+
+        assert not transport._aec_ref_queue.empty()  # references retained
+        assert transport._primed is False  # jitter buffer re-armed
 
     @pytest.mark.asyncio
     async def test_config_defaults(self):

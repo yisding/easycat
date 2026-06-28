@@ -1,4 +1,4 @@
-"""AudioStage — wraps NoiseReducer + EchoCanceller with journal recording."""
+"""AudioStage — wraps EchoCanceller + NoiseReducer with journal recording."""
 
 from __future__ import annotations
 
@@ -27,13 +27,15 @@ logger = logging.getLogger(__name__)
 
 
 class AudioStage:
-    """Stage wrapper around :class:`NoiseReducer` and :class:`EchoCanceller`.
+    """Stage wrapper around :class:`EchoCanceller` and :class:`NoiseReducer`.
 
-    ``execute`` feeds the input chunk through the NR + AEC chain; it
-    records the raw input bytes as ``input_ref`` on ``stage_start`` and
-    the processed output as ``output_ref`` on ``stage_complete`` so
-    LIVE replay can re-drive a fresh NR backend and ARTIFACT replay can
-    skip processing entirely.
+    ``execute`` feeds the input chunk through the AEC → NR chain: echo
+    cancellation runs on the raw mic signal *before* noise reduction
+    because NR's nonlinear processing breaks AEC convergence. It records
+    the raw input bytes as ``input_ref`` on ``stage_start`` and the
+    processed output as ``output_ref`` on ``stage_complete`` so LIVE
+    replay can re-drive a fresh NR backend and ARTIFACT replay can skip
+    processing entirely.
     """
 
     name = "audio"
@@ -83,9 +85,12 @@ class AudioStage:
         error_provider = type(self._provider).__name__.lower()
         try:
             chunk = input
+            # Echo cancellation runs first, on the raw mic signal, because the
+            # noise reducer's nonlinear processing would break AEC convergence.
             if self._echo_canceller is not None:
                 error_provider = type(self._echo_canceller).__name__.lower()
                 chunk = await self._echo_canceller.process(chunk)
+            # Noise reduction runs on the echo-cancelled signal.
             error_provider = type(self._provider).__name__.lower()
             chunk = await self._provider.process(chunk)
             result = chunk

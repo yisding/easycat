@@ -749,6 +749,157 @@ async def test_await_drain_waits_for_in_flight_send():
     await router.stop_outbound()
 
 
+class _DrainRefTransport(_FakeTransport):
+    """Delivery-reporting transport that exposes an AEC reference drain queue.
+
+    Mirrors LocalTransport / the WebRTC outbound source: the output callback
+    accumulates far-end (speaker) frames at playback time and the router drains
+    them via ``drain_aec_reference_frames()`` before the near-end mic frame.
+    """
+
+    reports_audio_delivery = True
+
+    def __init__(self, ref_frames: list[bytes]) -> None:
+        super().__init__()
+        self._ref_frames = ref_frames
+        self.drain_calls = 0
+
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        self.drain_calls += 1
+        if self.drain_calls > 1:
+            return []
+        return list(self._ref_frames)
+
+
+@pytest.mark.asyncio
+async def test_drain_path_journals_reference_and_feeds_before_near_end():
+    """Issue B + drain-path ordering.
+
+    A transport that exposes ``drain_aec_reference_frames()`` feeds the far-end
+    reference in ``_process_chunk`` *before* ``AudioStage.execute`` runs the
+    near-end mic frame.  Even though ``_handle_audio_delivery`` skips the feed
+    for these transports, the far-end reference must still be journaled on the
+    drain feed path (it is the one AEC leg the pipeline never journals itself).
+    """
+    import dataclasses
+
+    from easycat.runtime.artifacts import InMemoryArtifactStore
+    from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
+
+    ref_frames = [b"\x01\x02" * 80, b"\x03\x04" * 80]
+    transport = _DrainRefTransport(ref_frames)
+    turn = TurnContext(turn_id="t", cancel_token=CancelToken())
+    journal = InMemoryRingBuffer(capacity=64)
+    router, state = _make_router(
+        transport=transport,
+        enable_aec=True,
+        current_turn=turn,
+        journal=journal,
+    )
+    # The router only journals the reference when capture is opted in *and* an
+    # artifact store is present; wire both so the drain feed path can journal.
+    router._capture_aec_reference = True
+    router._run_ctx = dataclasses.replace(
+        router._run_ctx,
+        journal=journal,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    # The router is constructed with a drain-capable transport, so it routes the
+    # reference through the drain path rather than _handle_audio_delivery.
+    assert router._transport_has_aec_drain is True
+
+    # Record relative ordering of the far-end feed vs. the near-end audio stage.
+    order: list[str] = []
+    aec = router._echo_canceller
+    orig_feed = aec.feed_reference
+
+    def _spy_feed(chunk):
+        order.append("feed")
+        orig_feed(chunk)
+
+    aec.feed_reference = _spy_feed
+
+    audio_stage = state["audio_stage"]
+    orig_execute = audio_stage.execute
+
+    async def _spy_execute(chunk, ctx, t):
+        order.append("execute")
+        return await orig_execute(chunk, ctx, t)
+
+    audio_stage.execute = _spy_execute
+
+    await router._process_chunk(_make_chunk())
+
+    # Both drained reference frames were fed, and every feed landed before the
+    # near-end mic frame reached AudioStage.execute.
+    assert order.count("feed") == len(ref_frames)
+    assert order.count("execute") == 1
+    assert order[-1] == "execute"
+    assert all(marker == "feed" for marker in order[:-1])
+
+    # The far-end reference IS journaled on the drain feed path (decimated to
+    # the first frame of the window via _AEC_REFERENCE_CAPTURE_EVERY_N_FRAMES).
+    ref_records = [r for r in journal.read() if r.name == AEC_REFERENCE_FRAME_NAME]
+    assert len(ref_records) == 1
+
+
+@pytest.mark.asyncio
+async def test_await_drain_extends_playout_deadline_beyond_fixed_timeout(monkeypatch):
+    """Issue G.
+
+    The local output queue can buffer far more than the fixed ``timeout``
+    seconds of audio, so ``await_drain`` must derive its playout deadline from
+    the transport's reported ``pending_playout_ms`` instead of bailing after the
+    fixed ``timeout`` while the speaker buffer is still draining.
+
+    A fake monotonic clock keeps the test deterministic and fast: no real
+    multi-second sleep occurs.
+    """
+
+    class _Clock:
+        def __init__(self, start: float) -> None:
+            self.now = start
+
+        def time(self) -> float:
+            return self.now
+
+    clock = _Clock(1000.0)
+    start = clock.now
+    # Backlog (5s) far exceeds the 2s fixed timeout; the speaker buffer reports
+    # drained only once the (fake) clock passes 4s — past the fixed timeout.
+    drain_at = start + 4.0
+
+    class _PlayoutTransport(_FakeTransport):
+        def pending_playout_ms(self) -> float:
+            return 0.0 if clock.now >= drain_at else 5000.0
+
+    transport = _PlayoutTransport()
+    router, state = _make_router(transport=transport)
+
+    real_sleep = asyncio.sleep
+
+    async def _advancing_sleep(delay: float) -> None:
+        clock.now += delay
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "get_running_loop", lambda: clock)
+    monkeypatch.setattr(asyncio, "sleep", _advancing_sleep)
+
+    # No outbound task in flight and the queue is empty, so await_drain goes
+    # straight to the playout wait. With the fixed-2s deadline this would bail
+    # at clock.now == start + 2.0 while pending is still 5000ms; the
+    # pending-derived deadline keeps waiting until the buffer truly empties.
+    await router.await_drain(timeout=2.0)
+
+    # await_drain waited past the fixed 2s timeout and returned only once the
+    # speaker buffer actually drained (~4s of simulated playout).
+    assert transport.pending_playout_ms() == 0.0
+    assert clock.now - start >= 4.0
+    # ...and did not run away past the pending-derived deadline (5s + 0.5 margin).
+    assert clock.now - start <= 5.5 + 0.05
+
+
 @pytest.mark.asyncio
 async def test_await_drain_waits_for_transport_playout_buffer():
     """A transport exposing pending_playout_ms is waited on until it empties."""
