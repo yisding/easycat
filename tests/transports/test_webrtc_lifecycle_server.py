@@ -389,7 +389,7 @@ class TestWebRTCStatsArtifact:
         # M7: the client paths are templated through a ``?webrtc=`` base so the
         # SAME page serves both the flat helper and the namespaced VoiceServer.
         assert 'fetch(baseUrl + WEBRTC_BASE + "/stats"' in html
-        assert 'new URLSearchParams(location.search).get("webrtc")' in html
+        assert 'safeWebRTCBase(new URLSearchParams(location.search).get("webrtc") || "")' in html
         for label in (
             "before_speech",
             "client_speech_end",
@@ -466,6 +466,67 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
             async with session.get(f"http://127.0.0.1:{port}/", allow_redirects=False) as resp:
                 assert resp.status == 302
                 assert resp.headers["Location"] == "/webrtc_client.html"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_root_redirect_preserves_sanitized_webrtc_base(self, tmp_path):
+        # The standalone transport serves FLAT routes; a clean same-origin
+        # ``?webrtc=/proxy`` (e.g. a reverse-proxy path prefix) must survive the
+        # redirect so the bundled client targets ``/proxy/offer``.
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = self._unused_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            url = f"http://127.0.0.1:{port}/?webrtc=/proxy/&token=sekrit"
+            async with session.get(url, allow_redirects=False) as resp:
+                assert resp.status == 302
+                assert resp.headers["Location"] == "/webrtc_client.html?token=sekrit&webrtc=/proxy"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "/../x",
+            "//evil.test",
+            "https://evil.test",
+            ".attacker.test",
+        ],
+    )
+    async def test_root_redirect_strips_untrusted_webrtc_base(self, tmp_path, raw):
+        # Untrusted / cross-origin / traversal ``?webrtc=`` values must be
+        # dropped server-side rather than echoed into the redirect location.
+        from urllib.parse import urlencode
+
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = self._unused_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        query = urlencode({"webrtc": raw, "token": "sekrit"})
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/?{query}", allow_redirects=False
+            ) as resp:
+                assert resp.status == 302
+                location = resp.headers["Location"]
+
+        assert "webrtc=" not in location
+        assert location == "/webrtc_client.html?token=sekrit"
 
         await transport.disconnect()
 

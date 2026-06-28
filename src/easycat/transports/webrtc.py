@@ -34,6 +34,7 @@ from hmac import compare_digest
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, ClassVar
+from urllib.parse import parse_qsl, urlencode
 
 from easycat._extras import require_module
 from easycat._signals import create_shutdown_event
@@ -283,6 +284,27 @@ def _is_loopback_host(host: str) -> bool:
         return ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+def _sanitize_webrtc_base(raw: str) -> str:
+    """Return a safe same-origin path prefix from an untrusted ``?webrtc=`` value.
+
+    The bundled client prepends ``?webrtc=<prefix>`` to its credentialed
+    ``/offer`` / ``/stats`` POSTs, so an attacker-supplied value could
+    misdirect them. Accept ONLY a clean same-origin absolute path prefix
+    (allowlist): it must start with ``/`` and contain no scheme/host,
+    backslash, query/fragment marker, protocol-relative or empty ``//``
+    segment, or ``..`` traversal segment. Anything else collapses to ``""``
+    (flat mode). Mirrors the ``safeWebRTCBase`` allowlist in
+    ``static/webrtc_client.html`` so the server and client agree.
+    """
+    if not raw or not raw.startswith("/"):
+        return ""
+    if "//" in raw or "\\" in raw or ":" in raw or "?" in raw or "#" in raw:
+        return ""
+    if ".." in raw.split("/"):
+        return ""
+    return raw.rstrip("/")
 
 
 def webrtc_ice_servers_from_env(
@@ -1330,8 +1352,23 @@ class WebRTCTransport(AudioQueueMixin):
         if self._has_bundled_client:
             location = "/webrtc_client.html"
             query_string = getattr(request, "query_string", "")
-            if query_string:
-                location = f"{location}?{query_string}"
+            params: list[tuple[str, str]] = []
+            user_base = ""
+            for key, value in parse_qsl(query_string, keep_blank_values=True):
+                if key == "webrtc":
+                    if not user_base:
+                        user_base = value
+                    continue
+                params.append((key, value))
+            # The standalone helper serves FLAT routes, so there is no trusted
+            # mount base to substitute: preserve only a sanitized same-origin
+            # ``?webrtc=`` prefix (e.g. a reverse-proxy path prefix) and drop
+            # any untrusted/cross-origin value instead of echoing the raw query.
+            base = _sanitize_webrtc_base(user_base)
+            if base:
+                params.append(("webrtc", base))
+            if params:
+                location = f"{location}?{urlencode(params, doseq=True, safe='/')}"
             raise web.HTTPFound(location)
         return web.Response(
             content_type="application/json",
