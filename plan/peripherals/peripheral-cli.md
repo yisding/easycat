@@ -842,10 +842,10 @@ Explicit non-goals, with reasoning.
   pre-loaded is a one-line convenience, but `pyproject.toml` can
   already register the plugin in `[tool.pytest.ini_options]`.
   Scaffolded templates do exactly that. No wrapper needed.
-- **`easycat cost`** — cost rollups are valuable but the per-session
-  cost is already visible in `bundles show` and the dev waterfall
-  (`peripheral-eval-and-debugger-ui.md`). A dedicated command is
-  polish, not thesis. Defer.
+- **`easycat cost`** — runtime cost rollups were removed (see
+  `peripheral-observability-and-cost.md`) as undercooked and duplicative
+  with the journal; cost monitoring is not currently a library direction.
+  Defer any dedicated command until cost tracking is revisited.
 - **`easycat login` / credential store** — API keys go in `.env`.
   Managing credentials is the OS's job.
 - **`easycat deploy`** — deployment is documented in
