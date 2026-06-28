@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from hmac import compare_digest
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +165,13 @@ class ProjectManifest:
         if preset == "browser":
             return EasyConfig.browser(**kwargs)
         if preset == "phone":
+            if spec.token is not None:
+                from easycat.transports.twilio_media import TwilioTransportConfig
+
+                token = spec.token.resolve(dict(os.environ))
+                kwargs["transport"] = TwilioTransportConfig(
+                    stream_token_validator=lambda candidate: compare_digest(candidate, token)
+                )
             return EasyConfig.phone(**kwargs)
         if preset == "mic":
             return EasyConfig.mic(**kwargs)
