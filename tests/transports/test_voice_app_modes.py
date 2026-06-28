@@ -168,8 +168,9 @@ def test_browser_allows_framework_agent_spec(
 ) -> None:
     """The documented quickstart shape ``VoiceApp(agent=Agent(...)).run("browser")``
     must work: a framework agent *spec* (here the OpenAI Agents SDK ``Agent``) is
-    rebuilt into a fresh bridge per session, so it is safe to reuse across
-    per-connection sessions and the live-collaborator guard must not reject it."""
+    rebuilt into a fresh bridge per session — the bridge, not the wrapped spec,
+    owns per-session state — so it is safe to reuse across per-connection
+    sessions and the live-collaborator guard must not reject it."""
     agents = pytest.importorskip("agents")
 
     VoiceApp(agent=agents.Agent(name="assistant", instructions="help")).run("browser")
