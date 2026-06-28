@@ -784,11 +784,11 @@ def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     import struct
 
     peak = 2_147_483_647
-    data = struct.pack("=ii", peak, peak)
+    data = struct.pack("<ii", peak, peak)
 
     mono = _server._np_tomono(data, 4)
 
-    assert struct.unpack("=i", mono) == (peak,)
+    assert struct.unpack("<i", mono) == (peak,)
 
 
 def test_collect_audio_frames_mic_selects_stt_stage_start():
