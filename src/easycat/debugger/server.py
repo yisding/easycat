@@ -107,7 +107,7 @@ def _np_tomono(data: bytes, width: int) -> bytes:
     if dt is None:
         raise ValueError(f"unsupported sample width {width}")
     arr = _np.frombuffer(data, dtype=dt)  # type: ignore[union-attr]
-    stereo = arr.reshape(-1, 2).astype(_np.int32)  # type: ignore[union-attr]
+    stereo = arr.reshape(-1, 2).astype(_np.int64)  # type: ignore[union-attr]
     mono = ((stereo[:, 0] + stereo[:, 1]) >> 1).astype(dt)
     return mono.tobytes()
 

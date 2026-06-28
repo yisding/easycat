@@ -760,6 +760,20 @@ def test_coerce_frames_to_format_lenient_resamples_with_numpy(monkeypatch):
     assert len(blobs[1]) > len(frames[1][1])
 
 
+def test_np_tomono_uses_wide_sum_for_int32_peak_values():
+    """The numpy fallback must not overflow before averaging int32 stereo samples."""
+    if _server._np is None:  # pragma: no cover
+        pytest.skip("numpy unavailable")
+    import struct
+
+    peak = 2_147_483_647
+    data = struct.pack("=ii", peak, peak)
+
+    mono = _server._np_tomono(data, 4)
+
+    assert struct.unpack("=i", mono) == (peak,)
+
+
 def test_collect_audio_frames_mic_selects_stt_stage_start():
     """The mic track picks STT stage_start input_ref frames, ordered by seq."""
     records = [
