@@ -170,6 +170,47 @@ def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
     return snapshot
 
 
+def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
+    """Extract valid interleaved PCM16 bytes from an ``av.AudioFrame``.
+
+    ``bytes(frame.planes[0])`` can include PyAV line padding.  For decoded
+    aiortc frames that padding can be several times larger than the actual
+    samples, which makes the downstream pipeline see too much audio per RTP
+    frame.  ``to_ndarray()`` returns only the valid samples.
+    """
+    frame_rate = int(getattr(frame, "sample_rate", None) or _WEBRTC_SAMPLE_RATE)
+    layout = getattr(frame, "layout", None)
+    channels = len(getattr(layout, "channels", ()) or ()) or 1
+
+    to_ndarray = getattr(frame, "to_ndarray", None)
+    if callable(to_ndarray):
+        array = to_ndarray()
+        dtype = getattr(array, "dtype", None)
+        dtype_kind = getattr(dtype, "kind", "")
+        if dtype_kind == "f":
+            numpy = require_module("numpy", extra="webrtc", purpose="WebRTC audio conversion")
+            array = (numpy.clip(array, -1.0, 1.0) * 32767.0).astype("<i2")
+        else:
+            array = array.astype("<i2", copy=False)
+
+        frame_format = getattr(frame, "format", None)
+        is_planar = bool(getattr(frame_format, "is_planar", False))
+        if is_planar and channels > 1:
+            array = array.reshape(channels, -1).T.reshape(-1)
+        else:
+            array = array.reshape(-1)
+        return array.tobytes(), frame_rate, channels
+
+    # Fallback for minimal test doubles.  Slice the valid sample span so any
+    # padded plane buffers do not inflate audio duration.
+    raw = bytes(frame.planes[0])
+    samples = int(getattr(frame, "samples", 0) or 0)
+    valid_bytes = samples * channels * 2
+    if valid_bytes > 0:
+        raw = raw[:valid_bytes]
+    return raw, frame_rate, channels
+
+
 # ── Configuration ────────────────────────────────────────────────
 
 
@@ -1499,11 +1540,10 @@ class WebRTCTransport(AudioQueueMixin):
                 if not self._is_current_peer_generation(peer_generation):
                     break
 
-                # Extract raw PCM from the av.AudioFrame.
-                # aiortc decodes Opus to s16 at 48 kHz by default.
-                raw = bytes(frame.planes[0])
-                frame_rate = frame.sample_rate or _WEBRTC_SAMPLE_RATE
-                channels = len(frame.layout.channels) if frame.layout else 1
+                # Extract raw PCM from the av.AudioFrame. aiortc decodes Opus
+                # to s16 at 48 kHz by default, but PyAV plane buffers can
+                # include padding; the helper returns only valid samples.
+                raw, frame_rate, channels = _audio_frame_pcm16_bytes(frame)
 
                 # Downmix to mono if needed.
                 if channels > 1:
