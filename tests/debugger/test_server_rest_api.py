@@ -689,6 +689,18 @@ def test_coerce_frames_to_format_lenient_resamples_with_audioop():
     assert len(blobs[1]) > len(frames[1][1])
 
 
+def test_coerce_frames_to_format_lenient_drops_unsafe_resample_ratio():
+    """Mic coercion must not hand attacker-controlled extreme ratios to audioop."""
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x02" * 4, {"sample_rate": 1, "channels": 1, "sample_width": 2}),
+    ]
+    blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
+    assert blobs == [frames[0][1]]
+    assert dropped == 1
+
+
 def test_coerce_frames_to_format_lenient_skips_when_no_helper(monkeypatch):
     """When no audio helper is available, a format mismatch is skipped, not raised."""
     monkeypatch.setattr(_server, "_audioop", None)
@@ -748,6 +760,35 @@ def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     mono = _server._np_tomono(data, 4)
 
     assert struct.unpack("<i", mono) == (peak,)
+
+
+def test_collect_audio_frames_mic_falls_back_from_unsafe_target_format():
+    """The target WAV format is bounded before using untrusted mic metadata."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 10_000_000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "b",
+            "data": {"stage": "stt", "sample_rate": 1, "channels": 1, "sample_width": 2},
+        },
+    ]
+    source = DebuggerSource(
+        label="mic-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: {"a": b"\x00\x00", "b": b"\x01" * 4}.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    frames, fmt = _collect_audio_frames(source, "t1", track="mic")
+    assert frames == []
+    assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
 
 
 def test_collect_audio_frames_mic_selects_stt_stage_start():

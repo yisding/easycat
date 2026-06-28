@@ -184,6 +184,17 @@ _AUDIO_TRACK_MIC = "mic"
 _AUDIO_TRACK_REFERENCE = "reference"
 _VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
 
+# Accepted PCM geometry for audio concat/waveform routes.  Debug bundles are
+# treated as untrusted input, so journal-provided format metadata must be kept
+# within normal voice-audio bounds before it is used in WAV headers or passed to
+# audioop's resampler.
+_AUDIO_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+_AUDIO_MIN_SAMPLE_RATE = 8000
+_AUDIO_MAX_SAMPLE_RATE = 192000
+_AUDIO_VALID_CHANNELS = frozenset({1, 2})
+_AUDIO_MAX_RESAMPLE_RATIO = 4
+_AUDIO_MAX_CONVERTED_FRAME_BYTES = 5 * 1024 * 1024
+
 
 def _safe_ref(ref: str) -> str:
     """Reject anything that isn't a SHA-256 hex digest before any I/O.
@@ -914,6 +925,40 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _extract_turn_transcripts(records)
 
 
+def _audio_metadata_int(data: dict[str, Any], key: str, default: int = 0) -> int:
+    """Parse one integer PCM metadata field from untrusted journal data."""
+    try:
+        return int(data.get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_safe_audio_format(fmt: dict[str, int]) -> bool:
+    """Return true for bounded linear PCM geometry the debugger will process."""
+    rate = fmt.get("sample_rate", 0)
+    channels = fmt.get("channels", 0)
+    width = fmt.get("sample_width", 0)
+    return (
+        _AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE
+        and channels in _AUDIO_VALID_CHANNELS
+        and _is_supported_width(width)
+    )
+
+
+def _safe_audio_format_from_metadata(data: dict[str, Any]) -> dict[str, int]:
+    """Read a WAV/PCM format from journal metadata, falling back if unsafe."""
+    fmt = {
+        "sample_rate": _audio_metadata_int(data, "sample_rate", _AUDIO_DEFAULT_FMT["sample_rate"]),
+        "channels": _audio_metadata_int(data, "channels", _AUDIO_DEFAULT_FMT["channels"]),
+        "sample_width": _audio_metadata_int(
+            data, "sample_width", _AUDIO_DEFAULT_FMT["sample_width"]
+        ),
+    }
+    if _is_safe_audio_format(fmt):
+        return fmt
+    return dict(_AUDIO_DEFAULT_FMT)
+
+
 def _coerce_frames_to_format(
     frames: list[tuple[int, bytes, dict[str, Any]]],
     fmt: dict[str, int],
@@ -940,9 +985,9 @@ def _coerce_frames_to_format(
     target_channels = fmt["channels"]
     target_width = fmt["sample_width"]
     for _seq, blob, data in frames:
-        rate = int(data.get("sample_rate") or 0)
-        channels = int(data.get("channels") or 0)
-        width = int(data.get("sample_width") or 0)
+        rate = _audio_metadata_int(data, "sample_rate")
+        channels = _audio_metadata_int(data, "channels")
+        width = _audio_metadata_int(data, "sample_width")
         if rate == target_rate and channels == target_channels and width == target_width:
             blobs.append(blob)
             continue
@@ -952,8 +997,17 @@ def _coerce_frames_to_format(
                 "sample_rate/channels/sample_width"
             )
         # Non-strict (mic): convert when sample widths match and at least one
-        # audio helper is present; otherwise drop rather than corrupt the stream.
-        if (_audioop is None and _np is None) or width != target_width or width <= 0:
+        # audio helper (audioop/numpy) is present.  Debug bundles are untrusted,
+        # so both the source and target geometry must be within bounded voice-
+        # audio limits before we hand them to a resampler; otherwise drop the
+        # blob rather than corrupt the stream or trigger a runaway conversion.
+        source_fmt = {"sample_rate": rate, "channels": channels, "sample_width": width}
+        if (
+            (_audioop is None and _np is None)
+            or not _is_safe_audio_format(source_fmt)
+            or not _is_safe_audio_format(fmt)
+            or width != target_width
+        ):
             dropped += 1
             continue
         try:
@@ -966,7 +1020,17 @@ def _coerce_frames_to_format(
             elif channels != target_channels:
                 dropped += 1
                 continue
-            if rate > 0 and rate != target_rate:
+            if rate != target_rate:
+                resample_ratio = target_rate / rate
+                estimated_size = int(len(converted) * resample_ratio) + (
+                    target_channels * target_width
+                )
+                if (
+                    resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO
+                    or estimated_size > _AUDIO_MAX_CONVERTED_FRAME_BYTES
+                ):
+                    dropped += 1
+                    continue
                 if _audioop is not None:
                     converted, _ = _audioop.ratecv(
                         converted, width, target_channels, rate, target_rate, None
@@ -1039,11 +1103,7 @@ def _collect_audio_frames(
 
     frames.sort(key=lambda item: item[0])
     fmt0 = frames[0][2]
-    fmt = {
-        "sample_rate": int(fmt0.get("sample_rate") or 16000),
-        "channels": int(fmt0.get("channels") or 1),
-        "sample_width": int(fmt0.get("sample_width") or 2),
-    }
+    fmt = _safe_audio_format_from_metadata(fmt0)
     blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
     return blobs, fmt
 
