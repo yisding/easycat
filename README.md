@@ -199,7 +199,7 @@ easycat replay PATH       # replay a debug bundle or SQLite journal
 easycat debugger serve PATH # open the browser debugger UI for a bundle/journal
 easycat replay PATH --json # emit machine-readable replay summary
 easycat latency PATH      # summarise critical-path latency percentiles for a bundle
-easycat diff PATH_A PATH_B # diff two bundles turn-by-turn for milestone and cost regressions
+easycat diff PATH_A PATH_B # diff two bundles turn-by-turn for milestone regressions
 easycat journal grep PATH --query TEXT # full-text search a journal or bundle (redacted)
 easycat journal follow PATH # live-tail a journal as it grows (redacted)
 easycat journal promote PATH TURN_ID --out FILE # save one turn as a replayable regression bundle

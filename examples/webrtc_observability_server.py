@@ -3,7 +3,7 @@
 Same WebRTC pipeline as ``webrtc_server.py`` plus
 ``easycat.debugger.serve_session(...)`` running on port 8090. The
 debugger UI shows a live timeline, per-turn waterfall, records
-inspector, transcript, cost rollup, and audio playback — all driven by
+inspector, transcript, and audio playback — all driven by
 the journal so the same UI works on a recorded ``RunBundle`` after the
 session ends.
 
