@@ -14,7 +14,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import _format_follow_line, _format_size
+from easycat.cli.debug.bundles import _format_follow_line, _format_size, _stream_follow
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
@@ -38,6 +38,18 @@ class _FakeJournal:
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         return self._records[start:]
+
+
+class _FakeFollowView:
+    """Minimal async follow view for live-tail stream tests."""
+
+    def __init__(self, records: list[dict[str, object]]) -> None:
+        self._records = records
+
+    async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+        del from_sequence, poll_interval
+        for record in self._records:
+            yield record
 
 
 class _FakeSession:
@@ -383,6 +395,47 @@ def test_format_follow_line_milestone_and_audio_bar() -> None:
     )
     assert "milestone=tts_first_byte" not in later
     assert "audio=2048B" in later
+
+
+@pytest.mark.asyncio
+async def test_stream_follow_json_redacts_record_payloads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    view = _FakeFollowView(
+        [
+            {
+                "sequence": 12,
+                "session_id": "sess-public",
+                "turn_id": "turn-+1 (415) 555-0199",
+                "name": "stt_final",
+                "kind": "event",
+                "data": {
+                    "transcript": "call me at +1 (415) 555-0199",
+                    "api_key": "sk-abcdefghijklmnop",
+                    "provider_request_id": "req_sensitive123",
+                },
+                "error": {
+                    "type": "ProviderError",
+                    "message": "Authorization: Bearer tok-abcdefghijklmnop",
+                },
+            }
+        ]
+    )
+
+    await _stream_follow(
+        view,
+        from_sequence=0,
+        errors_only=False,
+        turn_id=None,
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["turn_id"] == "turn-[REDACTED_PHONE]"
+    assert payload["data"]["transcript"] == "[REDACTED_TRANSCRIPT]"
+    assert payload["data"]["api_key"] == "[REDACTED_SECRET]"
+    assert payload["data"]["provider_request_id"] == "[REDACTED_REQUEST_ID]"
+    assert payload["error"]["message"] == "Authorization: [REDACTED_SECRET]"
 
 
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:

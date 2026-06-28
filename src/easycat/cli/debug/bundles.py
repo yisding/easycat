@@ -2227,7 +2227,7 @@ async def _stream_follow(
         if json_output:
             # Newline-delimited JSON, one record per line (NOT a single
             # envelope) so a consumer can ``read`` the stream incrementally.
-            stdout_console.print(json.dumps(record_dict, sort_keys=False))
+            stdout_console.print(json.dumps(_redact_follow_record(record_dict), sort_keys=False))
             continue
 
         # Only the FIRST TTS byte of a turn is the milestone landmark; later
@@ -2260,6 +2260,18 @@ def _record_to_follow_dict(record: Any) -> dict[str, Any]:
     if timing is not None:
         out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
     return out
+
+
+def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a redacted copy of a follow record before JSON streaming.
+
+    Human follow output already renders a narrow, redacted summary.  JSON mode
+    intentionally preserves the same record shape for incremental consumers,
+    but must pass every projected field through the shared redaction policy
+    before writing newline-delimited records to stdout.
+    """
+    redacted = redact_value(dict(record))
+    return cast(dict[str, Any], redacted)
 
 
 @cli_command
