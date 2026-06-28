@@ -2,9 +2,11 @@
 
 ``is_reusable_agent_spec`` decides which high-level ``agent`` values a
 per-connection server may forward into a *fresh* ``EasyConfig`` for every
-connection. Framework agent objects, built bridges/runners, and unknown objects
-can carry mutable runtime state and MUST be rejected so the caller routes them
-through a ``config_factory`` instead.
+connection. A declarative framework spec rebuilds an independent bridge per
+session (safe to reuse — the bridge, not the wrapped spec, owns per-session
+state); an already-built bridge/runner — or a runnable that pins a single
+conversation — carries per-session state and MUST be rejected so the caller
+routes it through a ``config_factory`` instead.
 
 This is the load-bearing guard for the "VoiceApp state isolated across
 connections" contract, so every branch is locked here. The SDK-free
@@ -69,25 +71,25 @@ def test_runnable_with_blank_pin_value_does_not_pin() -> None:
     assert _runnable_pins_conversation(_Binding({"configurable": {"thread_id": ""}})) is False
 
 
-# ── Framework objects are not reusable across connections ─────────────
+# ── Declarative framework specs are reusable ─────────────────────────
 
 
-def test_openai_agent_is_not_reusable() -> None:
+def test_openai_agent_is_reusable() -> None:
     agents_mod = pytest.importorskip("agents")
-    assert is_reusable_agent_spec(agents_mod.Agent(name="t", instructions="hi")) is False
+    assert is_reusable_agent_spec(agents_mod.Agent(name="t", instructions="hi")) is True
 
 
-def test_pydantic_ai_agent_is_not_reusable() -> None:
+def test_pydantic_ai_agent_is_reusable() -> None:
     pytest.importorskip("pydantic_ai")
     from pydantic_ai import Agent as PydanticAgent
     from pydantic_ai.models.test import TestModel
 
-    assert is_reusable_agent_spec(PydanticAgent(TestModel(custom_output_text="ok"))) is False
+    assert is_reusable_agent_spec(PydanticAgent(TestModel(custom_output_text="ok"))) is True
 
 
-def test_plain_langchain_runnable_is_not_reusable() -> None:
+def test_plain_langchain_runnable_is_reusable() -> None:
     rc = pytest.importorskip("langchain_core.runnables")
-    assert is_reusable_agent_spec(rc.RunnableLambda(lambda x: x)) is False
+    assert is_reusable_agent_spec(rc.RunnableLambda(lambda x: x)) is True
 
 
 def test_langchain_runnable_pinning_conversation_is_rejected() -> None:
@@ -102,7 +104,7 @@ def test_langchain_runnable_pinning_conversation_is_rejected() -> None:
         assert is_reusable_agent_spec(pinned) is False, key
 
 
-def test_compiled_langgraph_graph_is_not_reusable() -> None:
+def test_compiled_langgraph_graph_is_reusable_unless_pinned() -> None:
     pytest.importorskip("langgraph")
     from typing import TypedDict
 
@@ -115,12 +117,15 @@ def test_compiled_langgraph_graph_is_not_reusable() -> None:
     builder.add_node("noop", lambda s: s)
     builder.add_edge(START, "noop")
     graph = builder.compile()
-    assert is_reusable_agent_spec(graph) is False
+    # Unpinned: each per-connection bridge mints its own ``thread_id``, so the
+    # same compiled graph is safe to forward into every connection.
+    assert is_reusable_agent_spec(graph) is True
+    # Pinned: every per-session bridge would resolve the same thread, so reject.
     pinned = graph.with_config(configurable={"thread_id": "t"})
     assert is_reusable_agent_spec(pinned) is False
 
 
-def test_llama_workflow_is_not_reusable(fake_workflows_modules: None) -> None:
+def test_llama_workflow_is_reusable(fake_workflows_modules: None) -> None:
     # Reuse the suite's ``sys.modules['workflows']`` shim (see conftest) so the
     # real-isinstance ``is_llama_workflow_instance`` check resolves without the
     # workflows SDK's step-validation getting in the way.
@@ -129,7 +134,7 @@ def test_llama_workflow_is_not_reusable(fake_workflows_modules: None) -> None:
     class _W(_FakeWorkflowBase):
         pass
 
-    assert is_reusable_agent_spec(_W()) is False
+    assert is_reusable_agent_spec(_W()) is True
 
 
 # ── Built bridges / runners / unknowns are NOT reusable ──────────────

@@ -276,23 +276,89 @@ def _runnable_pins_conversation(agent: Any) -> bool:
 
 
 def is_reusable_agent_spec(agent: Any) -> bool:
-    """Return whether *agent* is safe to reuse in per-connection modes.
+    """Return ``True`` when *agent* is a declarative framework spec safe to
+    reuse across concurrent per-connection sessions.
 
-    Per-connection servers forward the same high-level ``agent`` value into a
-    fresh :class:`~easycat.config.EasyConfig` for every client.
-    :func:`auto_adapt_agent` can build a new EasyCat bridge for recognized
-    framework objects, but it still wraps the exact same OpenAI Agents SDK,
-    PydanticAI, LangChain/LangGraph, or LlamaIndex object by reference. Those
-    objects may carry mutable conversation/tool state, and some bridges mutate
-    wrapped framework-agent attributes while a turn is running.
+    A per-connection server forwards the same ``agent`` value into a fresh
+    :class:`~easycat.config.EasyConfig` for every connection, and
+    :func:`auto_adapt_agent` runs again on each one.  That is safe for a
+    *declarative framework spec* — the OpenAI Agents SDK ``Agent``, a PydanticAI
+    ``Agent``, a LangChain ``Runnable`` (which also covers a compiled LangGraph
+    graph), or a LlamaIndex workflow — because the per-session *bridge*
+    (rebuilt from the spec for each connection) is what owns the mutable
+    per-session state, not the wrapped spec:
 
-    Because EasyCat cannot prove an arbitrary framework object is immutable or
-    clone it losslessly, no object instance is considered a reusable
-    per-connection agent spec here. Use a primitive provider/URL string when
-    applicable, or pass ``config_factory`` so each connection constructs its own
-    framework agent and bridge.
+    * The OpenAI / PydanticAI / LangChain bridges keep conversation history on
+      the bridge instance (``_message_history`` / per-bridge history store),
+      not on the wrapped agent.
+    * The LangGraph bridge mints a *fresh* ``thread_id`` per bridge, so
+      concurrent connections sharing one compiled graph read/write isolated
+      checkpointer threads.
+    * LlamaIndex workflow runs allocate their own per-run context.
+
+    Cloning the spec per connection (e.g. ``copy.deepcopy``) is *not* used: it
+    is lossy for these objects — deep-copying a compiled LangGraph graph also
+    copies its checkpointer, breaking an intentionally shared persistent store —
+    whereas the per-bridge isolation above already provides the correct
+    boundary. This keeps the documented quickstart
+    ``VoiceApp(agent=Agent(...)).run("browser")`` working out of the box.
+
+    It returns ``False`` for anything EasyCat cannot prove is rebuilt fresh:
+    an already-constructed :class:`~easycat.integrations.agents.base.ExternalAgentBridge`
+    or :class:`AgentRunner` (passed through by reference, carrying per-session
+    conversation/stream state), and any unrecognized object such as a plain
+    ``async run(text)`` callable or a custom workflow (reused by reference).
+    Those must be supplied through a per-connection ``config_factory`` that
+    constructs a fresh agent per connection.  ``str`` URLs/provider names are
+    handled by the caller as primitives and never reach this predicate.
+
+    A LangChain/LangGraph ``Runnable`` that pins a *conversation* via
+    ``with_config(configurable={...})`` is the one exception to "a fresh bridge
+    means no shared state": a bound ``thread_id`` / ``checkpoint_id`` (LangGraph)
+    or ``session_id`` (LangChain history) is resolved identically by every
+    per-session bridge, so all concurrent connections would read and write the
+    *same* checkpointer thread / history store and corrupt each other. Such a
+    runnable is rejected here so it is routed through a ``config_factory``.
+
+    Advanced setups that push *per-session* mutable framework configuration onto
+    a single shared instance (e.g. distinct MCP servers per connection, which
+    the OpenAI bridge applies to the wrapped agent for the duration of a turn)
+    should also use a ``config_factory`` so each connection owns its own agent.
     """
-    return False
+    # OpenAI Agents SDK ``Agent`` -> fresh ``OpenAIAgentsBridge`` per session.
+    try:
+        from agents import Agent as OpenAIAgent
+
+        if isinstance(agent, OpenAIAgent):
+            return True
+    except ImportError:
+        pass
+    # PydanticAI ``Agent`` -> fresh ``PydanticAIBridge`` per session. A
+    # ``pydantic_graph.Graph`` is intentionally excluded: it is not
+    # auto-adaptable and requires explicit ``PydanticAIBridge`` construction.
+    try:
+        from pydantic_ai import Agent as PydanticAgent
+
+        if isinstance(agent, PydanticAgent):
+            return True
+    except ImportError:
+        pass
+    # LangChain ``Runnable`` -> fresh ``LangChainBridge`` / ``LangGraphBridge``
+    # per session (a compiled LangGraph graph is itself a ``Runnable``) — unless
+    # it pins a conversation via ``with_config(configurable={...})``, which every
+    # per-session bridge would resolve to the same shared thread/history.
+    try:
+        from langchain_core.runnables import Runnable
+
+        if isinstance(agent, Runnable):
+            return not _runnable_pins_conversation(agent)
+    except ImportError:
+        pass
+    # LlamaIndex / LlamaAgents workflow -> fresh ``LlamaAgentsBridge`` per
+    # session (workflow runs allocate their own per-run context).
+    from easycat.integrations.agents.llama_agents import is_llama_workflow_instance
+
+    return is_llama_workflow_instance(agent)
 
 
 def _unwrap_compiled_state_graph(agent: Any) -> Any | None:

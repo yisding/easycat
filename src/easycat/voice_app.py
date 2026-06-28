@@ -121,12 +121,16 @@ def _is_shareable_spec(field: str, value: Any) -> bool:
     if value is None or isinstance(value, str):
         return True
     if field == "agent":
-        # Only primitive agent specs (provider names / URLs) are shareable in
-        # per-connection modes. Framework agent objects are wrapped by reference
-        # during auto-adaptation and may carry mutable runtime state, so callers
-        # must build them per connection with ``config_factory``. Import from
-        # ``_factory`` directly (like the other internal callers) so this guard
-        # does not eagerly pull in every bridge module via the package.
+        # Declarative framework agent *specs* (OpenAI/PydanticAI/LangChain/
+        # LangGraph/Llama) are rebuilt into a fresh bridge per connection, and
+        # that bridge — not the wrapped spec — owns the mutable per-session
+        # state, so the same spec is safe to forward into every connection (this
+        # keeps the documented ``VoiceApp(agent=Agent(...)).run("browser")``
+        # quickstart working). Built bridges/runners, conversation-pinned
+        # runnables, and unrecognized objects carry per-session state by
+        # reference and are rejected, so they need a ``config_factory``. Import
+        # from ``_factory`` directly (like the other internal callers) so this
+        # guard does not eagerly pull in every bridge module via the package.
         from easycat.integrations.agents._factory import is_reusable_agent_spec
 
         return is_reusable_agent_spec(value)
