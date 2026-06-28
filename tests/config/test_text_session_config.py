@@ -6,25 +6,18 @@ from easycat import (
     ObservabilityConfig,
     create_text_session,
 )
-from easycat.validation import LatencyBudget
 from tests.config._helpers import (
     _DummyAgent,
 )
 
 
 def test_create_text_session_forwards_observability_advanced_aliases():
-    budget = LatencyBudget(stage="total_ms", max_ms=1000.0)
     session = create_text_session(
         agent=_DummyAgent(),
-        latency_budget=budget,
         warmup=False,
-        max_session_cost_usd=0.25,
     )
 
-    assert session._easycat_config.latency_budget == (budget,)
     assert session._easycat_config.warmup is False
-    assert session._easycat_config.max_session_cost_usd == 0.25
-    assert session._run_ctx.latency_budgets == (budget,)
     assert session._config.warmup is False
     assert session._warmup.enabled is False
 

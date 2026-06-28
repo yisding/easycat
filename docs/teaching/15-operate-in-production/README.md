@@ -407,9 +407,9 @@ thread = serve_session(session, port=8765, in_thread=True)
 ```
 
 On the browser side you get per-stage spans per turn, the journal
-record list filterable by kind and stage, the text transcript
-reconstructed from `stt.final` / assistant deltas, and a cost
-rollup. For chapter 11's bug-hunting, `serve_bundle` on one of the
+record list filterable by kind and stage, and the text transcript
+reconstructed from `stt.final` / assistant deltas. For chapter 11's
+bug-hunting, `serve_bundle` on one of the
 planted bundles is an instructive follow-up.
 
 ## The `easycat` CLI
@@ -435,7 +435,7 @@ EasyCat — voice bot framework
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
-    diff        Diff two bundles turn-by-turn for milestone and cost regressions
+    diff        Diff two bundles turn-by-turn for milestone regressions
     journal     Search and tail captured journals and crash dumps
     tail        Live-tail a SQLite journal as it grows
     explain     Route a call problem by symptom, or look up an error code
@@ -530,7 +530,7 @@ Run easycat explain json-schema for CLI JSON.
   pipeline dispatch wait from the model's first-token time so you can tell a
   slow pipeline from a slow model.
 - **`uv run easycat diff <path-a> <path-b>`** — diff two bundles turn by turn,
-  surfacing milestone, transcript, and cost deltas so you can see which segment
+  surfacing milestone and transcript deltas so you can see which segment
   regressed between a baseline ("before") and a comparison ("after") run.
 - **`uv run easycat journal grep <path>`** / **`uv run easycat journal follow
   <path>`** / **`uv run easycat journal promote <path>`** — full-text search a

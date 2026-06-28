@@ -11,7 +11,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -50,11 +49,9 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
-from easycat.runtime.costs import cost_budget_status, finite_number
 from easycat.runtime.journal import ExecutionJournal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
-_COST_RECORD_NAMES = frozenset({"cost", "cost_record"})
 logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
     "text",
@@ -164,13 +161,7 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: TurnIdResolver
-    max_session_cost_usd: float | None = None
-    on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], bool | None] | None = None
     _subscribed: bool = field(default=False, init=False)
-    _cost_total_usd: float = field(default=0.0, init=False)
-    _cost_budget_warning_emitted: bool = field(default=False, init=False)
-    _cost_budget_exceeded_emitted: bool = field(default=False, init=False)
-    _cost_budget_enforcement_pending: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
@@ -282,11 +273,6 @@ class SessionJournalSink:
         output_artifact_class: ArtifactClass = "debug_verbose",
     ) -> None:
         if self.journal is None:
-            self._maybe_append_cost_budget_record(
-                name=name,
-                turn_id=self.current_turn_id(turn_id),
-                data=data,
-            )
             return
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
@@ -308,108 +294,6 @@ class SessionJournalSink:
             input_ref=input_ref,
             output_ref=output_ref,
         )
-        self._maybe_append_cost_budget_record(
-            name=name,
-            turn_id=resolved_turn_id,
-            data=data,
-        )
-
-    def _maybe_append_cost_budget_record(
-        self,
-        *,
-        name: str,
-        turn_id: str | None,
-        data: dict[str, Any] | None,
-    ) -> None:
-        if name not in _COST_RECORD_NAMES or not isinstance(data, dict):
-            return
-        limit_usd = finite_number(self.max_session_cost_usd)
-        if limit_usd is None or limit_usd <= 0:
-            return
-        record_usd = finite_number(data.get("usd"))
-        if record_usd is None:
-            return
-
-        self._cost_total_usd += record_usd
-        budget = cost_budget_status(self._cost_total_usd, limit_usd)
-        if budget["warning"] and not self._cost_budget_warning_emitted:
-            self._append_cost_budget_alert(
-                alert="warning",
-                budget=budget,
-                trigger_record_name=name,
-                turn_id=turn_id,
-            )
-            self._cost_budget_warning_emitted = True
-        if budget["exceeded"]:
-            should_notify = (
-                not self._cost_budget_exceeded_emitted or self._cost_budget_enforcement_pending
-            )
-            if not self._cost_budget_exceeded_emitted:
-                alert_data = self._append_cost_budget_alert(
-                    alert="exceeded",
-                    budget=budget,
-                    trigger_record_name=name,
-                    turn_id=turn_id,
-                )
-                self._cost_budget_exceeded_emitted = True
-            else:
-                alert_data = self._cost_budget_alert_data(
-                    alert="exceeded",
-                    budget=budget,
-                    trigger_record_name=name,
-                )
-            if should_notify and self.on_cost_budget_exceeded is not None:
-                try:
-                    accepted = self.on_cost_budget_exceeded(alert_data, turn_id)
-                except Exception:
-                    self._cost_budget_enforcement_pending = True
-                    logger.exception("Cost budget enforcement callback failed")
-                else:
-                    self._cost_budget_enforcement_pending = accepted is False
-
-    def _cost_budget_alert_data(
-        self,
-        *,
-        alert: str,
-        budget: dict[str, Any],
-        trigger_record_name: str,
-    ) -> dict[str, Any]:
-        return {
-            "alert": alert,
-            "budget_status": budget["status"],
-            "total_usd": self._cost_total_usd,
-            "max_session_cost_usd": budget["max_session_cost_usd"],
-            "warning_threshold_usd": budget["warning_threshold_usd"],
-            "usage_fraction": budget["usage_fraction"],
-            "remaining_usd": budget["remaining_usd"],
-            "overage_usd": budget["overage_usd"],
-            "trigger_record_name": trigger_record_name,
-        }
-
-    def _append_cost_budget_alert(
-        self,
-        *,
-        alert: str,
-        budget: dict[str, Any],
-        trigger_record_name: str,
-        turn_id: str | None,
-    ) -> dict[str, Any]:
-        data = self._cost_budget_alert_data(
-            alert=alert,
-            budget=budget,
-            trigger_record_name=trigger_record_name,
-        )
-        if self.journal is None:
-            return data
-        self.journal.append(
-            kind=JournalRecordKind.METRIC,
-            name=f"cost_budget_{alert}",
-            session_id=self.session_id,
-            turn_id=turn_id,
-            data=data,
-            tags=frozenset({"cost_budget", alert}),
-        )
-        return data
 
     def _subscribe(self, event_type: type, handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)

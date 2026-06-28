@@ -27,7 +27,6 @@ class RunContext:
     journal: Any = None  # ExecutionJournal | None
     artifact_store: Any = None  # ArtifactStore | None
     config_snapshot: dict[str, Any] = field(default_factory=dict)
-    latency_budgets: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         if self.runtime_mode not in ("chained_pipeline", "text_session"):

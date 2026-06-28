@@ -107,7 +107,7 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   dead air); the `issues` key is always present in the `--json` envelope.
 - More journal CLI entry points:
   `easycat diff <path> <path>` diffs two bundles or journals turn by turn,
-  surfacing milestone, transcript, and cost deltas between a baseline ("before")
+  surfacing milestone and transcript deltas between a baseline ("before")
   and a comparison ("after") run; restrict it with `--turn` and add `--json` for
   a parseable summary.
   `easycat journal grep <path> --query TEXT` runs a redacted full-text search
@@ -130,7 +130,7 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   The UI gives every captured call a timeline-first forensic workspace: an
   overview dashboard with recommended next steps, Live lanes for during-call
   event flow, per-turn waterfalls, transcript/audio playback, paged raw records,
-  deterministic issue triage cards, cost rollups, replay controls, and
+  deterministic issue triage cards, replay controls, and
   live-session bundle export. You can also import `serve_bundle` for an offline
   bundle or `serve_session` for a live session:
 
@@ -240,29 +240,16 @@ There are three independent knobs, and they control different things:
   debugger UI launches); `EASYCAT_LOG_LEVEL` decides how verbose the human
   console log is. Turning one up does not turn the other up.
 
-- **Advanced observability knobs** live on `ObservabilityConfig` and keep
-  top-level `EasyConfig` aliases for first-run ergonomics:
-  `latency_budget=LatencyBudget(...)`, `warmup=False`, and
-  `max_session_cost_usd=0.50`. These values are validated and preserved in safe
-  debug-bundle config snapshots. Budgets whose `stage` matches a runtime stage
-  name (for example `LatencyBudget(stage="tts", max_ms=500)`) tag over-budget
-  stage records with `latency_budget_exceeded`; `LatencyBudget(stage="total_ms",
-  max_ms=...)` emits turn-level `latency_budget_exceeded` metric records from
-  text turns and from voice turns once first TTS audio is available. The
-  debugger cost rollup reports `max_session_cost_usd` budget status from cost
-  records using the shared `easycat.runtime.cost_budget_status(...)` helper, and
-  the session journal emits `cost_budget_warning` / `cost_budget_exceeded`
-  records when appended cost records cross the configured thresholds. When
-  `cost_budget_exceeded` fires, Session also records
-  `cost_budget_stop_requested` and schedules `stop(force=True)` through the
-  runtime task scope. `warmup=True` runs structural provider/model `warmup()`
-  hooks during `Session.start()` before audio ingress and emits
-  `warmup_completed` timing records. The bundled providers now implement those
-  hooks — OpenAI TTS primes its HTTP pool, Silero VAD and Smart Turn prime
-  their ONNX sessions, the OpenAI Realtime STT runs a connect-handshake-close
-  cycle, and the OpenAI Agents bridge primes the SDK's shared client — so the
-  first turn does not pay their cold-start cost. Provider cost-record emission
-  and first-token/audio runtime budgets are still planned.
+- **Advanced observability knobs** live on `ObservabilityConfig` and keep a
+  top-level `EasyConfig` alias for first-run ergonomics: `warmup=False`. The
+  value is validated and preserved in safe debug-bundle config snapshots.
+  `warmup=True` runs structural provider/model `warmup()` hooks during
+  `Session.start()` before audio ingress and emits `warmup_completed` timing
+  records. The bundled providers now implement those hooks — OpenAI TTS primes
+  its HTTP pool, Silero VAD and Smart Turn prime their ONNX sessions, the OpenAI
+  Realtime STT runs a connect-handshake-close cycle, and the OpenAI Agents
+  bridge primes the SDK's shared client — so the first turn does not pay their
+  cold-start cost.
 
 ### Correlation ids in logs
 
@@ -288,15 +275,13 @@ ids, but EasyCat avoids that boundary.
   A pluggable full `RedactionPolicy` is still planned. Do not attach journal
   bundles to public issues or send them to third parties until you have manually
   scrubbed them.
-- **Latency budgets tag and alert, but they do not reject turns yet.** You can
-  pass `latency_budget=LatencyBudget(stage="tts", max_ms=500)` so matching
-  stage records carry `elapsed_ms`, a `latency_budget_exceeded` tag, and
-  structured `latency_budget_violations` when they exceed the configured
-  budget. `LatencyBudget(stage="total_ms", max_ms=...)` also emits `total_ms`
-  turn-level `latency_budget_exceeded` metric records. First-token/audio budgets
-  such as `llm_ttft_ms` and `tts_ttfb_ms` are still aggregate validation
-  concepts, not per-record runtime gates. Use the OTel latency histograms (D)
-  to observe real numbers until those alerts land.
+- **Latency is reported, not gated.** Every pipeline stage records its
+  `elapsed_ms` to the journal, and each turn emits a `turn_total_latency_ms`
+  (voice, once first TTS audio is available) or `text_turn_latency_ms` (text)
+  metric record. EasyCat does not reject or alert on slow turns at runtime; use
+  the OTel latency histograms (D), the `easycat latency` bundle summary, and the
+  `easycat validate latency` regression lane to observe real numbers and catch
+  regressions in CI.
 - **`gen_ai.*` attributes are development status.** The committed
   `gen_ai.operation.name`, `gen_ai.request.model`, and `gen_ai.system` span keys
   track the OpenTelemetry GenAI semantic conventions, which are themselves still

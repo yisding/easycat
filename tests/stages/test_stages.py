@@ -30,8 +30,7 @@ from easycat.stages import (
     TurnStage,
     VADStage,
 )
-from easycat.stages.base import LATENCY_BUDGET_EXCEEDED_TAG, journal_append_event
-from easycat.validation import LatencyBudget
+from easycat.stages.base import journal_append_event
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -150,7 +149,6 @@ class TestRunContext:
         assert ctx.journal is None
         assert ctx.artifact_store is None
         assert ctx.config_snapshot == {}
-        assert ctx.latency_budgets == ()
 
     def test_text_session_mode(self):
         ctx = RunContext(
@@ -181,16 +179,6 @@ class TestRunContext:
             config_snapshot={"key": "value"},
         )
         assert ctx.config_snapshot == {"key": "value"}
-
-    def test_latency_budgets(self):
-        budget = LatencyBudget(stage="tts", max_ms=25.0)
-        ctx = RunContext(
-            run_id="r1",
-            session_id="s1",
-            runtime_mode="chained_pipeline",
-            latency_budgets=(budget,),
-        )
-        assert ctx.latency_budgets == (budget,)
 
     def test_journal_attached(self):
         j = InMemoryRingBuffer(capacity=100)
@@ -475,15 +463,13 @@ class TestAudioStageProtocol:
 
 
 class TestStageExecuteRecording:
-    def test_stage_journal_record_tags_matching_latency_budget_overruns(self):
+    def test_stage_journal_record_writes_elapsed_ms_without_budget_metadata(self):
         journal = InMemoryRingBuffer(capacity=100)
-        budget = LatencyBudget(stage="tts", max_ms=10.0, percentile="p95")
         ctx = RunContext(
             run_id="run-1",
             session_id="sess-1",
             runtime_mode="chained_pipeline",
             journal=journal,
-            latency_budgets=(budget,),
         )
 
         journal_append_event(
@@ -495,39 +481,10 @@ class TestStageExecuteRecording:
         )
 
         record = journal.read()[0]
-        assert LATENCY_BUDGET_EXCEEDED_TAG in record.tags
-        assert record.data["latency_budget_exceeded"] is True
-        assert record.data["latency_budget_violations"] == [
-            {
-                "stage": "tts",
-                "observed_ms": 25.0,
-                "budget_ms": 10.0,
-                "percentile": "p95",
-                "scope": "stage_record",
-            }
-        ]
-
-    def test_stage_journal_record_does_not_tag_aggregate_latency_budget(self):
-        journal = InMemoryRingBuffer(capacity=100)
-        ctx = RunContext(
-            run_id="run-1",
-            session_id="sess-1",
-            runtime_mode="chained_pipeline",
-            journal=journal,
-            latency_budgets=(LatencyBudget(stage="tts_ttfb_ms", max_ms=10.0),),
-        )
-
-        journal_append_event(
-            ctx,
-            stage="tts",
-            name="stage_complete",
-            turn_id="turn-1",
-            data_extra={"elapsed_ms": 25.0},
-        )
-
-        record = journal.read()[0]
-        assert LATENCY_BUDGET_EXCEEDED_TAG not in record.tags
+        assert record.data["elapsed_ms"] == 25.0
+        # Latency is reported, not gated: stage records carry no budget tags.
         assert "latency_budget_exceeded" not in record.data
+        assert "latency_budget_violations" not in record.data
 
     async def test_stt_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)

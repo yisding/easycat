@@ -2,6 +2,15 @@
 
 Status: active review checklist.
 
+> **Stale (runtime budgets removed):** the runtime cost/latency-*budget* code
+> this matrix treats as existing — `LatencyBudgetMonitor`, `CostBudgetEnforcer`,
+> `cost_budget_*` records, the debugger `/api/cost` rollup, and the
+> `max_session_cost_usd` alias — was removed as undercooked and duplicative with
+> the journal. Acceptance rows below that gate on those symbols (e.g. the
+> Cost-budget / `max_session_cost_usd` row) are now net-new and need re-scoping.
+> The offline `easycat.validation.latency.LatencyBudget` (validation lane) is a
+> separate, still-existing symbol.
+
 Use this matrix during implementation reviews. A milestone is not done until its
 behavior, tests, docs, and migration notes are represented here.
 

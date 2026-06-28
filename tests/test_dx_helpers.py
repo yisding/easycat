@@ -243,13 +243,6 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     plan_index = (REPO_ROOT / "plan" / "peripherals" / "README.md").read_text(encoding="utf-8")
     field_names = {field.name for field in fields(EasyConfig)}
     field_count = len(field_names)
-    runtime_knobs = plan.split(
-        "Runtime enforcement for advanced observability knobs remains:",
-        1,
-    )[1].split(
-        "The high-leverage DX wins",
-        1,
-    )[0]
     remaining_summary = plan.split("The high-leverage DX wins are shipped;", 1)[1].split(
         ">",
         1,
@@ -280,7 +273,6 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     }.isdisjoint(field_names)
     assert "EasyCatConfig" not in plan
     assert "EasyConfig(record_to=...)" in plan
-    assert "`record_to=`" not in runtime_knobs
     assert f"currently {field_count} top-level `EasyConfig` fields" in plan
     assert "target ≤22" in plan
     assert field_count <= 22
@@ -291,12 +283,8 @@ def test_dx_onboarding_plan_tracks_current_easyconfig_surface() -> None:
     assert "cross-pipeline" in remaining_summary
     assert "full structlog adoption" in remaining_summary
     assert "non-canonical example shrinkage" in normalized_remaining_summary
-    assert (
-        "runtime enforcement for first-token/audio `latency_budget=` alerts"
-        in normalized_remaining_summary
-    )
-    assert "first-token/audio `latency_budget=` alerts" in normalized_remaining_summary
     assert "`warmup=`" not in remaining_summary
+    assert "`latency_budget=`" not in remaining_summary
     assert "`max_session_cost_usd=`" not in remaining_summary
 
 
@@ -327,14 +315,10 @@ def test_dx_onboarding_status_uses_stable_source_symbols() -> None:
     assert "visible-code budget is now ≤40 instead of ≤90" in normalized_status
     assert "Advanced observability knobs are now config-addressable" in status
     assert "`ObservabilityConfig` carries" in status
-    assert "`latency_budget_exceeded`" in status
-    assert "`easycat.runtime.cost_budget_status(...)`" in status
-    assert '`latency_budget=LatencyBudget(stage="total_ms", max_ms=...)`' in status
-    assert "turn-level `latency_budget_exceeded` metric records" in status
-    assert "`cost_budget_warning`" in status
-    assert "`cost_budget_exceeded`" in status
-    assert "`cost_budget_stop_requested`" in status
-    assert "`stop(force=True)`" in status
+    assert "`turn_total_latency_ms`" in status
+    assert "`text_turn_latency_ms`" in status
+    assert "`easycat validate latency`" in status
+    assert "were removed" in status
     assert "`warmup_completed`" in status
     assert "`warmup_failed`" in status
     assert "structured" in status

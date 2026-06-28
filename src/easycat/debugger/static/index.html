@@ -635,52 +635,33 @@
   .annotation-score-out { font-family: var(--mono); min-width: 1.2em; text-align: center; }
   .annotation-status { color: var(--muted); font-size: 11px; }
 
-  /* Cost view */
-  #cost-view, #issues-view { padding: 14px; overflow: auto; }
-  .issues-summary,
-  .cost-totals {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
-    margin-bottom: 16px;
-  }
-  .issue-card,
-  .cost-card {
+  /* Issue cards */
+  .issue-card {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 5px;
     padding: 14px;
   }
-  .issue-card .label,
-  .cost-card .label {
+  .issue-card .label {
     font-size: 10px;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 6px;
   }
-  .issue-card .value,
-  .cost-card .value {
+  .issue-card .value {
     font-family: var(--mono);
     font-size: 22px;
     color: var(--accent);
     overflow-wrap: anywhere;
   }
-  .cost-card .value.ok { color: var(--green); }
-  .cost-card .value.warning, .issue-card.warning .value { color: var(--orange); }
-  .cost-card .value.exceeded, .issue-card.error .value { color: var(--red); }
+  .issue-card.warning .value { color: var(--orange); }
+  .issue-card.error .value { color: var(--red); }
   .issue-list { display: grid; gap: 10px; margin-top: 14px; }
   .issue-card { cursor: pointer; }
   .issue-card:hover { border-color: var(--accent); }
   .issue-card .detail { color: var(--text); font-size: 12px; margin-top: 8px; line-height: 1.45; }
   .issue-card .meta { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-top: 8px; }
-  .cost-card .subvalue {
-    color: var(--muted);
-    font-family: var(--mono);
-    font-size: 11px;
-    margin-top: 4px;
-    overflow-wrap: anywhere;
-  }
 
   /* Issues view */
   #issues-view { padding: 14px; overflow: auto; }
@@ -1103,7 +1084,6 @@
   <div class="tab" data-tab="transcript" role="tab">Transcript</div>
   <div class="tab" data-tab="issues" role="tab">Issues</div>
   <div class="tab" data-tab="aec" role="tab">AEC</div>
-  <div class="tab" data-tab="cost" role="tab">Cost</div>
   <div class="tab" data-tab="replay" role="tab">Replay</div>
 </nav>
 <main>
@@ -1193,7 +1173,6 @@
   <section id="transcript-view" class="view"></section>
   <section id="issues-view" class="view"></section>
   <section id="aec-view" class="view"></section>
-  <section id="cost-view" class="view"></section>
 
   <section id="replay-view" class="view">
     <div id="replay-form-pane">
@@ -1404,7 +1383,6 @@ const state = {
   turns: [],
   timeline: [],
   transcripts: [],
-  cost: null,
   annotations: {},
   issues: { issues: [], summary: {}, total: 0 },
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
@@ -1498,7 +1476,6 @@ const TAB_LOADERS = {
   issues: renderIssuesView,
   // The AEC view lives in /static/aec.js (window.EasyCatAec); delegate to it.
   aec: () => window.EasyCatAec && window.EasyCatAec.renderAecView(),
-  cost: renderCostView,
   replay: renderReplayView,
 };
 
@@ -1546,12 +1523,11 @@ async function loadAllSnapshots() {
   // Live view has its own uncapped, name-filtered fetch so that
   // chatty ``tts_audio`` / ``agent_delta`` records in long sessions
   // don't push later VAD/ASR/agent events out of the 1000-record cap.
-  const [recsResp, turnsResp, timelineResp, transcriptResp, costResp, issuesResp] = await Promise.all([
+  const [recsResp, turnsResp, timelineResp, transcriptResp, issuesResp] = await Promise.all([
     getJSON("/api/records?limit=1000"),
     getJSON("/api/turns"),
     getJSON("/api/timeline"),
     getJSON("/api/transcript"),
-    getJSON("/api/cost").catch(() => ({ per_turn: {}, totals: {} })),
     getJSON("/api/issues").catch(() => ({ issues: [], summary: {}, total: 0 })),
     loadLiveRecords(),
   ]);
@@ -1560,7 +1536,6 @@ async function loadAllSnapshots() {
   state.turns = turnsResp.turns;
   state.timeline = timelineResp.timeline;
   state.transcripts = transcriptResp.transcripts;
-  state.cost = costResp;
   state.issues = issuesResp;
   // Hydrate reviewer verdicts from the bundle's annotation sidecar.  Only
   // bundle sources advertise ``supports_annotate``; a missing/corrupt
@@ -1628,9 +1603,6 @@ function rerenderActiveTab() {
 function fmtMs(value) {
   return typeof value === "number" ? `${value.toFixed(value >= 100 ? 0 : 1)} ms` : "—";
 }
-function fmtMoney(value) {
-  return typeof value === "number" ? `$${value.toFixed(4)}` : "$0.0000";
-}
 function issueSeverityClass() {
   const summary = state.issues?.summary || {};
   if ((summary.error || 0) > 0) return "bad";
@@ -1649,8 +1621,6 @@ function renderOverviewView() {
   const m = state.manifest || {};
   const issueCount = state.issues?.total || 0;
   const issueSummary = state.issues?.summary || {};
-  const costTotals = state.cost?.totals || {};
-  const budget = state.cost?.budget || {};
   const slowestTurns = [...(state.timeline || [])]
     .sort((a, b) => (b.wall_ms || 0) - (a.wall_ms || 0))
     .slice(0, 5);
@@ -1663,7 +1633,7 @@ function renderOverviewView() {
       el("div", { class: `pill ${m.is_live ? "good" : ""}` }, m.is_live ? "● live source" : "offline bundle"),
       el("h2", null, sourceTitle()),
       el("p", null,
-        "Start here for call health, then jump directly into timeline, live lanes, issues, records, transcript, cost, or replay."),
+        "Start here for call health, then jump directly into timeline, live lanes, issues, records, transcript, or replay."),
     ]),
     el("div", { class: "hero-actions" }, [
       el("button", { class: "primary", onclick: () => activateTab(issueCount ? "issues" : "timeline") },
@@ -1680,7 +1650,6 @@ function renderOverviewView() {
     ["Health", healthLabel, issueCount ? `${issueCount} triage card${issueCount === 1 ? "" : "s"}` : "ready for forensic review", issueSeverityClass()],
     ["Turns", String(state.turns.length), `${state.transcripts.length} transcript row${state.transcripts.length === 1 ? "" : "s"}`, ""],
     ["Records", String(m.record_count ?? state.recordsTotal ?? state.records.length), `${m.artifact_count ?? 0} artifacts`, ""],
-    ["Cost", fmtMoney(costTotals.usd || 0), budget.configured ? `${budget.status} budget` : "no budget configured", budget.status === "exceeded" ? "bad" : budget.status === "warning" ? "warn" : ""],
   ].forEach(([label, value, sub, cls]) => {
     metricGrid.appendChild(el("div", { class: "metric-card" }, [
       el("div", { class: "label" }, label),
@@ -2742,72 +2711,6 @@ function renderIssuesView() {
     list.appendChild(card);
   }
   root.appendChild(list);
-}
-
-// ── Cost view ────────────────────────────────────────────────────
-function renderCostView() {
-  const root = $("#cost-view");
-  clear(root);
-  if (!state.cost) return;
-  const totals = state.cost.totals || {};
-  const budget = state.cost.budget || {};
-  const totalsRow = el("div", { class: "cost-totals" });
-  const cards = [
-    { label: "Spend (USD)", value: `$${(totals.usd || 0).toFixed(4)}` },
-    { label: "STT seconds", value: (totals.stt_seconds || 0).toFixed(2) },
-    { label: "TTS chars", value: String(totals.tts_chars || 0) },
-    { label: "LLM tokens", value: String(totals.llm_tokens || 0) },
-  ];
-  if (budget.configured) {
-    const status = budget.status || "ok";
-    const label = status === "exceeded" ? "Exceeded" : status === "warning" ? "Warning" : "OK";
-    const maxUsd = budget.max_session_cost_usd || 0;
-    cards.push({
-      label: "Budget",
-      value: label,
-      valueClass: status,
-      subvalue: `$${(totals.usd || 0).toFixed(4)} / $${maxUsd.toFixed(4)}`,
-    });
-  }
-  for (const c of cards) {
-    const valueClass = c.valueClass ? `value ${c.valueClass}` : "value";
-    totalsRow.appendChild(el("div", { class: "cost-card" }, [
-      el("div", { class: "label" }, c.label),
-      el("div", { class: valueClass }, c.value),
-      c.subvalue ? el("div", { class: "subvalue" }, c.subvalue) : null,
-    ]));
-  }
-  root.appendChild(totalsRow);
-
-  const perTurn = state.cost.per_turn || {};
-  if (Object.keys(perTurn).length === 0) {
-    root.appendChild(el("div", { class: "empty" },
-      "No CostRecord events captured.  Add CostRecord emission to your providers " +
-      "(see peripheral-observability-and-cost.md) to populate this view."));
-    return;
-  }
-  root.appendChild(el("h3", null, "Per turn"));
-  const table = el("table");
-  const thead = el("thead");
-  thead.appendChild(el("tr", null, [
-    el("th", null, "turn_id"),
-    el("th", null, "USD"),
-    el("th", null, "STT s"),
-    el("th", null, "TTS chars"),
-    el("th", null, "LLM tokens"),
-  ]));
-  const tbody = el("tbody");
-  for (const [turnId, costs] of Object.entries(perTurn)) {
-    tbody.appendChild(el("tr", null, [
-      el("td", null, turnId),
-      el("td", null, `$${(costs.usd || 0).toFixed(4)}`),
-      el("td", null, (costs.stt_seconds || 0).toFixed(2)),
-      el("td", null, String(costs.tts_chars || 0)),
-      el("td", null, String(costs.llm_tokens || 0)),
-    ]));
-  }
-  table.appendChild(thead); table.appendChild(tbody);
-  root.appendChild(table);
 }
 
 // ── Replay view ──────────────────────────────────────────────────

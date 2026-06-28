@@ -753,30 +753,12 @@ def _slow_milestone_records(
     return shifted
 
 
-def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Path) -> None:
+def test_diff_json_flags_regression(cli: CliRunner, tmp_path: Path) -> None:
     """``easycat diff A B --json`` emits ``command=='diff'`` with a turns array,
     a regressed milestone, and the worst-regression summary."""
-    a_records = _milestone_records("t1", 1_000_000_000) + [
-        JournalRecord(
-            sequence=99,
-            session_id="sess-a",
-            name="cost",
-            turn_id="t1",
-            timing=TimingInfo(wall_ns=1_000_000_000),
-            data={"usd": 0.10},
-        ),
-    ]
-    # B's first token is 100 ms late and the turn costs more.
-    b_records = _slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100) + [
-        JournalRecord(
-            sequence=99,
-            session_id="sess-b",
-            name="cost",
-            turn_id="t1",
-            timing=TimingInfo(wall_ns=1_000_000_000),
-            data={"usd": 0.25},
-        ),
-    ]
+    a_records = _milestone_records("t1", 1_000_000_000)
+    # B's first token is 100 ms late.
+    b_records = _slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100)
     bundle_a = tmp_path / "before.zip"
     bundle_b = tmp_path / "after.zip"
     export_debug_bundle(_FakeSession(records=a_records), bundle_a)
@@ -794,12 +776,12 @@ def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Pat
     cell = turn["milestones"]["agent_request_to_first_token_ms"]
     assert cell["delta_ms"] == pytest.approx(100.0)
     assert cell["regressed"] is True
-    assert turn["cost"]["delta"] == pytest.approx(0.15)
+    assert "cost" not in turn
 
     worst = payload["summary"]["worst_regression"]
     assert worst is not None
     assert worst["delta_ms"] >= 100.0
-    assert payload["summary"]["total_cost_delta"] == pytest.approx(0.15)
+    assert "total_cost_delta" not in payload["summary"]
 
 
 def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> None:

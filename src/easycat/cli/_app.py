@@ -120,8 +120,8 @@ _COMMAND_TEXT: dict[str, _CommandText] = {
         journey="Summarise critical-path latency percentiles for a bundle",
     ),
     "diff": _CommandText(
-        help="Diff two bundles turn-by-turn: milestone, transcript, and cost deltas.",
-        journey="Diff two bundles turn-by-turn for milestone and cost regressions",
+        help="Diff two bundles turn-by-turn: milestone and transcript deltas.",
+        journey="Diff two bundles turn-by-turn for milestone regressions",
     ),
     "journal": _CommandText(
         help="Search and tail captured journals and crash dumps.",

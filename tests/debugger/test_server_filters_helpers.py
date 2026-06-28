@@ -11,7 +11,6 @@ from easycat.debug.bundle import RunBundle
 from easycat.debugger.server import (
     _build_issues,
     _build_transcript,
-    _cost_rollup,
     _filter_records,
     _session_source,
     _summarise_turns,
@@ -119,62 +118,6 @@ def test_build_issues_surfaces_errors_empty_stt_and_latency():
     assert out["total"] == len(out["issues"])
 
 
-def test_cost_rollup_reports_budget_status_from_snapshot():
-    records = [
-        {
-            "sequence": 1,
-            "name": "cost",
-            "turn_id": "turn-1",
-            "data": {"usd": 0.2, "stt_seconds": 1.5, "llm_tokens": True},
-        },
-        {
-            "sequence": 2,
-            "name": "cost_record",
-            "turn_id": "turn-2",
-            "data": {"usd": 0.65, "tts_chars": 120, "llm_tokens": 42},
-        },
-        {
-            "sequence": 3,
-            "name": "stage_complete",
-            "turn_id": "turn-2",
-            "data": {"usd": 10.0},
-        },
-    ]
-
-    out = _cost_rollup(records, config_snapshot={"max_session_cost_usd": "1.0"})
-
-    assert out["totals"]["usd"] == pytest.approx(0.85)
-    assert out["totals"]["stt_seconds"] == pytest.approx(1.5)
-    assert out["totals"]["tts_chars"] == pytest.approx(120)
-    assert out["totals"]["llm_tokens"] == pytest.approx(42)
-    assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.2)
-    assert out["per_turn"]["turn-2"]["usd"] == pytest.approx(0.65)
-    assert out["budget"] == {
-        "configured": True,
-        "max_session_cost_usd": 1.0,
-        "warning_threshold_usd": 0.8,
-        "usage_fraction": pytest.approx(0.85),
-        "remaining_usd": pytest.approx(0.15),
-        "overage_usd": 0.0,
-        "status": "warning",
-        "warning": True,
-        "exceeded": False,
-    }
-
-
-def test_cost_rollup_reports_exceeded_budget():
-    out = _cost_rollup(
-        [{"sequence": 1, "name": "cost", "turn_id": "turn-1", "data": {"usd": 1.25}}],
-        config_snapshot={"max_session_cost_usd": "1.0"},
-    )
-
-    assert out["budget"]["status"] == "exceeded"
-    assert out["budget"]["warning"] is True
-    assert out["budget"]["exceeded"] is True
-    assert out["budget"]["remaining_usd"] == 0.0
-    assert out["budget"]["overage_usd"] == pytest.approx(0.25)
-
-
 def test_transcript_ignores_malformed_turn_ids():
     records = [
         {
@@ -202,27 +145,6 @@ def test_transcript_ignores_malformed_turn_ids():
     assert len(out) == 1
     assert out[0]["turn_id"] == "turn-1"
     assert out[0]["user"] == "hello"
-
-
-def test_cost_rollup_treats_malformed_turn_ids_as_session_level_cost():
-    records = [
-        {"sequence": 1, "name": "cost", "turn_id": ["bad"], "data": {"usd": 0.25}},
-        {
-            "sequence": 2,
-            "name": "cost_record",
-            "turn_id": {"id": "bad"},
-            "data": {"tts_chars": 10},
-        },
-        {"sequence": 3, "name": "cost", "turn_id": "turn-1", "data": {"usd": 0.75}},
-    ]
-
-    out = _cost_rollup(records)
-
-    assert out["totals"]["usd"] == pytest.approx(1.0)
-    assert out["totals"]["tts_chars"] == pytest.approx(10)
-    assert out["per_turn"][""]["usd"] == pytest.approx(0.25)
-    assert out["per_turn"][""]["tts_chars"] == pytest.approx(10)
-    assert out["per_turn"]["turn-1"]["usd"] == pytest.approx(0.75)
 
 
 def test_build_transcript_delegates_to_shared_helper():
@@ -264,35 +186,6 @@ def test_build_transcript_delegates_to_shared_helper():
     # Byte-identical JSON serialization confirms the lift preserved the shape.
     assert _json.dumps(server_out) == _json.dumps(shared_out)
     assert server_out[0]["agent"] == "hello back"
-
-
-def test_cost_rollup_per_turn_and_totals_match_shared_helper():
-    """The server cost rollup's per-turn/totals halves come from the shared
-    ``turn_cost_rollup`` byte-for-byte; only the budget is layered on top."""
-    import json as _json
-
-    from easycat.debug._turn_timeline import turn_cost_rollup
-
-    records = [
-        {"sequence": 1, "name": "cost", "turn_id": "t1", "data": {"usd": 0.2, "stt_seconds": 1.5}},
-        {
-            "sequence": 2,
-            "name": "cost_record",
-            "turn_id": "t2",
-            "data": {"usd": 0.65, "tts_chars": 120, "llm_tokens": 42},
-        },
-        {"sequence": 3, "name": "cost", "turn_id": ["bad"], "data": {"usd": 0.1}},
-    ]
-
-    server_out = _cost_rollup(records)
-    by_turn, totals = turn_cost_rollup(records)
-    # The per-turn and totals halves are identical (incl. integer-zero counts).
-    assert _json.dumps(server_out["per_turn"]) == _json.dumps(by_turn)
-    assert _json.dumps(server_out["totals"]) == _json.dumps(totals)
-    # Unset counts stay integer 0, not 0.0 (historical JSON shape preserved).
-    assert server_out["per_turn"]["t1"]["tts_chars"] == 0
-    assert isinstance(server_out["per_turn"]["t1"]["tts_chars"], int)
-    assert "budget" in server_out
 
 
 def test_summarise_turns_tracks_audio_bytes():
