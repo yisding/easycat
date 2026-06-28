@@ -199,6 +199,10 @@ async def test_plan_endpoint_has_no_token(
     await server.start()
     try:
         async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 401
+
+        auth_headers = {"Authorization": f"Bearer {_RESOLVED_TOKEN}"}
+        async with client.get(f"{_base_url(server)}/plan", headers=auth_headers) as resp:
             assert resp.status == 200
             assert _RESOLVED_TOKEN not in await resp.text()
     finally:
