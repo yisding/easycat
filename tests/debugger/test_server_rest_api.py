@@ -416,6 +416,34 @@ async def test_api_audio_concat_mic_skips_format_mismatch_without_raising(tmp_pa
         assert len(body) == 44 + 320
 
 
+async def test_api_audio_concat_mic_unsupported_width_returns_415(tmp_path):
+    """A real 8-bit (mu-law telephony) mic capture must surface an explicit 415.
+
+    The unsupported ``sample_width == 1`` is preserved through format collection
+    so the route reports an unsupported format, rather than silently rewriting
+    it to the 16-bit default — which would drop every blob and 404 instead.
+    """
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x55" * 160})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/concat/t1?track=mic")
+        assert resp.status == 415
+        payload = await resp.json()
+        assert payload["unsupported"] is True
+        assert payload["format"]["sample_width"] == 1
+
+
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -469,6 +497,28 @@ async def test_api_audio_waveform_mic_track(tmp_path):
         assert resp.status == 200
         body = await resp.read()
         assert body[:8] == _PNG_SIGNATURE
+
+
+async def test_api_audio_waveform_mic_unsupported_width_returns_415(tmp_path):
+    """The waveform route must also 415 on an unsupported 8-bit telephony capture."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x55" * 160})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/t1?track=mic")
+        assert resp.status == 415
+        payload = await resp.json()
+        assert payload["unsupported"] is True
 
 
 async def test_api_audio_waveform_rejects_unknown_turn(tmp_path):
@@ -789,6 +839,31 @@ def test_collect_audio_frames_mic_falls_back_from_unsafe_target_format():
     frames, fmt = _collect_audio_frames(source, "t1", track="mic")
     assert frames == []
     assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+
+
+def test_collect_audio_frames_mic_preserves_unsupported_width():
+    """An 8-bit telephony capture keeps its width (rate stays bounded) so the
+    route can return 415 instead of dropping every blob and 404'ing."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = DebuggerSource(
+        label="mic-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: {"a": b"\x55" * 160}.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    frames, fmt = _collect_audio_frames(source, "t1", track="mic")
+    # The matching frame survives so the route reaches its unsupported-width
+    # branch; the width is preserved rather than rewritten to the 16-bit default.
+    assert frames == [b"\x55" * 160]
+    assert fmt == {"sample_rate": 8000, "channels": 1, "sample_width": 1}
 
 
 def test_collect_audio_frames_mic_selects_stt_stage_start():

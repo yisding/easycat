@@ -946,17 +946,28 @@ def _is_safe_audio_format(fmt: dict[str, int]) -> bool:
 
 
 def _safe_audio_format_from_metadata(data: dict[str, Any]) -> dict[str, int]:
-    """Read a WAV/PCM format from journal metadata, falling back if unsafe."""
-    fmt = {
-        "sample_rate": _audio_metadata_int(data, "sample_rate", _AUDIO_DEFAULT_FMT["sample_rate"]),
-        "channels": _audio_metadata_int(data, "channels", _AUDIO_DEFAULT_FMT["channels"]),
-        "sample_width": _audio_metadata_int(
-            data, "sample_width", _AUDIO_DEFAULT_FMT["sample_width"]
-        ),
-    }
-    if _is_safe_audio_format(fmt):
-        return fmt
-    return dict(_AUDIO_DEFAULT_FMT)
+    """Read a WAV/PCM format from journal metadata with bounded geometry.
+
+    The resampling/header-sensitive fields (``sample_rate`` and ``channels``)
+    are clamped to safe defaults whenever the untrusted journal value is out of
+    range, so a hostile bundle can never drive the resampler or WAV header out
+    of bounds.  ``sample_width`` is *preserved* as-is — even when it is an
+    unsupported width such as 8-bit mu-law telephony (``sample_width == 1``).
+    Rewriting it to the 16-bit default here would mask a genuinely unsupported
+    capture, so the route handlers would drop the only blobs and return 404/409
+    instead of the explicit 415 "unsupported format" response.  Preserving the
+    width lets ``_is_supported_width`` at the route layer surface that 415.
+    """
+    rate = _audio_metadata_int(data, "sample_rate", _AUDIO_DEFAULT_FMT["sample_rate"])
+    channels = _audio_metadata_int(data, "channels", _AUDIO_DEFAULT_FMT["channels"])
+    width = _audio_metadata_int(data, "sample_width", _AUDIO_DEFAULT_FMT["sample_width"])
+    if not (_AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE):
+        rate = _AUDIO_DEFAULT_FMT["sample_rate"]
+    if channels not in _AUDIO_VALID_CHANNELS:
+        channels = _AUDIO_DEFAULT_FMT["channels"]
+    if width <= 0:
+        width = _AUDIO_DEFAULT_FMT["sample_width"]
+    return {"sample_rate": rate, "channels": channels, "sample_width": width}
 
 
 def _coerce_frames_to_format(
