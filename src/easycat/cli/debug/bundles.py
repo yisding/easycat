@@ -83,6 +83,7 @@ from easycat.runtime.replay import (
 )
 from easycat.validation.latency import LatencyPercentileStats
 from easycat.validation.redaction import (
+    REDACTED_TRANSCRIPT,
     REDACTION_VERSION,
     contains_unredacted_sensitive_text,
     redact_text,
@@ -2227,7 +2228,12 @@ async def _stream_follow(
         if json_output:
             # Newline-delimited JSON, one record per line (NOT a single
             # envelope) so a consumer can ``read`` the stream incrementally.
-            stdout_console.print(json.dumps(_redact_follow_record(record_dict), sort_keys=False))
+            # Write straight to the file handle, bypassing Rich: Rich soft-wraps
+            # at terminal width, which would split long records across lines and
+            # mangle the NDJSON when consumers pipe it into ``jq`` or ``read``.
+            line = json.dumps(_redact_follow_record(record_dict), sort_keys=False)
+            stdout_console.file.write(line + "\n")
+            stdout_console.file.flush()
             continue
 
         # Only the FIRST TTS byte of a turn is the milestone landmark; later
@@ -2262,16 +2268,32 @@ def _record_to_follow_dict(record: Any) -> dict[str, Any]:
     return out
 
 
+# Free-form STT/agent text that ``SessionJournalSink`` stores under generic
+# ``data`` keys: final/partial transcript and model output land under
+# ``data.text`` and streamed tokens under ``data.delta``.  Neither key is in
+# ``redact_value``'s field-name allowlist, so they would only get pattern-based
+# redaction and otherwise stream verbatim utterances (e.g. medical or account
+# details).  Replace them wholesale with the shared transcript placeholder.
+_FOLLOW_FREE_TEXT_KEYS = ("text", "delta")
+
+
 def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Return a redacted copy of a follow record before JSON streaming.
 
     Human follow output already renders a narrow, redacted summary.  JSON mode
     intentionally preserves the same record shape for incremental consumers,
     but must pass every projected field through the shared redaction policy
-    before writing newline-delimited records to stdout.
+    before writing newline-delimited records to stdout.  Free-form transcript
+    and model text under ``data.text`` / ``data.delta`` is stripped explicitly
+    because those generic keys fall outside the shared field-name allowlist.
     """
-    redacted = redact_value(dict(record))
-    return cast(dict[str, Any], redacted)
+    redacted = cast(dict[str, Any], redact_value(dict(record)))
+    data = redacted.get("data")
+    if isinstance(data, dict):
+        for key in _FOLLOW_FREE_TEXT_KEYS:
+            if data.get(key):
+                data[key] = REDACTED_TRANSCRIPT
+    return redacted
 
 
 @cli_command

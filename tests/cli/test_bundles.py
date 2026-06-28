@@ -411,6 +411,8 @@ async def test_stream_follow_json_redacts_record_payloads(
                 "kind": "event",
                 "data": {
                     "transcript": "call me at +1 (415) 555-0199",
+                    "text": "I was recently diagnosed with type 2 diabetes",
+                    "delta": "your account balance is",
                     "api_key": "sk-abcdefghijklmnop",
                     "provider_request_id": "req_sensitive123",
                 },
@@ -433,6 +435,11 @@ async def test_stream_follow_json_redacts_record_payloads(
     payload = json.loads(capsys.readouterr().out)
     assert payload["turn_id"] == "turn-[REDACTED_PHONE]"
     assert payload["data"]["transcript"] == "[REDACTED_TRANSCRIPT]"
+    # Free-form STT/agent text and streamed tokens live under generic keys that
+    # fall outside the field-name allowlist, so they must be stripped wholesale
+    # rather than left as pattern-only redactions of verbatim utterances.
+    assert payload["data"]["text"] == "[REDACTED_TRANSCRIPT]"
+    assert payload["data"]["delta"] == "[REDACTED_TRANSCRIPT]"
     assert payload["data"]["api_key"] == "[REDACTED_SECRET]"
     assert payload["data"]["provider_request_id"] == "[REDACTED_REQUEST_ID]"
     assert payload["error"]["message"] == "Authorization: [REDACTED_SECRET]"
