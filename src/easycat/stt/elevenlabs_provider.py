@@ -76,6 +76,8 @@ class ElevenLabsSTTConfig:
     # Strip filler words, false starts, and disfluencies from transcripts.
     realtime_no_verbatim: bool = False
     # Include the detected language code on committed transcripts (realtime).
+    # ElevenLabs only carries language_code on committed_transcript_with_
+    # timestamps events, so enabling this forces include_timestamps on too.
     realtime_include_language_detection: bool = False
     # Zero-retention mode: when False, ElevenLabs does not store request audio
     # or transcripts (history/abuse logging off). Sent as a query param on both
@@ -194,11 +196,20 @@ class ElevenLabsSTT(WebSocketSTTBase):
     def _build_realtime_ws_url(self) -> str:
         from urllib.parse import urlencode
 
+        # The detected language_code is only delivered on
+        # committed_transcript_with_timestamps events, which require
+        # include_timestamps=true — so language detection implies timestamps,
+        # otherwise the flag would be silently inert (STTEvent.language stays
+        # empty). Force timestamps on when language detection is requested.
+        include_timestamps = (
+            self._config.realtime_include_timestamps
+            or self._config.realtime_include_language_detection
+        )
         params: dict[str, str] = {
             "model_id": self._resolved_model(),
             "audio_format": self._realtime_audio_format(),
             "commit_strategy": self._config.realtime_commit_strategy,
-            "include_timestamps": str(self._config.realtime_include_timestamps).lower(),
+            "include_timestamps": str(include_timestamps).lower(),
         }
         if self._config.language:
             params["language_code"] = self._config.language

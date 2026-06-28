@@ -307,6 +307,9 @@ def test_elevenlabs_realtime_url_carries_language_detection_and_zero_retention()
     url = ElevenLabsSTT(config)._build_realtime_ws_url()
     assert "include_language_detection=true" in url
     assert "enable_logging=false" in url
+    # language_code is only delivered on *_with_timestamps events, so enabling
+    # language detection must force include_timestamps on (else it's inert).
+    assert "include_timestamps=true" in url
 
 
 def test_elevenlabs_realtime_url_omits_logging_and_language_detection_by_default():
