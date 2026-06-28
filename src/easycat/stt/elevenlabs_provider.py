@@ -75,6 +75,12 @@ class ElevenLabsSTTConfig:
     realtime_keyterms: list[str] | None = None
     # Strip filler words, false starts, and disfluencies from transcripts.
     realtime_no_verbatim: bool = False
+    # Include the detected language code on committed transcripts (realtime).
+    realtime_include_language_detection: bool = False
+    # Zero-retention mode: when False, ElevenLabs does not store request audio
+    # or transcripts (history/abuse logging off). Applied to both realtime
+    # (query param) and batch (form field). ``True`` keeps the server default.
+    enable_logging: bool = True
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
     max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
@@ -195,6 +201,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
         }
         if self._config.language:
             params["language_code"] = self._config.language
+        if self._config.realtime_include_language_detection:
+            params["include_language_detection"] = "true"
+        # Zero-retention is opt-in; only send the param when disabling logging
+        # so a default config keeps the server default (logging on).
+        if not self._config.enable_logging:
+            params["enable_logging"] = "false"
         # Built-in VAD tuning is only meaningful under the "vad" commit
         # strategy; omit any unset param so the server default applies.
         if self._config.realtime_commit_strategy == "vad":
@@ -524,6 +536,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
         data["model"] = self._resolved_model()
         if self._config.language:
             data["language"] = self._config.language
+        # Zero-retention mode: opt-in, only sent when disabled so the default
+        # request keeps the server default (logging on).
+        if not self._config.enable_logging:
+            data["enable_logging"] = "false"
 
         client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
         owns_client = self._config.http_client is None
