@@ -36,6 +36,7 @@ from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id
 # never dominates the issues scan; clipping/silence defects show up at the
 # edges as readily as the middle and the stride keeps the sample budget low.
 _BYTE_CAP = 64 * 1024
+AUDIO_ANALYSIS_BYTE_CAP = _BYTE_CAP
 
 # Sample magnitude (int16) at/above which a sample is "clipped".  Full scale
 # is 32767; 32760 leaves a small guard band for near-max codec noise.
@@ -44,6 +45,57 @@ _CLIP_LEVEL = 32760
 # Encodings we treat as raw signed 16-bit little-endian PCM.  ``None`` and the
 # empty string mean "unspecified", which is the common in-tree default.
 _PCM16_ENCODINGS = frozenset({"", "pcm", "pcm16", "pcm_s16le", "linear16"})
+_MAX_ARTIFACT_REF_LEN = 128
+# Per-partition cap on distinct artifact refs resolved during one issues scan.
+# Bot-output and caller-input audio are budgeted separately (see
+# ``AudioSampleCache``) so a flood of one side's artifacts cannot exhaust the
+# budget the other side needs.  The scan stays bounded at this many refs per
+# partition, i.e. a small constant number of partitions overall.
+_MAX_ANALYZED_REFS = 512
+
+
+def _valid_artifact_ref(ref: str) -> bool:
+    """Return True when *ref* is small and cannot escape ref-based stores."""
+    return 0 < len(ref) <= _MAX_ARTIFACT_REF_LEN and "/" not in ref and "\\" not in ref
+
+
+class AudioSampleCache:
+    """Per-issue-scan cache for bounded decoded PCM samples.
+
+    The cache ensures repeated journal records that point at the same artifact
+    are resolved and decoded at most once during a scan.  It also limits the
+    number of distinct refs analyzed *per partition* so attacker-influenced
+    journals cannot force unbounded resolver calls.
+
+    Refs are budgeted per ``partition`` (e.g. ``"bot"`` output vs ``"caller"``
+    input) so the clipping pass cannot spend the whole budget on bot-output
+    artifacts and starve the later caller-input silence pass.  Decoded samples
+    are still shared across partitions by ref, so a caller-input artifact
+    decoded once during clipping is reused for free by the silence scan.
+    """
+
+    def __init__(self, resolver: Callable[[str], bytes | None], *, stride: int) -> None:
+        self._resolver = resolver
+        self._stride = stride
+        self._samples: dict[str, array[int] | None] = {}
+        self._partition_counts: dict[str, int] = {}
+
+    def resolve(self, ref: str, *, partition: str) -> array[int] | None:
+        if not _valid_artifact_ref(ref):
+            return None
+        if ref in self._samples:
+            return self._samples[ref]
+        if self._partition_counts.get(partition, 0) >= _MAX_ANALYZED_REFS:
+            return None
+        self._partition_counts[partition] = self._partition_counts.get(partition, 0) + 1
+        blob = self._resolver(ref)
+        if not blob:
+            self._samples[ref] = None
+            return None
+        samples = _iter_int16(blob, stride=self._stride)
+        resolved = samples if samples else None
+        self._samples[ref] = resolved
+        return resolved
 
 
 def _iter_int16(blob: bytes | bytearray, *, stride: int) -> array[int]:
@@ -141,17 +193,25 @@ def _resolve_samples(
     resolver: Callable[[str], bytes | None],
     *,
     stride: int,
+    partition: str,
+    sample_cache: AudioSampleCache | None = None,
 ) -> array[int] | None:
     """Resolve *ref_key* on *record* to decoded PCM16 samples, or ``None``.
 
     Returns ``None`` (skip) when the record is not PCM16 mono, the ref is
     missing, the artifact cannot be resolved, or it decodes to no samples.
+    ``partition`` selects the cache's per-side ref budget (e.g. ``"bot"`` vs
+    ``"caller"``) so one side's artifacts cannot starve the other's.
     """
     data = _record_data(record)
     if not _is_pcm16_mono(data):
         return None
     ref = record.get(ref_key)
     if not isinstance(ref, str) or not ref:
+        return None
+    if sample_cache is not None:
+        return sample_cache.resolve(ref, partition=partition)
+    if not _valid_artifact_ref(ref):
         return None
     blob = resolver(ref)
     if not blob:
@@ -166,6 +226,7 @@ def collect_clipping(
     *,
     stride: int,
     clip_consecutive: int,
+    sample_cache: AudioSampleCache | None = None,
 ) -> list[tuple[str, str | None, int | None]]:
     """Find clipping in bot (``tts_frame``) and caller (``stt`` input) audio.
 
@@ -181,7 +242,9 @@ def collect_clipping(
             side, ref_key = "caller", "input_ref"
         else:
             continue
-        samples = _resolve_samples(record, ref_key, resolver, stride=stride)
+        samples = _resolve_samples(
+            record, ref_key, resolver, stride=stride, partition=side, sample_cache=sample_cache
+        )
         if samples is None:
             continue
         run = detect_clipping(samples, max_run=clip_consecutive)
@@ -199,6 +262,7 @@ def collect_caller_silence(
     *,
     stride: int,
     silence_rms: float,
+    sample_cache: AudioSampleCache | None = None,
 ) -> dict[str, float]:
     """Aggregate caller-input RMS per turn; flag turns below *silence_rms*.
 
@@ -216,7 +280,14 @@ def collect_caller_silence(
         turn_id = safe_turn_id(record.get("turn_id"))
         if turn_id is None:
             continue
-        samples = _resolve_samples(record, "input_ref", resolver, stride=stride)
+        samples = _resolve_samples(
+            record,
+            "input_ref",
+            resolver,
+            stride=stride,
+            partition="caller",
+            sample_cache=sample_cache,
+        )
         if samples is None:
             continue
         seen_turns.add(turn_id)
@@ -278,6 +349,8 @@ def detect_dead_air(
 
 
 __all__ = [
+    "AUDIO_ANALYSIS_BYTE_CAP",
+    "AudioSampleCache",
     "collect_caller_silence",
     "collect_clipping",
     "compute_rms",
