@@ -348,6 +348,64 @@ async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monkeypatch):
+    # Race: commit_segment() then more audio is sent, then the *prior*
+    # segment's committed_transcript arrives. The late ack must NOT clear the
+    # newer audio's pending state, so end_stream still commits it.
+    monkeypatch.setattr(elevenlabs_provider, "_FINAL_TRANSCRIPT_TIMEOUT_S", 0.05)
+
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime", ws_connect=mock_connect)
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt.send_audio(chunk)  # segment 1 audio
+    assert await stt.commit_segment() is True  # manual commit for segment 1
+    await stt.send_audio(chunk)  # segment 2 audio (after the commit)
+    assert stt._audio_pending_commit is True
+
+    # The late committed_transcript for segment 1 arrives now.
+    stt._handle_json_message(json.loads(_el_transcript("segment one", is_final=True)))
+
+    # Segment 2 audio is still uncommitted — pending must survive.
+    assert stt._audio_pending_commit is True
+
+    await asyncio.wait_for(stt.end_stream(), timeout=2.0)
+
+    # end_stream must have issued a commit to flush segment 2 (commit:true frame
+    # beyond the one commit_segment() already sent).
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert len(commit_frames) == 2
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_partial_after_vad_commit_rearms_pending():
+    # VAD auto-commit clears pending; if speech resumes (a new partial) the
+    # pending flag must re-arm so the resumed audio is committed at end-of-turn.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+
+    stt._audio_pending_commit = True
+    # Unsolicited VAD commit (no manual commit in flight) clears pending.
+    stt._handle_json_message(json.loads(_el_transcript("first", is_final=True)))
+    assert stt._audio_pending_commit is False
+
+    # Speech resumes: a partial re-arms pending.
+    stt._handle_json_message(json.loads(_el_transcript("second...", is_final=False)))
+    assert stt._audio_pending_commit is True
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_with_confidence():
     messages = [_el_transcript("test", is_final=True, confidence=0.92)]
     stt, _, _ = _make_el_stt_realtime(messages)

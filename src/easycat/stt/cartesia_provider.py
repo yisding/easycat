@@ -32,10 +32,12 @@ class CartesiaSTTConfig:
     """
 
     api_key: str = ""
-    # ``ink-2`` is the latest model and the default — lowest WER and best
-    # built-in turn detection.  Use ``ink-whisper`` for the prior-gen,
-    # volume-gated endpointing behavior.
-    model: str = "ink-2"
+    # Model is resolved lazily (see ``resolved_model``) when left as ``None``:
+    # ``ink-2`` (latest, lowest WER, built-in turn detection) for English,
+    # falling back to the multilingual ``ink-whisper`` for non-English —
+    # because ink-2 is currently English-only and would otherwise reject a
+    # ``language != "en"`` config. Pin ``model`` explicitly to override.
+    model: str | None = None
     language: str = "en"
     encoding: str = "pcm_s16le"
     sample_rate: int = 16000
@@ -57,13 +59,25 @@ class CartesiaSTTConfig:
     event_bus: Any = field(default=None, repr=False)
 
     @property
+    def resolved_model(self) -> str:
+        """The model actually used, resolving the language-aware default.
+
+        ``ink-2`` is English-only, so when ``model`` is left unset it is
+        chosen for English and ``ink-whisper`` (multilingual) for any other
+        language. An explicitly set ``model`` is always honored as-is.
+        """
+        if self.model is not None:
+            return self.model
+        return "ink-2" if self.language.lower().startswith("en") else "ink-whisper"
+
+    @property
     def uses_volume_gate(self) -> bool:
         """True when the model endpoints via the volume-gate params.
 
         ``ink-2`` uses native semantic turn detection and rejects the
         volume-gate query params, so they must be omitted for it.
         """
-        return self.model in _VOLUME_GATE_MODELS
+        return self.resolved_model in _VOLUME_GATE_MODELS
 
 
 class CartesiaSTT(WebSocketSTTBase):
@@ -156,7 +170,7 @@ class CartesiaSTT(WebSocketSTTBase):
 
     def _build_url(self) -> str:
         params = {
-            "model": self._config.model,
+            "model": self._config.resolved_model,
             "language": self._config.language,
             "encoding": self._config.encoding,
             "sample_rate": str(self._config.sample_rate),
@@ -173,7 +187,7 @@ class CartesiaSTT(WebSocketSTTBase):
     def version_info(self) -> dict[str, str]:
         return {
             "provider": "cartesia",
-            "model": self._config.model,
+            "model": self._config.resolved_model,
             "api_version": self._config.cartesia_version,
             "sdk_version": get_package_version("websockets"),
         }

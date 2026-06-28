@@ -332,8 +332,27 @@ def test_cartesia_build_url_omits_volume_gate_params_for_ink2():
 
 def test_cartesia_default_model_is_ink2():
     config = CartesiaSTTConfig(api_key="k")
-    assert config.model == "ink-2"
+    assert config.resolved_model == "ink-2"
     assert config.uses_volume_gate is False
+
+
+def test_cartesia_default_falls_back_to_ink_whisper_for_non_english():
+    # ink-2 is English-only; a non-English config with no explicit model must
+    # resolve to the multilingual ink-whisper (and use its volume-gate params).
+    config = CartesiaSTTConfig(api_key="k", language="fr")
+    assert config.resolved_model == "ink-whisper"
+    assert config.uses_volume_gate is True
+
+    url = CartesiaSTT(config)._build_url()
+    assert "model=ink-whisper" in url
+    assert "language=fr" in url
+    assert "min_volume=" in url
+
+
+def test_cartesia_explicit_ink2_honored_for_non_english():
+    # An explicit model is always honored, even for non-English.
+    config = CartesiaSTTConfig(api_key="k", model="ink-2", language="fr")
+    assert config.resolved_model == "ink-2"
 
 
 async def test_cartesia_ignores_turn_lifecycle_events():

@@ -134,6 +134,18 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # Realtime mode state
         self._final_received: asyncio.Event | None = None
         self._audio_pending_commit: bool = False
+        # Monotonic count of realtime audio chunks streamed this session, and
+        # the count already acknowledged committed. A committed_transcript can
+        # arrive *after* newer audio has been streamed (manual commit_segment()
+        # followed by more send_audio(), or VAD auto-commit while speech
+        # resumes), so the pending flag is cleared only when the commit
+        # actually covers the latest audio — never unconditionally.
+        self._audio_epoch: int = 0
+        self._committed_through_epoch: int = 0
+        # Manual commits (commit_segment / end-of-turn) we've sent and are
+        # awaiting an ack for. Distinguishes a manual-commit ack from an
+        # unsolicited server VAD commit in the committed_transcript handler.
+        self._manual_commit_inflight: int = 0
         # Latest partial transcript text, promoted to a FINAL if the
         # committed transcript stalls past the timeout.
         self._partial_text: str = ""
@@ -243,6 +255,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._audio_pending_commit = False
         self._partial_text = ""
         self._dropping_pending_final = False
+        self._audio_epoch = 0
+        self._committed_through_epoch = 0
+        self._manual_commit_inflight = 0
         await self._connect_websocket(
             url=self._build_realtime_ws_url(),
             headers=headers,
@@ -263,6 +278,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         to match.
         """
         self._audio_pending_commit = False
+        # Fresh socket: nothing is buffered server-side and any manual commit
+        # we were awaiting will never be acked, so treat everything sent so far
+        # as accounted for.
+        self._committed_through_epoch = self._audio_epoch
+        self._manual_commit_inflight = 0
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
@@ -283,6 +303,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
             await self._ws.send(payload)
             self._audio_pending_commit = True
+            self._audio_epoch += 1
 
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
@@ -332,6 +353,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return False
 
         self._audio_pending_commit = False
+        # This commit covers everything streamed so far; its ack is the next
+        # committed_transcript we receive while a manual commit is in flight.
+        self._committed_through_epoch = self._audio_epoch
+        self._manual_commit_inflight += 1
         if wait_for_final:
             try:
                 await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
@@ -373,6 +398,12 @@ class ElevenLabsSTT(WebSocketSTTBase):
             if not text:
                 return
             self._partial_text = text
+            # A partial means the server is transcribing audio it has not yet
+            # committed, so there is genuinely uncommitted audio. Re-arm the
+            # pending flag — this recovers the case where an earlier (stale)
+            # committed_transcript optimistically cleared it while speech had
+            # already resumed.
+            self._audio_pending_commit = True
             self._emit_event(
                 STTEvent(
                     type=STTEventType.PARTIAL,
@@ -384,13 +415,27 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return
 
         if msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
-            # A committed transcript means the server flushed everything sent
-            # so far — whether we asked for it (manual commit) or its built-in
-            # VAD fired (commit_strategy="vad"). Clear the pending-commit flag
-            # so a later ``end_stream`` doesn't issue a redundant commit and
-            # block for the full final-transcript timeout waiting on a final
-            # that already arrived.
-            self._audio_pending_commit = False
+            # Clear the pending-commit flag only when this committed transcript
+            # actually covers the latest audio we've streamed. A committed
+            # transcript can arrive *after* newer audio was sent (manual
+            # commit_segment() then more send_audio(), or a VAD auto-commit
+            # while speech resumed); clearing unconditionally would make
+            # _end_realtime() skip the final commit for that newer audio and
+            # drop the trailing segment.
+            if self._manual_commit_inflight > 0:
+                # Ack of a manual commit we sent. Clear only if no audio was
+                # streamed after that commit was requested; otherwise the newer
+                # audio is still uncommitted and must be flushed at end-of-turn.
+                self._manual_commit_inflight -= 1
+                if self._audio_epoch <= self._committed_through_epoch:
+                    self._audio_pending_commit = False
+            else:
+                # Unsolicited server VAD commit: assume it covers everything
+                # sent so far so a redundant end-of-turn commit doesn't stall.
+                # If speech had already resumed, a following partial_transcript
+                # re-arms the pending flag.
+                self._committed_through_epoch = self._audio_epoch
+                self._audio_pending_commit = False
             if self._dropping_pending_final:
                 # A previous ``_send_commit`` already gave up on this
                 # committed transcript and promoted the accumulated partial
