@@ -618,6 +618,22 @@ def test_search_records_invalid_regex_raises():
         _search_records(_search_sample_records(), query="[", use_regex=True)
 
 
+def test_search_records_rejects_catastrophic_regex():
+    from easycat.debugger.server import _search_records
+
+    records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _search_records(records, query="(a+)+$", use_regex=True)
+
+
+def test_search_records_rejects_quantified_alternation_regex():
+    from easycat.debugger.server import _search_records
+
+    records = [{"sequence": 1, "name": "a" * 32 + "!", "data": {}}]
+    with pytest.raises(ValueError, match="unsafe regex"):
+        _search_records(records, query="(a|aa)+$", use_regex=True)
+
+
 def test_search_records_rejects_overlong_query():
     from easycat.debugger.server import _SEARCH_MAX_QUERY_LEN, _search_records
 

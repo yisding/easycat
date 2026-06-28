@@ -45,6 +45,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from ipaddress import ip_address
 from pathlib import Path
+from re import _parser as re_parser
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -119,6 +120,12 @@ _SEARCH_SCAN_LIMIT = 50000
 # boundary), but bounding the length is cheap defense-in-depth that keeps a
 # pathological user-supplied regex from compiling into a huge automaton.
 _SEARCH_MAX_QUERY_LEN = 500
+
+# Regex searches are intentionally a developer convenience, not an arbitrary
+# pattern execution surface. Reject constructs that commonly trigger
+# catastrophic backtracking in Python's backtracking ``re`` engine before the
+# pattern is run against journal-controlled text.
+_UNSAFE_REGEX_MESSAGE = "unsafe regex"
 
 # Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
 # batch.  A burst can advance the sequence by thousands in one poll; capping
@@ -646,6 +653,59 @@ def _filter_and_paginate(
     return full, total
 
 
+def _regex_tree_has_unsafe_backtracking(
+    tokens: Any, *, inside_repeat: bool = False, repeated_token: bool = False
+) -> bool:
+    """Return true when parsed regex tokens can cause exponential backtracking.
+
+    The journal search surface only needs small grep-style patterns. Nested
+    repeats, quantified alternations, backreferences, and assertions can all
+    make Python's ``re`` engine spend unbounded CPU on a single haystack, so
+    reject them instead of trying to sandbox individual ``search()`` calls.
+    """
+    for op, arg in tokens:
+        op_name = str(op)
+        if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
+            return True
+        if op_name == "BRANCH":
+            _none, branches = arg
+            if repeated_token:
+                return True
+            if any(
+                _regex_tree_has_unsafe_backtracking(branch, inside_repeat=inside_repeat)
+                for branch in branches
+            ):
+                return True
+            continue
+        if op_name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
+            _min_repeat, _max_repeat, child = arg
+            if inside_repeat:
+                return True
+            if _regex_tree_has_unsafe_backtracking(child, inside_repeat=True, repeated_token=True):
+                return True
+            continue
+        if op_name == "SUBPATTERN":
+            child = arg[-1]
+            if _regex_tree_has_unsafe_backtracking(
+                child, inside_repeat=inside_repeat, repeated_token=repeated_token
+            ):
+                return True
+    return False
+
+
+def _compile_search_regex(query: str) -> re.Pattern[str]:
+    """Compile a bounded, grep-style regex for journal search."""
+    try:
+        parsed = re_parser.parse(query, 0)
+        if _regex_tree_has_unsafe_backtracking(parsed.data):
+            raise ValueError(_UNSAFE_REGEX_MESSAGE)
+        return re.compile(query, re.IGNORECASE)
+    except ValueError:
+        raise
+    except re.error as exc:
+        raise ValueError("invalid regex") from exc
+
+
 def _record_searchable_text(record: dict[str, Any]) -> str:
     """Build the haystack a full-text query is matched against.
 
@@ -736,10 +796,7 @@ def _search_records(
         raise ValueError("search query too long")
     needle: Any
     if use_regex:
-        try:
-            needle = re.compile(query, re.IGNORECASE)
-        except re.error as exc:
-            raise ValueError("invalid regex") from exc
+        needle = _compile_search_regex(query)
     else:
         needle = query.lower()
         if not needle:
@@ -1486,7 +1543,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                     page = page[:limit]
         except ValueError as exc:
             logger.warning("Invalid records query: %s", exc)
-            text = "invalid regex" if str(exc) == "invalid regex" else "invalid query parameters"
+            if str(exc) in {"invalid regex", _UNSAFE_REGEX_MESSAGE}:
+                text = str(exc)
+            else:
+                text = "invalid query parameters"
             return web.Response(status=400, text=text)
         return web.json_response(
             {
