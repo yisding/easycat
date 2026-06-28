@@ -243,12 +243,13 @@ def test_browser_allows_registered_extension_stt_config(
         object.__setattr__(_CATALOG, "_discovered", discovered)
 
 
-def test_announce_browser_url_encodes_token(
+def test_announce_browser_url_omits_token_but_keeps_usable_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The announced browser URL must URL-encode the auth token so query-special
-    characters survive into the bundled client's ``?token=`` read (matching the
-    CLI ``serve`` path); the raw token would otherwise parse as a different one."""
+    """A token-protected browser serve must NOT print the token value, but MUST
+    tell the operator to append it as ``?token=``. The bundled client reads its
+    bearer token solely from that query, so an origin-only hint would open the
+    page unauthenticated (→ 401 from ``/config`` and ``/offer``)."""
     from easycat.cli import _output
     from easycat.transports.webrtc import WebRTCTransportConfig
 
@@ -261,10 +262,31 @@ def test_announce_browser_url_encodes_token(
     VoiceApp(agent="a")._announce_browser_url(config)
 
     assert printed, "expected an announced URL"
-    announced = printed[-1]
-    assert "token=a%2Bb%26c%23d+e" in announced
-    # The raw token must not leak through unencoded.
-    assert "a+b&c#d e" not in announced
+    output = "\n".join(printed)
+    # (i) The token value must never leak — neither raw nor URL-encoded.
+    assert "a+b&c#d e" not in output
+    assert "a%2Bb%26c%23d+e" not in output
+    # (ii) The append-token instruction must be present and usable.
+    assert "?token=" in output
+    assert "serve token" in output
+
+
+def test_announce_browser_url_without_token_prints_plain_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(iii) With no token configured, announce the plain origin URL as before."""
+    from easycat.cli import _output
+    from easycat.transports.webrtc import WebRTCTransportConfig
+
+    printed: list[str] = []
+    monkeypatch.setattr(
+        _output.stdout_console, "print", lambda msg, *a, **k: printed.append(str(msg))
+    )
+
+    config = WebRTCTransportConfig(host="127.0.0.1", port=8080)
+    VoiceApp(agent="a")._announce_browser_url(config)
+
+    assert printed == ["Open http://localhost:8080"]
 
 
 def test_browser_uses_supplied_config_factory(
@@ -542,7 +564,9 @@ def test_wrong_server_token_env_var_does_not_satisfy_guard(
 
 async def test_serve_browser_accepts_announce_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
     """``serve('browser', announce=...)`` must be accepted symmetrically with
-    ``run('browser', announce=...)`` (it previously raised "unknown kwarg")."""
+    ``run('browser', announce=...)`` (it previously raised "unknown kwarg") and,
+    like the sync path, VoiceApp must own the announcement line itself instead of
+    delegating a misleading origin-only message to the helper."""
     calls: dict[str, Any] = {}
     announced: list[bool] = []
 
@@ -561,6 +585,40 @@ async def test_serve_browser_accepts_announce_kwarg(monkeypatch: pytest.MonkeyPa
 
     await VoiceApp(agent="a").serve("browser", announce=True)
     assert announced == [True]
+    assert calls["kwargs"]["announce"] is False
+
+
+async def test_serve_browser_announces_token_safe_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async browser ``serve()`` with a serve token must announce a usable hint:
+    the token value never appears, but the operator is told to append it as
+    ``?token=`` so following the hint does not open the page unauthenticated."""
+    from easycat.cli import _output
+
+    printed: list[str] = []
+    monkeypatch.setattr(
+        _output.stdout_console, "print", lambda msg, *a, **k: printed.append(str(msg))
+    )
+
+    calls: dict[str, Any] = {}
+
+    async def _fake_serve(factory: Any, config: Any = None, **kwargs: Any) -> None:
+        calls["config"] = config
+        calls["kwargs"] = kwargs
+
+    monkeypatch.setattr(webrtc_module, "serve_webrtc_config_sessions", _fake_serve)
+
+    await VoiceApp(agent="a", serve_token="s3+cr et&x").serve("browser")
+
+    output = "\n".join(printed)
+    assert calls["config"].auth_token == "s3+cr et&x"
+    # VoiceApp owns the announcement; the helper's origin-only line stays off.
+    assert calls["kwargs"]["announce"] is False
+    # (i) the token value is never printed; (ii) the append hint is present.
+    assert "s3+cr et&x" not in output
+    assert "?token=" in output
+    assert "serve token" in output
 
 
 # ── Fail-loud on a misspelled server kwarg ───────────────────────────
