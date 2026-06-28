@@ -530,3 +530,41 @@ async def test_api_audio_reference_track_404_without_reference_frames(tmp_path):
         assert resp.status == 404
         resp = await client.get(f"/api/audio/waveform/{turn_id}?track=reference")
         assert resp.status == 404
+
+
+def test_aec_diagnostics_truncates_oversized_tracks(monkeypatch):
+    from easycat.debugger import server as debugger_server
+
+    cap = 640  # one 20ms frame at 16 kHz, int16 mono
+    monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)
+    records = []
+    blobs = {}
+    for idx, (name, ref_key, ref_value) in enumerate(
+        [
+            ("stage_start", "input_ref", "mic"),
+            (AEC_REFERENCE_FRAME_NAME, "output_ref", "ref"),
+            ("stage_complete", "output_ref", "post"),
+        ],
+        start=1,
+    ):
+        record = {
+            "sequence": idx,
+            "name": name,
+            "turn_id": "t1",
+            ref_key: ref_value,
+            "data": {"stage": "audio", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+            "timing": {"mono_ns": idx * 20_000_000},
+        }
+        records.append(record)
+        blobs[ref_value] = _tone_pcm(4000, 640)  # two frames, twice the cap
+    source = _DictSource(records, blobs)
+
+    out = debugger_server._aec_diagnostics_for_turn(source, "t1")
+
+    assert out["diagnostics_truncated"] is True
+    assert out["max_track_bytes"] == cap
+    for track in ("mic_in", "reference", "post_aec"):
+        assert out["tracks"][track]["truncated"] is True
+        assert out["tracks"][track]["byte_count"] == 1280
+        assert out["tracks"][track]["analyzed_byte_count"] == cap
+    assert out["erle"]["frames"] == [pytest.approx(0.0, abs=0.5)]
