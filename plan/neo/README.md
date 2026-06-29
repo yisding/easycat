@@ -2,6 +2,19 @@
 
 Status: active next-major planning packet.
 
+> **Stale (runtime budgets removed):** the runtime cost- and latency-*budget*
+> implementation this packet builds on — `session/_latency_budget.py`
+> (`LatencyBudgetMonitor`), `session/_cost_budget.py` (`CostBudgetEnforcer`),
+> `runtime/costs.py` / `cost_budget_status`, `max_session_cost_usd`, the
+> debugger `/api/cost` rollup + Cost tab, and the `_budget_matches_stage`
+> stage-record tagging — was removed as undercooked and duplicative with the
+> journal. Latency is now *reported* (per-stage `elapsed_ms` plus
+> `turn_total_latency_ms` / `text_turn_latency_ms` journal metrics) but not
+> gated; cost monitoring is not currently a library direction. Anything below
+> that cites those symbols as *existing* is historical, and the Phase-3
+> budgets workstream is now net-new and needs re-scoping (especially whether
+> cost budgets return at all) before implementation.
+
 This folder collects the implementation assets for the proposed next-major
 EasyCat product surface. It is intentionally separate from the historical
 roadmap/workstream plans so maintainers can evaluate, slice, and execute the

@@ -416,6 +416,34 @@ async def test_api_audio_concat_mic_skips_format_mismatch_without_raising(tmp_pa
         assert len(body) == 44 + 320
 
 
+async def test_api_audio_concat_mic_unsupported_width_returns_415(tmp_path):
+    """A real 8-bit (mu-law telephony) mic capture must surface an explicit 415.
+
+    The unsupported ``sample_width == 1`` is preserved through format collection
+    so the route reports an unsupported format, rather than silently rewriting
+    it to the 16-bit default — which would drop every blob and 404 instead.
+    """
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x55" * 160})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/concat/t1?track=mic")
+        assert resp.status == 415
+        payload = await resp.json()
+        assert payload["unsupported"] is True
+        assert payload["format"]["sample_width"] == 1
+
+
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
@@ -469,6 +497,28 @@ async def test_api_audio_waveform_mic_track(tmp_path):
         assert resp.status == 200
         body = await resp.read()
         assert body[:8] == _PNG_SIGNATURE
+
+
+async def test_api_audio_waveform_mic_unsupported_width_returns_415(tmp_path):
+    """The waveform route must also 415 on an unsupported 8-bit telephony capture."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x55" * 160})
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/audio/waveform/t1?track=mic")
+        assert resp.status == 415
+        payload = await resp.json()
+        assert payload["unsupported"] is True
 
 
 async def test_api_audio_waveform_rejects_unknown_turn(tmp_path):
@@ -564,47 +614,6 @@ def test_collect_concat_pcm_joins_frames():
     # Unknown turn → empty pcm, empty fmt.
     empty_pcm, empty_fmt = _collect_concat_pcm(source, "nope", track="tts")
     assert empty_pcm == b"" and empty_fmt == {}
-
-
-async def test_api_cost_returns_zero_when_no_cost_records(tmp_path):
-    """Cost panel must degrade gracefully — a bundle with no CostRecord
-    events still returns a well-formed totals dict."""
-    bundle_path = await _build_voice_bundle(tmp_path)
-    source = _bundle_source(bundle_path)
-    app = _make_app(source)
-    from aiohttp.test_utils import TestClient, TestServer
-
-    async with TestClient(TestServer(app)) as client:
-        body = await (await client.get("/api/cost")).json()
-        assert "totals" in body and "per_turn" in body
-        for k in ("usd", "stt_seconds", "tts_chars", "llm_tokens"):
-            assert body["totals"][k] == 0
-        assert body["budget"]["configured"] is False
-
-
-async def test_api_cost_reports_budget_from_manifest():
-    source = DebuggerSource(
-        label="budget-source",
-        _records_fn=lambda: [
-            {
-                "sequence": 1,
-                "name": "cost",
-                "turn_id": "turn-1",
-                "data": {"usd": 0.85, "stt_seconds": 2.5},
-            }
-        ],
-        _artifact_fn=lambda _ref: None,
-        _manifest_fn=lambda: {"config_snapshot": {"max_session_cost_usd": "1.0"}},
-    )
-    app = _make_app(source)
-    from aiohttp.test_utils import TestClient, TestServer
-
-    async with TestClient(TestServer(app)) as client:
-        body = await (await client.get("/api/cost")).json()
-        assert body["totals"]["usd"] == pytest.approx(0.85)
-        assert body["per_turn"]["turn-1"]["stt_seconds"] == pytest.approx(2.5)
-        assert body["budget"]["status"] == "warning"
-        assert body["budget"]["usage_fraction"] == pytest.approx(0.85)
 
 
 async def test_api_health_returns_ok(tmp_path):
@@ -730,6 +739,18 @@ def test_coerce_frames_to_format_lenient_resamples_with_audioop():
     assert len(blobs[1]) > len(frames[1][1])
 
 
+def test_coerce_frames_to_format_lenient_drops_unsafe_resample_ratio():
+    """Mic coercion must not hand attacker-controlled extreme ratios to audioop."""
+    fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
+        (2, b"\x02" * 4, {"sample_rate": 1, "channels": 1, "sample_width": 2}),
+    ]
+    blobs, dropped = _coerce_frames_to_format(frames, fmt, strict=False)
+    assert blobs == [frames[0][1]]
+    assert dropped == 1
+
+
 def test_coerce_frames_to_format_lenient_skips_when_no_helper(monkeypatch):
     """When no audio helper is available, a format mismatch is skipped, not raised."""
     monkeypatch.setattr(_server, "_audioop", None)
@@ -789,6 +810,60 @@ def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     mono = _server._np_tomono(data, 4)
 
     assert struct.unpack("<i", mono) == (peak,)
+
+
+def test_collect_audio_frames_mic_falls_back_from_unsafe_target_format():
+    """The target WAV format is bounded before using untrusted mic metadata."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 10_000_000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "b",
+            "data": {"stage": "stt", "sample_rate": 1, "channels": 1, "sample_width": 2},
+        },
+    ]
+    source = DebuggerSource(
+        label="mic-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: {"a": b"\x00\x00", "b": b"\x01" * 4}.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    frames, fmt = _collect_audio_frames(source, "t1", track="mic")
+    assert frames == []
+    assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+
+
+def test_collect_audio_frames_mic_preserves_unsupported_width():
+    """An 8-bit telephony capture keeps its width (rate stays bounded) so the
+    route can return 415 instead of dropping every blob and 404'ing."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 8000, "channels": 1, "sample_width": 1},
+        },
+    ]
+    source = DebuggerSource(
+        label="mic-source",
+        _records_fn=lambda: records,
+        _artifact_fn=lambda ref: {"a": b"\x55" * 160}.get(ref),
+        _manifest_fn=lambda: {},
+    )
+    frames, fmt = _collect_audio_frames(source, "t1", track="mic")
+    # The matching frame survives so the route reaches its unsupported-width
+    # branch; the width is preserved rather than rewritten to the 16-bit default.
+    assert frames == [b"\x55" * 160]
+    assert fmt == {"sample_rate": 8000, "channels": 1, "sample_width": 1}
 
 
 def test_collect_audio_frames_mic_selects_stt_stage_start():

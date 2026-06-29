@@ -25,14 +25,24 @@ def _locked_package_names() -> set[str]:
     return {package["name"] for package in lock["package"]}
 
 
+def _requirement(deps: list[str], name: str) -> str:
+    for dep in deps:
+        if Requirement(dep).name == name:
+            return dep
+    raise AssertionError(f"{name!r} not declared in {deps}")
+
+
 def test_funasr_vad_extra_uses_in_tree_runtime_dependencies() -> None:
     """FunASR VAD must not reintroduce the stale funasr-onnx dependency."""
-    deps = _pyproject()["project"]["optional-dependencies"]["funasr-vad"]
+    extras = _pyproject()["project"]["optional-dependencies"]
+    deps = extras["funasr-vad"]
     names = {Requirement(dep).name for dep in deps}
 
     assert "kaldi-native-fbank>=1.22.3" in deps
     assert "numpy>=1.24.0" in deps
-    assert "onnxruntime>=1.26.0" in deps
+    # Reuse the canonical in-tree onnxruntime constraint shared by the sibling
+    # ONNX VAD extras instead of pinning a divergent version.
+    assert _requirement(deps, "onnxruntime") == _requirement(extras["silero-vad"], "onnxruntime")
     for package_name in ("funasr-onnx", "modelscope", "jieba", "onnx"):
         assert package_name not in names
 

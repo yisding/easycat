@@ -347,6 +347,10 @@ def test_docs_command(cli: CliRunner) -> None:
     assert "Machine-readable routes, audiences, and command hints: easycat docs --json" in (
         result.stdout
     )
+    assert (
+        "Filtered machine-readable routes: easycat docs --audience learners --json"
+        in result.stdout
+    )
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
@@ -524,6 +528,18 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv sync --extra local --group dev",
         "uv run python docs/teaching/00-hello-audio/main.py",
     ]
+    assert commands["docs/testing-and-evals.md"] == [
+        "uv run pytest tests/debug/test_testing_helpers.py",
+        "uv run python docs/teaching/12-evals-and-latency/llm_judge.py "
+        "docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle",
+        "uv run easycat doctor --env-file .env",
+        "uv run easycat doctor --env-file .env --json",
+        "uv run easycat validate latency --smoke",
+        "uv run --env-file .env easycat validate latency --smoke",
+        "uv run easycat validate live --provider openai",
+        "uv run --env-file .env easycat validate live --provider openai --strict",
+        "uv run easycat validate report .easycat/validation/latest.json",
+    ]
     assert commands["docs/validation.md"] == [
         *_DOCS_ONBOARDING_GUARD_COMMANDS,
         *_DOCS_ONBOARDING_RAW_GUARD_COMMANDS,
@@ -638,6 +654,14 @@ def test_docs_command_filters_human_routes_by_audience(cli: CliRunner) -> None:
 
     assert result.exit_code == 0
     assert "Audience filter: operators" in result.stdout
+    assert (
+        "Filtered machine-readable routes: easycat docs --audience operators --json"
+        in result.stdout
+    )
+    assert (
+        "Filtered machine-readable routes: easycat docs --audience maintainers --json"
+        not in result.stdout
+    )
     assert "Available audiences: all readers, app builders, coding agents, contributors" in (
         normalized
     )
@@ -657,6 +681,10 @@ def test_docs_command_accepts_hyphenated_audience_filter(cli: CliRunner) -> None
 
     assert result.exit_code == 0
     assert "Audience filter: app-builders" in result.stdout
+    assert (
+        "Filtered machine-readable routes: easycat docs --audience app-builders --json"
+        in result.stdout
+    )
     assert "CLI and scaffolds" in result.stdout
     assert "Examples" in result.stdout
     assert "Teaching ladder" not in result.stdout

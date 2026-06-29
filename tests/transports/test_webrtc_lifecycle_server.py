@@ -214,6 +214,52 @@ class TestWebRTCIngressQueueOwnership:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_inbound_consume_ignores_pyav_plane_padding(self):
+        transport = WebRTCTransport()
+        target_format = transport._config.audio_format
+
+        class _StereoLayout:
+            channels = (object(), object())
+
+        class _PackedFormat:
+            is_planar = False
+            bytes = 2
+
+        class _PaddedDecodedFrame:
+            sample_rate = 48_000
+            samples = 960
+            layout = _StereoLayout()
+            format = _PackedFormat()
+
+            def __init__(self) -> None:
+                # 20 ms of valid packed stereo PCM at 48 kHz. The fake plane
+                # above mirrors PyAV's padded decoded aiortc buffers; the
+                # transport must use only these valid samples.
+                valid_pcm = bytes(960 * 2 * 2)
+                self.planes = [valid_pcm + (b"\xff" * (23_040 - len(valid_pcm)))]
+
+            def to_ndarray(self):  # pragma: no cover - must not be used
+                raise AssertionError("WebRTC inbound extraction must not require NumPy")
+
+        class _OneFrameTrack:
+            def __init__(self) -> None:
+                self._delivered = False
+
+            async def recv(self) -> object:
+                if self._delivered:
+                    raise StopAsyncIteration
+                self._delivered = True
+                return _PaddedDecodedFrame()
+
+        await transport._consume_audio(_OneFrameTrack())
+
+        chunks = [chunk async for chunk in transport.receive_audio()]
+        assert len(chunks) == 1
+        assert chunks[0].format == target_format
+        assert len(chunks[0].data) == int(target_format.bytes_per_second * 0.02)
+        assert chunks[0].duration_ms == 20
+
+    @pytest.mark.asyncio
     async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()
@@ -389,7 +435,7 @@ class TestWebRTCStatsArtifact:
         # M7: the client paths are templated through a ``?webrtc=`` base so the
         # SAME page serves both the flat helper and the namespaced VoiceServer.
         assert 'fetch(baseUrl + WEBRTC_BASE + "/stats"' in html
-        assert 'new URLSearchParams(location.search).get("webrtc")' in html
+        assert 'safeWebRTCBase(new URLSearchParams(location.search).get("webrtc") || "")' in html
         for label in (
             "before_speech",
             "client_speech_end",
@@ -466,6 +512,67 @@ class TestWebRTCTransportLifecycle(_UsesPytestTcpPortFactory):
             async with session.get(f"http://127.0.0.1:{port}/", allow_redirects=False) as resp:
                 assert resp.status == 302
                 assert resp.headers["Location"] == "/webrtc_client.html"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_root_redirect_preserves_sanitized_webrtc_base(self, tmp_path):
+        # The standalone transport serves FLAT routes; a clean same-origin
+        # ``?webrtc=/proxy`` (e.g. a reverse-proxy path prefix) must survive the
+        # redirect so the bundled client targets ``/proxy/offer``.
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = self._unused_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        async with aiohttp.ClientSession() as session:
+            url = f"http://127.0.0.1:{port}/?webrtc=/proxy/&token=sekrit"
+            async with session.get(url, allow_redirects=False) as resp:
+                assert resp.status == 302
+                assert resp.headers["Location"] == "/webrtc_client.html?token=sekrit&webrtc=/proxy"
+
+        await transport.disconnect()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "/../x",
+            "//evil.test",
+            "https://evil.test",
+            ".attacker.test",
+        ],
+    )
+    async def test_root_redirect_strips_untrusted_webrtc_base(self, tmp_path, raw):
+        # Untrusted / cross-origin / traversal ``?webrtc=`` values must be
+        # dropped server-side rather than echoed into the redirect location.
+        from urllib.parse import urlencode
+
+        import aiohttp
+
+        client = tmp_path / "webrtc_client.html"
+        client.write_text("<html></html>", encoding="utf-8")
+
+        port = self._unused_port()
+        config = WebRTCTransportConfig(host="127.0.0.1", port=port, static_dir=str(tmp_path))
+        transport = WebRTCTransport(config)
+        await transport.connect()
+
+        query = urlencode({"webrtc": raw, "token": "sekrit"})
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://127.0.0.1:{port}/?{query}", allow_redirects=False
+            ) as resp:
+                assert resp.status == 302
+                location = resp.headers["Location"]
+
+        assert "webrtc=" not in location
+        assert location == "/webrtc_client.html?token=sekrit"
 
         await transport.disconnect()
 

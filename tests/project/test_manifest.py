@@ -70,17 +70,19 @@ def test_redacted_dump_shows_reference_never_resolved_token() -> None:
     assert not contains_unredacted_sensitive_text(serialized)
 
 
-def test_redacted_dump_passes_ipv4_host_through_verbatim() -> None:
-    # F2: the bind host is a STRUCTURAL operator address, not PII. A dotted IPv4
-    # must survive ``to_redacted_dict`` verbatim — ``redact_value``'s phone-number
-    # policy would otherwise mangle it into ``[REDACTED_PHONE]``. The token
-    # reference must still be the safe ``bearer-env:NAME`` reference (never a
-    # resolved token).
+@pytest.mark.parametrize(
+    "host",
+    ["127.0.0.1", "0.0.0.0", "192.0.2.5", "fd00::1", "server.internal"],
+)
+def test_redacted_dump_redacts_bind_host(host: str) -> None:
+    # The bind host may expose private addresses or internal topology through
+    # the unauthenticated ``/manifest`` route. The token reference must still be
+    # the safe ``bearer-env:NAME`` reference (never a resolved token).
     manifest = parse_manifest(
         {
             "project": {"name": "demo"},
             "server": {
-                "host": "127.0.0.1",
+                "host": host,
                 "auth": "bearer-env:EASYCAT_SERVE_TOKEN",
                 "port": 8080,
             },
@@ -93,9 +95,8 @@ def test_redacted_dump_passes_ipv4_host_through_verbatim() -> None:
     dump = manifest.to_redacted_dict()
     serialized = json.dumps(dump)
 
-    # The IPv4 bind host survives verbatim (NOT mangled into a phone redaction).
-    assert dump["server"]["host"] == "127.0.0.1"
-    assert "[REDACTED_PHONE]" not in serialized
+    assert dump["server"]["host"] == "[REDACTED_HOST]"
+    assert host not in serialized
     # The secret-bearing field stays redacted: only the env reference, no token.
     assert dump["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
     assert _RESOLVED_TOKEN not in serialized
@@ -179,6 +180,61 @@ def test_to_easyconfig_browser_profile_uses_preset(monkeypatch: pytest.MonkeyPat
     config = manifest.to_easyconfig("default", resolve_agent=False)
     assert isinstance(config.transport, WebRTCTransportConfig)
     assert config.tts is not None  # forwarded + normalized by EasyConfig
+
+
+def test_to_easyconfig_twilio_profile_enforces_manifest_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.transports.twilio_media import TwilioTransportConfig, _twilio_stream_token_valid
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.setenv("TWILIO_STREAM_TOKEN_SECRET", "expected-stream-token")
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "phone": {
+                    "transport": "twilio",
+                    "token": "bearer-env:TWILIO_STREAM_TOKEN_SECRET",
+                }
+            }
+        }
+    )
+
+    config = manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert isinstance(config.transport, TwilioTransportConfig)
+    assert config.transport.stream_token_validator is not None
+    assert not _twilio_stream_token_valid({"customParameters": {}}, config.transport)
+    assert not _twilio_stream_token_valid(
+        {"customParameters": {"EasyCatStreamToken": "wrong-stream-token"}},
+        config.transport,
+    )
+    assert _twilio_stream_token_valid(
+        {"customParameters": {"EasyCatStreamToken": "expected-stream-token"}},
+        config.transport,
+    )
+
+
+def test_to_easyconfig_twilio_profile_token_unset_env_raises_e604(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    monkeypatch.delenv("TWILIO_STREAM_TOKEN_SECRET", raising=False)
+    manifest = parse_manifest(
+        {
+            "voice": {
+                "phone": {
+                    "transport": "twilio",
+                    "token": "bearer-env:TWILIO_STREAM_TOKEN_SECRET",
+                }
+            }
+        }
+    )
+
+    with pytest.raises(EasyCatError) as exc_info:
+        manifest.to_easyconfig("phone", resolve_agent=False)
+
+    assert exc_info.value.code == "EASYCAT_E604"
 
 
 def test_to_easyconfig_coerces_vad_shortcut_to_vad_config(

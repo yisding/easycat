@@ -99,10 +99,11 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   long as the clause is long enough to not sound clipped) to shave
   time-to-first-audio; every later payload keeps full-sentence granularity.
   That behavior is structural, not configurable delay.
-- **Latency budgets observe, they do not speed up** — `latency_budget=
-  LatencyBudget(stage="tts", max_ms=500)` tags over-budget records so slow
-  turns are findable; see [observability](observability.md) for the budget
-  and alerting story.
+- **Latency is reported, not gated** — every stage records its `elapsed_ms` to
+  the journal and each turn emits a `turn_total_latency_ms` (voice) /
+  `text_turn_latency_ms` (text) metric record, so slow turns are findable; see
+  [observability](observability.md). EasyCat does not slow down or reject turns
+  to hit a target. For regression gating in CI, use `easycat validate latency`.
 
 ## A worked triage
 

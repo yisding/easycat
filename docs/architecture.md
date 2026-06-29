@@ -15,8 +15,11 @@ agent needs route entries and command hints.
 
 ## Pipeline Flow
 
-Transport (audio in) → NoiseReducer → EchoCanceller → VAD → STT →
+Transport (audio in) → EchoCanceller → NoiseReducer → VAD → STT →
 [SmartTurn] → Agent → TTS → Transport (audio out).
+
+AEC runs on the raw mic signal *before* NoiseReducer because NR's nonlinear
+processing breaks AEC convergence.
 
 The `EchoCanceller` also consumes TTS output as reference audio (fed in by
 `session/_audio_router.py`) so it can subtract the bot's own playback from the
@@ -63,8 +66,8 @@ captured mic signal.
 - `session/_turn_runner.py` — Drives a single turn end-to-end (agent run →
   streaming → TTS scheduling), holding the logic that used to be inlined in
   `session/_session.py`.
-- `session/_audio_router.py` — Routes captured audio through noise reduction
-  / echo cancellation and feeds TTS output back as AEC reference audio.
+- `session/_audio_router.py` — Routes captured audio through echo cancellation
+  / noise reduction and feeds TTS output back as AEC reference audio.
 - `session/_tts_scheduler.py` — `TTSScheduler.prepare()` builds and
   normalizes TTS payload text before scheduling synthesis/playback.
 - `session/_stt_committer.py` — Commits finalized STT transcripts into the

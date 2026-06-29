@@ -67,6 +67,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qsl, urlencode
 
 from easycat.transports.webrtc import (
     _CORS_ALLOW_HEADERS,
@@ -74,6 +75,7 @@ from easycat.transports.webrtc import (
     WebRTCTransport,
     WebRTCTransportConfig,
     _is_loopback_host,
+    _sanitize_webrtc_base,
     _sanitize_webrtc_stats_snapshot,
 )
 
@@ -627,11 +629,24 @@ class WebRTCRoutes:
         if self._has_bundled_client:
             location = "/webrtc_client.html"
             query_string = getattr(request, "query_string", "")
-            params = [query_string] if query_string else []
-            if self._client_base:
-                params.append(f"webrtc={self._client_base}")
+            params: list[tuple[str, str]] = []
+            user_base = ""
+            for key, value in parse_qsl(query_string, keep_blank_values=True):
+                if key == "webrtc":
+                    if not user_base:
+                        user_base = value
+                    continue
+                params.append((key, value))
+            # A trusted mount base (e.g. ``/webrtc``) always replaces whatever
+            # the client supplied. In flat mode (``_client_base == ""``) there
+            # is no trusted base to substitute, so preserve a sanitized
+            # same-origin ``?webrtc=`` prefix (reverse-proxy path prefixes) and
+            # drop any untrusted/cross-origin value rather than echoing it.
+            base = self._client_base or _sanitize_webrtc_base(user_base)
+            if base:
+                params.append(("webrtc", base))
             if params:
-                location = f"{location}?{'&'.join(params)}"
+                location = f"{location}?{urlencode(params, doseq=True, safe='/')}"
             raise web.HTTPFound(location)
         return web.Response(
             content_type="application/json",

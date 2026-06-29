@@ -310,8 +310,13 @@ Commands:
 ```bash
 uv run pytest tests/debug/test_testing_helpers.py
 uv run python docs/teaching/12-evals-and-latency/llm_judge.py docs/teaching/12-evals-and-latency/bundles/turn_01_fast.bundle
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
 uv run easycat validate latency --smoke
+uv run --env-file .env easycat validate latency --smoke
 uv run easycat validate live --provider openai
+uv run --env-file .env easycat validate live --provider openai --strict
+uv run easycat validate report .easycat/validation/latest.json
 ```
 
 ## Events reference

@@ -42,6 +42,8 @@ class BoundedAudioQueue:
         name: str = "audio_queue",
         on_drop: Any = None,
     ) -> None:
+        if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
+            raise ValueError("max_size must be a positive integer")
         self._max_size = max_size
         self._policy = policy
         self._block_timeout = block_timeout

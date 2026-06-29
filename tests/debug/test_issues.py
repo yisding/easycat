@@ -55,6 +55,53 @@ def test_build_issues_flags_tool_failure_and_timeout_by_name():
     assert report["summary"]["error"] == 2
 
 
+def test_build_issues_ignores_non_string_record_names():
+    records = [
+        {"sequence": 1, "name": ["tool_call_failed"], "data": {}},
+        {"sequence": 2, "name": {"event": "provider_timeout"}, "data": {}},
+        {
+            "sequence": 3,
+            "name": ["bot_stopped_speaking"],
+            "turn_id": "t1",
+            "timing": {"wall_ns": 0},
+        },
+    ]
+
+    report = build_issues(records)
+
+    assert report == {
+        "issues": [],
+        "summary": {"error": 0, "warning": 0, "info": 0},
+        "total": 0,
+    }
+
+
+def test_build_issues_with_artifact_resolver_ignores_non_string_record_names():
+    records = [
+        {
+            "sequence": 1,
+            "name": ["stage_start"],
+            "turn_id": "t1",
+            "timing": {"wall_ns": 0},
+            "data": {"stage": "stt"},
+        },
+        {
+            "sequence": 2,
+            "name": {"event": "tts_frame"},
+            "turn_id": "t1",
+            "timing": {"wall_ns": 4_000_000_000},
+        },
+    ]
+
+    report = build_issues(records, artifact_resolver=lambda _ref: None)
+
+    assert report == {
+        "issues": [],
+        "summary": {"error": 0, "warning": 0, "info": 0},
+        "total": 0,
+    }
+
+
 def test_build_issues_flags_empty_stt_final_as_warning():
     records = [
         _rec(1, "stt_final", text="   "),

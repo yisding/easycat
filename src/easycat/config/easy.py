@@ -68,7 +68,6 @@ if TYPE_CHECKING:
     from easycat.telephony.ivr import AgentCallback, DTMFDelivery
     from easycat.telephony.retry import RetryStrategyConfig
     from easycat.telephony.session_actions import TwilioSessionActionConfig
-    from easycat.validation.latency import LatencyBudget
 
 logger = logging.getLogger("easycat.config")
 
@@ -127,27 +126,6 @@ def _require_non_negative(name: str, value: float) -> None:
         raise ValueError(f"{name} must be non-negative")
 
 
-def _normalize_latency_budgets(value: Any) -> tuple[LatencyBudget, ...]:
-    """Normalize ``latency_budget`` to a tuple without importing by default."""
-    if value is None or value == ():
-        return ()
-
-    from easycat.validation.latency import LatencyBudget
-
-    if isinstance(value, LatencyBudget):
-        return (value,)
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise ValueError("latency_budget must be a LatencyBudget or a sequence of LatencyBudget.")
-
-    budgets = tuple(value)
-    for budget in budgets:
-        if not isinstance(budget, LatencyBudget):
-            raise ValueError(
-                "latency_budget must be a LatencyBudget or a sequence of LatencyBudget."
-            )
-    return budgets
-
-
 def _validate_common(
     *,
     debug: str,
@@ -195,17 +173,32 @@ def _validate_common(
                 )
 
 
-def _stt_config_is_flux(stt: Any) -> bool:
-    """Whether ``stt`` is a Deepgram Flux config (provider-side endpointing).
+def _stt_uses_native_endpointing(stt: Any) -> bool:
+    """Whether ``stt`` does its own turn endpointing (provider-side VAD).
 
-    Mirrors ``_should_auto_turn_from_stt_final`` in the factory so the
-    smart-turn default and the auto-turn-from-STT-final decision stay
-    consistent: a Flux config derives turn boundaries from STT finals and
-    needs neither smart-turn nor the VAD that smart-turn pulls in.
+    Shared by the smart-turn default here and
+    ``_should_auto_turn_from_stt_final`` in the factory so both stay
+    consistent: such providers derive turn boundaries from their own
+    endpointing, so EasyCat should drive turns from STT finals and run
+    neither smart-turn nor the Silero VAD it pulls in (which would otherwise
+    double-endpoint and produce duplicate FINAL transcripts).
+
+    Covers:
+      - Deepgram **Flux** (native end-of-turn signal),
+      - Cartesia **ink-2** (native semantic turn detection), and
+      - ElevenLabs realtime with the built-in **VAD** commit strategy.
     """
+    from easycat.stt.cartesia_provider import CartesiaSTTConfig
     from easycat.stt.deepgram_provider import DeepgramSTTConfig
+    from easycat.stt.elevenlabs_provider import ElevenLabsSTTConfig
 
-    return isinstance(stt, DeepgramSTTConfig) and stt.is_flux
+    if isinstance(stt, DeepgramSTTConfig):
+        return stt.is_flux
+    if isinstance(stt, CartesiaSTTConfig):
+        return stt.resolved_model == "ink-2"
+    if isinstance(stt, ElevenLabsSTTConfig):
+        return stt.mode == "realtime" and stt.realtime_commit_strategy == "vad"
+    return False
 
 
 def _normalize_smart_turn_config(
@@ -213,7 +206,7 @@ def _normalize_smart_turn_config(
     *,
     sensitivity: float | None,
     transport: Any = None,
-    stt_is_flux: bool = False,
+    stt_native_endpointing: bool = False,
 ) -> SmartTurnConfig:
     """Resolve EasyConfig's beginner-facing smart-turn shortcuts.
 
@@ -225,11 +218,12 @@ def _normalize_smart_turn_config(
     presets keep smart-turn off by default — they pick their own
     endpointing strategy and shouldn't pay the warmup cost implicitly.
 
-    A Deepgram Flux STT is the exception on the mic preset: it does its own
-    provider-side endpointing, so smart-turn (and the Silero VAD it would
-    pull in) stays off by default and Flux's native end-of-turn signal
-    drives turns.  An explicit ``smart_turn=True`` / ``SmartTurnConfig``
-    still wins.
+    A provider-side-endpointing STT (Deepgram Flux, Cartesia ink-2, or
+    ElevenLabs realtime with the built-in VAD commit strategy) is the
+    exception on the mic preset: it does its own endpointing, so smart-turn
+    (and the Silero VAD it would pull in) stays off by default and the
+    provider's native end-of-turn signal drives turns.  An explicit
+    ``smart_turn=True`` / ``SmartTurnConfig`` still wins.
     """
     if isinstance(smart_turn, bool):
         if not smart_turn and sensitivity is not None:
@@ -237,7 +231,7 @@ def _normalize_smart_turn_config(
         config = SmartTurnConfig(enabled=smart_turn)
     elif smart_turn is None:
         enabled = sensitivity is not None or (
-            isinstance(transport, LocalTransportConfig) and not stt_is_flux
+            isinstance(transport, LocalTransportConfig) and not stt_native_endpointing
         )
         config = SmartTurnConfig(enabled=enabled)
     elif isinstance(smart_turn, SmartTurnConfig):
@@ -491,9 +485,7 @@ class ObservabilityConfig:
     debug: Literal["off", "light", "full"] = "full"
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite"
     journal_retention: Literal["archive", "delete"] = "archive"
-    latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = ()
     warmup: bool = True
-    max_session_cost_usd: float | None = None
     # Strictly opt-in: ``debug="full"`` keeps a durable journal but never
     # auto-launches the debugger UI on its own (that would race the port and
     # pop a browser tab for every concurrent session). Set this — or the
@@ -516,14 +508,6 @@ class ObservabilityConfig:
     # never on by default. Set this — or the ``EASYCAT_EMERGENCY_EXPORT`` env
     # var — to arm it. Off by default.
     emergency_export: bool = False
-
-    def __post_init__(self) -> None:
-        self._normalize_and_validate()
-
-    def _normalize_and_validate(self) -> None:
-        self.latency_budget = _normalize_latency_budgets(self.latency_budget)
-        if self.max_session_cost_usd is not None:
-            _require_positive("max_session_cost_usd", self.max_session_cost_usd)
 
 
 _SESSION_POLICY_ALIAS_FIELDS = frozenset(
@@ -551,9 +535,7 @@ _OBSERVABILITY_ALIAS_FIELDS = frozenset(
         "debug",
         "journal_backend",
         "journal_retention",
-        "latency_budget",
         "warmup",
-        "max_session_cost_usd",
         "debugger_autolaunch",
         "capture_aec_reference",
         "emergency_export",
@@ -611,9 +593,7 @@ class _AgentSessionConfig:
     debug: InitVar[Literal["off", "light", "full"] | None] = None
     journal_backend: InitVar[Literal["sqlite", "sqlite+litestream", "libsql"] | None] = None
     journal_retention: InitVar[Literal["archive", "delete"] | None] = None
-    latency_budget: InitVar[LatencyBudget | Sequence[LatencyBudget] | None] = None
     warmup: InitVar[bool | None] = None
-    max_session_cost_usd: InitVar[float | None] = None
 
     def __getattribute__(self, name: str) -> Any:
         if name in _OBSERVABILITY_ALIAS_FIELDS:
@@ -635,9 +615,7 @@ class _AgentSessionConfig:
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
-        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
         warmup: bool | None,
-        max_session_cost_usd: float | None,
     ) -> None:
         if debug is not None:
             self.debug = debug
@@ -645,13 +623,8 @@ class _AgentSessionConfig:
             self.journal_backend = journal_backend
         if journal_retention is not None:
             self.journal_retention = journal_retention
-        if latency_budget is not None:
-            self.latency_budget = latency_budget
         if warmup is not None:
             self.warmup = warmup
-        if max_session_cost_usd is not None:
-            self.max_session_cost_usd = max_session_cost_usd
-        self.observability._normalize_and_validate()
 
 
 @dataclass(kw_only=True)
@@ -749,9 +722,7 @@ class EasyConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
-        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
         warmup: bool | None,
-        max_session_cost_usd: float | None,
         vad: VADConfig | VADProvider | None,
         noise_reduction: NoiseReducerConfig | NoiseReducer | None,
         echo_cancellation: EchoCancellationConfig | EchoCanceller | None,
@@ -767,9 +738,7 @@ class EasyConfig(_AgentSessionConfig):
             debug,
             journal_backend,
             journal_retention,
-            latency_budget,
             warmup,
-            max_session_cost_usd,
         )
         if vad is not None:
             self.vad = vad
@@ -835,17 +804,17 @@ class EasyConfig(_AgentSessionConfig):
                 self.tts = OpenAITTSConfig(api_key=self.openai_api_key)
 
         # Normalize smart-turn AFTER string STT shortcuts resolve to a typed
-        # config.  The mic-preset default skips Deepgram Flux, and Flux can
-        # arrive either typed (``DeepgramSTTConfig``) or as the ``"deepgram/
-        # flux"`` string spec — only resolvable to ``is_flux`` once
-        # ``parse_stt_string`` has run above.  Computing it before string
-        # resolution left the string form with smart-turn (and a Silero VAD)
-        # on, diverging from the typed form.
+        # config.  The mic-preset default skips provider-side-endpointing STTs
+        # (Deepgram Flux, Cartesia ink-2, ElevenLabs realtime VAD), which can
+        # arrive either typed or as a ``"provider/model"`` string spec — only
+        # recognizable once ``parse_stt_string`` has run above.  Computing it
+        # before string resolution left the string form with smart-turn (and a
+        # Silero VAD) on, diverging from the typed form.
         self.smart_turn = _normalize_smart_turn_config(
             self.smart_turn,
             sensitivity=self.smart_turn_sensitivity,
             transport=self.transport,
-            stt_is_flux=_stt_config_is_flux(self.stt),
+            stt_native_endpointing=_stt_uses_native_endpointing(self.stt),
         )
 
         # Catalog membership (not an isinstance against the built-in
@@ -1005,17 +974,13 @@ class TextSessionConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] | None,
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] | None,
         journal_retention: Literal["archive", "delete"] | None,
-        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None,
         warmup: bool | None,
-        max_session_cost_usd: float | None,
     ) -> None:
         self._apply_observability_aliases(
             debug,
             journal_backend,
             journal_retention,
-            latency_budget,
             warmup,
-            max_session_cost_usd,
         )
         _validate_common(
             debug=self.debug,
@@ -1037,9 +1002,7 @@ class TextSessionConfig(_AgentSessionConfig):
         debug: Literal["off", "light", "full"] = "full",
         journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
         journal_retention: Literal["archive", "delete"] = "archive",
-        latency_budget: LatencyBudget | Sequence[LatencyBudget] | None = None,
         warmup: bool | None = None,
-        max_session_cost_usd: float | None = None,
         wrap_agent: bool = True,
         agent_runner: AgentRunnerConfig | None = None,
         agent_model: str | None = None,
@@ -1064,9 +1027,7 @@ class TextSessionConfig(_AgentSessionConfig):
                 "debug": (debug, "full"),
                 "journal_backend": (journal_backend, "sqlite"),
                 "journal_retention": (journal_retention, "archive"),
-                "latency_budget": (latency_budget, None),
                 "warmup": (warmup, None),
-                "max_session_cost_usd": (max_session_cost_usd, None),
                 "wrap_agent": (wrap_agent, True),
                 "agent_runner": (agent_runner, None),
                 "agent_model": (agent_model, None),
@@ -1088,9 +1049,7 @@ class TextSessionConfig(_AgentSessionConfig):
             debug=debug,
             journal_backend=journal_backend,
             journal_retention=journal_retention,
-            latency_budget=latency_budget,
             warmup=warmup,
-            max_session_cost_usd=max_session_cost_usd,
             wrap_agent=wrap_agent,
             agent_runner=agent_runner,
             agent_model=agent_model,

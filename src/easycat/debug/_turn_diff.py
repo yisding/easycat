@@ -2,11 +2,11 @@
 
 Compares two recorded bundles / crash journals turn-by-turn so a developer
 can answer "what changed between this run and the baseline?" — which
-milestone regressed, whether the transcript drifted, and how the cost moved
-— without opening the debugger UI.  Everything here is pure: it operates on
-plain journal-record dicts (as yielded by ``RunBundle.records()``) and reuses
-the shared rollups in :mod:`easycat.debug._turn_timeline` so the diff never
-reimplements milestone, transcript, or cost math.
+milestone regressed and whether the transcript drifted — without opening the
+debugger UI.  Everything here is pure: it operates on plain journal-record
+dicts (as yielded by ``RunBundle.records()``) and reuses the shared rollups in
+:mod:`easycat.debug._turn_timeline` so the diff never reimplements milestone
+or transcript math.
 
 Turns are aligned **positionally** by index (turn 0 of A vs turn 0 of B),
 which is what matters for a before/after comparison of the same scripted
@@ -26,7 +26,6 @@ from typing import Any
 
 from easycat.debug._turn_timeline import (
     extract_turn_transcripts,
-    turn_cost_rollup,
     turn_milestones,
     turn_waterfall,
 )
@@ -96,10 +95,6 @@ def _transcript_cell(
     }
 
 
-def _cost_cell(usd_a: float, usd_b: float) -> dict[str, Any]:
-    return {"usd_a": usd_a, "usd_b": usd_b, "delta": usd_b - usd_a}
-
-
 def diff_bundles(
     records_a: list[dict[str, Any]],
     records_b: list[dict[str, Any]],
@@ -107,10 +102,9 @@ def diff_bundles(
     """Diff two journals' records turn-by-turn.
 
     Returns ``{"turns": [...], "summary": {...}}`` where each turn carries the
-    per-milestone deltas, the transcript comparison, and the cost delta.  Turns
-    are aligned positionally; ragged counts pad ``None`` and mark the pair
-    ``unmatched``.  The summary names the single worst regression across all
-    turns/milestones and the total cost delta.
+    per-milestone deltas and the transcript comparison.  Turns are aligned
+    positionally; ragged counts pad ``None`` and mark the pair ``unmatched``.
+    The summary names the single worst regression across all turns/milestones.
     """
     waterfall_a = turn_waterfall(records_a)
     waterfall_b = turn_waterfall(records_b)
@@ -118,12 +112,9 @@ def diff_bundles(
     milestones_b = turn_milestones(records_b)
     transcripts_a = {t["turn_id"]: t for t in extract_turn_transcripts(records_a)}
     transcripts_b = {t["turn_id"]: t for t in extract_turn_transcripts(records_b)}
-    per_turn_cost_a, _ = turn_cost_rollup(records_a)
-    per_turn_cost_b, _ = turn_cost_rollup(records_b)
 
     turns: list[dict[str, Any]] = []
     worst: dict[str, Any] | None = None
-    total_cost_delta = 0.0
 
     for index in range(max(len(waterfall_a), len(waterfall_b))):
         turn_a = waterfall_a[index] if index < len(waterfall_a) else None
@@ -139,11 +130,6 @@ def diff_bundles(
             transcripts_a.get(turn_id_a) if turn_id_a else None,
             transcripts_b.get(turn_id_b) if turn_id_b else None,
         )
-
-        usd_a = (per_turn_cost_a.get(turn_id_a, {}) if turn_id_a else {}).get("usd", 0.0)
-        usd_b = (per_turn_cost_b.get(turn_id_b, {}) if turn_id_b else {}).get("usd", 0.0)
-        cost = _cost_cell(float(usd_a), float(usd_b))
-        total_cost_delta += cost["delta"]
 
         for name, cell in milestone_cells.items():
             if not cell["regressed"]:
@@ -166,7 +152,6 @@ def diff_bundles(
                 "unmatched": turn_a is None or turn_b is None,
                 "milestones": milestone_cells,
                 "transcript": transcript,
-                "cost": cost,
             }
         )
 
@@ -174,7 +159,6 @@ def diff_bundles(
         "turns": turns,
         "summary": {
             "worst_regression": worst,
-            "total_cost_delta": total_cost_delta,
         },
     }
 

@@ -2,6 +2,14 @@
 
 Status: active planning risk log.
 
+> **Stale (runtime budgets removed):** the runtime cost/latency-*budget* code
+> some risks below reference as existing — `LatencyBudgetMonitor`
+> (`session/_latency_budget.py`), `CostBudgetEnforcer` (`session/_cost_budget.py`),
+> `cost_budget_*` records, and the debugger `/api/cost` rollup — was removed as
+> undercooked and duplicative with the journal. Those entries are now historical
+> / net-new. The offline `easycat.validation.latency.LatencyBudget` (validation
+> lane) is a separate, still-existing symbol.
+
 ## Summary
 
 Neo touches user-facing APIs, server runtime, observability, evals, and docs.

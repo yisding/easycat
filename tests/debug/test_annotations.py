@@ -8,6 +8,8 @@ import pytest
 
 from easycat.debug.annotations import (
     FAILURE_TYPES,
+    MAX_ANNOTATIONS,
+    MAX_SIDECAR_BYTES,
     SCHEMA_VERSION,
     Annotation,
     AnnotationError,
@@ -155,3 +157,65 @@ def test_save_does_not_touch_the_bundle(tmp_path: Path) -> None:
     before = bundle.read_bytes()
     save_annotation(bundle, Annotation(turn_id="t1", passed=True))
     assert bundle.read_bytes() == before
+
+
+def test_load_annotations_rejects_oversized_sidecar_before_reading(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar_path(bundle).write_bytes(b" " * (MAX_SIDECAR_BYTES + 1))
+    assert load_annotations(bundle) == {}
+
+
+def test_load_annotations_rejects_over_count_cap_sidecar(tmp_path: Path) -> None:
+    # A compact sidecar can stay under the byte cap while holding far more
+    # records than the count cap; load must bound it like a corrupt file so
+    # downstream consumers stay bounded and the write path is not locked out.
+    import json
+
+    bundle = tmp_path / "call.zip"
+    annotations = {f"t{i}": {"passed": True} for i in range(MAX_ANNOTATIONS + 1)}
+    sidecar_path(bundle).write_text(
+        json.dumps({"schema_version": SCHEMA_VERSION, "annotations": annotations}),
+        encoding="utf-8",
+    )
+    assert load_annotations(bundle) == {}
+    # The count-cap lockout is gone: a fresh annotation can still be saved,
+    # rewriting the oversized sidecar down to a bounded map.
+    save_annotation(bundle, Annotation(turn_id="fresh", passed=True))
+    assert set(load_annotations(bundle)) == {"fresh"}
+
+
+def test_load_annotations_tolerates_deep_json_recursion(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    sidecar_path(bundle).write_text(
+        '{"annotations":' + ("[" * 2000) + ("]" * 2000) + "}", encoding="utf-8"
+    )
+    assert load_annotations(bundle) == {}
+
+
+def test_save_annotation_rejects_unknown_allowed_turn(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    with pytest.raises(AnnotationError, match="does not exist"):
+        save_annotation(bundle, Annotation(turn_id="missing"), allowed_turn_ids={"known"})
+
+
+def test_save_annotation_caps_record_count(tmp_path: Path) -> None:
+    bundle = tmp_path / "call.zip"
+    annotations = {f"t{i}": {"passed": True} for i in range(MAX_ANNOTATIONS)}
+    sidecar_path(bundle).write_text(
+        __import__("json").dumps({"schema_version": SCHEMA_VERSION, "annotations": annotations}),
+        encoding="utf-8",
+    )
+    with pytest.raises(AnnotationError, match="limited"):
+        save_annotation(bundle, Annotation(turn_id="too-many"))
+    # Existing turns can still be updated at the cap.
+    save_annotation(bundle, Annotation(turn_id="t0", notes="updated"))
+    assert load_annotations(bundle)["t0"]["notes"] == "updated"
+
+
+def test_save_annotation_caps_serialized_sidecar_size(tmp_path: Path, monkeypatch) -> None:
+    import easycat.debug.annotations as annotations_mod
+
+    bundle = tmp_path / "call.zip"
+    monkeypatch.setattr(annotations_mod, "MAX_SIDECAR_BYTES", 200)
+    with pytest.raises(AnnotationError, match="bytes"):
+        save_annotation(bundle, Annotation(turn_id="t1", notes="x" * 180))

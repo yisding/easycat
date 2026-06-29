@@ -35,10 +35,8 @@ from easycat.events import (
 from easycat.runtime.context import RunContext
 from easycat.session._audio_router import AudioRouter
 from easycat.session._cancel_orchestrator import CancelOrchestrator
-from easycat.session._cost_budget import CostBudgetEnforcer
 from easycat.session._greeting import GreetingController
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._latency_budget import LatencyBudgetMonitor
 from easycat.session._stt_committer import STTCommitter
 from easycat.session._tts_scheduler import TTSScheduler
 from easycat.session._turn_runner import TurnRunner
@@ -56,7 +54,7 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.session._types import SessionConfig
 
-_OUTBOUND_QUEUE_MAX_SIZE = 200
+_OUTBOUND_QUEUE_MAX_SIZE = 500
 _OUTBOUND_QUEUE_POLICY = DropPolicy.DROP_NEWEST
 _OUTBOUND_QUEUE_NAME = "outbound_audio"
 
@@ -73,7 +71,6 @@ class SessionComponents:
     run_ctx: RunContext
     no_turn: TurnContext
     journal_sink: SessionJournalSink
-    cost_budget: CostBudgetEnforcer
     warmup: WarmupRunner
     outbound_queue: BoundedAudioQueue
 
@@ -112,7 +109,6 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         runtime_mode=cfg.runtime_mode,
         journal=journal,
         artifact_store=session._artifact_store,
-        latency_budgets=tuple(cfg.latency_budget or ()),
     )
     no_turn = TurnContext(turn_id="no-turn", cancel_token=CancelToken())
 
@@ -122,21 +118,7 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         artifact_store=session._artifact_store,
         session_id=session.session_id,
         current_turn_id=session._journal_turn_id,
-        max_session_cost_usd=cfg.max_session_cost_usd,
     )
-    latency_budget = LatencyBudgetMonitor(
-        journal_sink=journal_sink,
-        budgets=tuple(cfg.latency_budget or ()),
-    )
-    cost_budget = CostBudgetEnforcer(
-        session_id=session.session_id,
-        runtime_scope=session._runtime_scope,
-        journal_sink=journal_sink,
-        stop_session=session.stop,
-        is_closed=lambda: session._closed,
-        is_stopping=lambda: session._stopping,
-    )
-    journal_sink.on_cost_budget_exceeded = cost_budget.on_exceeded
     journal_sink.subscribe()
     warmup = WarmupRunner(
         enabled=cfg.warmup,
@@ -291,7 +273,6 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         journal_sink=journal_sink,
         runtime_scope=session._runtime_scope,
         timeout_config=session._timeout_config,
-        latency_budget=latency_budget,
         turn_handle=_SessionTurnHandle(session),
         stt_stage=stt_stage,
         session_id=session.session_id,
@@ -328,7 +309,6 @@ def build_session(session: Session, cfg: SessionConfig) -> SessionComponents:
         run_ctx=run_ctx,
         no_turn=no_turn,
         journal_sink=journal_sink,
-        cost_budget=cost_budget,
         warmup=warmup,
         outbound_queue=outbound_queue,
         stt_stage=stt_stage,

@@ -215,11 +215,17 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     assert "_sub(ToolCallStarted" not in plan
     assert "Session._subscribe_journal_sink" not in plan
 
+    # SessionAction lifecycle events are now journaled (same pattern as the
+    # tool-call subscriptions above); the plan must document this instead of
+    # claiming a journaling gap.
     action_events = (
         "SessionActionRequested",
         "SessionActionStarted",
         "SessionActionCompleted",
         "SessionActionFailed",
     )
-    assert all(event not in journal_sink for event in action_events)
-    assert "*not* currently journaled" in plan
+    assert all(event in journal_sink for event in action_events)
+    assert 'self._make_event_handler(evt, "session_action_failed")' in journal_sink
+    assert "*not* currently journaled" not in plan
+    assert "`SessionAction` flows are journaled too" in plan
+    assert "session_action_requested" in plan

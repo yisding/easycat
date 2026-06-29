@@ -211,18 +211,25 @@ def _create_artifact_store(
 
 
 def _should_auto_turn_from_stt_final(config: EasyConfig) -> bool:
-    """Whether this session should derive turn boundaries from STT finals."""
-    from easycat.stt.deepgram_provider import DeepgramSTTConfig
+    """Whether this session should derive turn boundaries from STT finals.
 
-    if not isinstance(config.stt, DeepgramSTTConfig):
-        return False
+    True for STT providers that do their own endpointing (Deepgram Flux,
+    Cartesia ink-2, ElevenLabs realtime VAD) — unless an explicit endpointing
+    choice overrides it: push-to-talk, smart-turn, or a telephony voicemail
+    detector all keep EasyCat's own VAD + commit path. When True, the caller
+    disables the Silero VAD stage (``enable_vad = not auto_turn``) and the STT
+    committer stops driving manual commits, so the provider's native VAD is the
+    single source of turn boundaries (no double endpointing / duplicate FINALs).
+    """
+    from .easy import _stt_uses_native_endpointing
+
     if config.turn_taking.mode == TurnMode.PUSH_TO_TALK:
         return False
     if config.smart_turn.enabled:
         return False
     if config.telephony and config.telephony.enable_voicemail_detector:
         return False
-    return config.stt.is_flux
+    return _stt_uses_native_endpointing(config.stt)
 
 
 def _validate_agent_shape(adapted: Any, *, wrap_agent: bool) -> None:
@@ -501,9 +508,7 @@ def create_session(config: EasyConfig) -> Session:
                 timeout_config=config.timeouts,
                 journal=journal,
                 artifact_store=artifact_store,
-                latency_budget=config.latency_budget,
                 warmup=config.warmup,
-                max_session_cost_usd=config.max_session_cost_usd,
                 record_to=config.record_to,
                 session_id=session_id,
                 telephony_helpers=telephony_helpers,
@@ -619,6 +624,7 @@ def _emergency_export_enabled(config: Any) -> bool:
 _EXPORT_REGISTRY: dict[int, Callable[[], None]] = {}
 _EXPORT_INSTALLED = False
 _EXPORT_PREVIOUS_EXCEPTHOOK: Callable[..., None] | None = None
+_EXPORT_EXCEPTHOOK: Callable[..., None] | None = None
 
 
 def _run_all_exporters() -> None:
@@ -630,22 +636,32 @@ def _run_all_exporters() -> None:
             logger.warning("Emergency debug-bundle export failed", exc_info=True)
 
 
-def _shared_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
-    _run_all_exporters()
-    if _EXPORT_PREVIOUS_EXCEPTHOOK is not None:
-        _EXPORT_PREVIOUS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
+def _make_excepthook(previous: Callable[..., None] | None) -> Callable[..., None]:
+    """Create one generation of the emergency-export excepthook.
+
+    A fresh function per install keeps third-party hooks that captured an older
+    EasyCat hook from re-entering the current hook chain after a later reinstall.
+    """
+
+    def _easycat_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+        _run_all_exporters()
+        if previous is not None:
+            previous(exc_type, exc_value, exc_tb)
+
+    return _easycat_excepthook
 
 
 def _install_shared_hooks() -> None:
     """Install the single process-wide excepthook + atexit hook (idempotent)."""
-    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    global _EXPORT_EXCEPTHOOK, _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
     import atexit
     import sys
 
     if _EXPORT_INSTALLED:
         return
     _EXPORT_PREVIOUS_EXCEPTHOOK = sys.excepthook
-    sys.excepthook = _shared_excepthook
+    _EXPORT_EXCEPTHOOK = _make_excepthook(_EXPORT_PREVIOUS_EXCEPTHOOK)
+    sys.excepthook = _EXPORT_EXCEPTHOOK
     atexit.register(_run_all_exporters)
     _EXPORT_INSTALLED = True
 
@@ -657,7 +673,7 @@ def _uninstall_shared_hooks() -> None:
     later caller chained on top we leave their hook intact rather than dropping
     it. ``atexit.unregister`` is always safe to call.
     """
-    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    global _EXPORT_EXCEPTHOOK, _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
     import atexit
     import sys
 
@@ -667,9 +683,10 @@ def _uninstall_shared_hooks() -> None:
         atexit.unregister(_run_all_exporters)
     except Exception:
         pass
-    if sys.excepthook is _shared_excepthook:
+    if sys.excepthook is _EXPORT_EXCEPTHOOK:
         sys.excepthook = _EXPORT_PREVIOUS_EXCEPTHOOK or sys.__excepthook__
     _EXPORT_PREVIOUS_EXCEPTHOOK = None
+    _EXPORT_EXCEPTHOOK = None
     _EXPORT_INSTALLED = False
 
 
@@ -743,9 +760,7 @@ def create_text_session(
     debug: Literal["off", "light", "full"] = "full",
     journal_backend: Literal["sqlite", "sqlite+litestream", "libsql"] = "sqlite",
     journal_retention: Literal["archive", "delete"] = "archive",
-    latency_budget: Any = None,
     warmup: bool | None = None,
-    max_session_cost_usd: float | None = None,
     wrap_agent: bool = True,
     agent_runner: AgentRunnerConfig | None = None,
     agent_model: str | None = None,
@@ -780,9 +795,7 @@ def create_text_session(
         debug=debug,
         journal_backend=journal_backend,
         journal_retention=journal_retention,
-        latency_budget=latency_budget,
         warmup=warmup,
-        max_session_cost_usd=max_session_cost_usd,
         wrap_agent=wrap_agent,
         agent_runner=agent_runner,
         agent_model=agent_model,
@@ -849,9 +862,7 @@ def create_text_session(
                 event_bus=event_bus,
                 journal=journal,
                 artifact_store=artifact_store,
-                latency_budget=config.latency_budget,
                 warmup=config.warmup,
-                max_session_cost_usd=config.max_session_cost_usd,
                 record_to=record_to,
                 session_id=sid,
                 runtime_mode="text_session",
@@ -870,9 +881,7 @@ def create_text_session(
         debug=debug,
         journal_backend=journal_backend,
         journal_retention=journal_retention,
-        latency_budget=config.latency_budget,
         warmup=config.warmup,
-        max_session_cost_usd=config.max_session_cost_usd,
         record_to=record_to,
     )
     session._agent_model = agent_model

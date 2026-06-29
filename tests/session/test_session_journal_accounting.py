@@ -17,7 +17,6 @@ from easycat.runtime import InMemoryRingBuffer, SqliteJournal
 from easycat.runtime.artifacts import FilesystemArtifactStore, InMemoryArtifactStore
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
-from easycat.session._types import SessionConfig
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 from tests.session._session_core_helpers import (
     FakeTransport,
@@ -26,120 +25,6 @@ from tests.session._session_core_helpers import (
     _full_config,
     _make_chunk,
 )
-
-
-@pytest.mark.asyncio
-async def test_session_cost_budget_exceeded_requests_force_stop() -> None:
-    journal = InMemoryRingBuffer()
-    session = Session(
-        SessionConfig(
-            runtime_mode="text_session",
-            journal=journal,
-            max_session_cost_usd=1.0,
-        )
-    )
-
-    session._journal_sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost_record",
-        turn_id="turn-budget",
-        data={"usd": 1.25},
-    )
-
-    await asyncio.wait_for(session.wait_closed(), timeout=1.0)
-
-    records = session.journal.read()
-    names = [record.name for record in records]
-    assert names[:5] == [
-        "cost_record",
-        "cost_budget_warning",
-        "cost_budget_exceeded",
-        "cost_budget_stop_requested",
-        "task_scheduled",
-    ]
-    stop_request = records[3]
-    assert stop_request.kind == JournalRecordKind.CONTROL
-    assert stop_request.turn_id == "turn-budget"
-    assert stop_request.data == {
-        "reason": "max_session_cost_usd_exceeded",
-        "budget_status": "exceeded",
-        "total_usd": 1.25,
-        "max_session_cost_usd": 1.0,
-        "overage_usd": pytest.approx(0.25),
-        "trigger_record_name": "cost_record",
-    }
-    assert records[4].data == {"task_name": "cost_budget_stop"}
-    assert session._closed is True
-
-
-@pytest.mark.asyncio
-async def test_session_cost_budget_exceeded_stops_without_journal() -> None:
-    session = Session(
-        SessionConfig(
-            runtime_mode="text_session",
-            max_session_cost_usd=1.0,
-        )
-    )
-
-    session._journal_sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost",
-        data={"usd": 1.1},
-    )
-
-    await asyncio.wait_for(session.wait_closed(), timeout=1.0)
-
-    assert session._closed is True
-    assert session.journal is None
-
-
-def test_session_cost_budget_exceeded_off_loop_retries_when_loop_available() -> None:
-    journal = InMemoryRingBuffer()
-    session = Session(
-        SessionConfig(
-            runtime_mode="text_session",
-            journal=journal,
-            max_session_cost_usd=1.0,
-        )
-    )
-
-    session._journal_sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost_record",
-        turn_id="turn-off-loop",
-        data={"usd": 1.25},
-    )
-
-    names_after_off_loop = [record.name for record in journal.read()]
-    assert names_after_off_loop == [
-        "cost_record",
-        "cost_budget_warning",
-        "cost_budget_exceeded",
-    ]
-    assert session._closed is False
-
-    async def retry_with_running_loop() -> None:
-        session._journal_sink.append_record(
-            kind=JournalRecordKind.METRIC,
-            name="cost_record",
-            turn_id="turn-retry",
-            data={"usd": 0.01},
-        )
-        await asyncio.wait_for(session.wait_closed(), timeout=1.0)
-
-    asyncio.run(retry_with_running_loop())
-
-    names_after_retry = [record.name for record in journal.read()]
-    assert names_after_retry[:6] == [
-        "cost_record",
-        "cost_budget_warning",
-        "cost_budget_exceeded",
-        "cost_record",
-        "cost_budget_stop_requested",
-        "task_scheduled",
-    ]
-    assert names_after_retry.count("cost_budget_exceeded") == 1
-    assert session._closed is True
 
 
 @pytest.mark.asyncio

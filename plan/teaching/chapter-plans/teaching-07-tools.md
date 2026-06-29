@@ -124,14 +124,17 @@
   redacted by default, so anything the tool returns lands verbatim
   in the bundle. Treat bundles as sensitive and read
   `../../peripherals/peripheral-redaction.md` for the planned policy layer.
-- **Heads-up for `SessionAction` flows:** `SessionActionRequested`
+- **`SessionAction` flows are journaled too.** `SessionActionRequested`
   / `SessionActionStarted` / `SessionActionCompleted` /
-  `SessionActionFailed` are emitted on the `EventBus` but are
-  *not* currently journaled. To inspect the action timeline, wire
-  a bus listener in the chapter script, or wait until the
-  journaling surface gains these subscriptions (same pattern as
-  the tool-call ones above). The chapter should call this gap out
-  rather than assume journal records that do not yet exist.
+  `SessionActionFailed` are emitted on the `EventBus` and
+  `SessionJournalSink` subscribes to all four (same pattern as the
+  tool-call ones above), writing `session_action_requested`,
+  `session_action_started`, `session_action_completed`, and
+  `session_action_failed` records. Each record carries the `action`
+  (JSON-normalized), the `executor`, and — for completions — the
+  `result`; failures also capture the `error` reason. The chapter
+  can read the full action timeline straight from the journal
+  rather than wiring a separate bus listener.
 - Filler-utterance TTS spans, distinguishable from the main
   response by a tag on the journal record
 

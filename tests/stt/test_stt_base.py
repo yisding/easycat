@@ -235,7 +235,7 @@ async def test_base_fresh_queue_per_stream():
 
 @pytest.mark.asyncio
 async def test_websocket_base_ignores_binary_and_invalid_json_messages():
-    ws = MockWebSocket([b"\x00\x01", "{not json", '{"text": "hello"}'])
+    ws = MockWebSocket([b"\x00\x01", "{not json", "[]", '{"text": "hello"}'])
     stt = JsonWebSocketSTT(ws)
 
     events = await collect_stt_events(stt, make_audio_chunks(generate_pcm_sine(duration_ms=100)))

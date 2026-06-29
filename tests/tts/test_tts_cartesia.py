@@ -6,7 +6,7 @@ import asyncio
 import base64
 import json
 import struct
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -99,6 +99,254 @@ class FakeReconnectingWS:
         self._closed = True
 
 
+class FakePersistentWS:
+    """Fake multi-context socket for the persistent Cartesia path.
+
+    The manager calls ``connect_factory(on_reconnect)`` (recorded), then
+    ``connect()``, then iterates ``recv_iter()``. The script can address frames
+    to a specific context id via ``script_for``.
+    """
+
+    def __init__(self, on_reconnect=None, *, fail_send_at=None):
+        self.on_reconnect = on_reconnect
+        self.sent: list[str] = []
+        self._send_count = 0
+        self._fail_send_at = fail_send_at or set()
+        self.closed = False
+        self._queue: asyncio.Queue = asyncio.Queue()
+
+    async def connect(self) -> None:
+        return None
+
+    async def send(self, message: str) -> None:
+        self._send_count += 1
+        if self._send_count in self._fail_send_at:
+            raise RuntimeError("send failed")
+        self.sent.append(message)
+        # Auto-respond to a synthesis request with a chunk + done for its ctx.
+        try:
+            msg = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if "transcript" in msg:
+            ctx_id = msg["context_id"]
+            await self._queue.put(
+                json.dumps(
+                    {
+                        "type": "chunk",
+                        "context_id": ctx_id,
+                        "data": base64.b64encode(_pcm16_bytes(120)).decode("ascii"),
+                        "done": False,
+                    }
+                )
+            )
+            await self._queue.put(json.dumps({"type": "done", "context_id": ctx_id, "done": True}))
+
+    async def recv_iter(self):
+        # Single await point per iteration so the reader task can be cancelled
+        # cleanly without orphaning helper tasks.
+        while True:
+            frame = await self._queue.get()
+            if frame is None:
+                return
+            yield frame
+
+    async def close(self) -> None:
+        self.closed = True
+        await self._queue.put(None)
+
+
+class TestCartesiaPersistent:
+    def _make_provider(self, **kwargs) -> CartesiaTTS:
+        return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=True, **kwargs))
+
+    async def test_one_socket_across_two_synthesize_calls(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_ws", factory):
+            ctx_ids = []
+            for text in ("first", "second"):
+                async for _ in provider.synthesize(text):
+                    pass
+                ctx_ids.append(provider._context_id or "cleared")
+
+        # connect_factory was invoked exactly once -> one socket reused.
+        assert factory.call_count == 1
+        # Two distinct fresh context ids were used (recorded from sent frames).
+        sent_ctx = [
+            json.loads(s)["context_id"] for s in fake.sent if "transcript" in json.loads(s)
+        ]
+        assert len(sent_ctx) == 2
+        assert sent_ctx[0] != sent_ctx[1]
+        assert all(len(c) >= 32 for c in sent_ctx)
+        await provider.close()
+
+    async def test_synthesize_yields_audio(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            audio = [e async for e in provider.synthesize("hello") if e.type == TTSEventType.AUDIO]
+        assert len(audio) == 1
+        chunks = extract_audio_chunks(audio)
+        assert verify_pcm16_audio(chunks)
+        await provider.close()
+
+    async def test_stray_non_object_frame_does_not_break_stream(self):
+        # A valid-but-non-object JSON frame on the shared socket (exercising the
+        # REAL Cartesia adapter) must be dropped, not crash the reader: audio
+        # still flows and the turn completes.
+        fake = FakePersistentWS()
+
+        async def _send_with_stray(message: str) -> None:
+            fake.sent.append(message)
+            msg = json.loads(message)
+            if "transcript" in msg:
+                ctx_id = msg["context_id"]
+                await fake._queue.put('"pong"')  # stray keepalive-ish frame
+                await fake._queue.put(
+                    json.dumps(
+                        {
+                            "type": "chunk",
+                            "context_id": ctx_id,
+                            "data": base64.b64encode(_pcm16_bytes(120)).decode("ascii"),
+                            "done": True,
+                        }
+                    )
+                )
+
+        provider = self._make_provider()
+        with patch.object(provider, "_build_ws", return_value=fake):
+            fake.send = _send_with_stray  # type: ignore[method-assign]
+            audio = [e async for e in provider.synthesize("hi") if e.type == TTSEventType.AUDIO]
+        assert len(audio) == 1
+        assert not fake.closed  # socket survived the stray frame
+        await provider.close()
+
+    async def test_cancel_sends_cancel_and_keeps_socket_open(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            events = []
+            async for event in provider.synthesize("long text"):
+                events.append(event)
+                if event.type == TTSEventType.AUDIO:
+                    await provider.cancel()
+
+            assert provider.is_cancelled
+            # Socket NOT closed by the context-scoped cancel.
+            assert not fake.closed
+            cancel = [json.loads(s) for s in fake.sent if json.loads(s).get("cancel") is True]
+            assert cancel and cancel[0]["cancel"] is True
+        await provider.close()
+
+    async def test_cancel_send_failure_falls_back_to_socket_close(self):
+        provider = self._make_provider()
+        # First send (the transcript) succeeds; the cancel frame send fails.
+        fake = FakePersistentWS(fail_send_at={2})
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            async for event in provider.synthesize("text"):
+                if event.type == TTSEventType.AUDIO:
+                    await provider.cancel()
+                    break
+
+            assert fake.closed
+        await provider.close()
+
+    async def test_close_tears_down(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_build_ws", return_value=fake):
+            async for _ in provider.synthesize("hi"):
+                pass
+            await provider.close()
+
+        assert fake.closed
+        assert provider._mgr is not None and provider._mgr._closed
+
+    async def test_persistent_connect_failure_ends_synthesis(self):
+        # A failed initial connect on the persistent path must emit the error
+        # and clear is_active (run _end_synthesis), like the one-shot path —
+        # not leave the provider stuck active.
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        with patch.object(provider, "_build_ws", return_value=FailingConnectWS()):
+            with pytest.raises(RuntimeError, match="connect boom"):
+                async for _ in provider.synthesize("hi"):
+                    pass
+
+        assert not provider.is_active
+        await provider.close()
+
+
+class TestCartesiaPersistentEquivalence:
+    """Persistent transport must not change the emitted audio bytes."""
+
+    async def test_decoded_pcm_identical_persistent_vs_default(self):
+        audio_chunks = [_pcm16_bytes(241), _pcm16_bytes(239)]  # odd splits
+
+        # Default one-shot path.
+        default_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
+        default_msgs = [_chunk_msg(c) for c in audio_chunks] + [_done_msg()]
+        default_ws = FakeReconnectingWS(messages=default_msgs)
+        with patch.object(default_provider, "_create_ws", return_value=default_ws):
+            default_audio = b"".join(
+                [
+                    bytes(e.audio.data)
+                    async for e in default_provider.synthesize("Hi")
+                    if e.type == TTSEventType.AUDIO
+                ]
+            )
+
+        # Persistent path: feed the SAME audio frames addressed to the ctx.
+        persistent_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", persistent_ws=True))
+
+        class ScriptedPersistentWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self._send_count += 1
+                self.sent.append(message)
+                msg = json.loads(message)
+                if "transcript" in msg:
+                    cid = msg["context_id"]
+                    for c in audio_chunks:
+                        await self._queue.put(
+                            json.dumps(
+                                {
+                                    "type": "chunk",
+                                    "context_id": cid,
+                                    "data": base64.b64encode(c).decode("ascii"),
+                                    "done": False,
+                                }
+                            )
+                        )
+                    await self._queue.put(
+                        json.dumps({"type": "done", "context_id": cid, "done": True})
+                    )
+
+        scripted = ScriptedPersistentWS()
+        with patch.object(persistent_provider, "_build_ws", return_value=scripted):
+            persistent_audio = b"".join(
+                [
+                    bytes(e.audio.data)
+                    async for e in persistent_provider.synthesize("Hi")
+                    if e.type == TTSEventType.AUDIO
+                ]
+            )
+        await persistent_provider.close()
+
+        assert persistent_audio == default_audio
+        assert len(persistent_audio) > 0
+
+
 class TestCartesiaTTSConfig:
     def test_defaults(self):
         config = CartesiaTTSConfig(api_key="test-key")
@@ -112,6 +360,24 @@ class TestCartesiaTTSConfig:
     def test_rejects_unsupported_encoding(self):
         with pytest.raises(ValueError, match="Unsupported Cartesia encoding"):
             CartesiaTTSConfig(api_key="k", encoding="pcm_mulaw")
+
+    def test_rejects_out_of_range_speed(self):
+        with pytest.raises(ValueError, match="speed must be in"):
+            CartesiaTTSConfig(api_key="k", speed=2.0)
+
+    def test_rejects_out_of_range_volume(self):
+        with pytest.raises(ValueError, match="volume must be in"):
+            CartesiaTTSConfig(api_key="k", volume=0.1)
+
+    def test_generation_config_omitted_when_unset(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
+        request = provider._build_request("hi", "ctx-1")
+        assert "generation_config" not in request
+
+    def test_generation_config_includes_only_set_controls(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", speed=1.2, emotion="excited"))
+        request = provider._build_request("hi", "ctx-1")
+        assert request["generation_config"] == {"speed": 1.2, "emotion": "excited"}
 
     def test_custom_values(self):
         config = CartesiaTTSConfig(

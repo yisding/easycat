@@ -96,6 +96,28 @@ def register_health_routes(app: Any, server: VoiceServer) -> None:
     app.router.add_get("/health", _make_health_handler(server))
 
 
+def _auth_failure_response() -> Any:
+    """Return the shared 401 response for protected read-only endpoints."""
+    from aiohttp import web
+
+    return web.json_response({"error": "Missing or invalid bearer token"}, status=401)
+
+
+def _authorized_readonly_request(server: VoiceServer, request: Any) -> bool:
+    """Authorize a read-only aiohttp request with the server auth policy.
+
+    A server without an auth policy remains open (the loopback/dev default). When
+    an auth policy is configured, metadata endpoints must require the same
+    bearer credential as WebRTC signaling instead of exposing deployment details
+    to unauthenticated clients.
+    """
+    if server.config.auth is None:
+        return True
+    from easycat.server.auth import from_aiohttp_request
+
+    return server.config.auth.authorize(from_aiohttp_request(request)).allowed
+
+
 def _make_plan_handler(server: VoiceServer) -> Any:
     """Build the ``GET /plan`` handler (read-only, redacted, side-effect-free).
 
@@ -105,8 +127,16 @@ def _make_plan_handler(server: VoiceServer) -> Any:
     no manifest/profile, returns a documented empty plan (``selected={}``).
     """
 
-    async def _handle_plan(_request: Any) -> Any:
+    async def _handle_plan(request: Any) -> Any:
         from aiohttp import web
+
+        auth = server.config.auth
+        if auth is not None:
+            from easycat.server.auth import from_aiohttp_request
+
+            result = auth.authorize(from_aiohttp_request(request))
+            if not result.allowed:
+                return web.json_response({"error": "Missing or invalid bearer token"}, status=401)
 
         payload = server.plan_payload()
         return web.json_response(payload)
@@ -135,9 +165,11 @@ def _make_metrics_handler(server: VoiceServer) -> Any:
     in CI. NEVER includes session IDs, IPs, tokens, or raw paths.
     """
 
-    async def _handle_metrics(_request: Any) -> Any:
+    async def _handle_metrics(request: Any) -> Any:
         from aiohttp import web
 
+        if not _authorized_readonly_request(server, request):
+            return _auth_failure_response()
         return web.json_response(server.metrics_payload())
 
     return _handle_metrics
@@ -158,9 +190,11 @@ def _make_manifest_handler(server: VoiceServer) -> Any:
     reads the env token); only the redacted dump is exposed.
     """
 
-    async def _handle_manifest(_request: Any) -> Any:
+    async def _handle_manifest(request: Any) -> Any:
         from aiohttp import web
 
+        if not _authorized_readonly_request(server, request):
+            return _auth_failure_response()
         return web.json_response(server.manifest_payload())
 
     return _handle_manifest
@@ -181,9 +215,11 @@ def _make_capabilities_handler(server: VoiceServer) -> Any:
     :meth:`VoiceServer.capabilities_payload` (the M4 import boundary).
     """
 
-    async def _handle_capabilities(_request: Any) -> Any:
+    async def _handle_capabilities(request: Any) -> Any:
         from aiohttp import web
 
+        if not _authorized_readonly_request(server, request):
+            return _auth_failure_response()
         return web.json_response(server.capabilities_payload())
 
     return _handle_capabilities

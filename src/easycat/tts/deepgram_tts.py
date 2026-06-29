@@ -20,7 +20,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DeepgramTTSConfig:
-    """Configuration for the Deepgram TTS provider."""
+    """Configuration for the Deepgram TTS provider.
+
+    Note: persistent multi-context socket reuse (``persistent_ws``, as on
+    Cartesia/ElevenLabs) is deliberately out of scope here. Aura's WebSocket
+    has no documented per-message context routing or per-context cancel, so the
+    one-shot-per-utterance model is the only safe option. The field is
+    intentionally absent so the contract matrix / provider registry stay
+    unchanged and Deepgram always runs the default path.
+    """
 
     api_key: str = ""
     model: str = "aura-asteria-en"
@@ -159,6 +167,8 @@ class DeepgramTTS(_WSTTSBase):
                     try:
                         ctrl = json.loads(message)
                     except json.JSONDecodeError:
+                        continue
+                    if not isinstance(ctrl, dict):
                         continue
                     ctrl_type = ctrl.get("type")
                     if ctrl_type == "Flushed":

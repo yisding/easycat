@@ -102,6 +102,25 @@ async def test_annotate_rejects_bad_turn_id(tmp_path):
         assert body["error_code"] == "BAD_REQUEST"
 
 
+async def test_annotate_rejects_turn_id_not_in_bundle(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/annotate",
+            json={"turn_id": "syntactically-valid-but-missing", "passed": True},
+            headers=_SAFE_HEADERS,
+        )
+        assert resp.status == 400
+        body = await resp.json()
+        assert body["error_code"] == "BAD_REQUEST"
+        assert "does not exist" in body["message"]
+        assert not sidecar_path(bundle_path).exists()
+
+
 async def test_annotate_rejects_bad_failure_type(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)
