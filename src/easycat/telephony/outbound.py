@@ -66,6 +66,8 @@ def _get_call_sid(params: dict[str, Any]) -> str | None:
 def _parse_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
