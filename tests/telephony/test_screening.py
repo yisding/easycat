@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 
 import pytest
 
@@ -143,6 +144,12 @@ class TestScreeningPatterns:
 class TestCallScreeningDetectorConfig:
     @pytest.mark.parametrize("agent_timeout_s", [0.0, -0.1])
     def test_rejects_non_positive_agent_timeout(self, agent_timeout_s: float) -> None:
+        bus = EventBus()
+        with pytest.raises(ValueError, match="agent_timeout_s"):
+            CallScreeningDetector(bus, agent_timeout_s=agent_timeout_s)
+
+    @pytest.mark.parametrize("agent_timeout_s", [math.nan, math.inf])
+    def test_rejects_non_finite_agent_timeout(self, agent_timeout_s: float) -> None:
         bus = EventBus()
         with pytest.raises(ValueError, match="agent_timeout_s"):
             CallScreeningDetector(bus, agent_timeout_s=agent_timeout_s)
