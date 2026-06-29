@@ -218,6 +218,8 @@ class NumberHealthMonitor:
         # Guard against duplicate CallInitiated for the same call_sid
         # (place_call() emits one, and the Twilio "initiated" status callback
         # emits another via emit_call_status).
+        if not event.call_sid or not event.from_:
+            return
         if event.call_sid in self._call_sid_to_number:
             return
         if event.call_sid in self._terminal_call_sids:
