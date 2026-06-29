@@ -462,13 +462,24 @@ class RunBundle:
                 artifact_blobs[ref] = data
 
             # Reconstruct artifacts from inline base64 blobs in manifest
-            for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
+            inline_artifacts = manifest_data.get("inline_artifacts", {})
+            if not isinstance(inline_artifacts, dict):
+                raise BundleValidationError(
+                    "Bundle inline_artifacts must be a JSON object",
+                    reason_code="INVALID_MANIFEST",
+                )
+            for ref, b64 in inline_artifacts.items():
                 if ref in artifact_index:
                     continue  # file-based entry takes precedence
                 if not _SHA256_REF.match(ref):
                     raise BundleValidationError(
                         f"Invalid inline artifact ref: {ref!r}",
                         reason_code="INVALID_REF",
+                    )
+                if not isinstance(b64, str):
+                    raise BundleValidationError(
+                        f"Inline artifact {ref!r} must be a base64 string",
+                        reason_code="INVALID_MANIFEST",
                     )
                 estimated_size = (len(b64) * 3) // 4
                 if total_size + estimated_size > _ARTIFACT_SIZE_CAP:
