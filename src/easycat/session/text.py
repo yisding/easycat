@@ -109,6 +109,8 @@ def split_first_clause(text: str) -> tuple[str, str]:
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
+        if _is_url_separator(text, i):
+            continue
         if _is_numeric_separator(text, i):
             continue
         # Include any trailing whitespace so the remaining buffer starts at
@@ -122,6 +124,22 @@ def split_first_clause(text: str) -> tuple[str, str]:
         # Too short to ship on its own; keep scanning for a later boundary.
 
     return "", text
+
+
+def _is_url_separator(text: str, index: int) -> bool:
+    start = index - 1
+    while start >= 0 and not text[start].isspace():
+        start -= 1
+    token_prefix = text[start + 1 : index]
+    if text[index] == ":" and text[index + 1 : index + 3] == "//":
+        scheme = token_prefix
+    else:
+        scheme, sep, _ = token_prefix.partition("://")
+        if not sep:
+            return False
+    return (
+        bool(scheme) and scheme[0].isalpha() and all(ch.isalnum() or ch in "+-." for ch in scheme)
+    )
 
 
 def _is_numeric_separator(text: str, index: int) -> bool:

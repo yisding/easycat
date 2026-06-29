@@ -128,6 +128,12 @@ def test_split_first_clause_skips_decimal_point() -> None:
     assert remaining == "then continue."
 
 
+def test_split_first_clause_skips_url_scheme_colon() -> None:
+    ready, remaining = split_first_clause("Visit https://example.com now, then continue.")
+    assert ready == "Visit https://example.com now, "
+    assert remaining == "then continue."
+
+
 def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> None:
     ready, remaining = split_first_clause("The estimate is 3.")
     assert ready == ""
