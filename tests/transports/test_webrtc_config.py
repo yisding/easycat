@@ -34,6 +34,13 @@ class TestWebRTCTransportConfig:
         with pytest.raises(ValueError, match="auth_token"):
             await transport.connect()
 
+    @pytest.mark.asyncio
+    async def test_non_loopback_bind_rejects_blank_auth_token(self):
+        transport = WebRTCTransport(WebRTCTransportConfig(host="0.0.0.0", auth_token="   "))
+
+        with pytest.raises(ValueError, match="auth_token"):
+            await transport.connect()
+
     def test_stats_path_defaults_from_validation_env(self, monkeypatch):
         monkeypatch.setenv("EASYCAT_WEBRTC_STATS_PATH", "/tmp/easycat-webrtc-stats.jsonl")
 
@@ -114,6 +121,13 @@ class TestWebRTCTransportConfig:
         ]
         assert config.ice_servers[1].username == "turn-user"
         assert config.ice_servers[1].credential == "turn-secret"
+
+    def test_env_config_treats_blank_signaling_token_as_missing(self, monkeypatch):
+        monkeypatch.setenv("WEBRTC_SIGNALING_TOKEN", "   ")
+
+        config = webrtc_transport_config_from_env()
+
+        assert config.auth_token is None
 
     def test_env_ice_server_helper_can_skip_public_stun(self, monkeypatch):
         monkeypatch.setenv("TURN_SERVER_URL", "turn:example.com:3478")
