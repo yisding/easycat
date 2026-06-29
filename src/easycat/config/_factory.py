@@ -594,6 +594,25 @@ def create_session(config: EasyConfig) -> Session:
     if config.debug != "off" and _emergency_export_enabled(config):
         install_emergency_export(session)
 
+    # Dev debugger mode: register every session built through this funnel so the
+    # live session selector lists them across ALL modes (the per-connection
+    # server modes build sessions here too). A no-op unless dev registration is
+    # armed; the UI launch itself stays the separate, additive opt-in.
+    #
+    # Gate the import so an off/light production session never loads the debugger
+    # module graph (``easycat.debugger`` eagerly imports the ~3k-line server +
+    # numpy). ``EASYCAT_DEV`` covers the env opt-in; the ``sys.modules`` check
+    # covers ``VoiceApp(dev=True)`` server modes whose launch hook already
+    # imported ``dev`` before any connection builds a session. Local
+    # ``VoiceApp(dev=True)`` still registers via its own ``_arm_dev_debugger``.
+    import os
+    import sys
+
+    if os.getenv("EASYCAT_DEV") or "easycat.debugger.dev" in sys.modules:
+        from easycat.debugger.dev import arm_dev_session
+
+        arm_dev_session(session)
+
     return session
 
 

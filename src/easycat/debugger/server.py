@@ -250,6 +250,12 @@ class DebuggerSource:
     # for bundle sources and never surfaced in ``manifest()`` — the browser
     # learns it can annotate via the ``supports_annotate`` flag, never the path.
     _annotate_path: Path | None = field(default=None, repr=False)
+    # Monotonic "which session is selected" counter for dev-registry sources.
+    # The live WS loop reads it each tick and, when it advances, resets its
+    # follow-cursor and tells the UI to clear — so switching to a session whose
+    # journal sequence is *lower* than the prior one re-snapshots cleanly
+    # instead of stalling. ``None`` (every non-dev source) reads as a constant 0.
+    _selection_epoch_fn: Any | None = field(default=None, repr=False)
     is_live: bool = False
 
     def records(self) -> list[dict[str, Any]]:
@@ -292,6 +298,12 @@ class DebuggerSource:
             return self._progress_fn()
         n = len(self.records())
         return (n, n)
+
+    def selection_epoch(self) -> int:
+        """Return the dev-registry selection counter (0 for non-dev sources)."""
+        if self._selection_epoch_fn is not None:
+            return int(self._selection_epoch_fn())
+        return 0
 
     def artifact(self, ref: str) -> bytes | None:
         return self._artifact_fn(ref)
@@ -1592,6 +1604,41 @@ def _records_since(
     return batch, int(batch[-1]["sequence"])
 
 
+def _should_reset_live_follow(prev_epoch: int | None, cur_epoch: int) -> bool:
+    """Whether the WS live-follow cursor should reset (the selection changed).
+
+    Pure so it is unit-testable in isolation: resets iff a prior epoch was seen
+    and the current epoch differs (a dev-registry session switch). The first
+    tick (``prev_epoch is None``) never resets — it is the initial snapshot.
+    """
+    return prev_epoch is not None and cur_epoch != prev_epoch
+
+
+def _session_overview_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reduce one session's journal records to cheap, journal-only triage stats.
+
+    No audio decode and no issue analysis — just the per-turn rollups
+    (:func:`summarise_turns`) summed: turn count, total errors/interruptions,
+    and the wall time of the most recent turn. Powers the cross-session overview
+    strip so a developer can see which of N concurrent calls is hot or erroring.
+    """
+    turns = _summarise_turns(records)
+    error_count = sum(int(t.get("error_count", 0) or 0) for t in turns)
+    interruption_count = sum(int(t.get("interruption_count", 0) or 0) for t in turns)
+    last_turn_wall_ms = 0.0
+    if turns:
+        first_ns = turns[-1].get("first_wall_ns")
+        last_ns = turns[-1].get("last_wall_ns")
+        if isinstance(first_ns, (int, float)) and isinstance(last_ns, (int, float)):
+            last_turn_wall_ms = max(0.0, (last_ns - first_ns) / 1e6)
+    return {
+        "turn_count": len(turns),
+        "error_count": error_count,
+        "interruption_count": interruption_count,
+        "last_turn_wall_ms": round(last_turn_wall_ms, 1),
+    }
+
+
 # ── Dev-mode registry adaptation ─────────────────────────────────
 
 
@@ -1638,19 +1685,31 @@ class _DevDebuggerState:
     def __init__(self, registry: Any) -> None:
         self._registry = registry
         self._active_id: str | None = None
+        # Bumps whenever the active session changes (explicit select OR the
+        # single-session auto-select), so the WS loop knows to reset live-follow.
+        self._selection_epoch = 0
 
     @property
     def registry(self) -> Any:
         return self._registry
 
+    def selection_epoch(self) -> int:
+        return self._selection_epoch
+
+    def _set_active(self, registry_id: str | None) -> None:
+        """Point at *registry_id*, bumping the selection epoch on a real change."""
+        if registry_id != self._active_id:
+            self._active_id = registry_id
+            self._selection_epoch += 1
+
     def select(self, registry_id: str | None) -> bool:
         """Set the active registry id. Returns ``True`` when it resolves."""
         if registry_id is None:
-            self._active_id = None
+            self._set_active(None)
             return True
         if self._registry.get(registry_id) is None:
             return False
-        self._active_id = registry_id
+        self._set_active(registry_id)
         return True
 
     def active_id(self) -> str | None:
@@ -1660,7 +1719,7 @@ class _DevDebuggerState:
             return self._active_id
         sessions = self._registry.list()
         if len(sessions) == 1:
-            self._active_id = sessions[0].registry_id
+            self._set_active(sessions[0].registry_id)
             return self._active_id
         return None
 
@@ -1701,6 +1760,7 @@ class _DevDebuggerState:
             _manifest_fn=_manifest,
             _bundle_fn=lambda: state._active_source().bundle(),
             _replay_fn=None,
+            _selection_epoch_fn=state.selection_epoch,
             is_live=True,
         )
         # The export route reads these hooks off the bound source (the proxy);
@@ -2380,8 +2440,37 @@ def _make_app(
         await ws.prepare(request)
         last_seq = -1
         last_pushed_seq = 0
+        last_epoch: int | None = None
+        last_sessions_version: int | None = None
         try:
             while not ws.closed:
+                # Dev-registry session switch: when the developer re-points the
+                # selector, the active session's journal sequence can be LOWER
+                # than the one we were following, which would otherwise stall the
+                # follow-cursor forever.  Reset the cursor and tell the UI to
+                # clear so the newly selected session re-snapshots from scratch.
+                cur_epoch = source.selection_epoch()
+                if _should_reset_live_follow(last_epoch, cur_epoch):
+                    last_seq = -1
+                    last_pushed_seq = 0
+                    await ws.send_json({"type": "reset", "selection_epoch": cur_epoch})
+                last_epoch = cur_epoch
+                # Dev-registry live selector: push the session list only when it
+                # actually changed (the registry's O(1) version counter bumps on
+                # register/unregister/prune), so the UI selector updates as calls
+                # come and go without polling /api/dev/sessions.
+                if dev is not None:
+                    sessions_version = dev.registry.version()
+                    if sessions_version != last_sessions_version:
+                        last_sessions_version = sessions_version
+                        await ws.send_json(
+                            {
+                                "type": "sessions",
+                                "sessions": [s.to_dict() for s in dev.registry.list()],
+                                "active_session": dev.active_id(),
+                                "selection_epoch": cur_epoch,
+                            }
+                        )
                 # Cheap O(1) growth probe — never re-reads or re-serializes
                 # the journal just to compare counts.  Only emit a snapshot
                 # when the monotonic sequence advances; the actual records
@@ -2481,6 +2570,54 @@ def _make_app(
             )
         return web.json_response({"active_session": dev.active_id()})
 
+    async def dev_overview(_request: Any) -> Any:
+        """Cross-session triage: per-session journal stats + an aggregate strip.
+
+        At a glance: which of N concurrent live sessions is hot, idle, or
+        erroring. Journal-derived only (no audio decode); a flaky session is
+        skipped rather than 500'ing the whole strip, and zero sessions yields an
+        empty-but-200 report.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        sessions_out: list[dict[str, Any]] = []
+        sessions_running = 0
+        active_turns = 0
+        errors_total = 0
+        for summary in dev.registry.list():
+            session = dev.registry.get(summary.registry_id)
+            stats = {
+                "turn_count": 0,
+                "error_count": 0,
+                "interruption_count": 0,
+                "last_turn_wall_ms": 0.0,
+            }
+            if session is not None:
+                try:
+                    stats = _session_overview_stats(_session_source(session).records())
+                except Exception:  # noqa: BLE001 - one flaky session must not 500 the strip
+                    logger.debug(
+                        "overview stats failed for %s", summary.registry_id, exc_info=True
+                    )
+            if summary.is_running:
+                sessions_running += 1
+            if summary.activity == "active":
+                active_turns += 1
+            errors_total += int(stats["error_count"])
+            sessions_out.append({**summary.to_dict(), **stats})
+        return web.json_response(
+            {
+                "summary": {
+                    "sessions_total": len(sessions_out),
+                    "sessions_running": sessions_running,
+                    "active_turns": active_turns,
+                    "errors_total": errors_total,
+                },
+                "sessions": sessions_out,
+                "active_session": dev.active_id(),
+            }
+        )
+
     app = web.Application(middlewares=[_origin_guard])
     app.router.add_get("/", index)
     app.router.add_get("/api/manifest", manifest)
@@ -2505,6 +2642,7 @@ def _make_app(
     if dev is not None:
         app.router.add_get("/api/dev/sessions", dev_sessions)
         app.router.add_post("/api/dev/select", dev_select)
+        app.router.add_get("/api/dev/overview", dev_overview)
     app.router.add_get("/ws", websocket)
     # Static assets directory if we ever add JS / CSS files.
     if static_dir.is_dir():

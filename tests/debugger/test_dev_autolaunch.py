@@ -260,7 +260,8 @@ async def test_dev_sessions_route_lists_and_selects():
     from easycat.debugger.session_registry import SessionRegistry
 
     registry = SessionRegistry()
-    sid = registry.register(_FakeSession("live-1"), label="first")
+    live = _FakeSession("live-1")  # held: the registry only weakly references it
+    sid = registry.register(live, label="first")
     app = _dev_app(registry)
 
     async with TestClient(TestServer(app)) as client:

@@ -161,10 +161,21 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   Dev mode (`EASYCAT_DEV=1` / `VoiceApp(dev=True)`) defaults to durable
   debugging when you have not set `debug=` explicitly, registers every live
   session in a process-local registry, and launches ONE loopback debugger UI per
-  process. The UI adds a **live session selector** so you can switch among
-  concurrently running browser/websocket/twilio sessions (`GET
-  /api/dev/sessions` lists them; `POST /api/dev/select` re-points every panel at
-  the selected session).
+  process. Registration flows through the single `create_session` funnel, so
+  **every mode** populates the UI — including the per-connection
+  browser/websocket/twilio sessions built downstream — and sessions
+  auto-unregister when they stop (weakly held, so a stopped call is never pinned
+  alive or left lingering in the list).
+
+  The UI adds a **live session selector** that updates over the WebSocket as
+  calls come and go (`GET /api/dev/sessions` lists them; `POST /api/dev/select`
+  re-points every panel — switching a session resets the live-follow cursor so
+  a session whose journal is "behind" still streams cleanly). It also surfaces a
+  **cross-session overview strip** (`GET /api/dev/overview`) with one chip per
+  session colored by error count, a "follow newest" toggle, `[`/`]` keyboard
+  switching, and a filter box. If the default port (8765) is taken — e.g. a
+  second dev process — the UI scans the next few loopback ports automatically
+  (override with `EASYCAT_DEV_DEBUGGER_PORT`).
 
   Dev mode is **purely additive** over the autolaunch guard: it is a separate,
   explicit opt-in. `debug="full"` on its own still keeps a durable journal and
