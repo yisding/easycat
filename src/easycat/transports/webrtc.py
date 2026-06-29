@@ -176,39 +176,60 @@ def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
     ``bytes(frame.planes[0])`` can include PyAV line padding.  For decoded
     aiortc frames that padding can be several times larger than the actual
     samples, which makes the downstream pipeline see too much audio per RTP
-    frame.  ``to_ndarray()`` returns only the valid samples.
+    frame.  Slice by frame metadata instead of ``to_ndarray()`` so
+    ``easycat[webrtc]`` does not need a NumPy dependency.
     """
     frame_rate = int(getattr(frame, "sample_rate", None) or _WEBRTC_SAMPLE_RATE)
     layout = getattr(frame, "layout", None)
     channels = len(getattr(layout, "channels", ()) or ()) or 1
-
-    to_ndarray = getattr(frame, "to_ndarray", None)
-    if callable(to_ndarray):
-        array = to_ndarray()
-        dtype = getattr(array, "dtype", None)
-        dtype_kind = getattr(dtype, "kind", "")
-        if dtype_kind == "f":
-            numpy = require_module("numpy", extra="webrtc", purpose="WebRTC audio conversion")
-            array = (numpy.clip(array, -1.0, 1.0) * 32767.0).astype("<i2")
-        else:
-            array = array.astype("<i2", copy=False)
-
-        frame_format = getattr(frame, "format", None)
-        is_planar = bool(getattr(frame_format, "is_planar", False))
-        if is_planar and channels > 1:
-            array = array.reshape(channels, -1).T.reshape(-1)
-        else:
-            array = array.reshape(-1)
-        return array.tobytes(), frame_rate, channels
-
-    # Fallback for minimal test doubles.  Slice the valid sample span so any
-    # padded plane buffers do not inflate audio duration.
-    raw = bytes(frame.planes[0])
+    frame_format = getattr(frame, "format", None)
+    sample_width = int(getattr(frame_format, "bytes", 2) or 2)
     samples = int(getattr(frame, "samples", 0) or 0)
-    valid_bytes = samples * channels * 2
-    if valid_bytes > 0:
-        raw = raw[:valid_bytes]
+    planes = list(getattr(frame, "planes", ()))
+    if not planes:
+        return b"", frame_rate, channels
+
+    is_planar = bool(getattr(frame_format, "is_planar", False))
+    if is_planar and channels > 1 and len(planes) >= channels and samples > 0:
+        raw = _interleave_audio_planes(
+            planes,
+            samples=samples,
+            channels=channels,
+            sample_width=sample_width,
+        )
+    else:
+        raw = bytes(planes[0])
+        valid_bytes = samples * channels * sample_width
+        if valid_bytes > 0:
+            raw = raw[:valid_bytes]
     return raw, frame_rate, channels
+
+
+def _interleave_audio_planes(
+    planes: list[Any],
+    *,
+    samples: int,
+    channels: int,
+    sample_width: int,
+) -> bytes:
+    """Return interleaved bytes for planar PCM frames."""
+    plane_bytes = []
+    valid_plane_bytes = samples * sample_width
+    for plane in planes[:channels]:
+        data = bytes(plane)[:valid_plane_bytes]
+        if len(data) < valid_plane_bytes:
+            data += bytes(valid_plane_bytes - len(data))
+        plane_bytes.append(data)
+
+    interleaved = bytearray(samples * channels * sample_width)
+    offset = 0
+    for sample in range(samples):
+        start = sample * sample_width
+        end = start + sample_width
+        for channel in plane_bytes:
+            interleaved[offset : offset + sample_width] = channel[start:end]
+            offset += sample_width
+    return bytes(interleaved)
 
 
 # ── Configuration ────────────────────────────────────────────────

@@ -215,7 +215,6 @@ class TestWebRTCIngressQueueOwnership:
 
     @pytest.mark.asyncio
     async def test_inbound_consume_ignores_pyav_plane_padding(self):
-        numpy = pytest.importorskip("numpy")
         transport = WebRTCTransport()
         target_format = transport._config.audio_format
 
@@ -224,22 +223,23 @@ class TestWebRTCIngressQueueOwnership:
 
         class _PackedFormat:
             is_planar = False
+            bytes = 2
 
         class _PaddedDecodedFrame:
             sample_rate = 48_000
             samples = 960
             layout = _StereoLayout()
             format = _PackedFormat()
-            planes = [bytes(23_040)]
 
             def __init__(self) -> None:
                 # 20 ms of valid packed stereo PCM at 48 kHz. The fake plane
                 # above mirrors PyAV's padded decoded aiortc buffers; the
                 # transport must use only these valid samples.
-                self._valid_pcm = bytes(960 * 2 * 2)
+                valid_pcm = bytes(960 * 2 * 2)
+                self.planes = [valid_pcm + (b"\xff" * (23_040 - len(valid_pcm)))]
 
-            def to_ndarray(self):
-                return numpy.frombuffer(self._valid_pcm, dtype="<i2").reshape(1, -1)
+            def to_ndarray(self):  # pragma: no cover - must not be used
+                raise AssertionError("WebRTC inbound extraction must not require NumPy")
 
         class _OneFrameTrack:
             def __init__(self) -> None:
