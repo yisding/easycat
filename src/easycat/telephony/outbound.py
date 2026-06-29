@@ -127,6 +127,8 @@ def parse_call_status_callback(
 
     if status == "completed":
         duration_s = _parse_float(params.get("Duration"))
+        if duration_s is None:
+            duration_s = _parse_float(params.get("CallDuration"))
         return CallEnded(
             call_sid=call_sid,
             duration_s=duration_s,

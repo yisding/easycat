@@ -58,6 +58,13 @@ class TestParseCallStatusCallback:
         assert result.disposition == "completed"
         assert result.number == "+1999"
 
+    def test_completed_status_reads_call_duration_alias(self) -> None:
+        result = parse_call_status_callback(
+            {"CallStatus": "completed", "CallSid": "CA123", "CallDuration": "45"}
+        )
+        assert isinstance(result, CallEnded)
+        assert result.duration_s == 45.0
+
     def test_completed_status_ignores_malformed_duration(self) -> None:
         result = parse_call_status_callback(
             {"CallStatus": "completed", "CallSid": "CA123", "Duration": "not-a-number"}
