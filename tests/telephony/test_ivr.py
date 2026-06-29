@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,10 +42,22 @@ class TestIVRNavigatorConfig:
         with pytest.raises(ValueError, match=field):
             IVRNavigatorConfig(**{field: -0.1})
 
+    @pytest.mark.parametrize("field", ["prompt_timeout_s", "agent_timeout_s"])
+    @pytest.mark.parametrize("value", [math.nan, math.inf])
+    def test_rejects_non_finite_timeouts(self, field: str, value: float) -> None:
+        with pytest.raises(ValueError, match=field):
+            IVRNavigatorConfig(**{field: value})
+
     @pytest.mark.parametrize("field", ["agent_retry_delay_s", "hold_silence_threshold_s"])
     def test_rejects_negative_duration_knobs(self, field: str) -> None:
         with pytest.raises(ValueError, match=field):
             IVRNavigatorConfig(**{field: -0.1})
+
+    @pytest.mark.parametrize("field", ["agent_retry_delay_s", "hold_silence_threshold_s"])
+    @pytest.mark.parametrize("value", [math.nan, math.inf])
+    def test_rejects_non_finite_duration_knobs(self, field: str, value: float) -> None:
+        with pytest.raises(ValueError, match=field):
+            IVRNavigatorConfig(**{field: value})
 
 
 class TestIVRNavigator:

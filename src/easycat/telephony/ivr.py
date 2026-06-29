@@ -15,6 +15,7 @@ __all__ = [
 
 import asyncio
 import logging
+import math
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -88,12 +89,22 @@ class IVRNavigatorConfig:
 
 
 def _validate_positive_number(name: str, value: float) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
         raise ValueError(f"{name} must be a positive number")
 
 
 def _validate_non_negative_number(name: str, value: float) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+    ):
         raise ValueError(f"{name} must be a non-negative number")
 
 
