@@ -389,7 +389,17 @@ class RunBundle:
                     "Bundle manifest is not valid JSON",
                     reason_code="INVALID_MANIFEST_JSON",
                 ) from exc
+            if not isinstance(manifest_data, dict):
+                raise BundleValidationError(
+                    "Bundle manifest must be a JSON object",
+                    reason_code="INVALID_MANIFEST",
+                )
             fmt_ver = manifest_data.get("format_version", 0)
+            if not isinstance(fmt_ver, int) or isinstance(fmt_ver, bool) or fmt_ver < 0:
+                raise BundleValidationError(
+                    "Bundle format_version must be a non-negative integer",
+                    reason_code="INVALID_MANIFEST",
+                )
             if fmt_ver > FORMAT_VERSION:
                 raise BundleVersionError(
                     f"Bundle format_version {fmt_ver} is newer than "
@@ -400,12 +410,32 @@ class RunBundle:
             for name in zf.namelist():
                 _reject_traversal(name)
 
+            provider_versions = manifest_data.get("provider_versions", {})
+            config_snapshot = manifest_data.get("config_snapshot", {})
+            env_metadata = manifest_data.get("env_metadata", {})
+            for key, value in (
+                ("provider_versions", provider_versions),
+                ("config_snapshot", config_snapshot),
+                ("env_metadata", env_metadata),
+            ):
+                if not isinstance(value, dict):
+                    raise BundleValidationError(
+                        f"Bundle manifest {key} must be a JSON object",
+                        reason_code="INVALID_MANIFEST",
+                    )
+            sharing_banner = manifest_data.get("sharing_banner", "")
+            if not isinstance(sharing_banner, str):
+                raise BundleValidationError(
+                    "Bundle manifest sharing_banner must be a string",
+                    reason_code="INVALID_MANIFEST",
+                )
+
             manifest = Manifest(
                 format_version=fmt_ver,
-                provider_versions=manifest_data.get("provider_versions", {}),
-                config_snapshot=manifest_data.get("config_snapshot", {}),
-                env_metadata=manifest_data.get("env_metadata", {}),
-                sharing_banner=manifest_data.get("sharing_banner", ""),
+                provider_versions=provider_versions,
+                config_snapshot=config_snapshot,
+                env_metadata=env_metadata,
+                sharing_banner=sharing_banner,
             )
 
             # Read journal
@@ -454,13 +484,24 @@ class RunBundle:
                 artifact_blobs[ref] = data
 
             # Reconstruct artifacts from inline base64 blobs in manifest
-            for ref, b64 in manifest_data.get("inline_artifacts", {}).items():
+            inline_artifacts = manifest_data.get("inline_artifacts", {})
+            if not isinstance(inline_artifacts, dict):
+                raise BundleValidationError(
+                    "Bundle inline_artifacts must be a JSON object",
+                    reason_code="INVALID_MANIFEST",
+                )
+            for ref, b64 in inline_artifacts.items():
                 if ref in artifact_index:
                     continue  # file-based entry takes precedence
                 if not _SHA256_REF.match(ref):
                     raise BundleValidationError(
                         f"Invalid inline artifact ref: {ref!r}",
                         reason_code="INVALID_REF",
+                    )
+                if not isinstance(b64, str):
+                    raise BundleValidationError(
+                        f"Inline artifact {ref!r} must be a base64 string",
+                        reason_code="INVALID_MANIFEST",
                     )
                 estimated_size = (len(b64) * 3) // 4
                 if total_size + estimated_size > _ARTIFACT_SIZE_CAP:

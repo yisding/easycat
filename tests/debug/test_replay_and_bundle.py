@@ -645,6 +645,60 @@ class TestBundleValidation:
         with pytest.raises(BundleVersionError, match="newer than"):
             RunBundle.load(bundle_path)
 
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            [],
+            {"format_version": "1"},
+            {"format_version": True},
+        ],
+    )
+    def test_invalid_manifest_shape_is_rejected(self, tmp_path, manifest):
+        bundle_path = _make_bundle_zip(tmp_path, manifest=manifest)
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+        assert exc_info.value.reason_code == "INVALID_MANIFEST"
+
+    @pytest.mark.parametrize(
+        "inline_artifacts",
+        [
+            [],
+            {"a" * 64: 123},
+        ],
+    )
+    def test_invalid_inline_artifacts_shape_is_rejected(self, tmp_path, inline_artifacts):
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                "inline_artifacts": inline_artifacts,
+            },
+        )
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+        assert exc_info.value.reason_code == "INVALID_MANIFEST"
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("provider_versions", []),
+            ("config_snapshot", []),
+            ("env_metadata", []),
+            ("sharing_banner", {}),
+        ],
+    )
+    def test_invalid_manifest_metadata_shape_is_rejected(self, tmp_path, field, value):
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                field: value,
+            },
+        )
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+        assert exc_info.value.reason_code == "INVALID_MANIFEST"
+
     def test_metadata_too_large(self, tmp_path):
         """Journal records with >1MB metadata should be rejected."""
         # Create a record with oversized metadata
