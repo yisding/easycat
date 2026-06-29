@@ -78,6 +78,11 @@ class TestBoundedAudioQueueBasic:
         assert q.max_size == 5
         assert q.policy == DropPolicy.DROP_NEWEST
 
+    @pytest.mark.parametrize("max_size", [0, -1, True])
+    def test_rejects_invalid_max_size(self, max_size):
+        with pytest.raises(ValueError, match="max_size"):
+            BoundedAudioQueue(max_size=max_size)
+
 
 # ── Drop policies (Task 8.6) ──────────────────────────────────────
 
