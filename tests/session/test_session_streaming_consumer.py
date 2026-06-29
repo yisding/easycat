@@ -204,6 +204,46 @@ async def test_consume_agent_stream_strip_markdown_disambiguates_open_link_mid_s
     assert "more plain prose" in joined
 
 
+async def test_consume_agent_stream_strip_markdown_rechecks_digit_colon_after_plain_delta():
+    """A digit-ending colon should emit once the next delta proves it is not a time."""
+    from easycat.session._streaming import consume_agent_stream
+
+    async def _stream() -> AsyncIterator[AgentBridgeEvent]:
+        yield AgentBridgeEvent(kind="text_delta", text="Next, step 1:")
+        yield AgentBridgeEvent(kind="text_delta", text=" continue drafting")
+        yield AgentBridgeEvent(kind="done", text="")
+
+    turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+    tts_queue: asyncio.Queue[TTSInput | None] = asyncio.Queue()
+    built: list[tuple[str, bool]] = []
+
+    def _prepare(text: str, *, is_streaming: bool = True, is_final: bool = False) -> TTSInput:
+        _ = is_streaming
+        built.append((text, is_final))
+        return TTSInput(text=text)
+
+    result = await consume_agent_stream(
+        _stream,
+        cancel_token=turn.cancel_token,
+        tts_queue=tts_queue,
+        emit=AsyncMock(),
+        prepare_tts_payload=_prepare,
+        strip_md=True,
+        turn=turn,
+    )
+
+    assert result.error is None
+    payloads: list[TTSInput] = []
+    while True:
+        item = await tts_queue.get()
+        if item is None:
+            break
+        payloads.append(item)
+
+    assert ("Next, step 1: ", False) in built
+    assert payloads[0].text == "Next, step 1: "
+
+
 async def test_consume_agent_stream_sentinel_skipped_when_consumer_stopped():
     """If the bounded queue is full and the consumer stopped draining, the
     stop sentinel is dropped instead of deadlocking the finally block."""
