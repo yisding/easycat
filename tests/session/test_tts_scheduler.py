@@ -415,6 +415,43 @@ async def test_finalize_speaking_turn_keeps_no_interrupt_until_outbound_drain() 
     assert turn_manager.state.value == "idle"
 
 
+@pytest.mark.asyncio
+async def test_finalize_speaking_turn_does_not_clear_turn_started_during_mark_flush() -> None:
+    tts = _RecordingTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    old_turn = TurnContext("old-turn", CancelToken())
+    new_turn = TurnContext("new-turn", CancelToken())
+    ctx["current_turn_ref"]["turn"] = old_turn
+    turn_manager = ctx["turn_manager"]
+    await turn_manager.bot_started_speaking()
+
+    flush_started = asyncio.Event()
+    release_flush = asyncio.Event()
+
+    async def _flush_trailing_playback_mark(turn: TurnContext | None = None) -> None:
+        assert turn is old_turn
+        flush_started.set()
+        await release_flush.wait()
+
+    ctx["router"].flush_trailing_playback_mark = _flush_trailing_playback_mark
+
+    finalize_task = asyncio.create_task(
+        scheduler.finalize_speaking_turn(
+            old_turn,
+            turn_generation=old_turn.generation,
+        )
+    )
+    await flush_started.wait()
+    ctx["current_turn_ref"]["turn"] = new_turn
+
+    release_flush.set()
+    should_stop = await finalize_task
+
+    assert should_stop is False
+    assert ctx["current_turn_ref"]["turn"] is new_turn
+    assert turn_manager.state.value == "idle"
+
+
 # ── Tests: synthesize_sentences stub ─────────────────────────
 
 
