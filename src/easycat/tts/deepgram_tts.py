@@ -168,6 +168,8 @@ class DeepgramTTS(_WSTTSBase):
                         ctrl = json.loads(message)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(ctrl, dict):
+                        continue
                     ctrl_type = ctrl.get("type")
                     if ctrl_type == "Flushed":
                         break
