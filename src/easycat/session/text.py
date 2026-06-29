@@ -109,6 +109,8 @@ def split_first_clause(text: str) -> tuple[str, str]:
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
+        if _is_numeric_separator(text, i):
+            continue
         # Include any trailing whitespace so the remaining buffer starts at
         # the next clause's first non-space character.
         end = i + 1
@@ -120,6 +122,17 @@ def split_first_clause(text: str) -> tuple[str, str]:
         # Too short to ship on its own; keep scanning for a later boundary.
 
     return "", text
+
+
+def _is_numeric_separator(text: str, index: int) -> bool:
+    if text[index] not in ".,．，":
+        return False
+    return (
+        index > 0
+        and index + 1 < len(text)
+        and text[index - 1].isdigit()
+        and text[index + 1].isdigit()
+    )
 
 
 def _is_word_char(ch: str) -> bool:
