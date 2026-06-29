@@ -146,8 +146,12 @@ def _parse_server(table: Any, where: str) -> ServerSection:
         raise EASYCAT_E602(path=where, problem="[server] host must be a string")
     if not isinstance(port, int) or isinstance(port, bool):
         raise EASYCAT_E602(path=where, problem="[server] port must be an integer")
+    if not 0 <= port <= 65535:
+        raise EASYCAT_E602(path=where, problem="[server] port must be between 0 and 65535")
     if not isinstance(max_sessions, int) or isinstance(max_sessions, bool):
         raise EASYCAT_E602(path=where, problem="[server] max_sessions must be an integer")
+    if max_sessions < 1:
+        raise EASYCAT_E602(path=where, problem="[server] max_sessions must be >= 1")
 
     auth_raw = table.get("auth")
     auth = (
