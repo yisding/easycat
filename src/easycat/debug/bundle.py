@@ -387,7 +387,17 @@ class RunBundle:
                     "Bundle manifest is not valid JSON",
                     reason_code="INVALID_MANIFEST_JSON",
                 ) from exc
+            if not isinstance(manifest_data, dict):
+                raise BundleValidationError(
+                    "Bundle manifest must be a JSON object",
+                    reason_code="INVALID_MANIFEST",
+                )
             fmt_ver = manifest_data.get("format_version", 0)
+            if not isinstance(fmt_ver, int) or isinstance(fmt_ver, bool) or fmt_ver < 0:
+                raise BundleValidationError(
+                    "Bundle format_version must be a non-negative integer",
+                    reason_code="INVALID_MANIFEST",
+                )
             if fmt_ver > FORMAT_VERSION:
                 raise BundleVersionError(
                     f"Bundle format_version {fmt_ver} is newer than "

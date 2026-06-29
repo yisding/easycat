@@ -633,6 +633,20 @@ class TestBundleValidation:
         with pytest.raises(BundleVersionError, match="newer than"):
             RunBundle.load(bundle_path)
 
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            [],
+            {"format_version": "1"},
+            {"format_version": True},
+        ],
+    )
+    def test_invalid_manifest_shape_is_rejected(self, tmp_path, manifest):
+        bundle_path = _make_bundle_zip(tmp_path, manifest=manifest)
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+        assert exc_info.value.reason_code == "INVALID_MANIFEST"
+
     def test_metadata_too_large(self, tmp_path):
         """Journal records with >1MB metadata should be rejected."""
         # Create a record with oversized metadata
