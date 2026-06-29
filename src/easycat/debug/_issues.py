@@ -87,6 +87,12 @@ class IssueThresholds:
 _THRESHOLDS = IssueThresholds()
 
 
+def _record_name(record: Mapping[str, Any]) -> str:
+    """Return a hash-safe journal record name from untrusted bundle input."""
+    name = record.get("name")
+    return name if isinstance(name, str) else ""
+
+
 def _issue(
     *,
     code: str,
@@ -134,7 +140,7 @@ def _record_issues(
     """Flag per-record failures: errors, tool failures, timeouts, empty STT."""
     issues: list[dict[str, Any]] = []
     for record in records:
-        name = record.get("name") or ""
+        name = _record_name(record)
         turn_id = record.get("turn_id")
         turn_id = turn_id if isinstance(turn_id, str) and turn_id else None
         seq = record.get("sequence")
@@ -300,7 +306,7 @@ def _barge_in_cards(
         wall = record_wall_ns(record)
         if wall is None:
             continue
-        name = record.get("name")
+        name = _record_name(record)
         if _is_interruption(record):
             by_turn.setdefault(turn_id, []).append((wall, _INTERRUPTION, True))
         elif name in (_BOT_STARTED_SPEAKING, _VAD_START_SPEAKING) or name in _BOT_STOPPED_NAMES:
