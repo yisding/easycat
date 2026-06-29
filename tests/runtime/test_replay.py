@@ -366,6 +366,18 @@ class TestReplayRunner:
         # committable validation, so the walk simply slices [3, 5].
         assert [f.sequence for f in result.frames] == [3, 4, 5]
 
+    def test_skips_records_with_malformed_sequences(self, tmp_path):
+        records = [
+            {"sequence": "2", "kind": "event", "name": "bad-string"},
+            {"sequence": True, "kind": "event", "name": "bad-bool"},
+            {"sequence": 3, "kind": "event", "name": "ok"},
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+
+        result = bundle.replay(_spec(from_sequence=1, to_sequence=4))
+
+        assert [f.sequence for f in result.frames] == [3]
+
 
 # ── Version-match policy on ReplayRunner ─────────────────────────
 
