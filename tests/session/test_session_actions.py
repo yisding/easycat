@@ -299,7 +299,7 @@ async def test_dnc_session_action_lifecycle_is_written_to_journal() -> None:
 
     requested = by_name["session_action_requested"].data or {}
     assert requested["action"]["type"] == "add_to_dnc"
-    assert requested["action"]["number"] == "[REDACTED_PHONE]"
+    assert requested["action"]["number"] == "[REDACTED_SESSION_ACTION_VALUE]"
     assert requested["action"]["reason"] == "caller requested"
 
     started = by_name["session_action_started"].data or {}

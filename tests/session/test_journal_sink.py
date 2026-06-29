@@ -339,11 +339,61 @@ async def test_journal_sink_coerces_non_json_native_action_payload() -> None:
     # The persistent backend's json.dumps(default=str) round-trip is now a
     # no-op, so the in-memory and persistent backends store an identical shape.
     assert record.data == json.loads(json.dumps(record.data, default=str))
-    coerced_payload = record.data["action"]["payload"]
-    # The set / datetime leaves were coerced to JSON-native strings, not kept
-    # as live Python objects.
-    assert isinstance(coerced_payload["tags"], str)
-    assert isinstance(coerced_payload["scheduled_at"], str)
+    assert record.data["action"]["payload"] == "[REDACTED_SESSION_ACTION_PAYLOAD]"
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_redacts_sensitive_session_action_fields() -> None:
+    from easycat.events import SessionActionCompleted, SessionActionRequested
+    from easycat.session.actions import (
+        SendDTMFAction,
+        SendSMSAction,
+        SessionActionResult,
+        TransferCallAction,
+        TransferPlan,
+    )
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(SessionActionRequested(action=SendDTMFAction(digits="1234#")))
+    await bus.emit(
+        SessionActionRequested(
+            action=TransferCallAction(
+                target="+15551234567",
+                reason="escalation",
+                plan=TransferPlan(post_dial_digits="9876", caller_id="+15557654321"),
+            )
+        )
+    )
+    await bus.emit(
+        SessionActionCompleted(
+            action=SendSMSAction(to="+15550001111", body="PIN 1234 for +15551234567"),
+            executor="TwilioSessionActionExecutor",
+            result=SessionActionResult(metadata={"message_sid": "SM123", "to": "+15550001111"}),
+        )
+    )
+
+    dtmf, transfer, sms = journal.read()
+    assert dtmf.data["action"]["digits"] == "[REDACTED_SESSION_ACTION_VALUE]"
+    assert transfer.data["action"]["target"] == "[REDACTED_SESSION_ACTION_VALUE]"
+    assert transfer.data["action"]["plan"]["post_dial_digits"] == (
+        "[REDACTED_SESSION_ACTION_VALUE]"
+    )
+    assert transfer.data["action"]["plan"]["caller_id"] == "[REDACTED_SESSION_ACTION_VALUE]"
+    assert transfer.data["action"]["reason"] == "escalation"
+    assert sms.data["action"]["body"] == "[REDACTED_SESSION_ACTION_VALUE]"
+    assert sms.data["action"]["to"] == "[REDACTED_SESSION_ACTION_VALUE]"
+    assert sms.data["result"]["metadata"]["message_sid"] == "SM123"
+    assert sms.data["result"]["metadata"]["to"] == "[REDACTED_SESSION_ACTION_VALUE]"
 
 
 def test_journal_sink_stores_artifact_refs_before_record() -> None:

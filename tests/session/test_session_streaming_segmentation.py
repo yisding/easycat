@@ -122,6 +122,18 @@ def test_split_first_clause_emits_clause_at_comma():
     assert remaining == "and I will report back soon."
 
 
+def test_split_first_clause_skips_decimal_point() -> None:
+    ready, remaining = split_first_clause("The estimate is 3.5 seconds, then continue.")
+    assert ready == "The estimate is 3.5 seconds, "
+    assert remaining == "then continue."
+
+
+def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> None:
+    ready, remaining = split_first_clause("The estimate is 3.")
+    assert ready == ""
+    assert remaining == "The estimate is 3."
+
+
 def test_split_first_clause_skips_short_opener_fragment():
     # "Sure," is too short to ship on its own; the split falls through to the
     # sentence terminator instead of emitting a clipped fragment.

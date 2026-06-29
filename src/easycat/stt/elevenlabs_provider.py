@@ -476,6 +476,22 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._audio_pending_commit = False
 
     def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
+        text = msg.get("text", "")
+        if not text:
+            return
+
+        if self._transcribed_through_epoch <= self._committed_through_epoch:
+            # Some valid VAD commits arrive without a preceding
+            # ``partial_transcript``. The committed transcript itself proves
+            # the server transcribed a segment, but not that it covered newer
+            # trailing audio streamed before this message was processed. With
+            # no partial boundary, acknowledge only the next uncommitted epoch
+            # so resumed speech stays pending for end_stream().
+            self._transcribed_through_epoch = max(
+                self._transcribed_through_epoch,
+                min(self._audio_epoch, self._committed_through_epoch + 1),
+            )
+
         self._reconcile_pending_commit_on_committed()
         if self._dropping_pending_final:
             # A previous ``_send_commit`` already gave up on this committed
@@ -489,10 +505,6 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
-            return
-
-        text = msg.get("text", "")
-        if not text:
             return
 
         self._emit_event(
