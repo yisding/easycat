@@ -72,7 +72,7 @@ def test_redacted_dump_shows_reference_never_resolved_token() -> None:
 
 @pytest.mark.parametrize(
     "host",
-    ["127.0.0.1", "0.0.0.0", "10.0.0.5", "fd00::1", "server.internal"],
+    ["127.0.0.1", "0.0.0.0", "192.0.2.5", "fd00::1", "server.internal"],
 )
 def test_redacted_dump_redacts_bind_host(host: str) -> None:
     # The bind host may expose private addresses or internal topology through
