@@ -686,7 +686,7 @@ def _filter_records(
     out = []
     for r in records:
         seq = r.get("sequence")
-        if seq is None:
+        if isinstance(seq, bool) or not isinstance(seq, int):
             continue
         if from_seq is not None and seq < from_seq:
             continue
