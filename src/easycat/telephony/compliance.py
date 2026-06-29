@@ -84,7 +84,9 @@ def _normalize_dnc_number(phone: str, *, region: str | None = None) -> str:
 
     Falls back to a digit-only heuristic (see :func:`_normalize_digits_fallback`)
     when ``phonenumbers`` is unavailable or the number cannot be parsed, so DNC
-    matching still works — just without global canonicalization.
+    matching still works — just without global canonicalization.  Inputs that
+    cannot produce even one digit are rejected; otherwise unrelated non-number
+    strings would all collapse to the same empty DNC key.
 
     Keep a single deployment consistent: a list written while ``phonenumbers``
     is installed (E.164 keys) and later read without it (digit keys) will not
@@ -92,12 +94,27 @@ def _normalize_dnc_number(phone: str, *, region: str | None = None) -> str:
     ``region`` so both canonicalize the same way.
     """
     if _phonenumbers is None:
-        return _normalize_digits_fallback(phone)
+        normalized = _normalize_digits_fallback(phone)
+    else:
+        try:
+            parsed = _phonenumbers.parse(phone, region)
+        except _phonenumbers.NumberParseException:
+            normalized = _normalize_digits_fallback(phone)
+        else:
+            normalized = _phonenumbers.format_number(
+                parsed, _phonenumbers.PhoneNumberFormat.E164
+            )
+    if not _strip_to_digits(normalized):
+        raise ValueError("DNC phone number must contain at least one digit")
+    return normalized
+
+
+def _normalize_dnc_lookup_number(phone: str, *, region: str | None = None) -> str | None:
+    """Normalize a DNC lookup/removal key, returning ``None`` for no-number values."""
     try:
-        parsed = _phonenumbers.parse(phone, region)
-    except _phonenumbers.NumberParseException:
-        return _normalize_digits_fallback(phone)
-    return _phonenumbers.format_number(parsed, _phonenumbers.PhoneNumberFormat.E164)
+        return _normalize_dnc_number(phone, region=region)
+    except ValueError:
+        return None
 
 
 def _normalize_digits_fallback(phone: str) -> str:
@@ -226,17 +243,23 @@ class DNCList:
     def _normalize(self, phone: str) -> str:
         return _normalize_dnc_number(phone, region=self._default_region)
 
+    def _normalize_lookup(self, phone: str) -> str | None:
+        return _normalize_dnc_lookup_number(phone, region=self._default_region)
+
     def add(self, phone: str) -> None:
         """Add a number to the DNC list."""
         self._numbers.add(self._normalize(phone))
 
     def remove(self, phone: str) -> None:
         """Remove a number from the DNC list."""
-        self._numbers.discard(self._normalize(phone))
+        number = self._normalize_lookup(phone)
+        if number is not None:
+            self._numbers.discard(number)
 
     def is_on_dnc(self, phone: str) -> bool:
         """Check if a number is on the DNC list."""
-        return self._normalize(phone) in self._numbers
+        number = self._normalize_lookup(phone)
+        return number is not None and number in self._numbers
 
     def __len__(self) -> int:
         return len(self._numbers)
@@ -297,6 +320,9 @@ class SQLiteDNCList:
     def _normalize(self, phone: str) -> str:
         return _normalize_dnc_number(phone, region=self._default_region)
 
+    def _normalize_lookup(self, phone: str) -> str | None:
+        return _normalize_dnc_lookup_number(phone, region=self._default_region)
+
     def _harden(self) -> None:
         """Force owner-only perms on the DB and any WAL/SHM sidecars."""
         if not self._persistent:
@@ -315,7 +341,9 @@ class SQLiteDNCList:
 
     def remove(self, phone: str) -> None:
         """Remove a number from the DNC list (no-op if absent)."""
-        number = self._normalize(phone)
+        number = self._normalize_lookup(phone)
+        if number is None:
+            return
         with self._lock:
             self._conn.execute("DELETE FROM dnc_numbers WHERE number = ?", (number,))
             self._conn.commit()
@@ -323,7 +351,9 @@ class SQLiteDNCList:
 
     def is_on_dnc(self, phone: str) -> bool:
         """Check if a number is on the DNC list."""
-        number = self._normalize(phone)
+        number = self._normalize_lookup(phone)
+        if number is None:
+            return False
         with self._lock:
             row = self._conn.execute(
                 "SELECT 1 FROM dnc_numbers WHERE number = ? LIMIT 1", (number,)
