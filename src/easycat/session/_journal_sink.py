@@ -51,6 +51,7 @@ from easycat.events import (
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
 from easycat.runtime.journal import ExecutionJournal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
+from easycat.validation.redaction import redact_value
 
 logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
@@ -78,6 +79,23 @@ _JOURNAL_ATTRS = (
 # normalize them once here so all backends store identical JSON-native shapes.
 _JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
+_REDACTED_SESSION_ACTION_VALUE = "[REDACTED_SESSION_ACTION_VALUE]"
+_REDACTED_SESSION_ACTION_PAYLOAD = "[REDACTED_SESSION_ACTION_PAYLOAD]"
+_SESSION_ACTION_SENSITIVE_KEYS = frozenset(
+    {
+        "body",
+        "caller_id",
+        "digits",
+        "from",
+        "from_",
+        "from_number",
+        "number",
+        "payload",
+        "post_dial_digits",
+        "target",
+        "to",
+    }
+)
 
 
 def _truncate_transport_degraded_detail(detail: str) -> str:
@@ -138,6 +156,38 @@ def _to_jsonable(value: Any) -> Any:
             data["type"] = getattr(action_type, "value", action_type)
         return _coerce_json_native(data)
     return value
+
+
+def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
+    """Redact sensitive session-action fields before journaling.
+
+    Session actions can carry telephony secrets and customer content (DTMF
+    PINs/account numbers, SMS bodies, transfer targets, and arbitrary custom
+    payloads).  Generic validation redaction catches long phone numbers and
+    token-like values, but short DTMF strings and provider-neutral field names
+    need action-specific minimization at the journal boundary.
+    """
+    normalized_key = str(key).lower() if key is not None else None
+    if normalized_key == "payload" and value not in ({}, None):
+        return _REDACTED_SESSION_ACTION_PAYLOAD
+    if normalized_key in _SESSION_ACTION_SENSITIVE_KEYS and value not in ("", None):
+        redacted = redact_value(value, key)
+        return redacted if redacted != value else _REDACTED_SESSION_ACTION_VALUE
+    if isinstance(value, dict):
+        return {
+            str(item_key): _redact_session_action_data(item_value, str(item_key))
+            for item_key, item_value in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list):
+        return [_redact_session_action_data(item, key) for item in value]
+    return redact_value(value, key)
+
+
+def _journal_attr_value(attr: str, value: Any) -> Any:
+    jsonable = _to_jsonable(value) if attr in _JSONABLE_ATTRS else value
+    if attr in {"action", "result"}:
+        return _redact_session_action_data(jsonable)
+    return jsonable
 
 
 class TurnIdResolver(Protocol):
@@ -306,7 +356,7 @@ class SessionJournalSink:
             for attr in _JOURNAL_ATTRS:
                 val = getattr(event, attr, None)
                 if val is not None:
-                    data[attr] = _to_jsonable(val) if attr in _JSONABLE_ATTRS else val
+                    data[attr] = _journal_attr_value(attr, val)
             error = None
             exc = getattr(event, "exception", None)
             if exc is not None:
