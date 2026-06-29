@@ -45,15 +45,22 @@ _REFERENCE = "reference"
 _POST_AEC = "post_aec"
 
 
+def _record_sequence(record: dict[str, Any]) -> int | None:
+    seq = record.get("sequence")
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        return None
+    return seq
+
+
 def _record_mono_ns(record: dict[str, Any]) -> int:
     """Best-effort monotonic timestamp for ordering aligned frames."""
     timing = record.get("timing")
     if isinstance(timing, dict):
         value = timing.get("mono_ns")
-        if isinstance(value, int):
+        if isinstance(value, int) and not isinstance(value, bool):
             return value
-    seq = record.get("sequence")
-    return int(seq) if isinstance(seq, int) else 0
+    seq = _record_sequence(record)
+    return seq if seq is not None else 0
 
 
 def align_tracks(
@@ -94,9 +101,12 @@ def align_tracks(
         pcm = resolve(ref) if callable(resolve) else None
         if not pcm:
             continue
+        sequence = _record_sequence(record)
+        if sequence is None:
+            continue
         tracks[track].append(
             {
-                "sequence": int(record.get("sequence") or 0),
+                "sequence": sequence,
                 "mono_ns": _record_mono_ns(record),
                 "ref": ref,
                 "pcm": pcm,

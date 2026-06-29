@@ -165,6 +165,40 @@ def test_align_tracks_groups_by_track_and_orders_by_mono_ns():
     assert all(e["ref"] != "ref-other" for e in tracks["reference"])
 
 
+def test_align_tracks_skips_malformed_sequence_values():
+    records = [
+        {
+            "sequence": "bad",
+            "name": AEC_REFERENCE_FRAME_NAME,
+            "turn_id": "t1",
+            "output_ref": "bad",
+            "data": {"stage": "audio"},
+            "timing": {"mono_ns": 100},
+        },
+        {
+            "sequence": True,
+            "name": AEC_REFERENCE_FRAME_NAME,
+            "turn_id": "t1",
+            "output_ref": "bool",
+            "data": {"stage": "audio"},
+            "timing": {"mono_ns": 200},
+        },
+        {
+            "sequence": 2,
+            "name": AEC_REFERENCE_FRAME_NAME,
+            "turn_id": "t1",
+            "output_ref": "ok",
+            "data": {"stage": "audio"},
+            "timing": {"mono_ns": 300},
+        },
+    ]
+    source = _DictSource(records, {"bad": b"NO", "bool": b"NO", "ok": b"OK"})
+
+    tracks = align_tracks(records, source=source, turn_id="t1")
+
+    assert [e["ref"] for e in tracks["reference"]] == ["ok"]
+
+
 def test_frame_rms_series_mulaw_width_one_yields_no_frames():
     # 8-bit mu-law (sample_width == 1) is unsupported by the shared decoder, so
     # the RMS series is empty rather than mis-decoded int8 garbage.
