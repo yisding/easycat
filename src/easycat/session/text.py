@@ -125,8 +125,10 @@ def split_first_clause(text: str) -> tuple[str, str]:
 
 
 def _is_numeric_separator(text: str, index: int) -> bool:
-    if text[index] not in ".,．，":
+    if text[index] not in ".,．，:":
         return False
+    if text[index] == ":" and index > 0 and text[index - 1].isdigit():
+        return index + 1 == len(text) or text[index + 1].isdigit()
     if text[index] in ".．" and index > 0 and text[index - 1].isdigit():
         # At the end of a streaming buffer, a numeric period may still become
         # a decimal separator once the next delta arrives (for example "3."
