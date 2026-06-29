@@ -135,6 +135,11 @@ def _record_data(record: Mapping[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _record_name(record: Mapping[str, Any]) -> str:
+    name = record.get("name")
+    return name if isinstance(name, str) else ""
+
+
 def _resolve_samples(
     record: Mapping[str, Any],
     ref_key: str,
@@ -174,7 +179,7 @@ def collect_clipping(
     """
     hits: list[tuple[str, str | None, int | None]] = []
     for record in records:
-        name = record.get("name")
+        name = _record_name(record)
         if name == "tts_frame":
             side, ref_key = "bot", "output_ref"
         elif name == "stage_start" and _record_data(record).get("stage") == "stt":
@@ -209,7 +214,7 @@ def collect_caller_silence(
     per_turn_peak: dict[str, float] = {}
     seen_turns: set[str] = set()
     for record in records:
-        if record.get("name") != "stage_start":
+        if _record_name(record) != "stage_start":
             continue
         if _record_data(record).get("stage") != "stt":
             continue
@@ -250,7 +255,7 @@ def detect_dead_air(
     """
     by_turn: dict[str, list[int]] = {}
     for record in records:
-        name = record.get("name")
+        name = _record_name(record)
         if name not in _ACTIVE_AUDIO_NAMES:
             continue
         if name == "stage_start" and _record_data(record).get("stage") != "stt":
