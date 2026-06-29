@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -56,37 +56,53 @@ class WarmupRunner:
             for name, provider in self.components
             if (select is None or select(name)) and warmupable(provider) is not None
         ]
-        if not components and select is not None:
+        if not components:
+            if select is not None:
+                return
+            # Preserve the empty-completion record emitted by the previous
+            # ``asyncio.gather([])`` path when no component opts into warmup.
+            self.journal_sink.append_record(
+                name="warmup_completed",
+                data={"elapsed_ms": _elapsed_ms(started), "components": []},
+            )
             return
 
-        results = await asyncio.gather(
-            *(_warm_component(name, provider) for name, provider in components),
-        )
+        tasks = [
+            asyncio.create_task(_warm_component(name, provider)) for name, provider in components
+        ]
+        try:
+            _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        except asyncio.CancelledError:
+            await _cancel_tasks(tasks)
+            raise
+        # Fail fast: once one warmup raises, cancel siblings still running so a
+        # slow or hung provider can no longer hold ``Session.start()`` behind an
+        # already-known failure (the previous serial path aborted immediately).
+        if pending:
+            await _cancel_tasks(pending)
 
         warmed: list[dict[str, Any]] = []
-        failures: list[BaseException] = []
-        for result in results:
-            if "exception" in result:
-                failures.append(result["exception"])
+        failures: list[_ComponentWarmupError] = []
+        for task in tasks:
+            if task.cancelled():
+                continue
+            exc = task.exception()
+            if isinstance(exc, _ComponentWarmupError):
+                failures.append(exc)
                 self.journal_sink.append_record(
                     kind=JournalRecordKind.CONTROL,
                     name="warmup_failed",
                     data={
-                        "component": result["component"],
-                        "elapsed_ms": result["elapsed_ms"],
-                        "exc_type": type(result["exception"]).__name__,
+                        "component": exc.component,
+                        "elapsed_ms": exc.elapsed_ms,
+                        "exc_type": type(exc.cause).__name__,
                     },
                 )
                 continue
-            warmed.append(
-                {
-                    "component": result["component"],
-                    "elapsed_ms": result["elapsed_ms"],
-                }
-            )
+            warmed.append(task.result())
 
         if failures:
-            raise failures[0]
+            raise failures[0].cause
 
         self.journal_sink.append_record(
             name="warmup_completed",
@@ -97,20 +113,40 @@ class WarmupRunner:
         )
 
 
+class _ComponentWarmupError(Exception):
+    """Carry timing metadata for a failed component warmup.
+
+    Raising (rather than returning) the failure lets ``asyncio.wait`` surface it
+    via ``FIRST_EXCEPTION`` so siblings can be cancelled without waiting for a
+    slow provider, while the original error is preserved on ``cause``.
+    """
+
+    def __init__(self, component: str, elapsed_ms: float, cause: BaseException) -> None:
+        super().__init__(component)
+        self.component = component
+        self.elapsed_ms = elapsed_ms
+        self.cause = cause
+
+
 async def _warm_component(name: str, provider: Any) -> dict[str, Any]:
     component_started = time.perf_counter()
     try:
         await warmup_if_supported(provider)
     except Exception as exc:
-        return {
-            "component": name,
-            "elapsed_ms": _elapsed_ms(component_started),
-            "exception": exc,
-        }
+        raise _ComponentWarmupError(name, _elapsed_ms(component_started), exc) from exc
     return {
         "component": name,
         "elapsed_ms": _elapsed_ms(component_started),
     }
+
+
+async def _cancel_tasks(tasks: Iterable[asyncio.Task[Any]]) -> None:
+    """Cancel ``tasks`` and await their settlement, ignoring their outcomes."""
+    pending = [task for task in tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _elapsed_ms(started: float) -> float:

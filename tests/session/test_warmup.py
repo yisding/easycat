@@ -159,6 +159,52 @@ async def test_warmup_runner_noops_when_disabled() -> None:
     assert sink.records == []
 
 
+class _HangingWarmup:
+    def __init__(self, *, started: asyncio.Event) -> None:
+        self._started = started
+        self.cancelled = False
+
+    async def warmup(self) -> None:
+        self._started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+@pytest.mark.asyncio
+async def test_warmup_runner_fails_fast_and_cancels_hung_sibling() -> None:
+    started = asyncio.Event()
+    hanging = _HangingWarmup(started=started)
+    sink = _JournalSink()
+
+    async def _fail_after_sibling_starts() -> None:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        raise RuntimeError("boom")
+
+    class _FailWhenSiblingRunning:
+        async def warmup(self) -> None:
+            await _fail_after_sibling_starts()
+
+    runner = WarmupRunner(
+        enabled=True,
+        journal_sink=sink,
+        components=(
+            ("hang", hanging),
+            ("stt", _FailWhenSiblingRunning()),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await asyncio.wait_for(runner.run(), timeout=1.0)
+
+    # The slow/hung sibling must be cancelled rather than blocking startup.
+    assert hanging.cancelled is True
+    assert [record["name"] for record in sink.records] == ["warmup_failed"]
+    assert sink.records[0]["data"]["component"] == "stt"
+
+
 @pytest.mark.asyncio
 async def test_warmup_runner_records_failure_and_reraises() -> None:
     sink = _JournalSink()
