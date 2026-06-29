@@ -16,6 +16,7 @@ __all__ = [
 
 import asyncio
 import logging
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -561,6 +562,9 @@ class CallScreeningDetector:
         patterns: ScreeningPatternSet | None = None,
         track_filter: str | None = None,
     ) -> None:
+        _validate_positive_number("agent_timeout_s", agent_timeout_s)
+        _validate_positive_int("max_screening_turns", max_screening_turns)
+
         self._event_bus = event_bus
         self._call_sid = call_sid
         self._enabled = enabled
@@ -801,3 +805,18 @@ class CallScreeningDetector:
             return
         self._state = ScreeningState.DECLINED
         self._cancel_agent_timeout()
+
+
+def _validate_positive_number(name: str, value: float) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive number")
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
