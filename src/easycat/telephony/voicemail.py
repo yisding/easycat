@@ -126,6 +126,8 @@ class BeepDetectorConfig:
             raise ValueError("min_frequency_hz must not exceed max_frequency_hz")
         _validate_positive_int("min_duration_ms", self.min_duration_ms)
         _validate_non_negative_number("energy_threshold", self.energy_threshold)
+        if self.energy_threshold > 1.0:
+            raise ValueError("energy_threshold must be between 0 and 1")
         _validate_positive_int("sample_rate", self.sample_rate)
 
 
@@ -151,12 +153,22 @@ def _validate_positive_int(name: str, value: int) -> None:
 
 
 def _validate_positive_number(name: str, value: float) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
         raise ValueError(f"{name} must be a positive number")
 
 
 def _validate_non_negative_number(name: str, value: float) -> None:
-    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+    ):
         raise ValueError(f"{name} must be a non-negative number")
 
 

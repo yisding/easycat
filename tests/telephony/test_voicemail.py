@@ -163,6 +163,13 @@ class TestVoicemailDetectorConfig:
         with pytest.raises(ValueError, match="monologue_threshold_s"):
             VoicemailDetectorConfig(monologue_threshold_s=monologue_threshold_s)
 
+    @pytest.mark.parametrize("monologue_threshold_s", [math.nan, math.inf])
+    def test_rejects_non_finite_monologue_threshold(
+        self, monologue_threshold_s: float
+    ) -> None:
+        with pytest.raises(ValueError, match="monologue_threshold_s"):
+            VoicemailDetectorConfig(monologue_threshold_s=monologue_threshold_s)
+
     @pytest.mark.parametrize("min_duration_ms", [0, -1])
     def test_rejects_non_positive_beep_duration(self, min_duration_ms: int) -> None:
         with pytest.raises(ValueError, match="min_duration_ms"):
@@ -176,6 +183,15 @@ class TestVoicemailDetectorConfig:
     def test_rejects_negative_beep_energy_threshold(self) -> None:
         with pytest.raises(ValueError, match="energy_threshold"):
             BeepDetectorConfig(energy_threshold=-0.1)
+
+    @pytest.mark.parametrize("energy_threshold", [math.nan, math.inf])
+    def test_rejects_non_finite_beep_energy_threshold(self, energy_threshold: float) -> None:
+        with pytest.raises(ValueError, match="energy_threshold"):
+            BeepDetectorConfig(energy_threshold=energy_threshold)
+
+    def test_rejects_beep_energy_threshold_above_rms_range(self) -> None:
+        with pytest.raises(ValueError, match="energy_threshold"):
+            BeepDetectorConfig(energy_threshold=1.1)
 
     def test_rejects_inverted_beep_frequency_range(self) -> None:
         with pytest.raises(ValueError, match="min_frequency_hz"):
