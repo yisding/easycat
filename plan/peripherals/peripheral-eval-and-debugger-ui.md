@@ -7,6 +7,16 @@
 > everything that builds on top of those primitives: automated evals,
 > time-travel forking, and interactive debugging surfaces.
 
+> **Removed dependency (runtime budgets):** the dev-waterfall budget marker and
+> the `CostRecord` / runtime `LatencyBudget` deps below came from the runtime
+> cost/latency-budget surface in `peripheral-observability-and-cost.md` (the
+> `/api/cost` rollup, runtime `LatencyBudget` config, `CostRecord`, and
+> stage-record budget tagging), which was removed as undercooked and duplicative
+> with the journal. The waterfall now renders from journal records alone
+> (per-stage `elapsed_ms`, `turn_total_latency_ms` / `text_turn_latency_ms`);
+> latency regression gating lives in the offline `easycat validate latency` lane.
+> References below to those removed symbols are historical.
+
 ## Status (2026-05-21)
 
 Shipped:

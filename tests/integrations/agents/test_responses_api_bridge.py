@@ -769,6 +769,9 @@ class TestSSEParser:
     def test_invalid_json_returns_none(self):
         assert parse_sse_line("data: not json") is None
 
+    def test_non_object_json_returns_none(self):
+        assert parse_sse_line("data: []") is None
+
     def test_missing_type_returns_none(self):
         assert parse_sse_line('data: {"delta": "hi"}') is None
 

@@ -6,7 +6,6 @@ import pytest
 
 from easycat import (
     EasyConfig,
-    ObservabilityConfig,
 )
 from easycat.stt.deepgram_provider import DeepgramSTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTTConfig
@@ -37,14 +36,6 @@ def test_easycat_config_requires_stt_tts(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(EasyCatError) as excinfo:
         EasyConfig()
     assert excinfo.value.code == "EASYCAT_E203"
-
-
-def test_observability_rejects_invalid_advanced_knobs():
-    with pytest.raises(ValueError, match="max_session_cost_usd must be positive"):
-        ObservabilityConfig(max_session_cost_usd=0)
-
-    with pytest.raises(ValueError, match="latency_budget must be a LatencyBudget"):
-        ObservabilityConfig(latency_budget="total_ms")
 
 
 def test_debug_mode_defaults_easycat_logger_to_info(_restore_easycat_logger):

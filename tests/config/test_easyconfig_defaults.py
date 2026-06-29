@@ -25,7 +25,6 @@ from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
 from easycat.tts.openai_tts import OpenAITTSConfig
-from easycat.validation import LatencyBudget
 from tests.config._helpers import (
     _CapabilityTransportConfig,
     _DummyWebSocket,
@@ -232,34 +231,24 @@ def test_easyconfig_observability_keeps_legacy_top_level_aliases():
 
 
 def test_easyconfig_observability_carries_advanced_runtime_knobs():
-    budget = LatencyBudget(stage="total_ms", max_ms=1600.0, percentile="p90")
     config = EasyConfig(
         openai_api_key="test-key",
         observability=ObservabilityConfig(
-            latency_budget=[budget],
             warmup=False,
-            max_session_cost_usd=0.5,
         ),
     )
 
-    assert config.latency_budget == (budget,)
     assert config.warmup is False
-    assert config.max_session_cost_usd == 0.5
 
 
 def test_easyconfig_observability_advanced_knobs_keep_top_level_aliases():
-    budget = LatencyBudget(stage="tts_ttfb_ms", max_ms=120.0)
     config = EasyConfig(
         openai_api_key="test-key",
-        observability=ObservabilityConfig(warmup=True, max_session_cost_usd=2.0),
-        latency_budget=budget,
+        observability=ObservabilityConfig(warmup=True),
         warmup=False,
-        max_session_cost_usd=1.0,
     )
 
-    assert config.observability.latency_budget == (budget,)
     assert config.observability.warmup is False
-    assert config.observability.max_session_cost_usd == 1.0
 
 
 @pytest.mark.parametrize(

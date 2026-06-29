@@ -168,32 +168,18 @@ def test_observability_doc_tracks_advanced_config_knobs() -> None:
 
     for token in (
         "`ObservabilityConfig`",
-        "`latency_budget=LatencyBudget(...)`",
         "`warmup=False`",
-        "`max_session_cost_usd=0.50`",
         "safe debug-bundle config snapshots",
-        '`LatencyBudget(stage="tts", max_ms=500)`',
-        "`latency_budget_exceeded`",
-        '`LatencyBudget(stage="total_ms", max_ms=...)`',
-        "turn-level `latency_budget_exceeded` metric records",
-        "`max_session_cost_usd` budget status from cost records",
-        "`easycat.runtime.cost_budget_status(...)`",
-        "`cost_budget_warning` / `cost_budget_exceeded`",
-        "`cost_budget_stop_requested`",
-        "`stop(force=True)`",
         "structural provider/model `warmup()` hooks",
         "`warmup_completed` timing records",
         "The bundled providers now implement those hooks",
-        ("Provider cost-record emission and first-token/audio runtime budgets are still planned"),
     ):
         assert token in config_text
 
-    assert "tag and alert, but they do not reject turns yet" in caveats
-    assert '`latency_budget=LatencyBudget(stage="tts", max_ms=500)`' in caveats
-    assert "`latency_budget_violations`" in caveats
-    assert "`total_ms`" in caveats
-    assert "`llm_ttft_ms`" in caveats
-    assert "`tts_ttfb_ms`" in caveats
+    assert "Latency is reported, not gated" in caveats
+    assert "`turn_total_latency_ms`" in caveats
+    assert "`text_turn_latency_ms`" in caveats
+    assert "`easycat validate latency`" in caveats
 
 
 def test_latency_docs_defaults_match_code() -> None:

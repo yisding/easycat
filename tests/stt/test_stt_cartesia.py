@@ -318,6 +318,62 @@ def test_cartesia_build_url_carries_required_params():
     assert "max_silence_duration_secs=" in url
 
 
+def test_cartesia_build_url_omits_volume_gate_params_for_ink2():
+    # ink-2 endpoints via native semantic turn detection and rejects the
+    # volume-gate params, so they must not appear in the URL.
+    config = CartesiaSTTConfig(api_key="k", model="ink-2", sample_rate=16000)
+    stt = CartesiaSTT(config)
+    url = stt._build_url()
+
+    assert "model=ink-2" in url
+    assert "min_volume=" not in url
+    assert "max_silence_duration_secs=" not in url
+
+
+def test_cartesia_default_model_is_ink2():
+    config = CartesiaSTTConfig(api_key="k")
+    assert config.resolved_model == "ink-2"
+    assert config.uses_volume_gate is False
+
+
+def test_cartesia_default_falls_back_to_ink_whisper_for_non_english():
+    # ink-2 is English-only; a non-English config with no explicit model must
+    # resolve to the multilingual ink-whisper (and use its volume-gate params).
+    config = CartesiaSTTConfig(api_key="k", language="fr")
+    assert config.resolved_model == "ink-whisper"
+    assert config.uses_volume_gate is True
+
+    url = CartesiaSTT(config)._build_url()
+    assert "model=ink-whisper" in url
+    assert "language=fr" in url
+    assert "min_volume=" in url
+
+
+def test_cartesia_explicit_ink2_honored_for_non_english():
+    # An explicit model is always honored, even for non-English.
+    config = CartesiaSTTConfig(api_key="k", model="ink-2", language="fr")
+    assert config.resolved_model == "ink-2"
+
+
+async def test_cartesia_ignores_turn_lifecycle_events():
+    # ink-2 emits a turn.* lifecycle alongside transcripts; these carry no
+    # text and must be acknowledged without producing STT events.
+    messages = [
+        json.dumps({"type": "turn.start", "request_id": "r1"}),
+        _transcript_msg("hello", is_final=False),
+        json.dumps({"type": "turn.eager_end", "request_id": "r1"}),
+        _transcript_msg("hello world", is_final=True),
+        json.dumps({"type": "turn.end", "request_id": "r1"}),
+    ]
+    stt, _ = _make_cartesia_stt(messages)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    assert [e.type for e in events] == [STTEventType.PARTIAL, STTEventType.FINAL]
+    assert events[-1].text == "hello world"
+
+
 # ── Multiple streams ─────────────────────────────────────────────
 
 
@@ -349,7 +405,7 @@ def test_cartesia_version_info_shape():
     stt, _ = _make_cartesia_stt()
     info = stt.version_info()
     assert info["provider"] == "cartesia"
-    assert info["model"] == "ink-whisper"
+    assert info["model"] == "ink-2"
     assert "api_version" in info
     assert "sdk_version" in info
 

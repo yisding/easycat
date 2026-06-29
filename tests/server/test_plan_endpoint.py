@@ -138,17 +138,25 @@ async def test_plan_route_returns_200(
     await server.start()
     try:
         async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 401
+
+        auth_headers = {"Authorization": f"Bearer {_RESOLVED_TOKEN}"}
+        async with client.get(f"{_base_url(server)}/plan", headers=auth_headers) as resp:
             assert resp.status == 200
             body = await resp.json()
         assert body["profile"] == "default"
         assert "stt" in body["selected"]
-        assert _RESOLVED_TOKEN not in await _text_of(client, f"{_base_url(server)}/plan")
+        assert _RESOLVED_TOKEN not in await _text_of(
+            client, f"{_base_url(server)}/plan", headers=auth_headers
+        )
     finally:
         await server.stop()
 
 
-async def _text_of(client: aiohttp.ClientSession, url: str) -> str:
-    async with client.get(url) as resp:
+async def _text_of(
+    client: aiohttp.ClientSession, url: str, *, headers: dict[str, str] | None = None
+) -> str:
+    async with client.get(url, headers=headers) as resp:
         return await resp.text()
 
 
@@ -256,7 +264,8 @@ async def test_plan_and_capabilities_endpoints_200_when_unresolvable(
     server.config.port = 0
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/plan") as resp:
+        auth_headers = {"Authorization": "Bearer tok"}
+        async with client.get(f"{_base_url(server)}/plan", headers=auth_headers) as resp:
             assert resp.status == 200
             body = await resp.json()
             assert body["has_blocking_errors"] is True

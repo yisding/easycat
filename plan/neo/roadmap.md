@@ -2,6 +2,15 @@
 
 Status: active sequencing proposal.
 
+> **Stale (runtime budgets removed):** the runtime cost/latency-*budget*
+> implementation milestones M9 (Budgets Public API) and M12 (Runtime Budget
+> Coverage) build on — `LatencyBudgetMonitor`, `CostBudgetEnforcer`,
+> `runtime/costs.py`, the debugger `/api/cost` rollup, and `_budget_matches_stage`
+> stage tagging — was removed. Treat those as net-new, and re-scope the budgets
+> milestones (especially cost budgets / `max_session_cost_usd`) against the
+> "report latency, no runtime/cost budgets" decision. See `README.md` and
+> `phase-3-feedback-loop.md` for the full note.
+
 This roadmap converts the phase plans into reviewable PR slices. The ordering is
 optimized for early user value, low abstraction risk, and testability.
 

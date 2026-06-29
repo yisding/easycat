@@ -30,8 +30,7 @@ from easycat.stages import (
     TurnStage,
     VADStage,
 )
-from easycat.stages.base import LATENCY_BUDGET_EXCEEDED_TAG, journal_append_event
-from easycat.validation import LatencyBudget
+from easycat.stages.base import journal_append_event
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -150,7 +149,6 @@ class TestRunContext:
         assert ctx.journal is None
         assert ctx.artifact_store is None
         assert ctx.config_snapshot == {}
-        assert ctx.latency_budgets == ()
 
     def test_text_session_mode(self):
         ctx = RunContext(
@@ -181,16 +179,6 @@ class TestRunContext:
             config_snapshot={"key": "value"},
         )
         assert ctx.config_snapshot == {"key": "value"}
-
-    def test_latency_budgets(self):
-        budget = LatencyBudget(stage="tts", max_ms=25.0)
-        ctx = RunContext(
-            run_id="r1",
-            session_id="s1",
-            runtime_mode="chained_pipeline",
-            latency_budgets=(budget,),
-        )
-        assert ctx.latency_budgets == (budget,)
 
     def test_journal_attached(self):
         j = InMemoryRingBuffer(capacity=100)
@@ -475,15 +463,13 @@ class TestAudioStageProtocol:
 
 
 class TestStageExecuteRecording:
-    def test_stage_journal_record_tags_matching_latency_budget_overruns(self):
+    def test_stage_journal_record_writes_elapsed_ms_without_budget_metadata(self):
         journal = InMemoryRingBuffer(capacity=100)
-        budget = LatencyBudget(stage="tts", max_ms=10.0, percentile="p95")
         ctx = RunContext(
             run_id="run-1",
             session_id="sess-1",
             runtime_mode="chained_pipeline",
             journal=journal,
-            latency_budgets=(budget,),
         )
 
         journal_append_event(
@@ -495,39 +481,10 @@ class TestStageExecuteRecording:
         )
 
         record = journal.read()[0]
-        assert LATENCY_BUDGET_EXCEEDED_TAG in record.tags
-        assert record.data["latency_budget_exceeded"] is True
-        assert record.data["latency_budget_violations"] == [
-            {
-                "stage": "tts",
-                "observed_ms": 25.0,
-                "budget_ms": 10.0,
-                "percentile": "p95",
-                "scope": "stage_record",
-            }
-        ]
-
-    def test_stage_journal_record_does_not_tag_aggregate_latency_budget(self):
-        journal = InMemoryRingBuffer(capacity=100)
-        ctx = RunContext(
-            run_id="run-1",
-            session_id="sess-1",
-            runtime_mode="chained_pipeline",
-            journal=journal,
-            latency_budgets=(LatencyBudget(stage="tts_ttfb_ms", max_ms=10.0),),
-        )
-
-        journal_append_event(
-            ctx,
-            stage="tts",
-            name="stage_complete",
-            turn_id="turn-1",
-            data_extra={"elapsed_ms": 25.0},
-        )
-
-        record = journal.read()[0]
-        assert LATENCY_BUDGET_EXCEEDED_TAG not in record.tags
+        assert record.data["elapsed_ms"] == 25.0
+        # Latency is reported, not gated: stage records carry no budget tags.
         assert "latency_budget_exceeded" not in record.data
+        assert "latency_budget_violations" not in record.data
 
     async def test_stt_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)
@@ -553,6 +510,104 @@ class TestStageExecuteRecording:
         names = [r.name for r in records]
         assert "stage_start" in names
         assert "stage_complete" in names
+
+    async def test_agent_stage_journals_delta_before_yield_on_stream_close(self):
+        class _OneDeltaBridge:
+            COMMITTABLE_BOUNDARIES = {}
+
+            async def invoke(
+                self,
+                turn_input: AgentTurnInput,
+                recorder,
+                cancel_token: CancelToken | None = None,
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                _ = turn_input, recorder, cancel_token
+                yield AgentBridgeEvent(kind="text_delta", text="delivered")
+                yield AgentBridgeEvent(kind="done", text="delivered")
+
+            def snapshot_state(self):
+                return {}
+
+            def apply_interruption(self, *args, **kwargs) -> None:
+                pass
+
+            def replace_last_assistant_text(self, text: str) -> None:
+                pass
+
+            def append_interruption_note(self, note: str) -> None:
+                pass
+
+            def reset(self) -> None:
+                pass
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stream = AgentStage(_OneDeltaBridge(), journal=journal).execute_streaming(
+            "hello", ctx, turn
+        )
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "delivered"
+        await stream.aclose()
+
+        records = journal.read()
+        delta = next(
+            r for r in records if r.name == "agent_delta" and r.data.get("type") == "TEXT_DELTA"
+        )
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert delta.data["text"] == "delivered"
+        assert complete.data["response"] == "delivered"
+
+    async def test_agent_stage_excludes_cancelled_delta_from_completion_history(self):
+        class _CancelledDeltaBridge:
+            COMMITTABLE_BOUNDARIES = {}
+
+            async def invoke(
+                self,
+                turn_input: AgentTurnInput,
+                recorder,
+                cancel_token: CancelToken | None = None,
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                _ = turn_input, recorder, cancel_token
+                yield AgentBridgeEvent(kind="text_delta", text="dropped")
+
+            def snapshot_state(self):
+                return {}
+
+            def apply_interruption(self, *args, **kwargs) -> None:
+                pass
+
+            def replace_last_assistant_text(self, text: str) -> None:
+                pass
+
+            def append_interruption_note(self, note: str) -> None:
+                pass
+
+            def reset(self) -> None:
+                pass
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        turn.cancel_token.cancel()
+        stage = AgentStage(_CancelledDeltaBridge(), journal=journal)
+        stream = stage.execute_streaming("hello", ctx, turn, cancel_token=turn.cancel_token)
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "dropped"
+        await stream.aclose()
+
+        records = journal.read()
+        delta = next(
+            r for r in records if r.name == "agent_delta" and r.data.get("type") == "TEXT_DELTA"
+        )
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert delta.data["text"] == "dropped"
+        assert complete.data["response"] == ""
+        assert stage._history == []
 
     async def test_tts_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)

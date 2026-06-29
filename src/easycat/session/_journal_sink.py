@@ -9,8 +9,8 @@ and event-bus subscription handlers.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -29,6 +29,10 @@ from easycat.events import (
     ReconnectAttempt,
     ReconnectFailure,
     ReconnectSuccess,
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
     STTFinal,
     STTPartial,
     SupervisorListenerAttached,
@@ -45,16 +49,16 @@ from easycat.events import (
     VADStopSpeaking,
 )
 from easycat.runtime.artifacts import ArtifactClass, ArtifactStore
-from easycat.runtime.costs import cost_budget_status, finite_number
 from easycat.runtime.journal import ExecutionJournal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 
-_COST_RECORD_NAMES = frozenset({"cost", "cost_record"})
 logger = logging.getLogger(__name__)
 _JOURNAL_ATTRS = (
     "text",
     "track",
     "result",
+    "action",
+    "executor",
     "tool_name",
     "call_id",
     "delta",
@@ -62,6 +66,7 @@ _JOURNAL_ATTRS = (
     "queue_size",
     "dropped_frames",
     "reason",
+    "error",
     "structured_output",
 )
 
@@ -71,7 +76,7 @@ _JOURNAL_ATTRS = (
 # (discarding the model's fields), while the in-memory backend keeps them live
 # — the same record would round-trip to a different shape per backend.  We
 # normalize them once here so all backends store identical JSON-native shapes.
-_JSONABLE_ATTRS = frozenset({"structured_output", "result"})
+_JSONABLE_ATTRS = frozenset({"structured_output", "result", "action"})
 _MAX_TRANSPORT_DEGRADED_DETAIL_CHARS = 512
 
 
@@ -83,12 +88,30 @@ def _truncate_transport_degraded_detail(detail: str) -> str:
     return f"{detail[:_MAX_TRANSPORT_DEGRADED_DETAIL_CHARS]}… (truncated {omitted} chars)"
 
 
+def _coerce_json_native(value: Any) -> Any:
+    """Recursively coerce *value* to a JSON-native structure.
+
+    ``dataclasses.asdict`` / ``model_dump`` only rebuild the container tree;
+    non-JSON-native leaves (a ``set`` / ``bytes`` / ``datetime`` inside a
+    ``CustomAction.payload`` dict, say) survive as live Python objects.  The
+    persistent backend then ``json.dumps(default=str)``-stringifies them while
+    the in-memory backend keeps them live, so the same record would round-trip
+    to a different shape per backend.  Round-tripping through ``json`` here
+    forces an identical JSON-native shape for every backend.
+    """
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return value
+
+
 def _to_jsonable(value: Any) -> Any:
     """Best-effort conversion of *value* to a JSON-native structure.
 
-    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; everything
-    else is returned unchanged (the journal's ``json.dumps`` default-handler
-    still catches anything left non-serializable).
+    Pydantic models -> ``model_dump()``; dataclasses -> ``asdict``; both are
+    then recursively coerced so non-JSON-native leaves can't diverge per
+    backend.  Anything else is returned unchanged (the journal's ``json.dumps``
+    default-handler still catches whatever is left non-serializable).
     """
     # Common case (a plain string/number/bool result) is already JSON-native;
     # skip the model_dump/dataclass probing entirely.
@@ -100,16 +123,20 @@ def _to_jsonable(value: Any) -> Any:
             return dump(mode="json")
         except TypeError:
             try:
-                return dump()
+                return _coerce_json_native(dump())
             except Exception:
                 return value
         except Exception:
             return value
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         try:
-            return dataclasses.asdict(value)
+            data = dataclasses.asdict(value)
         except Exception:
             return value
+        action_type = getattr(value, "type", None)
+        if action_type is not None:
+            data["type"] = getattr(action_type, "value", action_type)
+        return _coerce_json_native(data)
     return value
 
 
@@ -134,13 +161,7 @@ class SessionJournalSink:
     artifact_store: ArtifactStore | None
     session_id: str
     current_turn_id: TurnIdResolver
-    max_session_cost_usd: float | None = None
-    on_cost_budget_exceeded: Callable[[dict[str, Any], str | None], bool | None] | None = None
     _subscribed: bool = field(default=False, init=False)
-    _cost_total_usd: float = field(default=0.0, init=False)
-    _cost_budget_warning_emitted: bool = field(default=False, init=False)
-    _cost_budget_exceeded_emitted: bool = field(default=False, init=False)
-    _cost_budget_enforcement_pending: bool = field(default=False, init=False)
 
     def subscribe(self) -> None:
         """Subscribe event bus handlers that write session events to the journal."""
@@ -178,6 +199,22 @@ class SessionJournalSink:
         self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))
         self._subscribe(ToolCallDelta, self._make_event_handler(evt, "tool_call_delta"))
         self._subscribe(ToolCallResult, self._make_event_handler(evt, "tool_call_result"))
+        self._subscribe(
+            SessionActionRequested,
+            self._make_event_handler(evt, "session_action_requested"),
+        )
+        self._subscribe(
+            SessionActionStarted,
+            self._make_event_handler(evt, "session_action_started"),
+        )
+        self._subscribe(
+            SessionActionCompleted,
+            self._make_event_handler(evt, "session_action_completed"),
+        )
+        self._subscribe(
+            SessionActionFailed,
+            self._make_event_handler(evt, "session_action_failed"),
+        )
         # ReconnectingWebSocket emits these on the bus; journal records make
         # the retry timeline visible in exported bundles.
         self._subscribe(ReconnectAttempt, self._make_event_handler(evt, "ws_reconnect_attempt"))
@@ -236,11 +273,6 @@ class SessionJournalSink:
         output_artifact_class: ArtifactClass = "debug_verbose",
     ) -> None:
         if self.journal is None:
-            self._maybe_append_cost_budget_record(
-                name=name,
-                turn_id=self.current_turn_id(turn_id),
-                data=data,
-            )
             return
         input_ref = (
             self.store_artifact(input_bytes, artifact_class=input_artifact_class)
@@ -262,108 +294,6 @@ class SessionJournalSink:
             input_ref=input_ref,
             output_ref=output_ref,
         )
-        self._maybe_append_cost_budget_record(
-            name=name,
-            turn_id=resolved_turn_id,
-            data=data,
-        )
-
-    def _maybe_append_cost_budget_record(
-        self,
-        *,
-        name: str,
-        turn_id: str | None,
-        data: dict[str, Any] | None,
-    ) -> None:
-        if name not in _COST_RECORD_NAMES or not isinstance(data, dict):
-            return
-        limit_usd = finite_number(self.max_session_cost_usd)
-        if limit_usd is None or limit_usd <= 0:
-            return
-        record_usd = finite_number(data.get("usd"))
-        if record_usd is None:
-            return
-
-        self._cost_total_usd += record_usd
-        budget = cost_budget_status(self._cost_total_usd, limit_usd)
-        if budget["warning"] and not self._cost_budget_warning_emitted:
-            self._append_cost_budget_alert(
-                alert="warning",
-                budget=budget,
-                trigger_record_name=name,
-                turn_id=turn_id,
-            )
-            self._cost_budget_warning_emitted = True
-        if budget["exceeded"]:
-            should_notify = (
-                not self._cost_budget_exceeded_emitted or self._cost_budget_enforcement_pending
-            )
-            if not self._cost_budget_exceeded_emitted:
-                alert_data = self._append_cost_budget_alert(
-                    alert="exceeded",
-                    budget=budget,
-                    trigger_record_name=name,
-                    turn_id=turn_id,
-                )
-                self._cost_budget_exceeded_emitted = True
-            else:
-                alert_data = self._cost_budget_alert_data(
-                    alert="exceeded",
-                    budget=budget,
-                    trigger_record_name=name,
-                )
-            if should_notify and self.on_cost_budget_exceeded is not None:
-                try:
-                    accepted = self.on_cost_budget_exceeded(alert_data, turn_id)
-                except Exception:
-                    self._cost_budget_enforcement_pending = True
-                    logger.exception("Cost budget enforcement callback failed")
-                else:
-                    self._cost_budget_enforcement_pending = accepted is False
-
-    def _cost_budget_alert_data(
-        self,
-        *,
-        alert: str,
-        budget: dict[str, Any],
-        trigger_record_name: str,
-    ) -> dict[str, Any]:
-        return {
-            "alert": alert,
-            "budget_status": budget["status"],
-            "total_usd": self._cost_total_usd,
-            "max_session_cost_usd": budget["max_session_cost_usd"],
-            "warning_threshold_usd": budget["warning_threshold_usd"],
-            "usage_fraction": budget["usage_fraction"],
-            "remaining_usd": budget["remaining_usd"],
-            "overage_usd": budget["overage_usd"],
-            "trigger_record_name": trigger_record_name,
-        }
-
-    def _append_cost_budget_alert(
-        self,
-        *,
-        alert: str,
-        budget: dict[str, Any],
-        trigger_record_name: str,
-        turn_id: str | None,
-    ) -> dict[str, Any]:
-        data = self._cost_budget_alert_data(
-            alert=alert,
-            budget=budget,
-            trigger_record_name=trigger_record_name,
-        )
-        if self.journal is None:
-            return data
-        self.journal.append(
-            kind=JournalRecordKind.METRIC,
-            name=f"cost_budget_{alert}",
-            session_id=self.session_id,
-            turn_id=turn_id,
-            data=data,
-            tags=frozenset({"cost_budget", alert}),
-        )
-        return data
 
     def _subscribe(self, event_type: type, handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
@@ -14,7 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import _format_follow_line, _format_size
+from easycat.cli.debug.bundles import _format_follow_line, _format_size, _stream_follow
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
@@ -38,6 +39,18 @@ class _FakeJournal:
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
         return self._records[start:]
+
+
+class _FakeFollowView:
+    """Minimal async follow view for live-tail stream tests."""
+
+    def __init__(self, records: list[dict[str, object]]) -> None:
+        self._records = records
+
+    async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+        del from_sequence, poll_interval
+        for record in self._records:
+            yield record
 
 
 class _FakeSession:
@@ -207,6 +220,20 @@ def test_bundles_list_marks_crashed_journal_json(cli: CliRunner, tmp_path: Path)
     payload = json.loads(result.stdout)
     statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
     assert statuses["boom.sqlite"] == "crashed (uncommitted)"
+
+
+def test_bundles_list_marks_malformed_journal_live(cli: CliRunner, tmp_path: Path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    bad = journals / "bad.sqlite"
+    bad.write_text("not a sqlite database")
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    assert statuses["bad.sqlite"] == "live"
 
 
 def test_bundles_list_marks_clean_journal_as_bundle(cli: CliRunner, tmp_path: Path) -> None:
@@ -383,6 +410,54 @@ def test_format_follow_line_milestone_and_audio_bar() -> None:
     )
     assert "milestone=tts_first_byte" not in later
     assert "audio=2048B" in later
+
+
+@pytest.mark.asyncio
+async def test_stream_follow_json_redacts_record_payloads(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    view = _FakeFollowView(
+        [
+            {
+                "sequence": 12,
+                "session_id": "sess-public",
+                "turn_id": "turn-+1 (415) 555-0199",
+                "name": "stt_final",
+                "kind": "event",
+                "data": {
+                    "transcript": "call me at +1 (415) 555-0199",
+                    "text": "I was recently diagnosed with type 2 diabetes",
+                    "delta": "your account balance is",
+                    "api_key": "sk-abcdefghijklmnop",
+                    "provider_request_id": "req_sensitive123",
+                },
+                "error": {
+                    "type": "ProviderError",
+                    "message": "Authorization: Bearer tok-abcdefghijklmnop",
+                },
+            }
+        ]
+    )
+
+    await _stream_follow(
+        view,
+        from_sequence=0,
+        errors_only=False,
+        turn_id=None,
+        json_output=True,
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["turn_id"] == "turn-[REDACTED_PHONE]"
+    assert payload["data"]["transcript"] == "[REDACTED_TRANSCRIPT]"
+    # Free-form STT/agent text and streamed tokens live under generic keys that
+    # fall outside the field-name allowlist, so they must be stripped wholesale
+    # rather than left as pattern-only redactions of verbatim utterances.
+    assert payload["data"]["text"] == "[REDACTED_TRANSCRIPT]"
+    assert payload["data"]["delta"] == "[REDACTED_TRANSCRIPT]"
+    assert payload["data"]["api_key"] == "[REDACTED_SECRET]"
+    assert payload["data"]["provider_request_id"] == "[REDACTED_REQUEST_ID]"
+    assert payload["error"]["message"] == "Authorization: [REDACTED_SECRET]"
 
 
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:
@@ -693,30 +768,12 @@ def _slow_milestone_records(
     return shifted
 
 
-def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Path) -> None:
+def test_diff_json_flags_regression(cli: CliRunner, tmp_path: Path) -> None:
     """``easycat diff A B --json`` emits ``command=='diff'`` with a turns array,
     a regressed milestone, and the worst-regression summary."""
-    a_records = _milestone_records("t1", 1_000_000_000) + [
-        JournalRecord(
-            sequence=99,
-            session_id="sess-a",
-            name="cost",
-            turn_id="t1",
-            timing=TimingInfo(wall_ns=1_000_000_000),
-            data={"usd": 0.10},
-        ),
-    ]
-    # B's first token is 100 ms late and the turn costs more.
-    b_records = _slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100) + [
-        JournalRecord(
-            sequence=99,
-            session_id="sess-b",
-            name="cost",
-            turn_id="t1",
-            timing=TimingInfo(wall_ns=1_000_000_000),
-            data={"usd": 0.25},
-        ),
-    ]
+    a_records = _milestone_records("t1", 1_000_000_000)
+    # B's first token is 100 ms late.
+    b_records = _slow_milestone_records("t1", 1_000_000_000, token_extra_ms=100)
     bundle_a = tmp_path / "before.zip"
     bundle_b = tmp_path / "after.zip"
     export_debug_bundle(_FakeSession(records=a_records), bundle_a)
@@ -734,12 +791,12 @@ def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Pat
     cell = turn["milestones"]["agent_request_to_first_token_ms"]
     assert cell["delta_ms"] == pytest.approx(100.0)
     assert cell["regressed"] is True
-    assert turn["cost"]["delta"] == pytest.approx(0.15)
+    assert "cost" not in turn
 
     worst = payload["summary"]["worst_regression"]
     assert worst is not None
     assert worst["delta_ms"] >= 100.0
-    assert payload["summary"]["total_cost_delta"] == pytest.approx(0.15)
+    assert "total_cost_delta" not in payload["summary"]
 
 
 def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> None:
@@ -1983,6 +2040,23 @@ def test_promote_writes_replayable_single_turn_slice(cli: CliRunner, tmp_path: P
     assert "assert_no_error" in result.stdout
     assert "assert_turn_completed(bundle, 't1')" in result.stdout
     assert "expected='hello there'" in result.stdout
+
+
+def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:
+    from easycat.cli.debug.bundles import _promote_test_stub
+
+    malicious_turn_id = (
+        "x(easycat_bundle):\n    __import__('os').system('touch /tmp/pwned')\n    #"
+    )
+
+    stub = _promote_test_stub(bundle_name="turn.zip", turn_id=malicious_turn_id, expected=None)
+
+    parsed = ast.parse(stub)
+    functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)]
+    assert [function.name for function in functions] == [
+        "test_x_easycat_bundle___import___os_system_touch_tmp_pwned"
+    ]
+    assert f"assert_turn_completed(bundle, {malicious_turn_id!r})" in stub
 
 
 def test_promote_json_carries_stub(cli: CliRunner, tmp_path: Path) -> None:

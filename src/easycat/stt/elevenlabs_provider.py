@@ -55,8 +55,35 @@ class ElevenLabsSTTConfig:
     ws_url: str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
     timeout: float = 30.0
     realtime_sample_rate: int = 16000
-    realtime_commit_strategy: str = "manual"  # "manual" or "vad"
+    # Endpointing strategy for the realtime model. ``"vad"`` (default) uses
+    # Scribe v2 Realtime's *built-in* voice-activity detection to commit
+    # segments automatically on detected silence — no external VAD needed.
+    # ``"manual"`` defers every commit to EasyCat's turn manager.
+    realtime_commit_strategy: str = "vad"  # "vad" or "manual"
     realtime_include_timestamps: bool = False
+    # Built-in VAD tuning, applied only when ``realtime_commit_strategy``
+    # is ``"vad"``. ``None`` leaves the server default in place
+    # (vad_threshold≈0.4, vad_silence_threshold_secs≈1.5,
+    # min_speech_duration_ms≈100, min_silence_duration_ms≈100).
+    realtime_vad_threshold: float | None = None
+    realtime_vad_silence_threshold_secs: float | None = None
+    realtime_min_speech_duration_ms: int | None = None
+    realtime_min_silence_duration_ms: int | None = None
+    # Bias Scribe v2 Realtime toward domain vocabulary (names, jargon).
+    # Up to 50 terms of up to 20 characters each; sent as repeated query
+    # params. ``None`` sends none.
+    realtime_keyterms: list[str] | None = None
+    # Strip filler words, false starts, and disfluencies from transcripts.
+    realtime_no_verbatim: bool = False
+    # Include the detected language code on committed transcripts (realtime).
+    # ElevenLabs only carries language_code on committed_transcript_with_
+    # timestamps events, so enabling this forces include_timestamps on too.
+    realtime_include_language_detection: bool = False
+    # Zero-retention mode: when False, ElevenLabs does not store request audio
+    # or transcripts (history/abuse logging off). Sent as a query param on both
+    # the realtime WebSocket and the batch /speech-to-text request. ``True``
+    # keeps the server default.
+    enable_logging: bool = True
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
     max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
@@ -75,13 +102,30 @@ class ElevenLabsSTTConfig:
         STTBase._validate_positive_limit(
             "ElevenLabsSTTConfig.max_audio_duration_ms", self.max_audio_duration_ms
         )
+        if self.realtime_keyterms is not None:
+            if len(self.realtime_keyterms) > 50:
+                raise ValueError(
+                    "ElevenLabsSTTConfig.realtime_keyterms accepts at most 50 terms, "
+                    f"got {len(self.realtime_keyterms)}"
+                )
+            for term in self.realtime_keyterms:
+                if len(term) > 20:
+                    raise ValueError(
+                        "ElevenLabsSTTConfig.realtime_keyterms entries must be <= 20 "
+                        f"characters, got {term!r}"
+                    )
 
 
 class ElevenLabsSTT(WebSocketSTTBase):
     """ElevenLabs STT supporting realtime WebSocket and batch modes.
 
     In **realtime** mode, a WebSocket connection is opened on ``start_stream``
-    and audio chunks are forwarded in real time.
+    and audio chunks are forwarded in real time. The default model is
+    ``scribe_v2_realtime``, which has *built-in voice-activity detection*;
+    with the default ``realtime_commit_strategy="vad"`` the server commits
+    transcript segments automatically on detected silence, so no external
+    VAD is required. Set ``realtime_commit_strategy="manual"`` to defer all
+    commits to EasyCat's turn manager instead.
 
     In **batch** mode, audio is buffered internally and submitted as a single
     HTTP request when ``end_stream`` is called.
@@ -99,6 +143,23 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # Realtime mode state
         self._final_received: asyncio.Event | None = None
         self._audio_pending_commit: bool = False
+        # Monotonic count of realtime audio chunks streamed this session, and
+        # the count already acknowledged committed. A committed_transcript can
+        # arrive *after* newer audio has been streamed (manual commit_segment()
+        # followed by more send_audio(), or VAD auto-commit while speech
+        # resumes), so the pending flag is cleared only when the commit
+        # actually covers the latest audio — never unconditionally.
+        self._audio_epoch: int = 0
+        self._committed_through_epoch: int = 0
+        # Audio epoch the server has demonstrably *transcribed* (bounded by the
+        # latest partial_transcript). An unsolicited VAD commit covers up to
+        # here — not necessarily the newest audio — so trailing audio streamed
+        # after the server's commit decision is not treated as committed.
+        self._transcribed_through_epoch: int = 0
+        # Manual commits (commit_segment / end-of-turn) we've sent and are
+        # awaiting an ack for. Distinguishes a manual-commit ack from an
+        # unsolicited server VAD commit in the committed_transcript handler.
+        self._manual_commit_inflight: int = 0
         # Latest partial transcript text, promoted to a FINAL if the
         # committed transcript stalls past the timeout.
         self._partial_text: str = ""
@@ -135,15 +196,49 @@ class ElevenLabsSTT(WebSocketSTTBase):
     def _build_realtime_ws_url(self) -> str:
         from urllib.parse import urlencode
 
+        # The detected language_code is only delivered on
+        # committed_transcript_with_timestamps events, which require
+        # include_timestamps=true — so language detection implies timestamps,
+        # otherwise the flag would be silently inert (STTEvent.language stays
+        # empty). Force timestamps on when language detection is requested.
+        include_timestamps = (
+            self._config.realtime_include_timestamps
+            or self._config.realtime_include_language_detection
+        )
         params: dict[str, str] = {
             "model_id": self._resolved_model(),
             "audio_format": self._realtime_audio_format(),
             "commit_strategy": self._config.realtime_commit_strategy,
-            "include_timestamps": str(self._config.realtime_include_timestamps).lower(),
+            "include_timestamps": str(include_timestamps).lower(),
         }
         if self._config.language:
             params["language_code"] = self._config.language
-        return f"{self._config.ws_url}?{urlencode(params)}"
+        if self._config.realtime_include_language_detection:
+            params["include_language_detection"] = "true"
+        # Zero-retention is opt-in; only send the param when disabling logging
+        # so a default config keeps the server default (logging on).
+        if not self._config.enable_logging:
+            params["enable_logging"] = "false"
+        # Built-in VAD tuning is only meaningful under the "vad" commit
+        # strategy; omit any unset param so the server default applies.
+        if self._config.realtime_commit_strategy == "vad":
+            vad_params: dict[str, float | int | None] = {
+                "vad_threshold": self._config.realtime_vad_threshold,
+                "vad_silence_threshold_secs": self._config.realtime_vad_silence_threshold_secs,
+                "min_speech_duration_ms": self._config.realtime_min_speech_duration_ms,
+                "min_silence_duration_ms": self._config.realtime_min_silence_duration_ms,
+            }
+            for name, value in vad_params.items():
+                if value is not None:
+                    params[name] = str(value)
+        if self._config.realtime_no_verbatim:
+            params["no_verbatim"] = "true"
+        # ``keyterms`` is sent as one repeated query param per term, so build
+        # the query with ``doseq`` and pass the list through as-is.
+        query: dict[str, str | list[str]] = dict(params)
+        if self._config.realtime_keyterms:
+            query["keyterms"] = self._config.realtime_keyterms
+        return f"{self._config.ws_url}?{urlencode(query, doseq=True)}"
 
     @property
     def mode(self) -> str:
@@ -189,6 +284,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._audio_pending_commit = False
         self._partial_text = ""
         self._dropping_pending_final = False
+        self._audio_epoch = 0
+        self._committed_through_epoch = 0
+        self._transcribed_through_epoch = 0
+        self._manual_commit_inflight = 0
         await self._connect_websocket(
             url=self._build_realtime_ws_url(),
             headers=headers,
@@ -209,6 +308,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         to match.
         """
         self._audio_pending_commit = False
+        # Fresh socket: nothing is buffered server-side and any manual commit
+        # we were awaiting will never be acked, so treat everything sent so far
+        # as accounted for.
+        self._committed_through_epoch = self._audio_epoch
+        self._manual_commit_inflight = 0
 
     async def _send_realtime(self, chunk: AudioChunk) -> None:
         if self._ws is not None:
@@ -229,6 +333,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
             await self._ws.send(payload)
             self._audio_pending_commit = True
+            self._audio_epoch += 1
 
     async def _on_commit_segment(self) -> bool:
         return await self._send_commit(wait_for_final=False)
@@ -278,6 +383,10 @@ class ElevenLabsSTT(WebSocketSTTBase):
             return False
 
         self._audio_pending_commit = False
+        # This commit covers everything streamed so far; its ack is the next
+        # committed_transcript we receive while a manual commit is in flight.
+        self._committed_through_epoch = self._audio_epoch
+        self._manual_commit_inflight += 1
         if wait_for_final:
             try:
                 await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
@@ -313,53 +422,103 @@ class ElevenLabsSTT(WebSocketSTTBase):
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
         msg_type = msg.get("message_type") or msg.get("type", "")
-
         if msg_type == "partial_transcript":
-            text = msg.get("text", "")
-            if not text:
-                return
-            self._partial_text = text
-            self._emit_event(
-                STTEvent(
-                    type=STTEventType.PARTIAL,
-                    text=text,
-                    confidence=msg.get("confidence"),
-                    language=msg.get("language_code") or self._config.language,
-                )
+            self._handle_partial_transcript(msg)
+        elif msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
+            self._handle_committed_transcript(msg)
+
+    def _handle_partial_transcript(self, msg: dict[str, Any]) -> None:
+        text = msg.get("text", "")
+        if not text:
+            return
+        self._partial_text = text
+        # A partial means the server is transcribing audio it has not yet
+        # committed, so there is genuinely uncommitted audio. Re-arm the
+        # pending flag — this recovers the case where an earlier (stale)
+        # committed_transcript optimistically cleared it while speech had
+        # already resumed.
+        self._audio_pending_commit = True
+        # The server has now transcribed through the latest audio epoch; a
+        # subsequent VAD commit covers at most this much.
+        self._transcribed_through_epoch = self._audio_epoch
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.PARTIAL,
+                text=text,
+                confidence=msg.get("confidence"),
+                language=msg.get("language_code") or self._config.language,
             )
+        )
+
+    def _reconcile_pending_commit_on_committed(self) -> None:
+        """Clear the pending-commit flag only when the committed transcript
+        actually covers the latest audio we've streamed.
+
+        A committed transcript can arrive *after* newer audio was sent (manual
+        commit_segment() then more send_audio(), or a VAD auto-commit while
+        speech resumed); clearing unconditionally would make _end_realtime()
+        skip the final commit for that newer audio and drop the trailing
+        segment.
+        """
+        if self._manual_commit_inflight > 0:
+            # Ack of a manual commit we sent. Clear only if no audio was
+            # streamed after that commit was requested; otherwise the newer
+            # audio is still uncommitted and must be flushed at end-of-turn.
+            self._manual_commit_inflight -= 1
+        else:
+            # Unsolicited server VAD commit. It covers what the server has
+            # transcribed (bounded by the latest partial), not necessarily the
+            # newest audio.
+            self._committed_through_epoch = max(
+                self._committed_through_epoch, self._transcribed_through_epoch
+            )
+        if self._audio_epoch <= self._committed_through_epoch:
+            self._audio_pending_commit = False
+
+    def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
+        text = msg.get("text", "")
+        if not text:
             return
 
-        if msg_type in {"committed_transcript", "committed_transcript_with_timestamps"}:
-            if self._dropping_pending_final:
-                # A previous ``_send_commit`` already gave up on this
-                # committed transcript and promoted the accumulated partial
-                # to a FINAL, so silently discard this late revision to
-                # avoid emitting a second FINAL for the same turn.
-                logger.debug(
-                    "Dropping late ElevenLabs committed_transcript (already promoted partial)"
-                )
-                self._dropping_pending_final = False
-                self._partial_text = ""
-                if self._final_received is not None:
-                    self._final_received.set()
-                return
-
-            text = msg.get("text", "")
-            if not text:
-                return
-
-            self._emit_event(
-                STTEvent(
-                    type=STTEventType.FINAL,
-                    text=text,
-                    confidence=msg.get("confidence"),
-                    language=msg.get("language_code") or self._config.language,
-                    word_timestamps=word_timestamps_from_words(msg.get("words")),
-                )
+        if self._transcribed_through_epoch <= self._committed_through_epoch:
+            # Some valid VAD commits arrive without a preceding
+            # ``partial_transcript``. The committed transcript itself proves
+            # the server transcribed a segment, but not that it covered newer
+            # trailing audio streamed before this message was processed. With
+            # no partial boundary, acknowledge only the next uncommitted epoch
+            # so resumed speech stays pending for end_stream().
+            self._transcribed_through_epoch = max(
+                self._transcribed_through_epoch,
+                min(self._audio_epoch, self._committed_through_epoch + 1),
             )
+
+        self._reconcile_pending_commit_on_committed()
+        if self._dropping_pending_final:
+            # A previous ``_send_commit`` already gave up on this committed
+            # transcript and promoted the accumulated partial to a FINAL, so
+            # silently discard this late revision to avoid emitting a second
+            # FINAL for the same turn.
+            logger.debug(
+                "Dropping late ElevenLabs committed_transcript (already promoted partial)"
+            )
+            self._dropping_pending_final = False
             self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
+            return
+
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=text,
+                confidence=msg.get("confidence"),
+                language=msg.get("language_code") or self._config.language,
+                word_timestamps=word_timestamps_from_words(msg.get("words")),
+            )
+        )
+        self._partial_text = ""
+        if self._final_received is not None:
+            self._final_received.set()
 
     # -- Batch (HTTP) mode -------------------------------------------------
 
@@ -401,6 +560,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         data["model"] = self._resolved_model()
         if self._config.language:
             data["language"] = self._config.language
+        # Zero-retention mode is a *query* parameter on /v1/speech-to-text (the
+        # multipart schema has no such field), so send it via ``params`` — in
+        # ``data`` it would be silently ignored. Opt-in: only sent when
+        # disabled so the default request keeps the server default (logging on).
+        params = {"enable_logging": "false"} if not self._config.enable_logging else None
 
         client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
         owns_client = self._config.http_client is None
@@ -408,6 +572,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             response = await client.post(
                 url,
                 headers=headers,
+                params=params,
                 files={"file": ("audio.wav", wav_data, "audio/wav")},
                 data=data,
             )

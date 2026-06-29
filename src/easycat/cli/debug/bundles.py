@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import keyword
+import re
 import shutil
 import sqlite3
 from collections.abc import Mapping
@@ -1608,15 +1610,15 @@ def _diff_turn_filter(result: dict[str, Any], turn: str | None) -> dict[str, Any
 
 
 def _diff_table(turns: list[dict[str, Any]]) -> Table:
-    """Render the per-turn diff: regressed milestones in red, cost delta, drift.
+    """Render the per-turn diff: regressed milestones in red, drift.
 
     One row per aligned turn pair: the positional index, both turn ids, each
-    milestone's ``a→b`` delta (red when it regressed), whether the transcript
-    changed, and the cost delta.  Unmatched turns (a dropped or extra turn)
-    render the missing side as ``-``.
+    milestone's ``a→b`` delta (red when it regressed), and whether the
+    transcript changed.  Unmatched turns (a dropped or extra turn) render the
+    missing side as ``-``.
     """
     table = Table(
-        title="Two-source diff (ms / USD) — regressions in red",
+        title="Two-source diff (ms) — regressions in red",
         show_header=True,
         header_style="bold",
         box=None,
@@ -1627,7 +1629,6 @@ def _diff_table(turns: list[dict[str, Any]]) -> Table:
     table.add_column("turn (a→b)", no_wrap=True, overflow="fold")
     table.add_column("milestones (Δms)", overflow="fold")
     table.add_column("transcript", no_wrap=True)
-    table.add_column("cost Δ", justify="right", no_wrap=True)
     for turn in turns:
         turn_a = turn.get("turn_id_a")
         turn_b = turn.get("turn_id_b")
@@ -1644,13 +1645,11 @@ def _diff_table(turns: list[dict[str, Any]]) -> Table:
         milestone_text = ", ".join(cells) if cells else "[dim](none)[/]"
         transcript = turn.get("transcript") or {}
         drift = "[yellow]changed[/]" if transcript.get("changed") else "same"
-        cost_delta = (turn.get("cost") or {}).get("delta")
         table.add_row(
             str(turn.get("index", "")),
             turn_label,
             milestone_text,
             drift,
-            f"{cost_delta:+.4f}" if isinstance(cost_delta, int | float) else "-",
         )
     return table
 
@@ -1672,13 +1671,13 @@ def diff_command(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
-    """Diff two bundles turn-by-turn: milestone, transcript, and cost deltas.
+    """Diff two bundles turn-by-turn: milestone and transcript deltas.
 
     Aligns turns positionally (turn 0 of A vs turn 0 of B) and reports each
     milestone's ``b - a`` delta, whether it regressed (default: >10% AND >5ms
-    slower), whether the transcript drifted, and the per-turn cost delta.
-    The summary names the single worst regression across the whole run.
-    Transcript text is redacted before it is printed.  See docs/latency.md.
+    slower), and whether the transcript drifted.  The summary names the single
+    worst regression across the whole run.  Transcript text is redacted before
+    it is printed.  See docs/latency.md.
     """
     bundle_a = _load_bundle_or_journal(path_a, command="diff", json_output=json_output)
     bundle_b = _load_bundle_or_journal(path_b, command="diff", json_output=json_output)
@@ -1738,6 +1737,16 @@ def _replay_signature(bundle: RunBundle) -> tuple[tuple[int, str, str | None], .
     return tuple((f.sequence, f.name, f.output_ref) for f in result.frames)
 
 
+def _promote_stub_test_name(turn_id: str) -> str:
+    """Return a Python identifier-safe pytest name suffix for a turn id."""
+    suffix = re.sub(r"[^0-9A-Za-z_]+", "_", turn_id).strip("_")
+    if not suffix:
+        suffix = "turn"
+    if suffix[0].isdigit() or keyword.iskeyword(suffix):
+        suffix = f"turn_{suffix}"
+    return suffix
+
+
 def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) -> str:
     """Render a copy-pasteable pytest regression stub for a promoted turn.
 
@@ -1747,7 +1756,7 @@ def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) 
     captured we assert it exactly; otherwise we emit a ``TODO`` so the
     author fills in the expected reply.
     """
-    safe_id = turn_id.replace("-", "_")
+    safe_id = _promote_stub_test_name(turn_id)
     if expected is not None:
         match_line = f"    assert_exact_match(bundle, expected={expected!r})"
     else:
@@ -2229,7 +2238,12 @@ async def _stream_follow(
         if json_output:
             # Newline-delimited JSON, one record per line (NOT a single
             # envelope) so a consumer can ``read`` the stream incrementally.
-            stdout_console.print(json.dumps(record_dict, sort_keys=False))
+            # Write straight to the file handle, bypassing Rich: Rich soft-wraps
+            # at terminal width, which would split long records across lines and
+            # mangle the NDJSON when consumers pipe it into ``jq`` or ``read``.
+            line = json.dumps(_redact_follow_record(record_dict), sort_keys=False)
+            stdout_console.file.write(line + "\n")
+            stdout_console.file.flush()
             continue
 
         # Only the FIRST TTS byte of a turn is the milestone landmark; later
@@ -2262,6 +2276,34 @@ def _record_to_follow_dict(record: Any) -> dict[str, Any]:
     if timing is not None:
         out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
     return out
+
+
+# Free-form STT/agent text that ``SessionJournalSink`` stores under generic
+# ``data`` keys: final/partial transcript and model output land under
+# ``data.text`` and streamed tokens under ``data.delta``.  Neither key is in
+# ``redact_value``'s field-name allowlist, so they would only get pattern-based
+# redaction and otherwise stream verbatim utterances (e.g. medical or account
+# details).  Replace them wholesale with the shared transcript placeholder.
+_FOLLOW_FREE_TEXT_KEYS = ("text", "delta")
+
+
+def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a redacted copy of a follow record before JSON streaming.
+
+    Human follow output already renders a narrow, redacted summary.  JSON mode
+    intentionally preserves the same record shape for incremental consumers,
+    but must pass every projected field through the shared redaction policy
+    before writing newline-delimited records to stdout.  Free-form transcript
+    and model text under ``data.text`` / ``data.delta`` is stripped explicitly
+    because those generic keys fall outside the shared field-name allowlist.
+    """
+    redacted = cast(dict[str, Any], redact_value(dict(record)))
+    data = redacted.get("data")
+    if isinstance(data, dict):
+        for key in _FOLLOW_FREE_TEXT_KEYS:
+            if data.get(key):
+                data[key] = REDACTED_TRANSCRIPT
+    return redacted
 
 
 @cli_command

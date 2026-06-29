@@ -157,28 +157,18 @@ Shipped:
 - Config flattening pass meets the target: currently 22 top-level `EasyConfig` fields
   against the target ≤22.
 - Advanced observability knobs are now config-addressable without widening the
-  top-level `EasyConfig` field budget: `ObservabilityConfig` carries
-  `latency_budget=`, `warmup=`, and `max_session_cost_usd=`, while
-  `EasyConfig(...)` and `create_text_session(...)` keep top-level aliases for
-  first-run ergonomics and safe debug-bundle snapshots preserve the values.
-- `latency_budget=LatencyBudget(stage="tts", max_ms=...)` now reaches the
-  runtime context and tags matching over-budget stage records with
-  `latency_budget_exceeded`, `elapsed_ms`, and structured
-  `latency_budget_violations`, so debug bundles surface local stage overruns
-  without requiring a separate validation run.
-- `latency_budget=LatencyBudget(stage="total_ms", max_ms=...)` now emits
-  turn-level `latency_budget_exceeded` metric records from text turns and from
-  voice turns once first TTS audio is available, so whole-turn latency alerts no
-  longer require a separate validation artifact.
-- `max_session_cost_usd=` now reaches the debugger cost rollup through safe
-  config snapshots. When `cost` / `cost_record` journal entries exist,
-  `/api/cost` reports `ok` / `warning` / `exceeded` budget status alongside
-  per-turn and total spend using the shared
-  `easycat.runtime.cost_budget_status(...)` helper. The session journal also
-  emits one `cost_budget_warning` and one `cost_budget_exceeded` metric record
-  when explicit cost records cross the configured thresholds; once the
-  exceeded alert fires, Session records `cost_budget_stop_requested` and
-  schedules `stop(force=True)` through the runtime task scope.
+  top-level `EasyConfig` field budget: `ObservabilityConfig` carries `warmup=`,
+  while `EasyConfig(...)` and `create_text_session(...)` keep a top-level alias
+  for first-run ergonomics and safe debug-bundle snapshots preserve the value.
+- Turn-level latency is reported to the journal without a budget: text turns
+  emit `text_turn_latency_ms` and voice turns emit `turn_total_latency_ms`
+  (once first TTS audio is available) metric records, and every stage records
+  its `elapsed_ms`, so debug bundles surface latency without a separate
+  validation run. Regression gating stays in the `easycat validate latency` lane.
+- The runtime cost-monitoring and latency-*budget* knobs (`max_session_cost_usd`,
+  `latency_budget=`, the debugger `/api/cost` rollup, `cost_budget_*` records,
+  and stage-record `latency_budget_exceeded` tags) were removed as undercooked
+  and duplicative with the journal-based observability surface.
 - `warmup=` now reaches `SessionConfig`, and `Session.start()` runs structural
   provider/model `warmup()` hooks before audio ingress when the flag is enabled,
   emitting `warmup_completed` timing records and `warmup_failed` control records
@@ -214,15 +204,11 @@ Still remaining:
 - Full structlog processor adoption remains; today's stdlib logger now has an
   explicit dev/prod renderer split (`json`, plain `text`, Rich-capable
   `human`) without adding a structlog dependency.
-- Runtime enforcement for advanced observability knobs remains:
-  first-token/audio `latency_budget=` gates such as `llm_ttft_ms` and
-  `tts_ttfb_ms` remain validation concepts rather than runtime alerts.
 
 The high-leverage DX wins are shipped; the remaining work is deliberately
 narrower: ecosystem-gated offline preset wiring, cross-pipeline
-`ExceptionGroup` propagation, full structlog adoption, non-canonical example
-shrinkage, and runtime enforcement for first-token/audio `latency_budget=`
-alerts.
+`ExceptionGroup` propagation, full structlog adoption, and non-canonical
+example shrinkage.
 
 >
 > **Sibling peripheral docs:**
@@ -574,10 +560,8 @@ low-level internals:
 - `runtime_mode="chained_pipeline" | "text_session"`
 - `smart_turn=True` with `smart_turn_sensitivity=0.5` (shipped)
 - `backchannel_filter=True`
-- `latency_budget=LatencyBudget(...)`
 - `warmup=True`
 - `mcp_servers=[...]`
-- `max_session_cost_usd=0.50`
 
 ## Quickstart Guardrails
 

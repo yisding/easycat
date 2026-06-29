@@ -3,9 +3,10 @@
 ``is_reusable_agent_spec`` decides which high-level ``agent`` values a
 per-connection server may forward into a *fresh* ``EasyConfig`` for every
 connection. A declarative framework spec rebuilds an independent bridge per
-session (safe to reuse); an already-built bridge/runner — or a runnable that
-pins a single conversation — carries per-session state and MUST be rejected so
-the caller routes it through a ``config_factory`` instead.
+session (safe to reuse — the bridge, not the wrapped spec, owns per-session
+state); an already-built bridge/runner — or a runnable that pins a single
+conversation — carries per-session state and MUST be rejected so the caller
+routes it through a ``config_factory`` instead.
 
 This is the load-bearing guard for the "VoiceApp state isolated across
 connections" contract, so every branch is locked here. The SDK-free
@@ -116,7 +117,10 @@ def test_compiled_langgraph_graph_is_reusable_unless_pinned() -> None:
     builder.add_node("noop", lambda s: s)
     builder.add_edge(START, "noop")
     graph = builder.compile()
+    # Unpinned: each per-connection bridge mints its own ``thread_id``, so the
+    # same compiled graph is safe to forward into every connection.
     assert is_reusable_agent_spec(graph) is True
+    # Pinned: every per-session bridge would resolve the same thread, so reject.
     pinned = graph.with_config(configurable={"thread_id": "t"})
     assert is_reusable_agent_spec(pinned) is False
 

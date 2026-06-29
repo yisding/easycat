@@ -731,8 +731,8 @@ opening the debugger UI. Turns are aligned positionally (turn 0 of A vs turn
 0 of B); ragged turn counts pad the missing side and mark the pair
 `unmatched` so a dropped or extra turn is obvious. Milestone keys are read
 dynamically from `debug/_turn_diff.diff_bundles`, which reuses the shared
-`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` /
-`turn_cost_rollup` rollups so the diff never reimplements the math.
+`turn_waterfall` / `turn_milestones` / `extract_turn_transcripts` rollups so
+the diff never reimplements the math.
 
 ```
 Usage: easycat diff [OPTIONS] PATH_A PATH_B
@@ -842,10 +842,10 @@ Explicit non-goals, with reasoning.
   pre-loaded is a one-line convenience, but `pyproject.toml` can
   already register the plugin in `[tool.pytest.ini_options]`.
   Scaffolded templates do exactly that. No wrapper needed.
-- **`easycat cost`** — cost rollups are valuable but the per-session
-  cost is already visible in `bundles show` and the dev waterfall
-  (`peripheral-eval-and-debugger-ui.md`). A dedicated command is
-  polish, not thesis. Defer.
+- **`easycat cost`** — runtime cost rollups were removed (see
+  `peripheral-observability-and-cost.md`) as undercooked and duplicative
+  with the journal; cost monitoring is not currently a library direction.
+  Defer any dedicated command until cost tracking is revisited.
 - **`easycat login` / credential store** — API keys go in `.env`.
   Managing credentials is the OS's job.
 - **`easycat deploy`** — deployment is documented in
@@ -931,7 +931,7 @@ EasyCat — voice bot framework
     inspect     Summarise a debug bundle or SQLite journal
     replay      Replay a debug bundle or SQLite journal
     latency     Summarise critical-path latency percentiles for a bundle
-    diff        Diff two bundles turn-by-turn for milestone and cost regressions
+    diff        Diff two bundles turn-by-turn for milestone regressions
     journal     Search and tail captured journals and crash dumps
     tail        Live-tail a SQLite journal as it grows
     explain     Route a call problem by symptom, or look up an error code
