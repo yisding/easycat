@@ -743,8 +743,8 @@ def test_diff_json_flags_regression_and_cost_delta(cli: CliRunner, tmp_path: Pat
 
 
 def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> None:
-    """A phone number a caller said aloud is redacted in the diff transcript."""
-    phone = "Call me at 415-555-0199 please"
+    """Free-form caller text is suppressed in the diff transcript."""
+    sensitive_text = "Call me at 415-555-0199 about diagnosis BLUE-ORCHID"
 
     def _with_transcript(turn_id: str, session: str, text: str) -> list[JournalRecord]:
         chain: list[JournalRecord] = []
@@ -757,18 +757,23 @@ def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> No
 
     bundle_a = tmp_path / "before.zip"
     bundle_b = tmp_path / "after.zip"
-    export_debug_bundle(_FakeSession(records=_with_transcript("t1", "sa", phone)), bundle_a)
+    export_debug_bundle(
+        _FakeSession(records=_with_transcript("t1", "sa", sensitive_text)), bundle_a
+    )
     export_debug_bundle(
         _FakeSession(records=_with_transcript("t1", "sb", "Different words")), bundle_b
     )
 
     result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--json"])
     assert result.exit_code == 0, result.stderr
-    # The raw phone number must never reach stdout.
+    # The raw transcript body must never reach stdout, even for text that
+    # substring redaction cannot recognize as sensitive.
     assert "415-555-0199" not in result.stdout
+    assert "diagnosis BLUE-ORCHID" not in result.stdout
     payload = json.loads(result.stdout)
     (turn,) = payload["turns"]
-    assert "415-555-0199" not in turn["transcript"]["user_a"]
+    assert turn["transcript"]["user_a"] == "[REDACTED_TRANSCRIPT]"
+    assert turn["transcript"]["user_b"] == "[REDACTED_TRANSCRIPT]"
     # Transcript drift is still detected after redaction.
     assert turn["transcript"]["changed"] is True
 

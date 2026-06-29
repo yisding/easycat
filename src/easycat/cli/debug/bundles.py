@@ -83,6 +83,7 @@ from easycat.runtime.replay import (
 )
 from easycat.validation.latency import LatencyPercentileStats
 from easycat.validation.redaction import (
+    REDACTED_TRANSCRIPT,
     REDACTION_VERSION,
     contains_unredacted_sensitive_text,
     redact_text,
@@ -1562,20 +1563,21 @@ def latency_command(
 
 # ── `easycat diff` ───────────────────────────────────────────────
 
-# Transcript fields whose free-form text must be redacted before any diff
-# row is emitted (JSON envelope or human table).  A regressed milestone or a
-# cost delta is just numbers; only the transcript can carry a phone number or
-# secret a caller said aloud.
+# Transcript fields whose free-form text must be suppressed before any diff
+# result is emitted (JSON envelope or human table).  A regressed milestone or
+# cost delta is just numbers; transcript bodies can carry arbitrary sensitive
+# caller/agent text, so substring redaction is not sufficient here.
 _DIFF_TRANSCRIPT_TEXT_FIELDS = ("user_a", "user_b", "agent_a", "agent_b")
 
 
 def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Redact every transcript string in a ``diff_bundles`` result in place.
+    """Suppress every transcript body in a ``diff_bundles`` result in place.
 
-    The diff carries raw user/agent transcripts so the ``changed`` flag is
-    meaningful, but the CLI must never print unredacted caller text.  Each
-    transcript cell's text fields are passed through :func:`redact_text`;
-    milestones, costs, and the summary are numbers and pass through untouched.
+    The diff engine carries raw user/agent transcripts only long enough to
+    compute the ``changed`` flag.  Before any CLI output, replace those bodies
+    with a constant marker so arbitrary conversation content cannot leak to
+    stdout, CI logs, or shared JSON artifacts.  Milestones, costs, and the
+    summary are numbers and pass through untouched.
     """
     for turn in result.get("turns", ()):
         transcript = turn.get("transcript")
@@ -1584,7 +1586,7 @@ def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
         for field_name in _DIFF_TRANSCRIPT_TEXT_FIELDS:
             value = transcript.get(field_name)
             if isinstance(value, str) and value:
-                transcript[field_name] = redact_text(value)
+                transcript[field_name] = REDACTED_TRANSCRIPT
     return result
 
 
