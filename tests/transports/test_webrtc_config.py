@@ -123,6 +123,14 @@ class TestWebRTCTransportConfig:
         assert len(servers) == 1
         assert servers[0].urls == ["turn:example.com:3478"]
 
+    def test_env_ice_server_helper_ignores_blank_turn_url(self, monkeypatch):
+        monkeypatch.setenv("TURN_SERVER_URL", "   ")
+
+        servers = webrtc_ice_servers_from_env()
+
+        assert len(servers) == 1
+        assert servers[0].urls == ["stun:stun.l.google.com:19302"]
+
 
 class TestWebRTCTransportConformance:
     def test_has_protocol_methods(self):
