@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
@@ -2020,6 +2021,23 @@ def test_promote_writes_replayable_single_turn_slice(cli: CliRunner, tmp_path: P
     assert "assert_no_error" in result.stdout
     assert "assert_turn_completed(bundle, 't1')" in result.stdout
     assert "expected='hello there'" in result.stdout
+
+
+def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:
+    from easycat.cli.debug.bundles import _promote_test_stub
+
+    malicious_turn_id = (
+        "x(easycat_bundle):\n    __import__('os').system('touch /tmp/pwned')\n    #"
+    )
+
+    stub = _promote_test_stub(bundle_name="turn.zip", turn_id=malicious_turn_id, expected=None)
+
+    parsed = ast.parse(stub)
+    functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)]
+    assert [function.name for function in functions] == [
+        "test_x_easycat_bundle___import___os_system_touch_tmp_pwned"
+    ]
+    assert f"assert_turn_completed(bundle, {malicious_turn_id!r})" in stub
 
 
 def test_promote_json_carries_stub(cli: CliRunner, tmp_path: Path) -> None:
