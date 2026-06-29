@@ -83,6 +83,7 @@ from easycat.runtime.replay import (
 )
 from easycat.validation.latency import LatencyPercentileStats
 from easycat.validation.redaction import (
+    REDACTED_TRANSCRIPT,
     REDACTION_VERSION,
     contains_unredacted_sensitive_text,
     redact_text,
@@ -2260,7 +2261,17 @@ async def _stream_follow(
 def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Return the JSON follow projection with sensitive values redacted."""
     redacted = redact_value(record)
-    return dict(redacted) if isinstance(redacted, Mapping) else {}
+    if not isinstance(redacted, Mapping):
+        return {}
+    out = dict(redacted)
+    data = out.get("data")
+    if isinstance(data, Mapping):
+        data = dict(data)
+        for key in ("text", "delta"):
+            if key in data:
+                data[key] = REDACTED_TRANSCRIPT
+        out["data"] = data
+    return out
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:

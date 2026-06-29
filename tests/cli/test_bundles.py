@@ -371,7 +371,8 @@ def test_journal_follow_json_record_redacts_sensitive_payloads() -> None:
         "turn_id": "t1",
         "name": "agent_final",
         "data": {
-            "text": "email alice@example.com with token=tok-123456789012",
+            "text": "my account is overdrawn",
+            "delta": "please summarize this balance",
             "api_key": "sk-live-secret-value",
         },
         "error": {
@@ -383,8 +384,11 @@ def test_journal_follow_json_record_redacts_sensitive_payloads() -> None:
     redacted = _redact_follow_record(record)
     rendered = json.dumps(redacted)
 
-    assert "tok-123456789012" not in rendered
+    assert "my account is overdrawn" not in rendered
+    assert "please summarize this balance" not in rendered
     assert "sk-live-secret-value" not in rendered
+    assert redacted["data"]["text"] == "[REDACTED_TRANSCRIPT]"
+    assert redacted["data"]["delta"] == "[REDACTED_TRANSCRIPT]"
     assert redacted["data"]["api_key"] == "[REDACTED_SECRET]"
     assert "[REDACTED_SECRET]" in rendered
 
