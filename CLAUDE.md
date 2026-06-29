@@ -12,7 +12,7 @@ command hints for automation; they are not the primary coding instructions.
 EasyCat is a Python voice bot framework that runs idiomatic agents and
 workflows from OpenAI Agents SDK, PydanticAI, LangChain, LangGraph,
 LlamaAgents, Remote Responses API, or your own async workflow. It handles the
-full audio pipeline: noise reduction → VAD → STT → agent → TTS, with pluggable
+full audio pipeline: echo cancellation → noise reduction → VAD → STT → agent → TTS, with pluggable
 providers at each stage.
 
 ## Commands
@@ -87,7 +87,7 @@ uv run python examples/ws_server.py  # Run an example
 
 ## Architecture
 
-**Pipeline flow:** Transport (audio in) → NoiseReducer → EchoCanceller → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). The `EchoCanceller` also consumes TTS output as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal.
+**Pipeline flow:** Transport (audio in) → EchoCanceller → NoiseReducer → VAD → STT → [SmartTurn] → Agent → TTS → Transport (audio out). AEC runs on the raw mic signal *before* NoiseReducer because NR's nonlinear processing breaks AEC convergence. The `EchoCanceller` also consumes TTS output as reference audio (fed in by `session/_audio_router.py`) so it can subtract the bot's own playback from the captured mic signal.
 
 The full architecture explanation — the `session/` collaborator map
 (`session/_builder.py`, `session/_wiring.py`, `session/_turn_runner.py`, …),

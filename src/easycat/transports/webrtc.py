@@ -170,6 +170,68 @@ def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
     return snapshot
 
 
+def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
+    """Extract valid interleaved PCM16 bytes from an ``av.AudioFrame``.
+
+    ``bytes(frame.planes[0])`` can include PyAV line padding.  For decoded
+    aiortc frames that padding can be several times larger than the actual
+    samples, which makes the downstream pipeline see too much audio per RTP
+    frame.  Slice by frame metadata instead of ``to_ndarray()`` so
+    ``easycat[webrtc]`` does not need a NumPy dependency.
+    """
+    frame_rate = int(getattr(frame, "sample_rate", None) or _WEBRTC_SAMPLE_RATE)
+    layout = getattr(frame, "layout", None)
+    channels = len(getattr(layout, "channels", ()) or ()) or 1
+    frame_format = getattr(frame, "format", None)
+    sample_width = int(getattr(frame_format, "bytes", 2) or 2)
+    samples = int(getattr(frame, "samples", 0) or 0)
+    planes = list(getattr(frame, "planes", ()))
+    if not planes:
+        return b"", frame_rate, channels
+
+    is_planar = bool(getattr(frame_format, "is_planar", False))
+    if is_planar and channels > 1 and len(planes) >= channels and samples > 0:
+        raw = _interleave_audio_planes(
+            planes,
+            samples=samples,
+            channels=channels,
+            sample_width=sample_width,
+        )
+    else:
+        raw = bytes(planes[0])
+        valid_bytes = samples * channels * sample_width
+        if valid_bytes > 0:
+            raw = raw[:valid_bytes]
+    return raw, frame_rate, channels
+
+
+def _interleave_audio_planes(
+    planes: list[Any],
+    *,
+    samples: int,
+    channels: int,
+    sample_width: int,
+) -> bytes:
+    """Return interleaved bytes for planar PCM frames."""
+    plane_bytes = []
+    valid_plane_bytes = samples * sample_width
+    for plane in planes[:channels]:
+        data = bytes(plane)[:valid_plane_bytes]
+        if len(data) < valid_plane_bytes:
+            data += bytes(valid_plane_bytes - len(data))
+        plane_bytes.append(data)
+
+    interleaved = bytearray(samples * channels * sample_width)
+    offset = 0
+    for sample in range(samples):
+        start = sample * sample_width
+        end = start + sample_width
+        for channel in plane_bytes:
+            interleaved[offset : offset + sample_width] = channel[start:end]
+            offset += sample_width
+    return bytes(interleaved)
+
+
 # ── Configuration ────────────────────────────────────────────────
 
 
@@ -493,6 +555,12 @@ class _OutboundAudioSource:
     to obtain an aiortc track that delegates ``recv()`` back to this source.
     """
 
+    # Maximum number of AEC far-end reference frames buffered between mic
+    # frames.  ``_recv`` runs on the event loop (no thread crossing), so the
+    # ``deque(maxlen=...)`` drops the OLDEST entry on overflow for free, which
+    # keeps the freshest reference available for cancellation.
+    _AEC_REF_QUEUE_MAX: ClassVar[int] = 100
+
     def __init__(self) -> None:
         self._queue: asyncio.Queue[_QueuedOutboundChunk] = asyncio.Queue(maxsize=100)
         self._pending: deque[_QueuedOutboundChunk] = deque()
@@ -501,6 +569,22 @@ class _OutboundAudioSource:
         self._event_bus: EventBus | None = None
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
+        # AEC far-end reference drain queue.  ``_recv`` appends each delivered
+        # (session-rate) chunk at playback time; AudioRouter drains it via
+        # ``drain_aec_reference_frames`` before AudioStage.execute() so the AEC
+        # far-end reference is always fed before the corresponding near-end mic
+        # frame is processed.  Fully-silent render frames append a session-rate
+        # silence frame too, so the far/near streams stay 1:1 during pauses.
+        self._aec_ref_queue: deque[bytes] = deque(maxlen=self._AEC_REF_QUEUE_MAX)
+        # Session-rate format of the most recently delivered far-end frame, used
+        # to size silence reference frames during fully-silent ``_recv`` calls.
+        # ``None`` until audio has played (no echo to cancel before then).
+        self._ref_format: AudioFormat | None = None
+        # Reference capture is armed only once a consumer (the AudioRouter)
+        # first drains via ``drain_aec_reference_frames()``.  Until then ``_recv``
+        # skips appending references entirely, so a session without AEC does no
+        # per-frame reference allocation or deque churn.
+        self._aec_reference_enabled: bool = False
 
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
@@ -596,10 +680,11 @@ class _OutboundAudioSource:
                     int((queued.transport_offset / len(queued.transport_data)) * original_size),
                 )
             if reported > queued.original_reported:
+                delivered_data = queued.original_chunk.data[queued.original_reported : reported]
                 delivered_chunks.append(
                     (
                         AudioChunk(
-                            data=queued.original_chunk.data[queued.original_reported : reported],
+                            data=delivered_data,
                             format=queued.original_chunk.format,
                             timestamp=queued.original_chunk.timestamp,
                         ),
@@ -608,6 +693,25 @@ class _OutboundAudioSource:
                         queued.turn_ref,
                     )
                 )
+                # Capture the far-end reference at playback time in the same
+                # session-rate format/order previously fed via the router's
+                # _handle_audio_delivery path.  Drained before the near-end
+                # frame by AudioRouter (shared AEC reference capability).
+                #
+                # KNOWN LIMITATION (server-side AEC is best-effort): this
+                # captures the reference at the server's RTP *send* time, not at
+                # the remote peer's actual speaker playout.  For a remote WebRTC
+                # peer the true echo path adds the peer's jitter buffer, speaker,
+                # room acoustics, and return-network latency, so this reference
+                # may not align with the echo arriving back at the near end and
+                # server-side AEC may not converge.  It is primarily effective
+                # for local-mic / co-located setups where send time ≈ playout
+                # time; remote-peer echo alignment is not guaranteed.  Most
+                # browsers already run their own near-end AEC, so this is a
+                # best-effort supplement rather than a guarantee.
+                if delivered_data and self._aec_reference_enabled:
+                    self._aec_ref_queue.append(delivered_data)
+                    self._ref_format = queued.original_chunk.format
                 queued.original_reported = reported
 
             if queued.transport_offset >= len(queued.transport_data):
@@ -618,6 +722,17 @@ class _OutboundAudioSource:
             buf.extend(bytes(frame_bytes - len(buf)))
 
         pcm_data = bytes(buf)
+
+        # Silence-frame alignment: a render frame that carried no real audio
+        # (queue empty) still played 20 ms of silence into the speaker, so
+        # append a matching session-rate silence reference.  This keeps the
+        # far-end stream 1:1 with the near-end mic stream during pauses,
+        # mirroring LocalTransport's per-callback reference.  Skipped until a
+        # session rate is known (nothing has played yet -> no echo to cancel).
+        if self._aec_reference_enabled and not delivered_chunks and self._ref_format is not None:
+            fmt = self._ref_format
+            silence_samples = fmt.sample_rate * _FRAME_SAMPLES // _WEBRTC_SAMPLE_RATE
+            self._aec_ref_queue.append(bytes(silence_samples * fmt.frame_size))
 
         frame = self._AudioFrame(format="s16", layout="mono", samples=_FRAME_SAMPLES)
         frame.sample_rate = _WEBRTC_SAMPLE_RATE
@@ -639,8 +754,30 @@ class _OutboundAudioSource:
                     )
         return frame
 
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        """Return all pending AEC far-end reference frames, draining the queue.
+
+        Each element is session-rate PCM16 captured at playback time, oldest
+        first.  The LiveKitAEC reframes internally, so variable-size elements
+        are fine.
+
+        Calling this also *arms* reference capture: ``_recv`` only buffers
+        far-end frames once a consumer has started draining, so a session
+        without AEC never pays the per-frame reference cost.
+        """
+        self._aec_reference_enabled = True
+        frames = list(self._aec_ref_queue)
+        self._aec_ref_queue.clear()
+        return frames
+
     def clear(self) -> None:
-        """Discard all queued audio data (used for barge-in / interruption)."""
+        """Discard all queued audio data (used for barge-in / interruption).
+
+        The AEC reference deque is intentionally *not* cleared: residual echo
+        of already-played audio is still arriving at the mic, so those refs
+        must remain available for cancellation.  The deque is bounded, so it
+        cannot grow without limit.
+        """
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
@@ -1042,6 +1179,20 @@ class WebRTCTransport(AudioQueueMixin):
         """Discard queued outbound audio (useful during barge-in)."""
         self._outbound.clear()
 
+    def drain_aec_reference_frames(self) -> list[bytes]:
+        """Return and clear pending AEC far-end reference frames, oldest first.
+
+        Shared AEC reference capability drained by AudioRouter before the
+        near-end mic frame is processed, so the far-end reference is always fed
+        to the echo canceller ahead of the corresponding near-end frame.
+
+        Returns an empty list when the outbound source is not present.
+        """
+        outbound = self._outbound
+        if outbound is None:
+            return []
+        return outbound.drain_aec_reference_frames()
+
     async def _send_client_event(self, payload: dict[str, Any]) -> None:
         """Push one JSON event message over the browser's "events" data channel."""
         channel = self._events_channel
@@ -1410,11 +1561,10 @@ class WebRTCTransport(AudioQueueMixin):
                 if not self._is_current_peer_generation(peer_generation):
                     break
 
-                # Extract raw PCM from the av.AudioFrame.
-                # aiortc decodes Opus to s16 at 48 kHz by default.
-                raw = bytes(frame.planes[0])
-                frame_rate = frame.sample_rate or _WEBRTC_SAMPLE_RATE
-                channels = len(frame.layout.channels) if frame.layout else 1
+                # Extract raw PCM from the av.AudioFrame. aiortc decodes Opus
+                # to s16 at 48 kHz by default, but PyAV plane buffers can
+                # include padding; the helper returns only valid samples.
+                raw, frame_rate, channels = _audio_frame_pcm16_bytes(frame)
 
                 # Downmix to mono if needed.
                 if channels > 1:

@@ -16,6 +16,7 @@ from easycat._provider_helpers import ProviderErrorEmitter
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
 from easycat.events import ErrorStage
 from easycat.reconnecting_ws import ReconnectingWebSocket
+from easycat.tts._multi_context_ws import MultiContextWSManager
 from easycat.tts.base import TTSBase
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,21 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
     def __init__(self, output_format: AudioFormat = PCM16_MONO_24K) -> None:
         super().__init__(output_format=output_format)
         self._ws: ReconnectingWebSocket | None = None
+        # Opt-in persistent multi-context socket manager. Stays ``None`` (and
+        # the one-shot-per-synthesize path runs byte-for-byte) unless the
+        # provider's config sets ``persistent_ws=True`` and the provider builds
+        # it lazily. Deepgram and custom providers never create one.
+        self._mgr: MultiContextWSManager | None = None
         self._init_emit_tasks()
+
+    def _persistent_enabled(self) -> bool:
+        """Whether the opt-in persistent multi-context socket is enabled.
+
+        Reads ``persistent_ws`` off the provider config by name so providers
+        whose config lacks the field (Deepgram, custom out-of-tree providers)
+        are unaffected and always run the default one-shot path.
+        """
+        return bool(getattr(self._config, "persistent_ws", False))
 
     async def _close_ws(self) -> None:
         """Close the current WebSocket connection (idempotent)."""
@@ -65,6 +80,12 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         this as-is; ElevenLabs extends it for its HTTP client) so the
         fire-and-forget ``_emit_provider_error`` tasks are awaited rather than
         left dangling into interpreter shutdown.
+
+        When a persistent multi-context manager is in use, it owns the socket,
+        so it is closed first; ``_close_ws`` is then a no-op (``self._ws`` is
+        ``None`` in persistent mode).
         """
+        if self._mgr is not None:
+            await self._mgr.aclose()
         await self._close_ws()
         await self._drain_emit_tasks()
