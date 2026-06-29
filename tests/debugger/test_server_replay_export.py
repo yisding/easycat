@@ -205,6 +205,27 @@ async def test_replay_destructive_combos_require_confirm(tmp_path):
         assert body["destructive"] is True
 
 
+async def test_replay_destructive_confirm_must_be_literal_true(tmp_path):
+    """Truthy JSON values like ``"false"`` must not satisfy confirmation."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        for confirm in ("true", "false", 1):
+            resp = await client.post(
+                "/api/replay",
+                json={"fidelity": "artifact", "force": True, "confirm": confirm},
+                headers=headers,
+            )
+            assert resp.status == 409
+
+
 async def test_replay_rejects_unknown_keys(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)

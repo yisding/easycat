@@ -188,6 +188,7 @@ class _SentenceStreamBuffer:
             await self._put_payload(ready, is_final=False)
 
     async def _add_markdown_delta(self, delta: str) -> None:
+        had_trailing_numeric_separator = self._has_trailing_numeric_separator(self._text)
         self._text += delta
 
         # Markdown stripping is regex-heavy and sentence splitting scans the
@@ -213,7 +214,7 @@ class _SentenceStreamBuffer:
                 # The first payload may emit at a clause boundary, so a delta
                 # carrying ``,``/``;``/``:`` is also worth a recheck.
                 triggers = triggers | _FIRST_CLAUSE_TRIGGER_CHARS
-            if not any(ch in delta for ch in triggers):
+            if not had_trailing_numeric_separator and not any(ch in delta for ch in triggers):
                 return
 
         self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
@@ -251,6 +252,10 @@ class _SentenceStreamBuffer:
                 self._first_payload_pending = False
                 return ready, remaining
         return split_at_sentence_boundaries(text)
+
+    @staticmethod
+    def _has_trailing_numeric_separator(text: str) -> bool:
+        return len(text) >= 2 and text[-2].isdigit() and text[-1] in ".．:"
 
     async def _put_payload(self, text: str, *, is_final: bool) -> None:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)

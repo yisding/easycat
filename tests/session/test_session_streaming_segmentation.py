@@ -128,6 +128,12 @@ def test_split_first_clause_skips_decimal_point() -> None:
     assert remaining == "then continue."
 
 
+def test_split_first_clause_skips_time_colon() -> None:
+    ready, remaining = split_first_clause("The meeting starts at 10:30, then continue.")
+    assert ready == "The meeting starts at 10:30, "
+    assert remaining == "then continue."
+
+
 def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> None:
     ready, remaining = split_first_clause("The estimate is 3.")
     assert ready == ""
