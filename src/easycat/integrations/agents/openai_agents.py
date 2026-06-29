@@ -45,6 +45,24 @@ logger = logging.getLogger(__name__)
 _OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS = 2.0
 
 
+def _resolve_model_id(candidate: Any) -> str | None:
+    """Best-effort string model id from a string or SDK ``Model`` candidate.
+
+    Returns a stripped, non-empty model id, or ``None`` when the candidate is
+    missing or carries no usable string id.  SDK ``Model`` objects expose the
+    id on a ``.model`` attribute.
+    """
+    if candidate is None:
+        return None
+    if isinstance(candidate, str):
+        stripped = candidate.strip()
+        return stripped or None
+    model_attr = getattr(candidate, "model", None)
+    if isinstance(model_attr, str) and model_attr.strip():
+        return model_attr.strip()
+    return None
+
+
 class OpenAIAgentsBridge:
     """Bridge wrapping an OpenAI Agents SDK ``Agent``.
 
@@ -107,14 +125,21 @@ class OpenAIAgentsBridge:
             logger.debug("OpenAI Agents warmup skipped: %s", exc)
 
     def _warmup_model_name(self, default_model: str) -> str:
-        """Return the string model name that should be touched during warmup."""
+        """Return the string model name that should be touched during warmup.
+
+        ``run_config.model`` and ``agent.model`` may be a plain string *or* an
+        SDK ``Model`` object (e.g. ``OpenAIResponsesModel``); for objects the
+        model id lives on a ``.model`` attribute.  Resolving both keeps warmup
+        priming the model the runtime actually uses instead of silently probing
+        ``default_model`` whenever a config passes a ``Model`` instance.
+        """
         for candidate in (
             getattr(self._run_config, "model", None),
             getattr(self._agent, "model", None),
-            default_model,
         ):
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate
+            resolved = _resolve_model_id(candidate)
+            if resolved is not None:
+                return resolved
         return default_model
 
     # ── ExternalAgentBridge interface ─────────────────────────────

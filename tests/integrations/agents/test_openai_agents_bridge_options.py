@@ -282,6 +282,31 @@ async def test_openai_agents_warmup_swallows_errors(monkeypatch):
     await bridge.warmup()
 
 
+def test_warmup_model_name_extracts_id_from_model_objects():
+    """``run_config.model``/``agent.model`` may be SDK ``Model`` objects."""
+    # run_config carries a Model object; its id should win over agent/default.
+    run_model = SimpleNamespace(model="gpt-run-obj")
+    agent = _Agent()
+    agent.model = SimpleNamespace(model="gpt-agent-obj")
+    bridge = OpenAIAgentsBridge(agent, run_config=SimpleNamespace(model=run_model))
+
+    assert bridge._warmup_model_name("gpt-default") == "gpt-run-obj"
+
+
+def test_warmup_model_name_falls_back_through_candidates():
+    """Empty/objectless candidates fall through to the next usable id."""
+    agent = _Agent()
+    agent.model = "  gpt-agent  "  # stripped and used when run_config has none
+    bridge = OpenAIAgentsBridge(agent, run_config=SimpleNamespace(model="   "))
+    assert bridge._warmup_model_name("gpt-default") == "gpt-agent"
+
+    # A Model object with no usable string id falls back to default_model.
+    agent_no_id = _Agent()
+    agent_no_id.model = SimpleNamespace(model=None)
+    bridge_default = OpenAIAgentsBridge(agent_no_id, run_config=None)
+    assert bridge_default._warmup_model_name("gpt-default") == "gpt-default"
+
+
 def _fail_if_called(*_args: Any, **_kwargs: Any) -> Any:
     raise AssertionError("warmup must not invoke the Runner")
 
