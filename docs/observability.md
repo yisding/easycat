@@ -145,6 +145,44 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `127.0.0.1` unless you have a controlled, private debugging environment and
   explicitly choose `allow_remote=True`.
 
+  **Dev mode (always-available dev timeline).** For the inner development loop,
+  opt in to dev mode instead of launching the debugger by hand:
+
+  ```bash
+  EASYCAT_DEV=1 easycat serve
+  ```
+
+  ```python
+  from easycat import VoiceApp
+
+  VoiceApp(agent=agent, dev=True).run("browser")
+  ```
+
+  Dev mode (`EASYCAT_DEV=1` / `VoiceApp(dev=True)`) defaults to durable
+  debugging when you have not set `debug=` explicitly, registers every live
+  session in a process-local registry, and launches ONE loopback debugger UI per
+  process. Registration flows through the single `create_session` funnel, so
+  **every mode** populates the UI — including the per-connection
+  browser/websocket/twilio sessions built downstream — and sessions
+  auto-unregister when they stop (weakly held, so a stopped call is never pinned
+  alive or left lingering in the list).
+
+  The UI adds a **live session selector** that updates over the WebSocket as
+  calls come and go (`GET /api/dev/sessions` lists them; `POST /api/dev/select`
+  re-points every panel — switching a session resets the live-follow cursor so
+  a session whose journal is "behind" still streams cleanly). It also surfaces a
+  **cross-session overview strip** (`GET /api/dev/overview`) with one chip per
+  session colored by error count, a "follow newest" toggle, `[`/`]` keyboard
+  switching, and a filter box. If the default port (8765) is taken — e.g. a
+  second dev process — the UI scans the next few loopback ports automatically
+  (override with `EASYCAT_DEV_DEBUGGER_PORT`).
+
+  Dev mode is **purely additive** over the autolaunch guard: it is a separate,
+  explicit opt-in. `debug="full"` on its own still keeps a durable journal and
+  never opens a browser tab — durable journaling and UI autolaunch remain
+  distinct concepts. Dev mode also never opens a tab in CI / non-interactive
+  shells (same loopback + interactive-terminal guards as the autolaunch path).
+
 ### D — OpenTelemetry facade
 
 `easycat._observability` is a thin facade over the OpenTelemetry API for
