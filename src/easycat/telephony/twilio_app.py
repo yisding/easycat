@@ -14,6 +14,11 @@ if TYPE_CHECKING:
     from easycat.telephony.session_actions import TwilioSessionActionConfig
 
 
+def _settings_value(value: str | None) -> str:
+    """Normalize env/settings values so blank secrets do not count as configured."""
+    return (value or "").strip()
+
+
 @dataclass(frozen=True, slots=True)
 class TwilioAppSettings:
     """Environment-derived settings for a Twilio Media Streams app."""
@@ -77,7 +82,9 @@ def twilio_app_settings_from_env(
 ) -> TwilioAppSettings:
     """Read the standard Twilio example/app environment variables."""
     env = os.environ if environ is None else environ
-    resolved_stream_url = stream_url or env.get("TWILIO_STREAM_URL", "")
+    resolved_stream_url = _settings_value(stream_url) or _settings_value(
+        env.get("TWILIO_STREAM_URL")
+    )
     if not resolved_stream_url:
         raise RuntimeError(
             "TWILIO_STREAM_URL is required. Set it to the public wss:// URL Twilio should "
@@ -86,14 +93,14 @@ def twilio_app_settings_from_env(
 
     return TwilioAppSettings(
         stream_url=resolved_stream_url,
-        account_sid=env.get("TWILIO_ACCOUNT_SID", ""),
-        auth_token=env.get("TWILIO_AUTH_TOKEN", ""),
-        voice_from=env.get("TWILIO_VOICE_FROM", ""),
-        twiml_url=env.get("TWILIO_TWIML_URL", ""),
-        status_callback_url=env.get("TWILIO_STATUS_CALLBACK_URL", ""),
-        call_api_token=env.get("TWILIO_CALL_API_TOKEN", ""),
-        sms_from=env.get("TWILIO_SMS_FROM", ""),
-        stream_token_secret=env.get("TWILIO_STREAM_TOKEN_SECRET", ""),
+        account_sid=_settings_value(env.get("TWILIO_ACCOUNT_SID")),
+        auth_token=_settings_value(env.get("TWILIO_AUTH_TOKEN")),
+        voice_from=_settings_value(env.get("TWILIO_VOICE_FROM")),
+        twiml_url=_settings_value(env.get("TWILIO_TWIML_URL")),
+        status_callback_url=_settings_value(env.get("TWILIO_STATUS_CALLBACK_URL")),
+        call_api_token=_settings_value(env.get("TWILIO_CALL_API_TOKEN")),
+        sms_from=_settings_value(env.get("TWILIO_SMS_FROM")),
+        stream_token_secret=_settings_value(env.get("TWILIO_STREAM_TOKEN_SECRET")),
     )
 
 
