@@ -226,6 +226,39 @@ async def test_replay_destructive_confirm_must_be_literal_true(tmp_path):
             assert resp.status == 409
 
 
+async def test_replay_force_must_be_literal_boolean(tmp_path):
+    """Truthy JSON values like ``"false"`` or ``1`` must not enable force."""
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    headers = {
+        "Origin": "http://localhost:8765",
+        "Content-Type": "application/json",
+    }
+    async with TestClient(TestServer(app)) as client:
+        for force in ("true", "false", 1):
+            resp = await client.post(
+                "/api/replay",
+                json={"fidelity": "artifact", "force": force},
+                headers=headers,
+            )
+            assert resp.status == 400
+            body = await resp.json()
+            assert body["error_code"] == "BAD_REQUEST"
+            assert "force must be a boolean" in body["message"]
+
+        resp = await client.post(
+            "/api/replay",
+            json={"fidelity": "artifact", "force": False},
+            headers=headers,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["destructive"] is False
+
+
 async def test_replay_rejects_unknown_keys(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)

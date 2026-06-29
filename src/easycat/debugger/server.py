@@ -382,6 +382,11 @@ def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     from easycat.runtime.replay import _STAGE_NAMES
 
     out: dict[str, Any] = {}
+    if "force" in kwargs:
+        value = kwargs["force"]
+        if not isinstance(value, bool):
+            raise ValueError("force must be a boolean")
+        out["force"] = value
     if "from_sequence" in kwargs and kwargs["from_sequence"] is not None:
         value = kwargs["from_sequence"]
         if not isinstance(value, int) or isinstance(value, bool):
@@ -423,9 +428,9 @@ def _run_bundle_source(
 
         fidelity = ReplayFidelity(kwargs.get("fidelity", "artifact"))
         timing = kwargs.get("timing", "fast")
-        force = bool(kwargs.get("force", False))
         tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
         validated = _validated_replay_kwargs(kwargs)
+        force = validated.get("force", False)
         spec = ReplaySpec(
             fidelity=fidelity,
             timing=timing,
@@ -2242,7 +2247,13 @@ def _make_app(
             return web.json_response({"error": f"unknown keys: {sorted(unknown)}"}, status=400)
         fidelity = payload.get("fidelity", "artifact")
         tool_policy = payload.get("tool_policy", "deny")
-        force = bool(payload.get("force", False))
+        try:
+            validated = _validated_replay_kwargs(payload)
+        except ValueError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
+        force = validated.get("force", False)
         confirm = payload.pop("confirm", False) is True
         # ARTIFACT/SIMULATED with DENY/STUB are always safe; LIVE
         # fidelity, ALLOW tool policy, or force=True can re-execute
