@@ -2271,6 +2271,7 @@ async def _stream_follow(
                 seen_tts_first.add(rec_turn)
         stdout_console.print(escape(_format_follow_line(record_dict)))
 
+
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:
     """Project a ``JournalRecord`` (or dict) into the follow-line dict shape."""
     if isinstance(record, dict):
