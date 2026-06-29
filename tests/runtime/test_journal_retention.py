@@ -114,7 +114,7 @@ def test_age_window_can_be_disabled_with_large_window(tmp_path):
     assert stale.exists()
 
 
-def test_age_window_tolerates_missing_file_mid_sweep(tmp_path):
+def test_age_window_tolerates_missing_file_mid_sweep(tmp_path, monkeypatch):
     """A concurrent sweep may unlink a file between glob and stat."""
     stale = _seed_journal(tmp_path, "stale-sess")
     fresh = _seed_journal(tmp_path, "fresh-sess")
@@ -123,7 +123,18 @@ def test_age_window_tolerates_missing_file_mid_sweep(tmp_path):
 
     # Simulate a racing crash-durability sweep removing the stale file's
     # main DB after globbing but before retention stats it.
-    stale.unlink()
+    original_stat = type(stale).stat
+    vanished = False
+
+    def race_stat(self, *args, **kwargs):
+        nonlocal vanished
+        if self == stale and not vanished:
+            vanished = True
+            stale.unlink(missing_ok=True)
+            raise FileNotFoundError(str(self))
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(stale), "stat", race_stat)
 
     removed = run_retention(tmp_path, max_age_days=14, mode="archive")
 
