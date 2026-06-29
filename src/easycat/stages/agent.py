@@ -227,7 +227,6 @@ class AgentStage:
                         # at the suspended yield, so post-yield code is not a
                         # reliable audit boundary for text already handed to
                         # downstream TTS or text clients.
-                        accumulated.append(text)
                         journal_append_event(
                             ctx,
                             stage=self.name,
@@ -235,6 +234,8 @@ class AgentStage:
                             turn_id=turn.id,
                             data_extra={"type": "TEXT_DELTA", "text": text},
                         )
+                        if not (cancel_token and cancel_token.is_cancelled):
+                            accumulated.append(text)
                         yield event
                         continue
                     elif kind == "done":
