@@ -77,6 +77,13 @@ def safe_turn_id(value: Any) -> str | None:
     return None
 
 
+def _safe_sequence(value: Any) -> int | None:
+    """Return a comparable journal sequence, ignoring malformed values."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Roll up per-turn timing for the waterfall view."""
     by_turn: dict[str, dict[str, Any]] = {}
@@ -85,12 +92,13 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         turn_id = safe_turn_id(r.get("turn_id"))
         if turn_id is None:
             continue
+        seq = _safe_sequence(r.get("sequence"))
         bucket = by_turn.get(turn_id)
         if bucket is None:
             bucket = {
                 "turn_id": turn_id,
-                "first_sequence": r.get("sequence"),
-                "last_sequence": r.get("sequence"),
+                "first_sequence": seq,
+                "last_sequence": seq,
                 "first_wall_ns": None,
                 "last_wall_ns": None,
                 "stage_counts": {},
@@ -102,7 +110,6 @@ def summarise_turns(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
             by_turn[turn_id] = bucket
             order.append(turn_id)
-        seq = r.get("sequence")
         if seq is not None:
             if bucket["first_sequence"] is None or seq < bucket["first_sequence"]:
                 bucket["first_sequence"] = seq
