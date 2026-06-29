@@ -38,6 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import keyword
+import re
 import shutil
 import sqlite3
 from collections.abc import Mapping
@@ -1734,6 +1736,16 @@ def _replay_signature(bundle: RunBundle) -> tuple[tuple[int, str, str | None], .
     return tuple((f.sequence, f.name, f.output_ref) for f in result.frames)
 
 
+def _promote_stub_test_name(turn_id: str) -> str:
+    """Return a Python identifier-safe pytest name suffix for a turn id."""
+    suffix = re.sub(r"[^0-9A-Za-z_]+", "_", turn_id).strip("_")
+    if not suffix:
+        suffix = "turn"
+    if suffix[0].isdigit() or keyword.iskeyword(suffix):
+        suffix = f"turn_{suffix}"
+    return suffix
+
+
 def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) -> str:
     """Render a copy-pasteable pytest regression stub for a promoted turn.
 
@@ -1743,7 +1755,7 @@ def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) 
     captured we assert it exactly; otherwise we emit a ``TODO`` so the
     author fills in the expected reply.
     """
-    safe_id = turn_id.replace("-", "_")
+    safe_id = _promote_stub_test_name(turn_id)
     if expected is not None:
         match_line = f"    assert_exact_match(bundle, expected={expected!r})"
     else:

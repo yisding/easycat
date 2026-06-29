@@ -643,6 +643,7 @@ def _emergency_export_enabled(config: Any) -> bool:
 _EXPORT_REGISTRY: dict[int, Callable[[], None]] = {}
 _EXPORT_INSTALLED = False
 _EXPORT_PREVIOUS_EXCEPTHOOK: Callable[..., None] | None = None
+_EXPORT_EXCEPTHOOK: Callable[..., None] | None = None
 
 
 def _run_all_exporters() -> None:
@@ -654,22 +655,32 @@ def _run_all_exporters() -> None:
             logger.warning("Emergency debug-bundle export failed", exc_info=True)
 
 
-def _shared_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
-    _run_all_exporters()
-    if _EXPORT_PREVIOUS_EXCEPTHOOK is not None:
-        _EXPORT_PREVIOUS_EXCEPTHOOK(exc_type, exc_value, exc_tb)
+def _make_excepthook(previous: Callable[..., None] | None) -> Callable[..., None]:
+    """Create one generation of the emergency-export excepthook.
+
+    A fresh function per install keeps third-party hooks that captured an older
+    EasyCat hook from re-entering the current hook chain after a later reinstall.
+    """
+
+    def _easycat_excepthook(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+        _run_all_exporters()
+        if previous is not None:
+            previous(exc_type, exc_value, exc_tb)
+
+    return _easycat_excepthook
 
 
 def _install_shared_hooks() -> None:
     """Install the single process-wide excepthook + atexit hook (idempotent)."""
-    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    global _EXPORT_EXCEPTHOOK, _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
     import atexit
     import sys
 
     if _EXPORT_INSTALLED:
         return
     _EXPORT_PREVIOUS_EXCEPTHOOK = sys.excepthook
-    sys.excepthook = _shared_excepthook
+    _EXPORT_EXCEPTHOOK = _make_excepthook(_EXPORT_PREVIOUS_EXCEPTHOOK)
+    sys.excepthook = _EXPORT_EXCEPTHOOK
     atexit.register(_run_all_exporters)
     _EXPORT_INSTALLED = True
 
@@ -681,7 +692,7 @@ def _uninstall_shared_hooks() -> None:
     later caller chained on top we leave their hook intact rather than dropping
     it. ``atexit.unregister`` is always safe to call.
     """
-    global _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
+    global _EXPORT_EXCEPTHOOK, _EXPORT_INSTALLED, _EXPORT_PREVIOUS_EXCEPTHOOK
     import atexit
     import sys
 
@@ -691,9 +702,10 @@ def _uninstall_shared_hooks() -> None:
         atexit.unregister(_run_all_exporters)
     except Exception:
         pass
-    if sys.excepthook is _shared_excepthook:
+    if sys.excepthook is _EXPORT_EXCEPTHOOK:
         sys.excepthook = _EXPORT_PREVIOUS_EXCEPTHOOK or sys.__excepthook__
     _EXPORT_PREVIOUS_EXCEPTHOOK = None
+    _EXPORT_EXCEPTHOOK = None
     _EXPORT_INSTALLED = False
 
 

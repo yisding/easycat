@@ -75,6 +75,15 @@ class ElevenLabsSTTConfig:
     realtime_keyterms: list[str] | None = None
     # Strip filler words, false starts, and disfluencies from transcripts.
     realtime_no_verbatim: bool = False
+    # Include the detected language code on committed transcripts (realtime).
+    # ElevenLabs only carries language_code on committed_transcript_with_
+    # timestamps events, so enabling this forces include_timestamps on too.
+    realtime_include_language_detection: bool = False
+    # Zero-retention mode: when False, ElevenLabs does not store request audio
+    # or transcripts (history/abuse logging off). Sent as a query param on both
+    # the realtime WebSocket and the batch /speech-to-text request. ``True``
+    # keeps the server default.
+    enable_logging: bool = True
     max_audio_chunk_bytes: int | None = DEFAULT_MAX_AUDIO_CHUNK_BYTES
     max_audio_buffer_bytes: int | None = DEFAULT_MAX_AUDIO_BUFFER_BYTES
     max_audio_duration_ms: float | None = DEFAULT_MAX_AUDIO_DURATION_MS
@@ -187,14 +196,29 @@ class ElevenLabsSTT(WebSocketSTTBase):
     def _build_realtime_ws_url(self) -> str:
         from urllib.parse import urlencode
 
+        # The detected language_code is only delivered on
+        # committed_transcript_with_timestamps events, which require
+        # include_timestamps=true — so language detection implies timestamps,
+        # otherwise the flag would be silently inert (STTEvent.language stays
+        # empty). Force timestamps on when language detection is requested.
+        include_timestamps = (
+            self._config.realtime_include_timestamps
+            or self._config.realtime_include_language_detection
+        )
         params: dict[str, str] = {
             "model_id": self._resolved_model(),
             "audio_format": self._realtime_audio_format(),
             "commit_strategy": self._config.realtime_commit_strategy,
-            "include_timestamps": str(self._config.realtime_include_timestamps).lower(),
+            "include_timestamps": str(include_timestamps).lower(),
         }
         if self._config.language:
             params["language_code"] = self._config.language
+        if self._config.realtime_include_language_detection:
+            params["include_language_detection"] = "true"
+        # Zero-retention is opt-in; only send the param when disabling logging
+        # so a default config keeps the server default (logging on).
+        if not self._config.enable_logging:
+            params["enable_logging"] = "false"
         # Built-in VAD tuning is only meaningful under the "vad" commit
         # strategy; omit any unset param so the server default applies.
         if self._config.realtime_commit_strategy == "vad":
@@ -452,6 +476,22 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._audio_pending_commit = False
 
     def _handle_committed_transcript(self, msg: dict[str, Any]) -> None:
+        text = msg.get("text", "")
+        if not text:
+            return
+
+        if self._transcribed_through_epoch <= self._committed_through_epoch:
+            # Some valid VAD commits arrive without a preceding
+            # ``partial_transcript``. The committed transcript itself proves
+            # the server transcribed a segment, but not that it covered newer
+            # trailing audio streamed before this message was processed. With
+            # no partial boundary, acknowledge only the next uncommitted epoch
+            # so resumed speech stays pending for end_stream().
+            self._transcribed_through_epoch = max(
+                self._transcribed_through_epoch,
+                min(self._audio_epoch, self._committed_through_epoch + 1),
+            )
+
         self._reconcile_pending_commit_on_committed()
         if self._dropping_pending_final:
             # A previous ``_send_commit`` already gave up on this committed
@@ -465,10 +505,6 @@ class ElevenLabsSTT(WebSocketSTTBase):
             self._partial_text = ""
             if self._final_received is not None:
                 self._final_received.set()
-            return
-
-        text = msg.get("text", "")
-        if not text:
             return
 
         self._emit_event(
@@ -524,6 +560,11 @@ class ElevenLabsSTT(WebSocketSTTBase):
         data["model"] = self._resolved_model()
         if self._config.language:
             data["language"] = self._config.language
+        # Zero-retention mode is a *query* parameter on /v1/speech-to-text (the
+        # multipart schema has no such field), so send it via ``params`` — in
+        # ``data`` it would be silently ignored. Opt-in: only sent when
+        # disabled so the default request keeps the server default (logging on).
+        params = {"enable_logging": "false"} if not self._config.enable_logging else None
 
         client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
         owns_client = self._config.http_client is None
@@ -531,6 +572,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
             response = await client.post(
                 url,
                 headers=headers,
+                params=params,
                 files={"file": ("audio.wav", wav_data, "audio/wav")},
                 data=data,
             )

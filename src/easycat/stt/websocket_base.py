@@ -168,6 +168,8 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                     msg = json.loads(raw_message)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(msg, dict):
+                    continue
                 self._handle_json_message(msg)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("%s WebSocket closed", self._provider_log_label)

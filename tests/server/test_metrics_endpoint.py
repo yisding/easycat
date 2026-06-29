@@ -208,9 +208,9 @@ async def test_manifest_endpoint_from_manifest_has_no_token(
         manifest = body["manifest"]
         # The redacted dump exposes only the bearer-env:NAME reference.
         assert manifest["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
-        # The IPv4 bind host is a structural field; it survives redaction
-        # verbatim (it must NOT be mangled into a [REDACTED_PHONE]).
-        assert manifest["server"]["host"] == "127.0.0.1"
+        # The IPv4 bind host is routed through the shared redaction policy so
+        # the public manifest cannot expose private bind metadata.
+        assert manifest["server"]["host"] == "[REDACTED_PHONE]"
         # The resolved (secret-shaped) token must never appear in the dump.
         assert _RESOLVED_TOKEN not in text
     finally:

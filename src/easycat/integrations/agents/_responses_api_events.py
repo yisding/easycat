@@ -64,6 +64,8 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
     except json.JSONDecodeError:
         logger.debug("SSE line is not valid JSON: %s", payload[:120])
         return None
+    if not isinstance(data, dict):
+        return None
 
     event_type = data.get("type", "")
     if not event_type:

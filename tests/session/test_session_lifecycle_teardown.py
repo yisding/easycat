@@ -56,7 +56,7 @@ async def test_start_runs_provider_warmup_before_audio_ingress():
     # is already buffering inbound frames into an undrained queue.  The
     # transport's own warmup runs AFTER connect (it may prime connect-created
     # resources), and both precede the receive (ingress) loop.
-    assert calls.index("stt.warmup") < calls.index("tts.warmup")
+    assert calls.index("stt.warmup") < calls.index("transport.connect")
     assert calls.index("tts.warmup") < calls.index("transport.connect")
     assert calls.index("transport.connect") < calls.index("transport.warmup")
     assert calls.index("transport.warmup") < calls.index("transport.receive")

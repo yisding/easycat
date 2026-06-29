@@ -25,6 +25,14 @@ _resolved_backend: str | None = None
 _logged_runtime_failure: set[str] = set()
 
 
+def _require_positive_int(name: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
 def pcm_to_wav(pcm_data: bytes, fmt: AudioFormat) -> bytes:
     """Convert raw PCM16 data to WAV file bytes."""
     buf = io.BytesIO()
@@ -58,6 +66,8 @@ def resample(data: bytes, from_rate: int, to_rate: int) -> bytes:
     resampled as garbage. Prefers high-quality backends (soxr, scipy) when
     available and falls back to linear interpolation if not.
     """
+    from_rate = _require_positive_int("from_rate", from_rate)
+    to_rate = _require_positive_int("to_rate", to_rate)
     if from_rate == to_rate:
         return data
     if not data:
@@ -238,6 +248,7 @@ def resample_chunk(chunk: AudioChunk, to_rate: int) -> AudioChunk:
 
 def to_mono(data: bytes, channels: int) -> bytes:
     """Downmix multi-channel PCM16 audio to mono by averaging channels."""
+    channels = _require_positive_int("channels", channels)
     if channels == 1:
         return data
 

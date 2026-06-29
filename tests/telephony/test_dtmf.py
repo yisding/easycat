@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from easycat.events import DTMF, DTMFAggregated, EventBus
 from easycat.telephony.dtmf import (
     DTMFAggregator,
@@ -108,6 +110,20 @@ class TestEmitTwilioDtmf:
 
 
 # ── Task 6.3: DTMF Aggregator ────────────────────────────────────
+
+
+class TestDTMFAggregatorConfig:
+    """Tests for DTMFAggregatorConfig validation."""
+
+    @pytest.mark.parametrize("timeout_ms", [0, -1])
+    def test_rejects_non_positive_timeout(self, timeout_ms: int) -> None:
+        with pytest.raises(ValueError, match="timeout_ms"):
+            DTMFAggregatorConfig(timeout_ms=timeout_ms)
+
+    @pytest.mark.parametrize("max_length", [0, -1])
+    def test_rejects_non_positive_max_length(self, max_length: int) -> None:
+        with pytest.raises(ValueError, match="max_length"):
+            DTMFAggregatorConfig(max_length=max_length)
 
 
 class TestDTMFAggregator:

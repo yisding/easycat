@@ -62,6 +62,12 @@ class ElevenLabsTTSConfig:
     model_id: str = "eleven_flash_v2_5"
     stability: float = 0.5
     similarity_boost: float = 0.75
+    # Style exaggeration (0.0–1.0). 0.0 (default) is fastest and most stable;
+    # higher values add expressivity at some latency/stability cost and are
+    # ignored by models that don't support style (e.g. eleven_flash_v2_5).
+    style: float = 0.0
+    # Boost similarity to the original speaker. ElevenLabs' own default.
+    use_speaker_boost: bool = True
     output_format: str = "pcm_24000"
     # Controls spelling-out of numbers, dates, currency, etc.
     # "auto" (default) lets the model decide, "on" forces normalization,
@@ -108,6 +114,8 @@ class ElevenLabsTTSConfig:
                 "ElevenLabs apply_text_normalization must be 'auto', 'on', or 'off', "
                 f"got {self.apply_text_normalization!r}"
             )
+        if not 0.0 <= self.style <= 1.0:
+            raise ValueError(f"ElevenLabs style must be in [0.0, 1.0], got {self.style}")
         if self.persistent_ws and self.stream_mode == ElevenLabsStreamMode.HTTP:
             raise ValueError(
                 "ElevenLabs persistent_ws=True requires stream_mode=WEBSOCKET; "
@@ -150,6 +158,15 @@ class ElevenLabsTTS(_WSTTSBase):
         # seamless resume.
         self._pending_messages: tuple[str, ...] | None = None
 
+    def _voice_settings(self) -> dict[str, float | bool]:
+        """The voice_settings payload shared by the HTTP and WebSocket paths."""
+        return {
+            "stability": self._config.stability,
+            "similarity_boost": self._config.similarity_boost,
+            "style": self._config.style,
+            "use_speaker_boost": self._config.use_speaker_boost,
+        }
+
     def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create the HTTP client."""
         if self._client is None:
@@ -186,10 +203,7 @@ class ElevenLabsTTS(_WSTTSBase):
             request_body = {
                 "text": text,
                 "model_id": self._config.model_id,
-                "voice_settings": {
-                    "stability": self._config.stability,
-                    "similarity_boost": self._config.similarity_boost,
-                },
+                "voice_settings": self._voice_settings(),
                 "apply_text_normalization": self._config.apply_text_normalization,
             }
 
@@ -306,10 +320,7 @@ class ElevenLabsTTS(_WSTTSBase):
         """Build the init, text, and EOS messages for a synthesis request."""
         init_msg = {
             "text": " ",
-            "voice_settings": {
-                "stability": self._config.stability,
-                "similarity_boost": self._config.similarity_boost,
-            },
+            "voice_settings": self._voice_settings(),
         }
         return (
             json.dumps(init_msg),
@@ -379,10 +390,7 @@ class ElevenLabsTTS(_WSTTSBase):
         return json.dumps(
             {
                 "text": " ",
-                "voice_settings": {
-                    "stability": self._config.stability,
-                    "similarity_boost": self._config.similarity_boost,
-                },
+                "voice_settings": self._voice_settings(),
                 "context_id": ctx_id,
             }
         )

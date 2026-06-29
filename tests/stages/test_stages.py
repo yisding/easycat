@@ -511,6 +511,104 @@ class TestStageExecuteRecording:
         assert "stage_start" in names
         assert "stage_complete" in names
 
+    async def test_agent_stage_journals_delta_before_yield_on_stream_close(self):
+        class _OneDeltaBridge:
+            COMMITTABLE_BOUNDARIES = {}
+
+            async def invoke(
+                self,
+                turn_input: AgentTurnInput,
+                recorder,
+                cancel_token: CancelToken | None = None,
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                _ = turn_input, recorder, cancel_token
+                yield AgentBridgeEvent(kind="text_delta", text="delivered")
+                yield AgentBridgeEvent(kind="done", text="delivered")
+
+            def snapshot_state(self):
+                return {}
+
+            def apply_interruption(self, *args, **kwargs) -> None:
+                pass
+
+            def replace_last_assistant_text(self, text: str) -> None:
+                pass
+
+            def append_interruption_note(self, note: str) -> None:
+                pass
+
+            def reset(self) -> None:
+                pass
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        stream = AgentStage(_OneDeltaBridge(), journal=journal).execute_streaming(
+            "hello", ctx, turn
+        )
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "delivered"
+        await stream.aclose()
+
+        records = journal.read()
+        delta = next(
+            r for r in records if r.name == "agent_delta" and r.data.get("type") == "TEXT_DELTA"
+        )
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert delta.data["text"] == "delivered"
+        assert complete.data["response"] == "delivered"
+
+    async def test_agent_stage_excludes_cancelled_delta_from_completion_history(self):
+        class _CancelledDeltaBridge:
+            COMMITTABLE_BOUNDARIES = {}
+
+            async def invoke(
+                self,
+                turn_input: AgentTurnInput,
+                recorder,
+                cancel_token: CancelToken | None = None,
+            ) -> AsyncIterator[AgentBridgeEvent]:
+                _ = turn_input, recorder, cancel_token
+                yield AgentBridgeEvent(kind="text_delta", text="dropped")
+
+            def snapshot_state(self):
+                return {}
+
+            def apply_interruption(self, *args, **kwargs) -> None:
+                pass
+
+            def replace_last_assistant_text(self, text: str) -> None:
+                pass
+
+            def append_interruption_note(self, note: str) -> None:
+                pass
+
+            def reset(self) -> None:
+                pass
+
+        journal = InMemoryRingBuffer(capacity=100)
+        ctx = _make_ctx(journal=journal)
+        turn = _make_turn()
+        turn.cancel_token.cancel()
+        stage = AgentStage(_CancelledDeltaBridge(), journal=journal)
+        stream = stage.execute_streaming("hello", ctx, turn, cancel_token=turn.cancel_token)
+
+        first = await anext(stream)
+        assert first.kind == "text_delta"
+        assert first.text == "dropped"
+        await stream.aclose()
+
+        records = journal.read()
+        delta = next(
+            r for r in records if r.name == "agent_delta" and r.data.get("type") == "TEXT_DELTA"
+        )
+        complete = next(r for r in records if r.name == "stage_complete")
+        assert delta.data["text"] == "dropped"
+        assert complete.data["response"] == ""
+        assert stage._history == []
+
     async def test_tts_stage_records(self):
         journal = InMemoryRingBuffer(capacity=100)
         ctx = _make_ctx(journal=journal)

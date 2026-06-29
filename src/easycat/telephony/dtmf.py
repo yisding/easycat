@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 VALID_DTMF_DIGITS = frozenset("0123456789*#ABCD")
 
 
+def _validate_positive_int(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
 # ── Twilio Media Streams DTMF parsing ────────────────────────────
 
 
@@ -93,6 +98,10 @@ class DTMFAggregatorConfig:
 
     max_length: int = 20
     """Maximum digit count before auto-emission."""
+
+    def __post_init__(self) -> None:
+        _validate_positive_int("timeout_ms", self.timeout_ms)
+        _validate_positive_int("max_length", self.max_length)
 
 
 class DTMFAggregator:

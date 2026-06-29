@@ -297,6 +297,61 @@ def test_elevenlabs_realtime_url_omits_keyterms_and_verbatim_by_default():
     assert "no_verbatim" not in url
 
 
+def test_elevenlabs_realtime_url_carries_language_detection_and_zero_retention():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        realtime_include_language_detection=True,
+        enable_logging=False,
+    )
+    url = ElevenLabsSTT(config)._build_realtime_ws_url()
+    assert "include_language_detection=true" in url
+    assert "enable_logging=false" in url
+    # language_code is only delivered on *_with_timestamps events, so enabling
+    # language detection must force include_timestamps on (else it's inert).
+    assert "include_timestamps=true" in url
+
+
+def test_elevenlabs_realtime_url_omits_logging_and_language_detection_by_default():
+    # Defaults keep the server defaults: logging on, no language detection.
+    url = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))._build_realtime_ws_url()
+    assert "enable_logging" not in url
+    assert "include_language_detection" not in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_sends_zero_retention_flag():
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(
+        api_key="k", mode="batch", http_client=mock_client, enable_logging=False
+    )
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    # enable_logging is a query parameter on /v1/speech-to-text, not a
+    # multipart form field (where it would be ignored).
+    call = mock_client.post.call_args
+    assert call.kwargs["params"] == {"enable_logging": "false"}
+    assert "enable_logging" not in call.kwargs.get("data", {})
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_omits_logging_flag_by_default():
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    call = mock_client.post.call_args
+    # No zero-retention requested → no enable_logging anywhere (server default).
+    assert call.kwargs.get("params") is None
+    assert "enable_logging" not in call.kwargs.get("data", {})
+
+
 def test_elevenlabs_rejects_too_many_keyterms():
     with pytest.raises(ValueError, match="at most 50 terms"):
         ElevenLabsSTTConfig(api_key="k", realtime_keyterms=[f"t{i}" for i in range(51)])
@@ -346,6 +401,63 @@ async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit
         if m.get("commit") is True
     ]
     assert commit_frames == []
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_without_partial_clears_pending():
+    # ElevenLabs can emit a server-driven final without first sending a
+    # partial_transcript. The final itself must acknowledge the current audio
+    # epoch so end_stream does not send a redundant manual commit.
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+    assert stt._audio_pending_commit is True
+
+    stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
+    assert stt._audio_pending_commit is False
+    assert stt._committed_through_epoch == stt._audio_epoch
+
+    await asyncio.wait_for(stt.end_stream(), timeout=1.0)
+
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert commit_frames == []
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_without_partial_keeps_newer_audio_pending():
+    # If newer audio was streamed before an older no-partial VAD final is
+    # processed, the final must not acknowledge that trailing audio.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+    stt._ws = MockWebSocket([])
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt._send_realtime(chunk)
+    await stt._send_realtime(chunk)
+    assert stt._audio_epoch == 2
+    assert stt._audio_pending_commit is True
+
+    stt._handle_json_message(json.loads(_el_transcript("segment one", is_final=True)))
+
+    assert stt._committed_through_epoch == 1
+    assert stt._audio_pending_commit is True
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import sqlite3
@@ -219,6 +220,20 @@ def test_bundles_list_marks_crashed_journal_json(cli: CliRunner, tmp_path: Path)
     payload = json.loads(result.stdout)
     statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
     assert statuses["boom.sqlite"] == "crashed (uncommitted)"
+
+
+def test_bundles_list_marks_malformed_journal_live(cli: CliRunner, tmp_path: Path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    bad = journals / "bad.sqlite"
+    bad.write_text("not a sqlite database")
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    assert statuses["bad.sqlite"] == "live"
 
 
 def test_bundles_list_marks_clean_journal_as_bundle(cli: CliRunner, tmp_path: Path) -> None:
@@ -2020,6 +2035,23 @@ def test_promote_writes_replayable_single_turn_slice(cli: CliRunner, tmp_path: P
     assert "assert_no_error" in result.stdout
     assert "assert_turn_completed(bundle, 't1')" in result.stdout
     assert "expected='hello there'" in result.stdout
+
+
+def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:
+    from easycat.cli.debug.bundles import _promote_test_stub
+
+    malicious_turn_id = (
+        "x(easycat_bundle):\n    __import__('os').system('touch /tmp/pwned')\n    #"
+    )
+
+    stub = _promote_test_stub(bundle_name="turn.zip", turn_id=malicious_turn_id, expected=None)
+
+    parsed = ast.parse(stub)
+    functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)]
+    assert [function.name for function in functions] == [
+        "test_x_easycat_bundle___import___os_system_touch_tmp_pwned"
+    ]
+    assert f"assert_turn_completed(bundle, {malicious_turn_id!r})" in stub
 
 
 def test_promote_json_carries_stub(cli: CliRunner, tmp_path: Path) -> None:
