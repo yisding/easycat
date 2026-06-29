@@ -105,6 +105,22 @@ uv run easycat validate latency --smoke
 uv run easycat validate live --provider openai
 ```
 
-Reports land in `.easycat/validation/latest.json`; see the
-[validation workflow](validation.md) for lane
-selection and report inspection.
+If credentials live in `.env`, preflight and run through that file:
+
+```bash
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run --env-file .env easycat validate latency --smoke
+uv run --env-file .env easycat validate live --provider openai --strict
+```
+
+Use `--strict` when an explicitly requested provider should fail fast if its
+secrets are missing; omit it when you want a capability report that skips
+unavailable live providers. Reports land in `.easycat/validation/latest.json`:
+
+```bash
+uv run easycat validate report .easycat/validation/latest.json
+```
+
+See the [validation workflow](validation.md) for lane selection and report
+inspection.

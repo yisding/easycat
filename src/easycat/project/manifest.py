@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from hmac import compare_digest
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 # reachable. The resolver imports lazily and tolerates either a zero-arg factory
 # (called to build the agent) or an already-constructed agent object.
 _PYTHON_AGENT_PREFIX = "python:"
+_REDACTED_HOST = "[REDACTED_HOST]"
 
 
 def _resolve_python_agent(reference: str) -> Any:
@@ -164,6 +166,13 @@ class ProjectManifest:
         if preset == "browser":
             return EasyConfig.browser(**kwargs)
         if preset == "phone":
+            if spec.token is not None:
+                from easycat.transports.twilio_media import TwilioTransportConfig
+
+                token = spec.token.resolve(dict(os.environ))
+                kwargs["transport"] = TwilioTransportConfig(
+                    stream_token_validator=lambda candidate: compare_digest(candidate, token)
+                )
             return EasyConfig.phone(**kwargs)
         if preset == "mic":
             return EasyConfig.mic(**kwargs)
@@ -255,16 +264,16 @@ class ProjectManifest:
         does not over-redact the useful, safe reference into an opaque
         placeholder.
 
-        The bind ``host`` is a STRUCTURAL field (an operator-chosen address, not
-        user PII), so it is passed through verbatim rather than routed through
-        ``redact_value`` — whose ``_PHONE_RE`` would otherwise mangle a dotted
-        IPv4 (e.g. ``"127.0.0.1"``) into ``[REDACTED_PHONE]``. The
+        The bind ``host`` can carry private addresses or internal DNS names in
+        deployments where ``/manifest`` is reachable, so the public dump uses
+        an explicit placeholder instead of exposing topology. The
         secret-bearing fields (``auth``/``token``) stay redacted: only the
         ``bearer-env:NAME`` reference is ever surfaced, never a resolved token.
         """
         raw: dict[str, Any] = {
             "project": {"name": self.project.name},
             "server": {
+                "host": _REDACTED_HOST,
                 "port": self.server.port,
                 "max_sessions": self.server.max_sessions,
                 "auth_ref": self.server.auth.reference if self.server.auth else None,
@@ -276,10 +285,6 @@ class ProjectManifest:
         if self.source_path is not None:
             raw["source_path"] = str(self.source_path)
         redacted: dict[str, Any] = redact_value(raw)  # type: ignore[assignment]
-        # Re-attach the bind host VERBATIM (a structural operator address, not
-        # PII) so a dotted IPv4 survives ``_PHONE_RE``. It is added after
-        # redaction so it is never routed through the value policy.
-        redacted["server"]["host"] = self.server.host
         return redacted
 
     @staticmethod

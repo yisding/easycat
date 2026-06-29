@@ -1,9 +1,18 @@
 # Observability Export and Cost — Peripheral
 
-> **Status (2026-05-21): mostly planned.** The debugger server exposes a
-> cost endpoint that degrades to zero when no `CostRecord` exists, but
-> real cost records, OTel export, pricing sources, and latency-budget config
-> remain planned.
+> **Cost monitoring removed; not a current direction.** The runtime
+> cost-monitoring surface that had partially landed (the debugger `/api/cost`
+> rollup, `max_session_cost_usd`, `cost_budget_*` records + `stop(force=True)`
+> kill switch, and the stage-record latency-*budget* tagging) was removed as
+> undercooked and duplicative with the journal. Latency is now *reported*
+> (`turn_total_latency_ms` / `text_turn_latency_ms` journal metrics, per-stage
+> `elapsed_ms`) but not gated. The cost/budget design below is retained for
+> historical context only — revisit the direction before rebuilding any of it.
+>
+> **Status (2026-05-21, pre-removal): mostly planned.** The debugger server
+> exposed a cost endpoint that degraded to zero when no `CostRecord` existed,
+> but real cost records, OTel export, pricing sources, and latency-budget
+> config remained planned.
 >
 > **This is a peripheral initiative.** It is not essential to the
 > debug-first thesis in `../roadmap/essential-debug-first-runtime.md`. The essential
@@ -105,16 +114,13 @@ journal record at 100%, and a session stop request when explicit cost records
 cross the cap. Kill-switch pattern from Langfuse, Helicone, Langsmith. Voice
 apps burn money faster than chat apps because audio tokens are expensive.
 
-Current partial landing: the debugger `/api/cost` rollup reads
-`max_session_cost_usd` from the safe config snapshot and reports
-`ok` / `warning` / `exceeded` status when `cost` / `cost_record` journal
-entries exist. The shared budget-status parser now lives in
-`easycat.runtime.cost_budget_status(...)`, and `SessionJournalSink` now uses
-the same helper to emit one `cost_budget_warning` and one
-`cost_budget_exceeded` metric record when explicit cost journal entries cross
-those thresholds. The exceeded alert now records `cost_budget_stop_requested`
-and schedules `stop(force=True)` through the runtime task scope. Runtime
-provider pricing remains planned.
+Status (removed): an earlier partial landing wired `max_session_cost_usd` into
+a debugger `/api/cost` rollup plus `cost_budget_warning` / `cost_budget_exceeded`
+/ `cost_budget_stop_requested` journal records and a `stop(force=True)` kill
+switch. That runtime cost-monitoring surface was removed as undercooked and
+duplicative with the journal; cost monitoring is not currently a library
+direction. The aspirational design above is retained for historical context
+only — revisit before rebuilding any of it.
 
 ## OTel Export
 

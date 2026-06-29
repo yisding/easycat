@@ -154,18 +154,6 @@ def test_diff_computes_transcript_changed_flag() -> None:
     assert unchanged["changed"] is False
 
 
-def test_diff_computes_cost_delta() -> None:
-    a = [_rec(1, "cost", turn_id="a0", wall_ms=0, usd=0.10)]
-    b = [_rec(1, "cost", turn_id="b0", wall_ms=0, usd=0.25)]
-
-    result = diff_bundles(a, b)
-    (turn,) = result["turns"]
-    assert turn["cost"]["usd_a"] == 0.10
-    assert turn["cost"]["usd_b"] == 0.25
-    assert turn["cost"]["delta"] == 0.15
-    assert result["summary"]["total_cost_delta"] == 0.15
-
-
 def test_diff_milestone_keys_are_dynamic() -> None:
     """Every milestone key from ``turn_milestones`` flows through the diff, so a
     future milestone change never silently drops a segment."""

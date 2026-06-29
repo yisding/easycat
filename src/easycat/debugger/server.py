@@ -4,7 +4,7 @@ Adapts a :class:`DebuggerSource` (a bundle on disk, an in-memory
 :class:`RunBundle`, or a live :class:`Session`) into a JSON HTTP API,
 WebSocket push channel, and single-page HTML UI rendering the
 timeline, per-stage waterfall, pipeline graph, transcript, audio
-playback, replay surface, cost rollup, and bundle export.
+playback, replay surface, and bundle export.
 
 Routes:
 
@@ -14,7 +14,6 @@ Routes:
 - ``GET  /api/turns``                 — per-turn rollup with stage counts
 - ``GET  /api/timeline``              — per-stage span timing per turn
 - ``GET  /api/transcript``            — extracted user/agent text per turn
-- ``GET  /api/cost``                  — cost rollup and budget status
 - ``GET  /api/issues``                — severity-ranked issue rollup
 - ``GET  /api/artifact/<ref>``        — raw artifact bytes (audio chunks)
 - ``GET  /api/audio/concat/<turn>``   — concatenated WAV for one turn (``?track=tts|mic``)
@@ -45,16 +44,17 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from ipaddress import ip_address
 from pathlib import Path
+from re import _parser as re_parser
 from typing import Any
 from urllib.parse import urlsplit
 
+from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
 from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
-from easycat.debug._turn_timeline import turn_cost_rollup as _turn_cost_rollup
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.annotations import (
     Annotation,
@@ -80,10 +80,6 @@ from easycat.debugger._aec import (
 )
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
-from easycat.runtime.costs import (
-    cost_budget_status,
-    max_session_cost_usd_from_snapshot,
-)
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
 
 # ``audioop`` was removed from the stdlib in Python 3.13.  Fall back to numpy
@@ -98,30 +94,6 @@ try:
     import numpy as _np
 except (ImportError, RecursionError):  # pragma: no cover
     _np = None  # type: ignore[assignment]
-
-
-_AUDIO_MIN_SAMPLE_RATE = 1_000
-_AUDIO_MAX_SAMPLE_RATE = 192_000
-_AUDIO_VALID_CHANNELS = frozenset({1, 2})
-_AUDIO_VALID_SAMPLE_WIDTHS = frozenset({1, 2, 4})
-_AUDIO_MAX_CONVERTED_BYTES = 32 * 1024 * 1024
-
-
-def _valid_pcm_format(fmt: dict[str, int]) -> bool:
-    """Return whether debugger bundle PCM metadata is safe to process."""
-    return (
-        _AUDIO_MIN_SAMPLE_RATE <= fmt.get("sample_rate", 0) <= _AUDIO_MAX_SAMPLE_RATE
-        and fmt.get("channels", 0) in _AUDIO_VALID_CHANNELS
-        and fmt.get("sample_width", 0) in _AUDIO_VALID_SAMPLE_WIDTHS
-    )
-
-
-def _frame_format(data: dict[str, Any]) -> dict[str, int]:
-    return {
-        "sample_rate": int(data.get("sample_rate") or 16000),
-        "channels": int(data.get("channels") or 1),
-        "sample_width": int(data.get("sample_width") or 2),
-    }
 
 
 def _np_pcm_dtype(width: int) -> Any:
@@ -151,7 +123,7 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
         return b""
     n_out = max(1, round(n_frames * outrate / inrate))
     out_bytes = n_out * nchannels * width
-    if out_bytes > _AUDIO_MAX_CONVERTED_BYTES:
+    if out_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
         raise ValueError("resampled audio frame exceeds debugger size limit")
     x_in = _np.arange(n_frames)  # type: ignore[union-attr]
     x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
@@ -209,6 +181,12 @@ _SEARCH_SCAN_LIMIT = 50000
 # pathological user-supplied regex from compiling into a huge automaton.
 _SEARCH_MAX_QUERY_LEN = 500
 
+# Regex searches are intentionally a developer convenience, not an arbitrary
+# pattern execution surface. Reject constructs that commonly trigger
+# catastrophic backtracking in Python's backtracking ``re`` engine before the
+# pattern is run against journal-controlled text.
+_UNSAFE_REGEX_MESSAGE = "unsafe regex"
+
 # Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
 # batch.  A burst can advance the sequence by thousands in one poll; capping
 # the slice keeps each frame small and lets the cursor catch up over a few
@@ -226,6 +204,17 @@ _AUDIO_TRACK_TTS = "tts"
 _AUDIO_TRACK_MIC = "mic"
 _AUDIO_TRACK_REFERENCE = "reference"
 _VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
+
+# Accepted PCM geometry for audio concat/waveform routes.  Debug bundles are
+# treated as untrusted input, so journal-provided format metadata must be kept
+# within normal voice-audio bounds before it is used in WAV headers or passed to
+# audioop's resampler.
+_AUDIO_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+_AUDIO_MIN_SAMPLE_RATE = 8000
+_AUDIO_MAX_SAMPLE_RATE = 192000
+_AUDIO_VALID_CHANNELS = frozenset({1, 2})
+_AUDIO_MAX_RESAMPLE_RATIO = 4
+_AUDIO_MAX_CONVERTED_FRAME_BYTES = 5 * 1024 * 1024
 
 
 def _safe_ref(ref: str) -> str:
@@ -267,6 +256,7 @@ class DebuggerSource:
     _records_fn: Any = field(repr=False)
     _artifact_fn: Any = field(repr=False)
     _manifest_fn: Any = field(repr=False)
+    _artifact_analysis_fn: Any | None = field(default=None, repr=False)
     _bundle_fn: Any | None = field(default=None, repr=False)
     _replay_fn: Any | None = field(default=None, repr=False)
     _progress_fn: Any | None = field(default=None, repr=False)
@@ -326,6 +316,11 @@ class DebuggerSource:
 
     def artifact(self, ref: str) -> bytes | None:
         return self._artifact_fn(ref)
+
+    def artifact_for_analysis(self, ref: str) -> bytes | None:
+        if self._artifact_analysis_fn is not None:
+            return self._artifact_analysis_fn(ref)
+        return self.artifact(ref)
 
     def manifest(self) -> dict[str, Any]:
         return dict(self._manifest_fn())
@@ -549,6 +544,15 @@ def _session_source(session: Any) -> DebuggerSource:
             return None
         return store.get(ref)
 
+    def _artifact_for_analysis(ref: str) -> bytes | None:
+        store = getattr(session, "_artifact_store", None)
+        if store is None:
+            return None
+        bounded = getattr(store, "get_head_tail", None)
+        if callable(bounded):
+            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
+        return store.get(ref)
+
     def _manifest() -> dict[str, Any]:
         return {
             "source": "session",
@@ -572,6 +576,7 @@ def _session_source(session: Any) -> DebuggerSource:
         _records_since_fn=_records_since,
         _artifact_fn=_artifact,
         _manifest_fn=_manifest,
+        _artifact_analysis_fn=_artifact_for_analysis,
         _bundle_fn=None,
         _replay_fn=None,
         is_live=True,
@@ -735,6 +740,80 @@ def _filter_and_paginate(
     return full, total
 
 
+def _regex_tree_has_unsafe_backtracking(
+    tokens: Any,
+    *,
+    inside_repeat: bool = False,
+    repeated_token: bool = False,
+    optional_repeats: list[int] | None = None,
+) -> bool:
+    """Return true when parsed regex tokens can cause exponential backtracking.
+
+    The journal search surface only needs small grep-style patterns. Nested
+    repeats, quantified alternations, backreferences, and assertions can all
+    make Python's ``re`` engine spend unbounded CPU on a single haystack, so
+    reject them instead of trying to sandbox individual ``search()`` calls.
+
+    A single repeat is fine, but two or more *optional* (``min == 0``) repeats
+    in the same sibling sequence -- e.g. ``a?a?...aaa`` or its grouped twin
+    ``(a?)(a?)...`` -- let the engine explore every "skip vs. match" subset and
+    blow up exponentially even though no repeat is nested inside another. The
+    ``optional_repeats`` accumulator counts those siblings; ``SUBPATTERN`` reuses
+    the parent's counter (transparent groups stay in the same sequence) while
+    branches and repeat children start a fresh count for their own scope.
+    """
+    if optional_repeats is None:
+        optional_repeats = [0]
+    for op, arg in tokens:
+        op_name = str(op)
+        if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
+            return True
+        if op_name == "BRANCH":
+            _none, branches = arg
+            if repeated_token:
+                return True
+            if any(
+                _regex_tree_has_unsafe_backtracking(branch, inside_repeat=inside_repeat)
+                for branch in branches
+            ):
+                return True
+            continue
+        if op_name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
+            min_repeat, _max_repeat, child = arg
+            if inside_repeat:
+                return True
+            if min_repeat == 0:
+                optional_repeats[0] += 1
+                if optional_repeats[0] > 1:
+                    return True
+            if _regex_tree_has_unsafe_backtracking(child, inside_repeat=True, repeated_token=True):
+                return True
+            continue
+        if op_name == "SUBPATTERN":
+            child = arg[-1]
+            if _regex_tree_has_unsafe_backtracking(
+                child,
+                inside_repeat=inside_repeat,
+                repeated_token=repeated_token,
+                optional_repeats=optional_repeats,
+            ):
+                return True
+    return False
+
+
+def _compile_search_regex(query: str) -> re.Pattern[str]:
+    """Compile a bounded, grep-style regex for journal search."""
+    try:
+        parsed = re_parser.parse(query, 0)
+        if _regex_tree_has_unsafe_backtracking(parsed.data):
+            raise ValueError(_UNSAFE_REGEX_MESSAGE)
+        return re.compile(query, re.IGNORECASE)
+    except ValueError:
+        raise
+    except re.error as exc:
+        raise ValueError("invalid regex") from exc
+
+
 def _record_searchable_text(record: dict[str, Any]) -> str:
     """Build the haystack a full-text query is matched against.
 
@@ -825,10 +904,7 @@ def _search_records(
         raise ValueError("search query too long")
     needle: Any
     if use_regex:
-        try:
-            needle = re.compile(query, re.IGNORECASE)
-        except re.error as exc:
-            raise ValueError("invalid regex") from exc
+        needle = _compile_search_regex(query)
     else:
         needle = query.lower()
         if not needle:
@@ -870,26 +946,49 @@ def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _extract_turn_transcripts(records)
 
 
-def _cost_rollup(
-    records: list[dict[str, Any]],
-    *,
-    config_snapshot: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Aggregate ``CostRecord``-style entries.  Degrades to zero when absent.
+def _audio_metadata_int(data: dict[str, Any], key: str, default: int = 0) -> int:
+    """Parse one integer PCM metadata field from untrusted journal data."""
+    try:
+        return int(data.get(key) or default)
+    except (TypeError, ValueError):
+        return default
 
-    Cost records are owned by the peripheral observability/cost plan so
-    they may not exist in any given bundle.  The endpoint returns a
-    well-formed shape with zeroes rather than 404'ing so the UI can
-    always render the panel.  The per-turn / total aggregation is the shared
-    :func:`easycat.debug._turn_timeline.turn_cost_rollup`; only the budget
-    evaluation (which needs the config snapshot) stays here.
-    """
-    by_turn, totals = _turn_cost_rollup(records)
-    budget = cost_budget_status(
-        totals["usd"],
-        max_session_cost_usd_from_snapshot(config_snapshot),
+
+def _is_safe_audio_format(fmt: dict[str, int]) -> bool:
+    """Return true for bounded linear PCM geometry the debugger will process."""
+    rate = fmt.get("sample_rate", 0)
+    channels = fmt.get("channels", 0)
+    width = fmt.get("sample_width", 0)
+    return (
+        _AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE
+        and channels in _AUDIO_VALID_CHANNELS
+        and _is_supported_width(width)
     )
-    return {"per_turn": by_turn, "totals": totals, "budget": budget}
+
+
+def _safe_audio_format_from_metadata(data: dict[str, Any]) -> dict[str, int]:
+    """Read a WAV/PCM format from journal metadata with bounded geometry.
+
+    The resampling/header-sensitive fields (``sample_rate`` and ``channels``)
+    are clamped to safe defaults whenever the untrusted journal value is out of
+    range, so a hostile bundle can never drive the resampler or WAV header out
+    of bounds.  ``sample_width`` is *preserved* as-is — even when it is an
+    unsupported width such as 8-bit mu-law telephony (``sample_width == 1``).
+    Rewriting it to the 16-bit default here would mask a genuinely unsupported
+    capture, so the route handlers would drop the only blobs and return 404/409
+    instead of the explicit 415 "unsupported format" response.  Preserving the
+    width lets ``_is_supported_width`` at the route layer surface that 415.
+    """
+    rate = _audio_metadata_int(data, "sample_rate", _AUDIO_DEFAULT_FMT["sample_rate"])
+    channels = _audio_metadata_int(data, "channels", _AUDIO_DEFAULT_FMT["channels"])
+    width = _audio_metadata_int(data, "sample_width", _AUDIO_DEFAULT_FMT["sample_width"])
+    if not (_AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE):
+        rate = _AUDIO_DEFAULT_FMT["sample_rate"]
+    if channels not in _AUDIO_VALID_CHANNELS:
+        channels = _AUDIO_DEFAULT_FMT["channels"]
+    if width <= 0:
+        width = _AUDIO_DEFAULT_FMT["sample_width"]
+    return {"sample_rate": rate, "channels": channels, "sample_width": width}
 
 
 def _coerce_frames_to_format(
@@ -914,21 +1013,13 @@ def _coerce_frames_to_format(
     """
     blobs: list[bytes] = []
     dropped = 0
-    if not _valid_pcm_format(fmt):
-        raise ValueError("audio frame metadata outside supported bounds")
     target_rate = fmt["sample_rate"]
     target_channels = fmt["channels"]
     target_width = fmt["sample_width"]
     for _seq, blob, data in frames:
-        frame_fmt = _frame_format(data)
-        if not _valid_pcm_format(frame_fmt):
-            if strict:
-                raise ValueError("audio frame metadata outside supported bounds")
-            dropped += 1
-            continue
-        rate = frame_fmt["sample_rate"]
-        channels = frame_fmt["channels"]
-        width = frame_fmt["sample_width"]
+        rate = _audio_metadata_int(data, "sample_rate")
+        channels = _audio_metadata_int(data, "channels")
+        width = _audio_metadata_int(data, "sample_width")
         if rate == target_rate and channels == target_channels and width == target_width:
             blobs.append(blob)
             continue
@@ -938,8 +1029,17 @@ def _coerce_frames_to_format(
                 "sample_rate/channels/sample_width"
             )
         # Non-strict (mic): convert when sample widths match and at least one
-        # audio helper is present; otherwise drop rather than corrupt the stream.
-        if (_audioop is None and _np is None) or width != target_width or width <= 0:
+        # audio helper (audioop/numpy) is present.  Debug bundles are untrusted,
+        # so both the source and target geometry must be within bounded voice-
+        # audio limits before we hand them to a resampler; otherwise drop the
+        # blob rather than corrupt the stream or trigger a runaway conversion.
+        source_fmt = {"sample_rate": rate, "channels": channels, "sample_width": width}
+        if (
+            (_audioop is None and _np is None)
+            or not _is_safe_audio_format(source_fmt)
+            or not _is_safe_audio_format(fmt)
+            or width != target_width
+        ):
             dropped += 1
             continue
         if channels == 2 and target_channels == 1:
@@ -957,7 +1057,7 @@ def _coerce_frames_to_format(
             rate=rate,
             target_rate=target_rate,
         )
-        if projected_bytes > _AUDIO_MAX_CONVERTED_BYTES:
+        if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
             raise ValueError("resampled audio frame exceeds debugger size limit")
         try:
             converted = blob
@@ -966,7 +1066,11 @@ def _coerce_frames_to_format(
                     converted = _audioop.tomono(converted, width, 0.5, 0.5)
                 else:
                     converted = _np_tomono(converted, width)
-            if rate > 0 and rate != target_rate:
+            if rate != target_rate:
+                resample_ratio = target_rate / rate
+                if resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO:
+                    dropped += 1
+                    continue
                 if _audioop is not None:
                     converted, _ = _audioop.ratecv(
                         converted, width, target_channels, rate, target_rate, None
@@ -1039,7 +1143,7 @@ def _collect_audio_frames(
 
     frames.sort(key=lambda item: item[0])
     fmt0 = frames[0][2]
-    fmt = _frame_format(fmt0)
+    fmt = _safe_audio_format_from_metadata(fmt0)
     blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
     return blobs, fmt
 
@@ -1075,6 +1179,11 @@ def _collect_concat_pcm(
 # PCM format fields (debugger-internal fixtures, malformed captures).
 _AEC_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
 _AEC_FRAME_MS = 20
+# Per-request cap for AEC diagnostics PCM processed per track. The debugger
+# may open untrusted bundles with hundreds of MB of artifacts, and the pure
+# Python diagnostics expand PCM into arrays/lists. Keep the analysis bounded
+# and report truncation instead of allocating unbounded joined tracks.
+_AEC_MAX_TRACK_BYTES = 8 * 1024 * 1024
 
 
 def _aec_track_format(entries: list[dict[str, Any]]) -> dict[str, int]:
@@ -1096,6 +1205,7 @@ def _aec_interruption_frames(
     post_aec: list[dict[str, Any]],
     *,
     frame_ms: int,
+    fmt: dict[str, int],
 ) -> list[int]:
     """Map this turn's interruption records onto post-AEC frame indices.
 
@@ -1103,22 +1213,23 @@ def _aec_interruption_frames(
     transition *into* ``user_speaking`` while the bot was speaking) is placed at
     the frame whose monotonic timestamp it most closely follows, so self-echo
     detection can tell a true barge-in from the bot hearing itself.
+
+    ``post_aec`` must be the FULL (untruncated) track: ``total_frames`` and the
+    clamp ceiling are derived from it so a barge-in beyond the analyzed prefix
+    keeps its true frame index instead of collapsing onto the prefix tail.
     """
     if not post_aec:
         return []
     base_ns = post_aec[0]["mono_ns"]
     frame_span_ns = max(1, frame_ms) * 1_000_000
+    bytes_per_sample = max(1, int(fmt.get("sample_width") or 2)) * max(
+        1, int(fmt.get("channels") or 1)
+    )
+    samples_per_frame = max(1, int(int(fmt.get("sample_rate") or 16000) * frame_ms / 1000))
+    bytes_per_frame = max(1, bytes_per_sample * samples_per_frame)
     total_frames = 0
     for entry in post_aec:
-        total_frames += max(
-            1,
-            len(
-                _frame_rms_series(
-                    entry["pcm"],
-                    frame_ms=frame_ms,
-                )
-            ),
-        )
+        total_frames += max(1, (len(entry["pcm"]) + bytes_per_frame - 1) // bytes_per_frame)
     frames: list[int] = []
     for record in records:
         if record.get("turn_id") != turn_id:
@@ -1141,6 +1252,35 @@ def _aec_interruption_frames(
     return frames
 
 
+def _limit_aec_track(
+    entries: list[dict[str, Any]], max_bytes: int
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Return track entries whose PCM totals no more than ``max_bytes``.
+
+    Entries are shallow-copied only when their PCM blob must be clipped. This
+    avoids unbounded concatenation/decoding while preserving the existing
+    diagnostics shape for normal-sized turns.
+    """
+    total_bytes = sum(len(entry["pcm"]) for entry in entries)
+    if total_bytes <= max_bytes:
+        return entries, total_bytes, False
+    remaining = max(0, max_bytes)
+    limited: list[dict[str, Any]] = []
+    for entry in entries:
+        if remaining <= 0:
+            break
+        pcm = entry["pcm"]
+        if len(pcm) <= remaining:
+            limited.append(entry)
+            remaining -= len(pcm)
+            continue
+        clipped = dict(entry)
+        clipped["pcm"] = pcm[:remaining]
+        limited.append(clipped)
+        remaining = 0
+    return limited, total_bytes, True
+
+
 def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str, Any]:
     """Build the AEC diagnostics payload for one turn.
 
@@ -1151,12 +1291,12 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
     """
     records = source.records()
     tracks = _align_aec_tracks(records, source=source, turn_id=turn_id)
-    mic_in = tracks["mic_in"]
-    reference = tracks["reference"]
-    post_aec = tracks["post_aec"]
-    has_reference = bool(reference)
+    mic_in_all = tracks["mic_in"]
+    reference_all = tracks["reference"]
+    post_aec_all = tracks["post_aec"]
+    has_reference = bool(reference_all)
 
-    fmt = _aec_track_format(post_aec or mic_in)
+    fmt = _aec_track_format(post_aec_all or mic_in_all)
     # 8-bit mu-law (sample_width == 1) can't be linearly decoded for the energy
     # math below; surface a clear unsupported result rather than mis-decoded
     # garbage ERLE/self-echo numbers.
@@ -1172,15 +1312,23 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
             ),
             "format": fmt,
             "tracks": {
-                "mic_in": {"frame_count": len(mic_in)},
-                "reference": {"frame_count": len(reference)},
-                "post_aec": {"frame_count": len(post_aec)},
+                "mic_in": {"frame_count": len(mic_in_all)},
+                "reference": {"frame_count": len(reference_all)},
+                "post_aec": {"frame_count": len(post_aec_all)},
             },
         }
     frame_ms = _AEC_FRAME_MS
+    mic_in, mic_total_bytes, mic_truncated = _limit_aec_track(mic_in_all, _AEC_MAX_TRACK_BYTES)
+    reference, ref_total_bytes, ref_truncated = _limit_aec_track(
+        reference_all, _AEC_MAX_TRACK_BYTES
+    )
+    post_aec, post_total_bytes, post_truncated = _limit_aec_track(
+        post_aec_all, _AEC_MAX_TRACK_BYTES
+    )
     mic_pcm = b"".join(entry["pcm"] for entry in mic_in)
     ref_pcm = b"".join(entry["pcm"] for entry in reference)
     post_pcm = b"".join(entry["pcm"] for entry in post_aec)
+    diagnostics_truncated = mic_truncated or ref_truncated or post_truncated
 
     erle = _compute_erle(
         mic_pcm,
@@ -1205,7 +1353,14 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
         frame_ms=frame_ms,
     )
     double_talk = _detect_double_talk(ref_rms, mic_rms)
-    interruption_frames = _aec_interruption_frames(records, turn_id, post_aec, frame_ms=frame_ms)
+    # Frame interruptions against the FULL (untruncated) post-AEC track. Passing
+    # the clipped prefix would shrink ``total_frames`` and clamp a real barge-in
+    # that lands after the prefix onto the last analyzed frame, planting a
+    # phantom guard window that suppresses genuine self-echo in the prefix tail.
+    # Only ``len(pcm)`` is read here (no decode/join), so the memory bound holds.
+    interruption_frames = _aec_interruption_frames(
+        records, turn_id, post_aec_all, frame_ms=frame_ms, fmt=fmt
+    )
     self_echo = _detect_self_echo(
         post_pcm,
         interruption_frames,
@@ -1223,10 +1378,30 @@ def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str,
         "double_talk": double_talk,
         "self_echo": self_echo,
         "interruption_frames": interruption_frames,
+        "diagnostics_truncated": diagnostics_truncated,
+        "max_track_bytes": _AEC_MAX_TRACK_BYTES,
         "tracks": {
-            "mic_in": {"frame_count": len(mic_in), "byte_count": len(mic_pcm)},
-            "reference": {"frame_count": len(reference), "byte_count": len(ref_pcm)},
-            "post_aec": {"frame_count": len(post_aec), "byte_count": len(post_pcm)},
+            "mic_in": {
+                "frame_count": len(mic_in_all),
+                "analyzed_frame_count": len(mic_in),
+                "byte_count": mic_total_bytes,
+                "analyzed_byte_count": len(mic_pcm),
+                "truncated": mic_truncated,
+            },
+            "reference": {
+                "frame_count": len(reference_all),
+                "analyzed_frame_count": len(reference),
+                "byte_count": ref_total_bytes,
+                "analyzed_byte_count": len(ref_pcm),
+                "truncated": ref_truncated,
+            },
+            "post_aec": {
+                "frame_count": len(post_aec_all),
+                "analyzed_frame_count": len(post_aec),
+                "byte_count": post_total_bytes,
+                "analyzed_byte_count": len(post_pcm),
+                "truncated": post_truncated,
+            },
         },
     }
 
@@ -1600,7 +1775,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                     page = page[:limit]
         except ValueError as exc:
             logger.warning("Invalid records query: %s", exc)
-            text = "invalid regex" if str(exc) == "invalid regex" else "invalid query parameters"
+            if str(exc) in {"invalid regex", _UNSAFE_REGEX_MESSAGE}:
+                text = str(exc)
+            else:
+                text = "invalid query parameters"
             return web.Response(status=400, text=text)
         return web.json_response(
             {
@@ -1625,14 +1803,9 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     async def transcript(_request: Any) -> Any:
         return web.json_response({"transcripts": _build_transcript(source.records())})
 
-    async def cost(_request: Any) -> Any:
-        manifest = source.manifest()
-        config_snapshot = manifest.get("config_snapshot") if isinstance(manifest, dict) else None
-        return web.json_response(_cost_rollup(source.records(), config_snapshot=config_snapshot))
-
     async def issues(_request: Any) -> Any:
         return web.json_response(
-            _build_issues(source.records(), artifact_resolver=source.artifact)
+            _build_issues(source.records(), artifact_resolver=source.artifact_for_analysis)
         )
 
     async def artifact(request: Any) -> Any:
@@ -1787,7 +1960,18 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
             return web.Response(status=400, text="invalid turn_id")
-        return web.json_response(_aec_diagnostics_for_turn(source, turn_id))
+        try:
+            payload = _aec_diagnostics_for_turn(source, turn_id)
+        except MemoryError:
+            logger.exception("AEC diagnostics exceeded available memory")
+            return web.json_response(
+                {
+                    "error_code": "AEC_DIAGNOSTICS_TOO_LARGE",
+                    "message": "AEC diagnostics too large",
+                },
+                status=413,
+            )
+        return web.json_response(payload)
 
     async def aec_vad_whatif(request: Any) -> Any:
         """Re-run VAD at an alternate sensitivity over a turn's captured input.
@@ -2028,6 +2212,19 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             return web.json_response(
                 {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
             )
+        allowed_turn_ids = {
+            turn["turn_id"]
+            for turn in _summarise_turns(source.records())
+            if isinstance(turn.get("turn_id"), str)
+        }
+        if turn_id not in allowed_turn_ids:
+            return web.json_response(
+                {
+                    "error_code": "BAD_REQUEST",
+                    "message": f"turn_id does not exist in bundle: {turn_id!r}",
+                },
+                status=400,
+            )
         try:
             annotation = Annotation(
                 turn_id=turn_id,
@@ -2041,7 +2238,11 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
                 {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
             )
         try:
-            record = save_annotation(annotate_path, annotation)
+            record = save_annotation(annotate_path, annotation, allowed_turn_ids=allowed_turn_ids)
+        except AnnotationError as exc:
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": str(exc)}, status=400
+            )
         except OSError:
             logger.exception("Annotation write failed")
             return web.Response(status=500, text="annotation write failed")
@@ -2129,7 +2330,6 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/turns", turns)
     app.router.add_get("/api/timeline", timeline)
     app.router.add_get("/api/transcript", transcript)
-    app.router.add_get("/api/cost", cost)
     app.router.add_get("/api/issues", issues)
     app.router.add_get("/api/artifact/{ref}", artifact)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)

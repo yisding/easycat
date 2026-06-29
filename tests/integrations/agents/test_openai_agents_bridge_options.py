@@ -223,19 +223,22 @@ async def test_mcp_servers_restored_when_stream_iteration_fails(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
-    """warmup() issues a cheap models.list() via the SDK's shared client —
-    never a billed Runner.run."""
+    """warmup() issues a cheap bounded model lookup — never a billed Runner.run."""
     # Needs the optional openai-agents SDK; skip in lanes without it.
+    default_models_module = pytest.importorskip("agents.models.default_models")
     openai_provider_module = pytest.importorskip("agents.models.openai_provider")
 
     import easycat.integrations.agents.openai_agents as openai_agents_module
 
-    list_called = {"count": 0}
+    retrieved: list[tuple[str, float]] = []
 
     class _FakeModels:
-        async def list(self) -> Any:
-            list_called["count"] += 1
-            return SimpleNamespace(data=[])
+        async def retrieve(self, model: str, *, timeout: float) -> Any:
+            retrieved.append((model, timeout))
+            return SimpleNamespace(id=model)
+
+        async def list(self) -> Any:  # pragma: no cover - must not be called
+            raise AssertionError("warmup should retrieve one model, not list every model")
 
     class _FakeClient:
         def __init__(self) -> None:
@@ -246,6 +249,7 @@ async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
             return _FakeClient()
 
     monkeypatch.setattr(openai_provider_module, "OpenAIProvider", _FakeProvider)
+    monkeypatch.setattr(default_models_module, "get_default_model", lambda: "gpt-default")
     # A sentinel Runner that fails loudly if warmup ever touches it.
     monkeypatch.setattr(
         openai_agents_module,
@@ -253,10 +257,12 @@ async def test_openai_agents_warmup_primes_models_not_runner(monkeypatch):
         SimpleNamespace(run=_fail_if_called, run_streamed=_fail_if_called),
     )
 
-    bridge = OpenAIAgentsBridge(_Agent())
+    agent = _Agent()
+    agent.model = "gpt-agent"
+    bridge = OpenAIAgentsBridge(agent, run_config=SimpleNamespace(model="gpt-run"))
     await bridge.warmup()
 
-    assert list_called["count"] == 1
+    assert retrieved == [("gpt-run", openai_agents_module._OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS)]
 
 
 @pytest.mark.asyncio
@@ -274,6 +280,31 @@ async def test_openai_agents_warmup_swallows_errors(monkeypatch):
     bridge = OpenAIAgentsBridge(_Agent())
     # Returns cleanly despite the client construction raising.
     await bridge.warmup()
+
+
+def test_warmup_model_name_extracts_id_from_model_objects():
+    """``run_config.model``/``agent.model`` may be SDK ``Model`` objects."""
+    # run_config carries a Model object; its id should win over agent/default.
+    run_model = SimpleNamespace(model="gpt-run-obj")
+    agent = _Agent()
+    agent.model = SimpleNamespace(model="gpt-agent-obj")
+    bridge = OpenAIAgentsBridge(agent, run_config=SimpleNamespace(model=run_model))
+
+    assert bridge._warmup_model_name("gpt-default") == "gpt-run-obj"
+
+
+def test_warmup_model_name_falls_back_through_candidates():
+    """Empty/objectless candidates fall through to the next usable id."""
+    agent = _Agent()
+    agent.model = "  gpt-agent  "  # stripped and used when run_config has none
+    bridge = OpenAIAgentsBridge(agent, run_config=SimpleNamespace(model="   "))
+    assert bridge._warmup_model_name("gpt-default") == "gpt-agent"
+
+    # A Model object with no usable string id falls back to default_model.
+    agent_no_id = _Agent()
+    agent_no_id.model = SimpleNamespace(model=None)
+    bridge_default = OpenAIAgentsBridge(agent_no_id, run_config=None)
+    assert bridge_default._warmup_model_name("gpt-default") == "gpt-default"
 
 
 def _fail_if_called(*_args: Any, **_kwargs: Any) -> Any:

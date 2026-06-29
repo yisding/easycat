@@ -122,6 +122,18 @@ def test_split_first_clause_emits_clause_at_comma():
     assert remaining == "and I will report back soon."
 
 
+def test_split_first_clause_skips_decimal_point() -> None:
+    ready, remaining = split_first_clause("The estimate is 3.5 seconds, then continue.")
+    assert ready == "The estimate is 3.5 seconds, "
+    assert remaining == "then continue."
+
+
+def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> None:
+    ready, remaining = split_first_clause("The estimate is 3.")
+    assert ready == ""
+    assert remaining == "The estimate is 3."
+
+
 def test_split_first_clause_skips_short_opener_fragment():
     # "Sure," is too short to ship on its own; the split falls through to the
     # sentence terminator instead of emitting a clipped fragment.
@@ -161,6 +173,18 @@ def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
 def test_text_for_estimation_timeline_supports_single_quoted_breaks() -> None:
     payload = TTSInput(
         text="<speak>Hello<break time='500ms'/>world</speak>",
+        format="ssml",
+    )
+
+    timeline = _text_for_estimation_timeline(payload)
+    assert "Hello" in timeline and "world" in timeline
+    assert timeline != "Hello world"
+    assert timeline.count("\ue000") == 7
+
+
+def test_text_for_estimation_timeline_supports_second_breaks() -> None:
+    payload = TTSInput(
+        text='<speak>Hello<break time="0.5s"/>world</speak>',
         format="ssml",
     )
 

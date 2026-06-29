@@ -267,6 +267,85 @@ async def test_journal_sink_normalizes_structured_output() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_journal_sink_records_session_action_failure_reason() -> None:
+    """A failed session action must journal *why* it failed, not just that it
+    did. ``SessionActionFailed`` carries its detail in an ``error`` str (no
+    ``exception`` attribute), so the reason has to land in the record data.
+    """
+    from easycat.events import SessionActionFailed
+    from easycat.session.actions import CustomAction
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        SessionActionFailed(
+            action=CustomAction(name="unsupported"),
+            error="No session action executor supports CustomAction",
+        )
+    )
+
+    records = journal.read()
+    assert len(records) == 1
+    record = records[0]
+    assert record.name == "session_action_failed"
+    assert record.data is not None
+    assert record.data["error"] == "No session action executor supports CustomAction"
+    assert record.data["action"]["type"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_coerces_non_json_native_action_payload() -> None:
+    """``CustomAction.payload`` may carry non-JSON-native leaves (a set /
+    datetime). ``asdict`` alone leaves them live, so the in-memory backend
+    keeps the live object while a persistent backend
+    ``json.dumps(default=str)``-stringifies it — divergent shapes. The sink
+    must coerce them so every backend stores an identical JSON-native shape.
+    """
+    import datetime
+    import json
+
+    from easycat.events import SessionActionRequested
+    from easycat.session.actions import CustomAction
+
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    payload = {
+        "tags": {"vip"},
+        "scheduled_at": datetime.datetime(2026, 6, 28, 12, 0, 0),
+    }
+    await bus.emit(SessionActionRequested(action=CustomAction(name="schedule", payload=payload)))
+
+    record = journal.read()[0]
+    assert record.name == "session_action_requested"
+    # The persistent backend's json.dumps(default=str) round-trip is now a
+    # no-op, so the in-memory and persistent backends store an identical shape.
+    assert record.data == json.loads(json.dumps(record.data, default=str))
+    coerced_payload = record.data["action"]["payload"]
+    # The set / datetime leaves were coerced to JSON-native strings, not kept
+    # as live Python objects.
+    assert isinstance(coerced_payload["tags"], str)
+    assert isinstance(coerced_payload["scheduled_at"], str)
+
+
 def test_journal_sink_stores_artifact_refs_before_record() -> None:
     artifact_store = InMemoryArtifactStore()
     journal = InMemoryRingBuffer(artifact_store=artifact_store)
@@ -291,163 +370,6 @@ def test_journal_sink_stores_artifact_refs_before_record() -> None:
     assert record.output_ref is not None
     assert artifact_store.has(record.input_ref)
     assert artifact_store.has(record.output_ref)
-
-
-def test_journal_sink_emits_cost_budget_alerts_once() -> None:
-    journal = InMemoryRingBuffer()
-    exceeded_calls: list[tuple[dict[str, object], str | None]] = []
-    sink = SessionJournalSink(
-        event_bus=EventBus(),
-        journal=journal,
-        artifact_store=None,
-        session_id="session-a",
-        current_turn_id=lambda turn_id=None: turn_id,
-        max_session_cost_usd=1.0,
-        on_cost_budget_exceeded=lambda alert, turn_id: exceeded_calls.append((alert, turn_id)),
-    )
-
-    sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost",
-        turn_id="turn-1",
-        data={"usd": 0.79},
-    )
-    sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost_record",
-        turn_id="turn-1",
-        data={"usd": 0.01},
-    )
-    sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost",
-        turn_id="turn-2",
-        data={"usd": 0.2},
-    )
-    sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost_record",
-        turn_id="turn-2",
-        data={"usd": 0.25},
-    )
-
-    records = journal.read()
-    assert [record.name for record in records] == [
-        "cost",
-        "cost_record",
-        "cost_budget_warning",
-        "cost",
-        "cost_budget_exceeded",
-        "cost_record",
-    ]
-
-    warning = records[2]
-    assert warning.kind == JournalRecordKind.METRIC
-    assert warning.turn_id == "turn-1"
-    assert warning.tags == frozenset({"cost_budget", "warning"})
-    assert warning.data == {
-        "alert": "warning",
-        "budget_status": "warning",
-        "total_usd": pytest.approx(0.8),
-        "max_session_cost_usd": 1.0,
-        "warning_threshold_usd": 0.8,
-        "usage_fraction": pytest.approx(0.8),
-        "remaining_usd": pytest.approx(0.2),
-        "overage_usd": 0.0,
-        "trigger_record_name": "cost_record",
-    }
-
-    exceeded = records[4]
-    assert exceeded.kind == JournalRecordKind.METRIC
-    assert exceeded.turn_id == "turn-2"
-    assert exceeded.tags == frozenset({"cost_budget", "exceeded"})
-    assert exceeded.data == {
-        "alert": "exceeded",
-        "budget_status": "exceeded",
-        "total_usd": pytest.approx(1.0),
-        "max_session_cost_usd": 1.0,
-        "warning_threshold_usd": 0.8,
-        "usage_fraction": pytest.approx(1.0),
-        "remaining_usd": 0.0,
-        "overage_usd": 0.0,
-        "trigger_record_name": "cost",
-    }
-    assert exceeded_calls == [(exceeded.data, "turn-2")]
-
-
-def test_journal_sink_skips_cost_budget_alerts_without_budget_or_numeric_usd() -> None:
-    unconfigured = InMemoryRingBuffer()
-    unconfigured_sink = SessionJournalSink(
-        event_bus=EventBus(),
-        journal=unconfigured,
-        artifact_store=None,
-        session_id="session-a",
-        current_turn_id=lambda turn_id=None: turn_id,
-    )
-    unconfigured_sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost",
-        data={"usd": 5.0},
-    )
-    assert [record.name for record in unconfigured.read()] == ["cost"]
-
-    journal = InMemoryRingBuffer()
-    sink = SessionJournalSink(
-        event_bus=EventBus(),
-        journal=journal,
-        artifact_store=None,
-        session_id="session-a",
-        current_turn_id=lambda turn_id=None: turn_id,
-        max_session_cost_usd=1.0,
-    )
-    sink.append_record(kind=JournalRecordKind.METRIC, name="cost", data={"usd": True})
-    sink.append_record(kind=JournalRecordKind.METRIC, name="cost_record", data={"usd": "0.9"})
-    sink.append_record(kind=JournalRecordKind.METRIC, name="cost", data=None)
-    sink.append_record(kind=JournalRecordKind.METRIC, name="stage_complete", data={"usd": 1.0})
-
-    assert [record.name for record in journal.read()] == [
-        "cost",
-        "cost_record",
-        "cost",
-        "stage_complete",
-    ]
-
-
-def test_journal_sink_notifies_cost_budget_exceeded_without_journal() -> None:
-    exceeded_calls: list[tuple[dict[str, object], str | None]] = []
-    sink = SessionJournalSink(
-        event_bus=EventBus(),
-        journal=None,
-        artifact_store=None,
-        session_id="session-a",
-        current_turn_id=lambda turn_id=None: turn_id,
-        max_session_cost_usd=1.0,
-        on_cost_budget_exceeded=lambda alert, turn_id: exceeded_calls.append((alert, turn_id)),
-    )
-
-    sink.append_record(
-        kind=JournalRecordKind.METRIC,
-        name="cost",
-        turn_id="turn-no-journal",
-        data={"usd": 1.1},
-    )
-
-    assert exceeded_calls == [
-        (
-            {
-                "alert": "exceeded",
-                "budget_status": "exceeded",
-                "total_usd": 1.1,
-                "max_session_cost_usd": 1.0,
-                "warning_threshold_usd": 0.8,
-                "usage_fraction": pytest.approx(1.1),
-                "remaining_usd": 0.0,
-                "overage_usd": pytest.approx(0.1),
-                "trigger_record_name": "cost",
-            },
-            "turn-no-journal",
-        )
-    ]
 
 
 def test_session_markdown_strip_delegates_to_journal_sink() -> None:

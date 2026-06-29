@@ -327,6 +327,21 @@ class TestDeepgramTTS:
         for e in events:
             assert e.type == TTSEventType.AUDIO
 
+    async def test_non_object_control_frame_does_not_truncate_audio(self):
+        provider = self._make_provider()
+        flushed = json.dumps({"type": "Flushed"})
+        messages = [_pcm16_bytes(240), "[]", _pcm16_bytes(240), flushed]
+        fake_ws = FakeReconnectingWS(messages=messages)
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            events = []
+            async for event in provider.synthesize("test"):
+                events.append(event)
+
+        assert len(events) == 2
+        for e in events:
+            assert e.type == TTSEventType.AUDIO
+
     async def test_synthesis_exception_posted_to_event_bus(self):
         bus = EventBus()
         errors: list[Error] = []

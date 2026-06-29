@@ -71,6 +71,10 @@ async def client() -> AsyncIterator[aiohttp.ClientSession]:
         yield session
 
 
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_RESOLVED_TOKEN}"}
+
+
 def _base_url(server: VoiceServer) -> str:
     address = server.http_address
     assert address is not None
@@ -106,7 +110,7 @@ async def test_metrics_endpoint_shape_factory_only(client: aiohttp.ClientSession
         # snapshot reflects at least one completed request.
         async with client.get(f"{_base_url(server)}/health/live") as resp:
             assert resp.status == 200
-        async with client.get(f"{_base_url(server)}/metrics") as resp:
+        async with client.get(f"{_base_url(server)}/metrics", headers=_auth_headers()) as resp:
             assert resp.status == 200
             body = await resp.json()
         assert set(body) == {
@@ -131,7 +135,7 @@ async def test_metrics_endpoint_shape_from_manifest(
     server = _manifest_server(tmp_path, monkeypatch)
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/metrics") as resp:
+        async with client.get(f"{_base_url(server)}/metrics", headers=_auth_headers()) as resp:
             assert resp.status == 200
             body = await resp.json()
         assert set(body) == {
@@ -148,6 +152,31 @@ async def test_metrics_endpoint_shape_from_manifest(
         await server.stop()
 
 
+@pytest.mark.integration_socket
+@pytest.mark.parametrize("path", ["/metrics", "/manifest", "/capabilities"])
+async def test_metadata_endpoints_require_auth_when_configured(
+    client: aiohttp.ClientSession,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    server = _manifest_server(tmp_path, monkeypatch)
+    await server.start()
+    try:
+        async with client.get(f"{_base_url(server)}{path}") as resp:
+            assert resp.status == 401
+            assert await resp.json() == {"error": "Missing or invalid bearer token"}
+        async with client.get(
+            f"{_base_url(server)}{path}",
+            headers={"Authorization": "Bearer wrong-token"},
+        ) as resp:
+            assert resp.status == 401
+        async with client.get(f"{_base_url(server)}{path}", headers=_auth_headers()) as resp:
+            assert resp.status == 200
+    finally:
+        await server.stop()
+
+
 # ── /manifest ────────────────────────────────────────────────────────
 
 
@@ -156,7 +185,7 @@ async def test_manifest_endpoint_absent_for_factory_only(client: aiohttp.ClientS
     server = _factory_only_server()
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/manifest") as resp:
+        async with client.get(f"{_base_url(server)}/manifest", headers=_auth_headers()) as resp:
             assert resp.status == 200
             body = await resp.json()
         assert body == {"loaded": False, "manifest": None}
@@ -171,7 +200,7 @@ async def test_manifest_endpoint_from_manifest_has_no_token(
     server = _manifest_server(tmp_path, monkeypatch)
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/manifest") as resp:
+        async with client.get(f"{_base_url(server)}/manifest", headers=_auth_headers()) as resp:
             assert resp.status == 200
             body = await resp.json()
             text = await resp.text()
@@ -179,9 +208,9 @@ async def test_manifest_endpoint_from_manifest_has_no_token(
         manifest = body["manifest"]
         # The redacted dump exposes only the bearer-env:NAME reference.
         assert manifest["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
-        # The IPv4 bind host is a structural field; it survives redaction
-        # verbatim (it must NOT be mangled into a [REDACTED_PHONE]).
-        assert manifest["server"]["host"] == "127.0.0.1"
+        # The IPv4 bind host is routed through the shared redaction policy so
+        # the public manifest cannot expose private bind metadata.
+        assert manifest["server"]["host"] == "[REDACTED_PHONE]"
         # The resolved (secret-shaped) token must never appear in the dump.
         assert _RESOLVED_TOKEN not in text
     finally:
@@ -199,6 +228,10 @@ async def test_plan_endpoint_has_no_token(
     await server.start()
     try:
         async with client.get(f"{_base_url(server)}/plan") as resp:
+            assert resp.status == 401
+
+        auth_headers = {"Authorization": f"Bearer {_RESOLVED_TOKEN}"}
+        async with client.get(f"{_base_url(server)}/plan", headers=auth_headers) as resp:
             assert resp.status == 200
             assert _RESOLVED_TOKEN not in await resp.text()
     finally:
@@ -215,7 +248,9 @@ async def test_capabilities_endpoint_empty_for_factory_only(
     server = _factory_only_server()
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/capabilities") as resp:
+        async with client.get(
+            f"{_base_url(server)}/capabilities", headers=_auth_headers()
+        ) as resp:
             assert resp.status == 200
             body = await resp.json()
         assert set(body) == {"profile", "roles", "all_capabilities"}
@@ -233,7 +268,9 @@ async def test_capabilities_endpoint_from_manifest_lists_seven_roles(
     server = _manifest_server(tmp_path, monkeypatch)
     await server.start()
     try:
-        async with client.get(f"{_base_url(server)}/capabilities") as resp:
+        async with client.get(
+            f"{_base_url(server)}/capabilities", headers=_auth_headers()
+        ) as resp:
             assert resp.status == 200
             body = await resp.json()
             text = await resp.text()

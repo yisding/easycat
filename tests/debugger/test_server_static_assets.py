@@ -135,6 +135,10 @@ def test_static_index_has_copy_replay_command_button():
     assert "easycat replay" in text
     assert "--turn" in text
     assert "navigator.clipboard" in text
+    assert "function _shellQuoteArg" in text
+    assert "_shellQuoteArg(name)" in text
+    assert "_shellQuoteArg(turnId)" in text
+    assert "easycat replay ${name} --turn ${turnId}" not in text
 
 
 def test_static_index_has_save_test_case_button():

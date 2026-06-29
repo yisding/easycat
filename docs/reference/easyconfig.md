@@ -114,11 +114,7 @@ Group under `observability=ObservabilityConfig(...)`:
   `"libsql"`.
 - `journal_retention` — `"archive"` (default) keeps closed journals;
   `"delete"` removes them.
-- `latency_budget` — one or more `LatencyBudget` thresholds; the session
-  emits alerts when a turn exceeds them.
 - `warmup` — run provider warmup hooks at session start (default `True`).
-- `max_session_cost_usd` — hard cost ceiling; the session stops when
-  estimated provider spend crosses it.
 - `debugger_autolaunch` — opt in to auto-opening the local debugger UI in an
   interactive terminal (default `False`). Durable journaling does not depend
   on this; the `EASYCAT_DEBUGGER_AUTOLAUNCH` env var also enables it.

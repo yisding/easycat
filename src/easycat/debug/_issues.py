@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from easycat.debug._audio_health import (
+    AudioSampleCache,
     collect_caller_silence,
     collect_clipping,
     detect_dead_air,
@@ -87,6 +88,12 @@ class IssueThresholds:
 _THRESHOLDS = IssueThresholds()
 
 
+def _record_name(record: Mapping[str, Any]) -> str:
+    """Return a hash-safe journal record name from untrusted bundle input."""
+    name = record.get("name")
+    return name if isinstance(name, str) else ""
+
+
 def _issue(
     *,
     code: str,
@@ -134,7 +141,7 @@ def _record_issues(
     """Flag per-record failures: errors, tool failures, timeouts, empty STT."""
     issues: list[dict[str, Any]] = []
     for record in records:
-        name = record.get("name") or ""
+        name = _record_name(record)
         turn_id = record.get("turn_id")
         turn_id = turn_id if isinstance(turn_id, str) and turn_id else None
         seq = record.get("sequence")
@@ -300,7 +307,7 @@ def _barge_in_cards(
         wall = record_wall_ns(record)
         if wall is None:
             continue
-        name = record.get("name")
+        name = _record_name(record)
         if _is_interruption(record):
             by_turn.setdefault(turn_id, []).append((wall, _INTERRUPTION, True))
         elif name in (_BOT_STARTED_SPEAKING, _VAD_START_SPEAKING) or name in _BOT_STOPPED_NAMES:
@@ -406,12 +413,14 @@ def _audio_health_cards(
     ``audio_stride`` plus a per-blob byte cap.
     """
     issues: list[dict[str, Any]] = []
+    sample_cache = AudioSampleCache(artifact_resolver, stride=thresholds.audio_stride)
 
     for side, turn_id, sequence in collect_clipping(
         records,
         artifact_resolver,
         stride=thresholds.audio_stride,
         clip_consecutive=thresholds.clip_consecutive,
+        sample_cache=sample_cache,
     ):
         who = "bot output" if side == "bot" else "caller input"
         issues.append(
@@ -436,6 +445,7 @@ def _audio_health_cards(
         artifact_resolver,
         stride=thresholds.audio_stride,
         silence_rms=thresholds.silence_rms,
+        sample_cache=sample_cache,
     ).items():
         issues.append(
             _issue(

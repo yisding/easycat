@@ -1,4 +1,4 @@
-"""Local voice bot using Cartesia for both STT (Ink-Whisper) and TTS (Sonic).
+"""Local voice bot using Cartesia for both STT (Ink) and TTS (Sonic).
 
 Setup: export OPENAI_API_KEY=...; export CARTESIA_API_KEY=...
        uv sync --extra quickstart --extra cartesia --group dev
@@ -28,7 +28,7 @@ require_env("OPENAI_API_KEY")
 run(
     EasyConfig.mic(
         agent=Agent(name="assistant", instructions="You are a helpful voice assistant."),
-        stt="cartesia/ink-whisper",
+        stt="cartesia/ink-2",
         tts="cartesia/sonic-3",
     )
 )

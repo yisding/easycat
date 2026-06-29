@@ -493,12 +493,13 @@ A weather lookup is a tool. "Hang up" is not a tool — there is
 nothing to return and nothing to resume. Put it in the action
 queue.
 
-> **Journaling gap.** `ToolCallStarted/Result` are journaled (we
-> write them from this script). `SessionActionRequested/...` are
-> emitted on the EventBus but not yet journaled by default. If you
-> need to inspect action timelines, subscribe on the bus or wait
-> for a planned journaling surface — don't assume records that
-> don't exist.
+> **Journaling.** `ToolCallStarted/Result` are journaled (we write
+> them from this script). `SessionActionRequested/Started/Completed/Failed`
+> are journaled by default too — `SessionJournalSink` records them as
+> `session_action_requested`, `session_action_started`,
+> `session_action_completed`, and `session_action_failed`, so you can
+> read the action timeline straight from the bundle (failures include
+> the `error` reason).
 
 ## A common bug: speaking the tool result
 

@@ -301,6 +301,17 @@ async def test_first_payload_emits_clause_before_full_sentence():
     assert "Let me look into that for you," not in later
 
 
+async def test_first_payload_holds_trailing_decimal_period_for_lookahead():
+    built = await _run_streaming_payloads(
+        ["The estimate is 3.", "5 seconds, then continue."],
+        strip_md=False,
+    )
+    streaming = [text for text, is_final in built if not is_final]
+    assert streaming, "expected at least one mid-stream payload"
+    assert streaming[0] == "The estimate is 3.5 seconds, "
+    assert "The estimate is 3." not in streaming
+
+
 async def test_first_payload_does_not_ship_clipped_short_opener():
     """A short opener like "Sure," is never queued as a clipped fragment.
 

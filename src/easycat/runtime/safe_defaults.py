@@ -35,9 +35,7 @@ SAFE_CONFIG_FIELDS: frozenset[str] = frozenset(
         "smart_turn_sensitivity",
         "timeouts",
         "debug",
-        "latency_budget",
         "warmup",
-        "max_session_cost_usd",
         # Pipeline flags
         "enable_noise_reduction",
         "enable_echo_cancellation",

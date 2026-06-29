@@ -19,6 +19,7 @@ from easycat.events import (
     TTSEventType,
 )
 from easycat.noise_reduction import PassthroughNoiseReducer
+from easycat.runtime import InMemoryRingBuffer
 from easycat.session._session import Session
 from easycat.session._types import CallIdentity, SessionConfig
 from easycat.session.actions import (
@@ -276,6 +277,40 @@ async def test_drain_add_to_dnc_applies_to_session_dnc_list() -> None:
     assert len(completed) == 1
     assert completed[0].result.metadata["dnc"] == "add"
     assert completed[0].result.metadata["applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_dnc_session_action_lifecycle_is_written_to_journal() -> None:
+    actions = SessionActions()
+    actions.add_to_dnc("+15551234567", reason="caller requested")
+    dnc = DNCList()
+    journal = InMemoryRingBuffer(capacity=100)
+    session = Session(_config(session_actions=actions, dnc_list=dnc, journal=journal))
+
+    await session._drain_session_actions()
+
+    records = journal.read()
+    by_name = {record.name: record for record in records}
+    assert {
+        "session_action_requested",
+        "session_action_started",
+        "session_action_completed",
+    }.issubset(by_name)
+
+    requested = by_name["session_action_requested"].data or {}
+    assert requested["action"]["type"] == "add_to_dnc"
+    assert requested["action"]["number"] == "[REDACTED_PHONE]"
+    assert requested["action"]["reason"] == "caller requested"
+
+    started = by_name["session_action_started"].data or {}
+    assert started["executor"] == "CoreSessionActionExecutor"
+    assert started["action"]["type"] == "add_to_dnc"
+
+    completed = by_name["session_action_completed"].data or {}
+    assert completed["executor"] == "CoreSessionActionExecutor"
+    assert completed["action"]["type"] == "add_to_dnc"
+    assert completed["result"]["metadata"]["dnc"] == "add"
+    assert completed["result"]["metadata"]["applied"] is True
 
 
 @pytest.mark.asyncio

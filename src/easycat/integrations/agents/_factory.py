@@ -276,17 +276,32 @@ def _runnable_pins_conversation(agent: Any) -> bool:
 
 
 def is_reusable_agent_spec(agent: Any) -> bool:
-    """Return ``True`` when *agent* is a stateless framework spec safe to
-    reuse across concurrent sessions.
+    """Return ``True`` when *agent* is a declarative framework spec safe to
+    reuse across concurrent per-connection sessions.
 
     A per-connection server forwards the same ``agent`` value into a fresh
     :class:`~easycat.config.EasyConfig` for every connection, and
-    :func:`auto_adapt_agent` runs again on each one.  That is only safe when
-    the value is a *declarative framework spec* — the OpenAI Agents SDK
-    ``Agent``, a PydanticAI ``Agent``, a LangChain ``Runnable`` (which also
-    covers a compiled LangGraph graph), or a LlamaIndex workflow — because
-    ``auto_adapt_agent`` builds a brand-new, independent bridge from the spec
-    for each session, so no per-session state is shared.
+    :func:`auto_adapt_agent` runs again on each one.  That is safe for a
+    *declarative framework spec* — the OpenAI Agents SDK ``Agent``, a PydanticAI
+    ``Agent``, a LangChain ``Runnable`` (which also covers a compiled LangGraph
+    graph), or a LlamaIndex workflow — because the per-session *bridge*
+    (rebuilt from the spec for each connection) is what owns the mutable
+    per-session state, not the wrapped spec:
+
+    * The OpenAI / PydanticAI / LangChain bridges keep conversation history on
+      the bridge instance (``_message_history`` / per-bridge history store),
+      not on the wrapped agent.
+    * The LangGraph bridge mints a *fresh* ``thread_id`` per bridge, so
+      concurrent connections sharing one compiled graph read/write isolated
+      checkpointer threads.
+    * LlamaIndex workflow runs allocate their own per-run context.
+
+    Cloning the spec per connection (e.g. ``copy.deepcopy``) is *not* used: it
+    is lossy for these objects — deep-copying a compiled LangGraph graph also
+    copies its checkpointer, breaking an intentionally shared persistent store —
+    whereas the per-bridge isolation above already provides the correct
+    boundary. This keeps the documented quickstart
+    ``VoiceApp(agent=Agent(...)).run("browser")`` working out of the box.
 
     It returns ``False`` for anything EasyCat cannot prove is rebuilt fresh:
     an already-constructed :class:`~easycat.integrations.agents.base.ExternalAgentBridge`
@@ -304,6 +319,11 @@ def is_reusable_agent_spec(agent: Any) -> bool:
     per-session bridge, so all concurrent connections would read and write the
     *same* checkpointer thread / history store and corrupt each other. Such a
     runnable is rejected here so it is routed through a ``config_factory``.
+
+    Advanced setups that push *per-session* mutable framework configuration onto
+    a single shared instance (e.g. distinct MCP servers per connection, which
+    the OpenAI bridge applies to the wrapped agent for the duration of a turn)
+    should also use a ``config_factory`` so each connection owns its own agent.
     """
     # OpenAI Agents SDK ``Agent`` -> fresh ``OpenAIAgentsBridge`` per session.
     try:

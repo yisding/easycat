@@ -6,11 +6,11 @@ view).  This module backs the server-side path: it downmixes raw PCM into a
 fixed number of (min, max) peak buckets and hand-rolls a greyscale PNG with
 clipped buckets tinted red.
 
-The actual byte→sample decode is delegated to the shared
-:func:`easycat.debug._pcm.decode_pcm_mono`, so unsupported formats (notably
-8-bit mu-law, ``sample_width == 1``) are handled the same way everywhere:
-they decode to no samples and the caller surfaces an "unsupported format"
-result rather than mis-decoded garbage.
+Peak extraction buckets directly from the raw PCM sample array instead of
+materialising every mono sample as a Python ``int``.  Unsupported formats
+(notably 8-bit mu-law, ``sample_width == 1``) still yield silent buckets so the
+caller can surface an "unsupported format" result rather than mis-decoded
+garbage.
 
 DEPENDENCY CONSTRAINT: ``numpy``/``Pillow`` are NOT available — the debugger
 extra ships only ``aiohttp``.  Everything here is pure stdlib (``struct``,
@@ -20,9 +20,11 @@ extra ships only ``aiohttp``.  Everything here is pure stdlib (``struct``,
 from __future__ import annotations
 
 import struct
+import sys
 import zlib
+from array import array
 
-from easycat.debug._pcm import decode_pcm_mono, full_scale, is_supported_width
+from easycat.debug._pcm import full_scale, is_supported_width
 
 __all__ = [
     "decode_pcm_peaks",
@@ -45,19 +47,58 @@ def decode_pcm_peaks(
     first.
     """
     buckets = max(1, int(buckets))
-    mono = decode_pcm_mono(pcm, sample_width=sample_width, channels=channels)
-    n = len(mono)
-    if n == 0:
+    samples, frame_count, channels = _decode_pcm_sample_array(
+        pcm, sample_width=sample_width, channels=channels
+    )
+    if frame_count == 0:
         return [(0, 0)] * buckets
+
     out: list[tuple[int, int]] = []
     for b in range(buckets):
-        start = (b * n) // buckets
-        end = ((b + 1) * n) // buckets
+        start = (b * frame_count) // buckets
+        end = ((b + 1) * frame_count) // buckets
         if end <= start:
-            end = min(start + 1, n)
-        window = mono[start:end]
-        out.append((min(window), max(window)) if window else (0, 0))
+            end = min(start + 1, frame_count)
+        lo: int | None = None
+        hi: int | None = None
+        for frame_index in range(start, end):
+            sample_index = frame_index * channels
+            if channels == 1:
+                sample = samples[sample_index]
+            else:
+                total = 0
+                for channel_offset in range(channels):
+                    total += samples[sample_index + channel_offset]
+                sample = total // channels
+            lo = sample if lo is None else min(lo, sample)
+            hi = sample if hi is None else max(hi, sample)
+        out.append((lo, hi) if lo is not None and hi is not None else (0, 0))
     return out
+
+
+def _decode_pcm_sample_array(
+    pcm: bytes, *, sample_width: int, channels: int
+) -> tuple[array[int], int, int]:
+    """Return native samples plus complete frame count without Python-list expansion."""
+    channels = max(1, int(channels))
+    width = int(sample_width)
+    if width == 2:
+        typecode = "h"
+    elif width == 4:
+        typecode = "i"
+    else:
+        return array("h"), 0, channels
+
+    frame_bytes = width * channels
+    usable = (len(pcm) // frame_bytes) * frame_bytes
+    if usable <= 0:
+        return array(typecode), 0, channels
+
+    samples = array(typecode)
+    samples.frombytes(bytes(pcm[:usable]))
+    if sys.byteorder == "big":  # pragma: no cover - rare BE host
+        samples.byteswap()
+    return samples, len(samples) // channels, channels
 
 
 def encode_peaks_png(

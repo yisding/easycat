@@ -24,8 +24,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from easycat.runtime.costs import finite_number
-
 STAGE_ORDER = ("transport", "audio", "vad", "stt", "agent", "tts", "turn", "telephony")
 
 # Milestone journal-record names.  ``vad_stop_speaking`` marks the VAD
@@ -393,17 +391,6 @@ def turn_waterfall(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return turns
 
 
-# Cost-rollup accumulator keys, in the order the debugger / CLI surface them.
-# ``usd`` / ``stt_seconds`` accumulate seconds and dollars (floats); ``tts_chars``
-# / ``llm_tokens`` are counts that stay integer-zero until a finite value lands,
-# preserving the historical JSON shape (``0`` not ``0.0``).
-_COST_KEYS = ("usd", "stt_seconds", "tts_chars", "llm_tokens")
-
-
-def _empty_cost_bucket() -> dict[str, float]:
-    return {"usd": 0.0, "stt_seconds": 0.0, "tts_chars": 0, "llm_tokens": 0}
-
-
 def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Pull per-turn user transcripts and agent responses out of the journal.
 
@@ -477,37 +464,6 @@ def extract_turn_transcripts(records: list[dict[str, Any]]) -> list[dict[str, An
     return transcripts
 
 
-def turn_cost_rollup(
-    records: list[dict[str, Any]],
-) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
-    """Aggregate ``CostRecord``-style entries into ``(per_turn, totals)``.
-
-    Cost records (``cost`` / ``cost_record``) are owned by the peripheral
-    observability/cost plan, so they may be absent; this degrades to zeroes
-    rather than raising.  Malformed turn ids roll up under the session-level
-    ``""`` bucket.  Budget evaluation stays with the caller (it needs the
-    config snapshot), so this is the pure number-crunching half shared by the
-    debugger cost panel and the two-source ``easycat diff``.
-    """
-    by_turn: dict[str, dict[str, float]] = {}
-    totals: dict[str, float] = _empty_cost_bucket()
-    for r in records:
-        if r.get("name") not in ("cost", "cost_record"):
-            continue
-        data = r.get("data") or {}
-        if not isinstance(data, dict):
-            continue
-        turn_id = safe_turn_id(r.get("turn_id")) or ""
-        bucket = by_turn.setdefault(turn_id, _empty_cost_bucket())
-        for key in _COST_KEYS:
-            value = finite_number(data.get(key))
-            if value is None:
-                continue
-            bucket[key] += value
-            totals[key] += value
-    return by_turn, totals
-
-
 __all__ = [
     "STAGE_ORDER",
     "build_timeline",
@@ -515,7 +471,6 @@ __all__ = [
     "record_wall_ns",
     "safe_turn_id",
     "summarise_turns",
-    "turn_cost_rollup",
     "turn_milestones",
     "turn_waterfall",
 ]

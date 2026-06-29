@@ -46,9 +46,9 @@ from easycat.events import (
     TurnStarted,
 )
 from easycat.runtime.context import RunContext
+from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
 from easycat.session._journal_sink import SessionJournalSink
-from easycat.session._latency_budget import LatencyBudgetMonitor
 from easycat.session._streaming import (
     AgentStreamResult,
     consume_agent_stream,
@@ -132,7 +132,6 @@ class TurnRunner:
         journal_sink: SessionJournalSink,
         runtime_scope: RuntimeScope,
         timeout_config: TimeoutConfig,
-        latency_budget: LatencyBudgetMonitor,
         turn_handle: TurnHandle,
         stt_stage: STTStage,
         session_id: str,
@@ -149,7 +148,6 @@ class TurnRunner:
         self._journal_sink = journal_sink
         self._runtime_scope = runtime_scope
         self._timeout_config = timeout_config
-        self._latency_budget = latency_budget
         self._turn = turn_handle
         self._stt_stage = stt_stage
         self._stt_provider = wiring.stt
@@ -674,20 +672,14 @@ class TurnRunner:
             )
 
     def _record_voice_total_latency(self, turn: TurnContext) -> None:
-        """Record a configured turn total budget from speech end to first audio."""
-        if (
-            not self._journal_enabled
-            or not self._latency_budget.has_budget_for("total_ms")
-            or turn.end_time is None
-            or turn.first_tts_audio_time is None
-        ):
+        """Record the turn's total latency from speech end to first audio."""
+        if not self._journal_enabled or turn.end_time is None or turn.first_tts_audio_time is None:
             return
         elapsed_ms = max(0.0, (turn.first_tts_audio_time - turn.end_time) * 1000.0)
-        self._latency_budget.record_metric(
+        self._journal_sink.append_record(
+            kind=JournalRecordKind.METRIC,
             name="turn_total_latency_ms",
             turn_id=turn.id,
-            stage="total_ms",
-            observed_ms=elapsed_ms,
             data={
                 "value": elapsed_ms,
                 "from": "turn_ended",
@@ -844,11 +836,10 @@ class TurnRunner:
                 )
             )
             if self._journal_enabled:
-                self._latency_budget.record_metric(
+                self._journal_sink.append_record(
+                    kind=JournalRecordKind.METRIC,
                     name="text_turn_latency_ms",
                     turn_id=turn_id,
-                    stage="total_ms",
-                    observed_ms=elapsed_ms,
                     data={"value": elapsed_ms, "surface": "text_session"},
                 )
             result_attr = "pass"
