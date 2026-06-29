@@ -170,6 +170,18 @@ def test_text_for_estimation_timeline_supports_single_quoted_breaks() -> None:
     assert timeline.count("\ue000") == 7
 
 
+def test_text_for_estimation_timeline_supports_second_breaks() -> None:
+    payload = TTSInput(
+        text='<speak>Hello<break time="0.5s"/>world</speak>',
+        format="ssml",
+    )
+
+    timeline = _text_for_estimation_timeline(payload)
+    assert "Hello" in timeline and "world" in timeline
+    assert timeline != "Hello world"
+    assert timeline.count("\ue000") == 7
+
+
 def test_cleanup_estimation_text_removes_pause_markers() -> None:
     payload = TTSInput(
         text='<speak>A<break time="500ms"/>B</speak>',

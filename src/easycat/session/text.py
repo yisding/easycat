@@ -390,12 +390,16 @@ def _text_for_estimation_timeline(payload: TTSInput) -> str:
 
     def _break_repl(match: re.Match[str]) -> str:
         attrs = match.group(1)
-        ms_match = re.search(
-            r"""time\s*=\s*(['"])\s*(\d+)\s*ms\s*\1""",
+        time_match = re.search(
+            r"""time\s*=\s*(['"])\s*((?:\d+(?:\.\d+)?)|(?:\.\d+))\s*(ms|s)\s*\1""",
             attrs,
             flags=re.IGNORECASE,
         )
-        ms = int(ms_match.group(2)) if ms_match else 0
+        ms = 0.0
+        if time_match:
+            amount = float(time_match.group(2))
+            unit = time_match.group(3).lower()
+            ms = amount if unit == "ms" else amount * 1000.0
         count = max(1, round((ms / 1000.0) * _PAUSE_CHARS_PER_SECOND)) if ms > 0 else 1
         return _PAUSE_MARKER * count
 
