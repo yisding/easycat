@@ -2009,7 +2009,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         fidelity = payload.get("fidelity", "artifact")
         tool_policy = payload.get("tool_policy", "deny")
         force = bool(payload.get("force", False))
-        confirm = bool(payload.pop("confirm", False))
+        confirm = payload.pop("confirm", False) is True
         # ARTIFACT/SIMULATED with DENY/STUB are always safe; LIVE
         # fidelity, ALLOW tool policy, or force=True can re-execute
         # against live providers and need explicit confirmation so a
