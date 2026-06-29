@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.runtime._journal_codec import _build_slice_where, _row_to_record
+from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.records import ErrorInfo, JournalRecord, JournalRecordKind
 
 
@@ -37,6 +38,7 @@ class ReadonlySqliteJournal:
         return -1
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        _validate_read_limit(limit)
         sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
         params: list[Any] = [start]
         if limit is not None:
@@ -127,6 +129,7 @@ class FrozenJournalSnapshot:
         return -1
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        _validate_read_limit(limit)
         out = [r for r in self._records if r.sequence >= start]
         if limit is not None:
             out = out[:limit]

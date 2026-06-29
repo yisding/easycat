@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat._observability import observe_gauge, record_histogram
 from easycat.runtime._journal_codec import _journal_record_for_append
+from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_views import FrozenJournalSnapshot
 from easycat.runtime.records import (
     BufferOverflow,
@@ -99,6 +100,7 @@ class InMemoryRingBuffer:
             )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        _validate_read_limit(limit)
         with self._lock:
             out = [r for r in self._buf if r.sequence >= start]
         if limit is not None:
