@@ -221,12 +221,12 @@ class AgentStage:
                     kind = getattr(event, "kind", None)
                     text = getattr(event, "text", "")
                     if kind == "text_delta" and text:
-                        # Hand the token off to the sentence buffer/TTS first so
-                        # the journal write never sits in front of the latency-
-                        # critical token handoff.  Exactly one journal append per
-                        # token still happens — only its ordering moves after the
-                        # yield (see PR7 journal hot-path reorder).
-                        yield event
+                        # Record the delivered token before yielding it.  Async
+                        # generator cleanup (``aclose()``, disconnects, or
+                        # cancellation) resumes by injecting ``GeneratorExit``
+                        # at the suspended yield, so post-yield code is not a
+                        # reliable audit boundary for text already handed to
+                        # downstream TTS or text clients.
                         accumulated.append(text)
                         journal_append_event(
                             ctx,
@@ -235,6 +235,7 @@ class AgentStage:
                             turn_id=turn.id,
                             data_extra={"type": "TEXT_DELTA", "text": text},
                         )
+                        yield event
                         continue
                     elif kind == "done":
                         if text:
