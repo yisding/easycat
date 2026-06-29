@@ -51,9 +51,15 @@ def _is_loopback(host: str) -> bool:
     return _is_loopback_host(host)
 
 
-def _playground_url(host: str, port: int, token: str | None) -> str:
+def _url_host(host: str) -> str:
     display_host = "localhost" if _is_loopback(host) else host
-    url = f"http://{display_host}:{port}"
+    if ":" in display_host and not display_host.startswith("["):
+        return f"[{display_host}]"
+    return display_host
+
+
+def _playground_url(host: str, port: int, token: str | None) -> str:
+    url = f"http://{_url_host(host)}:{port}"
     if token:
         query = urlencode({"token": token})
         return f"{url}/webrtc_client.html?{query}"
@@ -61,8 +67,7 @@ def _playground_url(host: str, port: int, token: str | None) -> str:
 
 
 def _websocket_endpoint(host: str, port: int) -> str:
-    display_host = "localhost" if _is_loopback(host) else host
-    return f"ws://{display_host}:{port}"
+    return f"ws://{_url_host(host)}:{port}"
 
 
 def _announce_serve_endpoint(*, mode: str, host: str, port: int, token: str | None) -> None:
