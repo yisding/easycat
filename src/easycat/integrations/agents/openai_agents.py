@@ -42,6 +42,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS = 2.0
+
 
 class OpenAIAgentsBridge:
     """Bridge wrapping an OpenAI Agents SDK ``Agent``.
@@ -83,20 +85,37 @@ class OpenAIAgentsBridge:
     async def warmup(self) -> None:
         """Prime DNS/TLS/connection-pool via the SDK's shared OpenAI client.
 
-        Issues a cheap, unbilled ``GET /models`` through the same
-        ``AsyncOpenAI`` client the ``Runner`` reuses, so the first real turn
-        does not pay the cold-connection cost.  This deliberately avoids a
-        billed ``Runner.run``.  All failures are swallowed — ``WarmupRunner``
-        re-raises, so an auth/timeout error here must not abort
-        ``Session.start()``.
+        Issues a cheap, unbilled single-model metadata request through the
+        same ``AsyncOpenAI`` client the ``Runner`` reuses, so the first real
+        turn does not pay the cold-connection cost. This deliberately avoids a
+        billed ``Runner.run`` and bounds the request so live WebRTC offer
+        handling is not held hostage by a slow warmup. All failures are
+        swallowed — ``WarmupRunner`` re-raises, so an auth/timeout error here
+        must not abort ``Session.start()``.
         """
         try:
+            from agents.models import default_models
             from agents.models.openai_provider import OpenAIProvider
 
             client = OpenAIProvider()._get_client()
-            await client.models.list()
+            model_name = self._warmup_model_name(default_models.get_default_model())
+            await client.models.retrieve(
+                model_name,
+                timeout=_OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             logger.debug("OpenAI Agents warmup skipped: %s", exc)
+
+    def _warmup_model_name(self, default_model: str) -> str:
+        """Return the string model name that should be touched during warmup."""
+        for candidate in (
+            getattr(self._run_config, "model", None),
+            getattr(self._agent, "model", None),
+            default_model,
+        ):
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate
+        return default_model
 
     # ── ExternalAgentBridge interface ─────────────────────────────
 

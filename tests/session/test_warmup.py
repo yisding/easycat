@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -53,6 +54,27 @@ class _FailingWarmup:
         raise RuntimeError("boom")
 
 
+class _BlockingWarmup:
+    def __init__(
+        self,
+        *,
+        name: str,
+        started: list[str],
+        all_started: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self._name = name
+        self._started = started
+        self._all_started = all_started
+        self._release = release
+
+    async def warmup(self) -> None:
+        self._started.append(self._name)
+        if len(self._started) == 2:
+            self._all_started.set()
+        await self._release.wait()
+
+
 @pytest.mark.asyncio
 async def test_warmup_runner_calls_supported_components_and_records_completion() -> None:
     calls: list[str] = []
@@ -78,6 +100,47 @@ async def test_warmup_runner_calls_supported_components_and_records_completion()
         "stt",
         "tts",
     ]
+
+
+@pytest.mark.asyncio
+async def test_warmup_runner_runs_supported_components_concurrently() -> None:
+    started: list[str] = []
+    all_started = asyncio.Event()
+    release = asyncio.Event()
+    sink = _JournalSink()
+    runner = WarmupRunner(
+        enabled=True,
+        journal_sink=sink,
+        components=(
+            (
+                "stt",
+                _BlockingWarmup(
+                    name="stt",
+                    started=started,
+                    all_started=all_started,
+                    release=release,
+                ),
+            ),
+            (
+                "agent",
+                _BlockingWarmup(
+                    name="agent",
+                    started=started,
+                    all_started=all_started,
+                    release=release,
+                ),
+            ),
+        ),
+    )
+
+    task = asyncio.create_task(runner.run())
+    await asyncio.wait_for(all_started.wait(), timeout=1.0)
+
+    assert started == ["stt", "agent"]
+    release.set()
+    await task
+    assert [record["name"] for record in sink.records] == ["warmup_completed"]
+    assert [c["component"] for c in sink.records[0]["data"]["components"]] == ["stt", "agent"]
 
 
 @pytest.mark.asyncio

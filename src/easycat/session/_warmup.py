@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -50,35 +51,42 @@ class WarmupRunner:
             return
 
         started = time.perf_counter()
+        components = [
+            (name, provider)
+            for name, provider in self.components
+            if (select is None or select(name)) and warmupable(provider) is not None
+        ]
+        if not components and select is not None:
+            return
+
+        results = await asyncio.gather(
+            *(_warm_component(name, provider) for name, provider in components),
+        )
+
         warmed: list[dict[str, Any]] = []
-        for name, provider in self.components:
-            if select is not None and not select(name):
-                continue
-            if warmupable(provider) is None:
-                continue
-            component_started = time.perf_counter()
-            try:
-                await warmup_if_supported(provider)
-            except Exception as exc:
+        failures: list[BaseException] = []
+        for result in results:
+            if "exception" in result:
+                failures.append(result["exception"])
                 self.journal_sink.append_record(
                     kind=JournalRecordKind.CONTROL,
                     name="warmup_failed",
                     data={
-                        "component": name,
-                        "elapsed_ms": _elapsed_ms(component_started),
-                        "exc_type": type(exc).__name__,
+                        "component": result["component"],
+                        "elapsed_ms": result["elapsed_ms"],
+                        "exc_type": type(result["exception"]).__name__,
                     },
                 )
-                raise
+                continue
             warmed.append(
                 {
-                    "component": name,
-                    "elapsed_ms": _elapsed_ms(component_started),
+                    "component": result["component"],
+                    "elapsed_ms": result["elapsed_ms"],
                 }
             )
 
-        if not warmed and select is not None:
-            return
+        if failures:
+            raise failures[0]
 
         self.journal_sink.append_record(
             name="warmup_completed",
@@ -87,6 +95,22 @@ class WarmupRunner:
                 "components": warmed,
             },
         )
+
+
+async def _warm_component(name: str, provider: Any) -> dict[str, Any]:
+    component_started = time.perf_counter()
+    try:
+        await warmup_if_supported(provider)
+    except Exception as exc:
+        return {
+            "component": name,
+            "elapsed_ms": _elapsed_ms(component_started),
+            "exception": exc,
+        }
+    return {
+        "component": name,
+        "elapsed_ms": _elapsed_ms(component_started),
+    }
 
 
 def _elapsed_ms(started: float) -> float:
