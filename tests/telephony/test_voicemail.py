@@ -157,16 +157,12 @@ class TestVoicemailDetectorConfig:
     """Tests for voicemail detector configuration validation."""
 
     @pytest.mark.parametrize("monologue_threshold_s", [0.0, -0.1])
-    def test_rejects_non_positive_monologue_threshold(
-        self, monologue_threshold_s: float
-    ) -> None:
+    def test_rejects_non_positive_monologue_threshold(self, monologue_threshold_s: float) -> None:
         with pytest.raises(ValueError, match="monologue_threshold_s"):
             VoicemailDetectorConfig(monologue_threshold_s=monologue_threshold_s)
 
     @pytest.mark.parametrize("monologue_threshold_s", [math.nan, math.inf])
-    def test_rejects_non_finite_monologue_threshold(
-        self, monologue_threshold_s: float
-    ) -> None:
+    def test_rejects_non_finite_monologue_threshold(self, monologue_threshold_s: float) -> None:
         with pytest.raises(ValueError, match="monologue_threshold_s"):
             VoicemailDetectorConfig(monologue_threshold_s=monologue_threshold_s)
 
