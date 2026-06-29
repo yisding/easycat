@@ -140,6 +140,20 @@ class TestScreeningPatterns:
 # ── Detector lifecycle and event emission ─────────────────────────
 
 
+class TestCallScreeningDetectorConfig:
+    @pytest.mark.parametrize("agent_timeout_s", [0.0, -0.1])
+    def test_rejects_non_positive_agent_timeout(self, agent_timeout_s: float) -> None:
+        bus = EventBus()
+        with pytest.raises(ValueError, match="agent_timeout_s"):
+            CallScreeningDetector(bus, agent_timeout_s=agent_timeout_s)
+
+    @pytest.mark.parametrize("max_screening_turns", [0, -1])
+    def test_rejects_non_positive_max_screening_turns(self, max_screening_turns: int) -> None:
+        bus = EventBus()
+        with pytest.raises(ValueError, match="max_screening_turns"):
+            CallScreeningDetector(bus, max_screening_turns=max_screening_turns)
+
+
 class TestCallScreeningDetector:
     @pytest.mark.asyncio
     async def test_detects_ios_screening_from_stt_partial(self) -> None:
