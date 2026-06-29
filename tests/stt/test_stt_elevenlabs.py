@@ -349,6 +349,43 @@ async def test_elevenlabs_realtime_vad_commit_clears_pending_no_redundant_commit
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_without_partial_clears_pending():
+    # ElevenLabs can emit a server-driven final without first sending a
+    # partial_transcript. The final itself must acknowledge the current audio
+    # epoch so end_stream does not send a redundant manual commit.
+    ws = MockWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        realtime_commit_strategy="vad",
+    )
+    stt = ElevenLabsSTT(config)
+
+    await stt.start_stream()
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+    assert stt._audio_pending_commit is True
+
+    stt._handle_json_message(json.loads(_el_transcript("hello world", is_final=True)))
+    assert stt._audio_pending_commit is False
+    assert stt._committed_through_epoch == stt._audio_epoch
+
+    await asyncio.wait_for(stt.end_stream(), timeout=1.0)
+
+    commit_frames = [
+        m
+        for m in (json.loads(s) for s in ws.sent if isinstance(s, str))
+        if m.get("commit") is True
+    ]
+    assert commit_frames == []
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monkeypatch):
     # Race: commit_segment() then more audio is sent, then the *prior*
     # segment's committed_transcript arrives. The late ack must NOT clear the
