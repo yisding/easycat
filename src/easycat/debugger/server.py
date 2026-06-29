@@ -122,6 +122,9 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
     if n_frames == 0:
         return b""
     n_out = max(1, round(n_frames * outrate / inrate))
+    out_bytes = n_out * nchannels * width
+    if out_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
+        raise ValueError("resampled audio frame exceeds debugger size limit")
     x_in = _np.arange(n_frames)  # type: ignore[union-attr]
     x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
     if nchannels == 1:
@@ -133,6 +136,24 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
         ).ravel()
     info = _np.iinfo(dt)  # type: ignore[union-attr]
     return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
+
+
+def _project_converted_pcm_bytes(
+    data: bytes,
+    *,
+    width: int,
+    channels: int,
+    target_channels: int,
+    rate: int,
+    target_rate: int,
+) -> int:
+    frames = len(data) // (width * channels)
+    if frames <= 0:
+        return 0
+    output_frames = frames
+    if rate > 0 and rate != target_rate:
+        output_frames = max(1, round(frames * target_rate / rate))
+    return output_frames * target_channels * width
 
 
 logger = logging.getLogger(__name__)
@@ -1021,6 +1042,23 @@ def _coerce_frames_to_format(
         ):
             dropped += 1
             continue
+        if channels == 2 and target_channels == 1:
+            projected_target_channels = 1
+        elif channels == target_channels:
+            projected_target_channels = target_channels
+        else:
+            dropped += 1
+            continue
+        projected_bytes = _project_converted_pcm_bytes(
+            blob,
+            width=width,
+            channels=channels,
+            target_channels=projected_target_channels,
+            rate=rate,
+            target_rate=target_rate,
+        )
+        if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
+            raise ValueError("resampled audio frame exceeds debugger size limit")
         try:
             converted = blob
             if channels == 2 and target_channels == 1:
@@ -1028,18 +1066,9 @@ def _coerce_frames_to_format(
                     converted = _audioop.tomono(converted, width, 0.5, 0.5)
                 else:
                     converted = _np_tomono(converted, width)
-            elif channels != target_channels:
-                dropped += 1
-                continue
             if rate != target_rate:
                 resample_ratio = target_rate / rate
-                estimated_size = int(len(converted) * resample_ratio) + (
-                    target_channels * target_width
-                )
-                if (
-                    resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO
-                    or estimated_size > _AUDIO_MAX_CONVERTED_FRAME_BYTES
-                ):
+                if resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO:
                     dropped += 1
                     continue
                 if _audioop is not None:
