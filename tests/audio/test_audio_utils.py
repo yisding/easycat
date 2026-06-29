@@ -93,6 +93,34 @@ def test_resample_chunk_same_rate_returns_same():
     assert result is chunk
 
 
+@pytest.mark.parametrize(
+    ("from_rate", "to_rate"),
+    [
+        (0, 16000),
+        (16000, 0),
+        (-8000, 16000),
+        (16000, -8000),
+    ],
+)
+def test_resample_rejects_non_positive_rates(from_rate: int, to_rate: int):
+    with pytest.raises(ValueError, match="positive"):
+        resample(b"\x00\x00", from_rate, to_rate)
+
+
+@pytest.mark.parametrize(
+    ("from_rate", "to_rate"),
+    [
+        (True, 16000),
+        (16000, False),
+        (16000.0, 16000),
+        (16000, "8000"),
+    ],
+)
+def test_resample_rejects_non_integer_rates(from_rate, to_rate):
+    with pytest.raises(TypeError, match="integer"):
+        resample(b"\x00\x00", from_rate, to_rate)
+
+
 # ── Extended resampling: 24k and 48k rates ────────────────────────
 
 
@@ -254,6 +282,18 @@ def test_to_mono_stereo_symmetric():
     result = to_mono(data, channels=2)
     samples = struct.unpack(f"<{len(result) // 2}h", result)
     assert samples == (500, -1000)
+
+
+@pytest.mark.parametrize("channels", [0, -1])
+def test_to_mono_rejects_non_positive_channels(channels: int):
+    with pytest.raises(ValueError, match="positive"):
+        to_mono(b"\x00\x00", channels=channels)
+
+
+@pytest.mark.parametrize("channels", [True, 2.0, "2"])
+def test_to_mono_rejects_non_integer_channels(channels):
+    with pytest.raises(TypeError, match="integer"):
+        to_mono(b"\x00\x00", channels=channels)
 
 
 def test_to_mono_chunk_returns_mono_format():
