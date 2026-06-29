@@ -1783,16 +1783,32 @@ def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) 
 
 
 def _promoted_agent_text(records: list[dict[str, Any]]) -> str | None:
-    """Return the turn's ``agent_final`` reply text, or ``None`` if absent."""
+    """Return a safe ``agent_final`` expected value, or ``None`` if sensitive.
+
+    ``journal promote`` prints a copy-pasteable pytest stub.  Journals can
+    contain transcripts, tool payloads, and provider text, so never echo an
+    ``agent_final`` value when the shared redaction policy would modify it or
+    still considers it sensitive after redaction.  Returning ``None`` keeps the
+    promoted bundle usable while making the stub ask the author to fill in the
+    exact expectation locally.
+    """
     for record in records:
         if record.get("name") != "agent_final":
             continue
         data = record.get("data")
+        expected: str | None = None
         if isinstance(data, Mapping) and isinstance(data.get("text"), str):
-            return data["text"]
-        text = record.get("text")
-        if isinstance(text, str):
-            return text
+            expected = data["text"]
+        else:
+            text = record.get("text")
+            if isinstance(text, str):
+                expected = text
+        if expected is None:
+            return None
+        redacted = redact_text(expected)
+        if redacted != expected or contains_unredacted_sensitive_text(redacted):
+            return None
+        return expected
     return None
 
 
@@ -2300,7 +2316,7 @@ def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     data = redacted.get("data")
     if isinstance(data, dict):
         for key in _FOLLOW_FREE_TEXT_KEYS:
-            if data.get(key):
+            if key in data:
                 data[key] = REDACTED_TRANSCRIPT
     return redacted
 
