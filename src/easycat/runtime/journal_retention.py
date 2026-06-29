@@ -54,8 +54,10 @@ def run_retention(
         except OSError:
             skip_resolved = skip_path
 
-    # Gather journal files sorted oldest-first by mtime.
-    files = sorted(journals_dir.glob("*.sqlite"), key=lambda p: p.stat().st_mtime)
+    # Gather journal files sorted oldest-first by mtime.  A concurrent crash
+    # sweep may unlink a file after globbing but before we stat it; skip that
+    # vanished path instead of failing the close-time retention pass.
+    files = _journal_files_oldest_first(journals_dir)
     if not files:
         return 0
 
@@ -87,15 +89,30 @@ class _RetentionSweep:
         self._root = root
         self._mode = mode
         self._skip_resolved = skip_resolved
-        # Total bytes includes protected journals — they cannot be reclaimed,
-        # so the cap pass must account for the space they hold.
-        self._total_bytes = sum(_session_bytes(root, f) for f in files)
-        # Candidate list excludes protected journals so neither pass can ever
-        # archive/checkpoint/unlink a live or caller-owned database.
-        self._files = [f for f in files if not self._is_protected(f)]
-        # Live/own journals we keep but never prune still count toward the
-        # session cap, so the cap pass compares against the full population.
-        self._protected_count = len(files) - len(self._files)
+        self._sizes: dict[Path, int] = {}
+        self._total_bytes = 0
+        self._files: list[Path] = []
+        self._protected_count = 0
+        for file in files:
+            size = _session_bytes(root, file)
+            if size is None:
+                continue
+            # Total bytes includes protected journals — they cannot be
+            # reclaimed, so the cap pass must account for the space they hold.
+            self._total_bytes += size
+            if self._is_protected(file):
+                # Missing files can present as unreadable/protected if they
+                # vanish between size accounting and liveness classification.
+                # They no longer occupy a session slot, so do not count them.
+                if not file.exists():
+                    self._total_bytes -= size
+                    continue
+                self._protected_count += 1
+                continue
+            # Candidate list excludes protected journals so neither pass can
+            # ever archive/checkpoint/unlink a live or caller-owned database.
+            self._files.append(file)
+            self._sizes[file] = size
         self.removed = 0
 
     def _is_protected(self, db_path: Path) -> bool:
@@ -115,7 +132,8 @@ class _RetentionSweep:
             try:
                 mtime = oldest.stat().st_mtime
             except OSError:
-                self._files.pop(0)
+                missing = self._files.pop(0)
+                self._total_bytes -= self._sizes.pop(missing, 0)
                 continue
             if mtime >= cutoff:
                 break
@@ -132,11 +150,12 @@ class _RetentionSweep:
     def _prune_oldest(self) -> bool:
         """Pop and archive/remove the oldest prunable journal; True if pruned."""
         oldest = self._files.pop(0)
-        fsize = _session_bytes(self._root, oldest)
+        fsize = self._sizes.pop(oldest, 0)
 
         # Guard file existence to avoid racing a concurrent crash-durability
         # sweep that may have already removed the file out from under us.
         if not oldest.exists():
+            self._total_bytes -= fsize
             return False
         if self._mode == "archive" and not _archive_session(self._root, oldest):
             return False
@@ -148,16 +167,42 @@ class _RetentionSweep:
         return True
 
 
-def _session_bytes(root: Path, db_path: Path) -> int:
+def _journal_files_oldest_first(journals_dir: Path) -> list[Path]:
+    """Return existing journal DBs oldest-first, tolerating concurrent unlink."""
+    statted: list[tuple[float, Path]] = []
+    for path in journals_dir.glob("*.sqlite"):
+        try:
+            statted.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    statted.sort(key=lambda item: item[0])
+    return [path for _, path in statted]
+
+
+def _session_bytes(root: Path, db_path: Path) -> int | None:
     """Total bytes for a session: DB + WAL/SHM sidecars + artifacts."""
-    size = db_path.stat().st_size
+    try:
+        size = db_path.stat().st_size
+    except OSError:
+        return None
     for suffix in ("-wal", "-shm"):
         sidecar = Path(str(db_path) + suffix)
-        if sidecar.exists():
+        try:
             size += sidecar.stat().st_size
+        except OSError:
+            pass
     art_dir = root / "artifacts" / db_path.stem
     if art_dir.is_dir():
-        size += sum(f.stat().st_size for f in art_dir.rglob("*") if f.is_file())
+        try:
+            artifact_paths = art_dir.rglob("*")
+            for artifact_path in artifact_paths:
+                try:
+                    if artifact_path.is_file():
+                        size += artifact_path.stat().st_size
+                except OSError:
+                    pass
+        except OSError:
+            pass
     return size
 
 
