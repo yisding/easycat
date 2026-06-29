@@ -1773,16 +1773,32 @@ def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) 
 
 
 def _promoted_agent_text(records: list[dict[str, Any]]) -> str | None:
-    """Return the turn's ``agent_final`` reply text, or ``None`` if absent."""
+    """Return a safe ``agent_final`` expected value, or ``None`` if sensitive.
+
+    ``journal promote`` prints a copy-pasteable pytest stub.  Journals can
+    contain transcripts, tool payloads, and provider text, so never echo an
+    ``agent_final`` value when the shared redaction policy would modify it or
+    still considers it sensitive after redaction.  Returning ``None`` keeps the
+    promoted bundle usable while making the stub ask the author to fill in the
+    exact expectation locally.
+    """
     for record in records:
         if record.get("name") != "agent_final":
             continue
         data = record.get("data")
+        expected: str | None = None
         if isinstance(data, Mapping) and isinstance(data.get("text"), str):
-            return data["text"]
-        text = record.get("text")
-        if isinstance(text, str):
-            return text
+            expected = data["text"]
+        else:
+            text = record.get("text")
+            if isinstance(text, str):
+                expected = text
+        if expected is None:
+            return None
+        redacted = redact_text(expected)
+        if redacted != expected or contains_unredacted_sensitive_text(redacted):
+            return None
+        return expected
     return None
 
 
@@ -2227,7 +2243,7 @@ async def _stream_follow(
         if json_output:
             # Newline-delimited JSON, one record per line (NOT a single
             # envelope) so a consumer can ``read`` the stream incrementally.
-            stdout_console.print(json.dumps(record_dict, sort_keys=False))
+            stdout_console.print(json.dumps(_redact_follow_record(record_dict), sort_keys=False))
             continue
 
         # Only the FIRST TTS byte of a turn is the milestone landmark; later
@@ -2239,6 +2255,12 @@ async def _stream_follow(
             else:
                 seen_tts_first.add(rec_turn)
         stdout_console.print(escape(_format_follow_line(record_dict)))
+
+
+def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the JSON follow projection with sensitive values redacted."""
+    redacted = redact_value(record)
+    return dict(redacted) if isinstance(redacted, Mapping) else {}
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:
