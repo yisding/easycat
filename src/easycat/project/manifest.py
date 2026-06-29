@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 # reachable. The resolver imports lazily and tolerates either a zero-arg factory
 # (called to build the agent) or an already-constructed agent object.
 _PYTHON_AGENT_PREFIX = "python:"
+_REDACTED_HOST = "[REDACTED_HOST]"
 
 
 def _resolve_python_agent(reference: str) -> Any:
@@ -256,15 +257,15 @@ class ProjectManifest:
         placeholder.
 
         The bind ``host`` can carry private addresses or internal DNS names in
-        deployments where ``/manifest`` is reachable, so it is routed through
-        the same value redaction policy as the rest of the payload. The
+        deployments where ``/manifest`` is reachable, so the public dump uses
+        an explicit placeholder instead of exposing topology. The
         secret-bearing fields (``auth``/``token``) stay redacted: only the
         ``bearer-env:NAME`` reference is ever surfaced, never a resolved token.
         """
         raw: dict[str, Any] = {
             "project": {"name": self.project.name},
             "server": {
-                "host": self.server.host,
+                "host": _REDACTED_HOST,
                 "port": self.server.port,
                 "max_sessions": self.server.max_sessions,
                 "auth_ref": self.server.auth.reference if self.server.auth else None,

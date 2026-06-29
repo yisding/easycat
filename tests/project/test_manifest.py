@@ -70,16 +70,19 @@ def test_redacted_dump_shows_reference_never_resolved_token() -> None:
     assert not contains_unredacted_sensitive_text(serialized)
 
 
-def test_redacted_dump_routes_ipv4_host_through_redaction_policy() -> None:
+@pytest.mark.parametrize(
+    "host",
+    ["127.0.0.1", "0.0.0.0", "10.0.0.5", "fd00::1", "server.internal"],
+)
+def test_redacted_dump_redacts_bind_host(host: str) -> None:
     # The bind host may expose private addresses or internal topology through
-    # the unauthenticated ``/manifest`` route, so it must use the same value
-    # redaction policy as the rest of the dump. The token reference must still
-    # be the safe ``bearer-env:NAME`` reference (never a resolved token).
+    # the unauthenticated ``/manifest`` route. The token reference must still be
+    # the safe ``bearer-env:NAME`` reference (never a resolved token).
     manifest = parse_manifest(
         {
             "project": {"name": "demo"},
             "server": {
-                "host": "127.0.0.1",
+                "host": host,
                 "auth": "bearer-env:EASYCAT_SERVE_TOKEN",
                 "port": 8080,
             },
@@ -92,9 +95,8 @@ def test_redacted_dump_routes_ipv4_host_through_redaction_policy() -> None:
     dump = manifest.to_redacted_dict()
     serialized = json.dumps(dump)
 
-    # The IPv4 bind host is routed through the shared redaction policy.
-    assert dump["server"]["host"] == "[REDACTED_PHONE]"
-    assert "127.0.0.1" not in serialized
+    assert dump["server"]["host"] == "[REDACTED_HOST]"
+    assert host not in serialized
     # The secret-bearing field stays redacted: only the env reference, no token.
     assert dump["server"]["auth_ref"] == "bearer-env:EASYCAT_SERVE_TOKEN"
     assert _RESOLVED_TOKEN not in serialized
