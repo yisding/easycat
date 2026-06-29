@@ -386,6 +386,26 @@ async def test_elevenlabs_realtime_vad_commit_without_partial_clears_pending():
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_realtime_vad_commit_without_partial_keeps_newer_audio_pending():
+    # If newer audio was streamed before an older no-partial VAD final is
+    # processed, the final must not acknowledge that trailing audio.
+    config = ElevenLabsSTTConfig(api_key="k", mode="realtime")
+    stt = ElevenLabsSTT(config)
+    stt._ws = MockWebSocket([])
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+
+    await stt._send_realtime(chunk)
+    await stt._send_realtime(chunk)
+    assert stt._audio_epoch == 2
+    assert stt._audio_pending_commit is True
+
+    stt._handle_json_message(json.loads(_el_transcript("segment one", is_final=True)))
+
+    assert stt._committed_through_epoch == 1
+    assert stt._audio_pending_commit is True
+
+
+@pytest.mark.asyncio
 async def test_elevenlabs_realtime_late_committed_does_not_drop_newer_audio(monkeypatch):
     # Race: commit_segment() then more audio is sent, then the *prior*
     # segment's committed_transcript arrives. The late ack must NOT clear the

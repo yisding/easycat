@@ -459,11 +459,14 @@ class ElevenLabsSTT(WebSocketSTTBase):
         if self._transcribed_through_epoch <= self._committed_through_epoch:
             # Some valid VAD commits arrive without a preceding
             # ``partial_transcript``. The committed transcript itself proves
-            # the server transcribed a segment; when no newer partial has
-            # bounded an older server-side commit decision, treat it as
-            # covering the current audio epoch so end_stream does not issue a
-            # redundant manual commit for a FINAL we already received.
-            self._transcribed_through_epoch = self._audio_epoch
+            # the server transcribed a segment, but not that it covered newer
+            # trailing audio streamed before this message was processed. With
+            # no partial boundary, acknowledge only the next uncommitted epoch
+            # so resumed speech stays pending for end_stream().
+            self._transcribed_through_epoch = max(
+                self._transcribed_through_epoch,
+                min(self._audio_epoch, self._committed_through_epoch + 1),
+            )
 
         self._reconcile_pending_commit_on_committed()
         if self._dropping_pending_final:
