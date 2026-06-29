@@ -184,6 +184,10 @@ class TestElevenLabsTTSValidation:
         with pytest.raises(ValueError, match="apply_text_normalization must be"):
             ElevenLabsTTSConfig(api_key="key", apply_text_normalization="sometimes")
 
+    def test_out_of_range_style_rejected(self):
+        with pytest.raises(ValueError, match="style must be in"):
+            ElevenLabsTTSConfig(api_key="key", style=1.5)
+
 
 class TestElevenLabsTTSHTTP:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
@@ -236,8 +240,25 @@ class TestElevenLabsTTSHTTP:
         assert body["model_id"] == "test-model"
         assert body["voice_settings"]["stability"] == 0.7
         assert body["voice_settings"]["similarity_boost"] == 0.8
+        # Style + speaker boost defaults are sent so callers can override them.
+        assert body["voice_settings"]["style"] == 0.0
+        assert body["voice_settings"]["use_speaker_boost"] is True
         # Default normalization mode is sent so callers can override it.
         assert body["apply_text_normalization"] == "auto"
+
+    async def test_synthesize_http_sends_style_and_speaker_boost_overrides(self):
+        provider = self._make_provider(style=0.6, use_speaker_boost=False)
+        fake_response = FakeHTTPStreamResponse([_pcm16_bytes(10)])
+        client = provider._get_http_client()
+        mock_stream = MagicMock(return_value=fake_response)
+
+        with patch.object(client, "stream", mock_stream):
+            async for _ in provider.synthesize("Test"):
+                pass
+
+        vs = mock_stream.call_args[1]["json"]["voice_settings"]
+        assert vs["style"] == 0.6
+        assert vs["use_speaker_boost"] is False
 
     async def test_synthesize_http_sends_text_normalization_override(self):
         provider = self._make_provider(apply_text_normalization="off")
@@ -364,6 +385,9 @@ class TestElevenLabsTTSWebSocket:
         init_msg = json.loads(fake_ws._sent[0])
         assert init_msg["text"] == " "
         assert "voice_settings" in init_msg
+        # Style + speaker boost travel in the WS init voice_settings too.
+        assert init_msg["voice_settings"]["style"] == 0.0
+        assert init_msg["voice_settings"]["use_speaker_boost"] is True
 
         text_msg = json.loads(fake_ws._sent[1])
         assert text_msg["text"] == "Test"

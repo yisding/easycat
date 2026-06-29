@@ -297,6 +297,61 @@ def test_elevenlabs_realtime_url_omits_keyterms_and_verbatim_by_default():
     assert "no_verbatim" not in url
 
 
+def test_elevenlabs_realtime_url_carries_language_detection_and_zero_retention():
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        realtime_include_language_detection=True,
+        enable_logging=False,
+    )
+    url = ElevenLabsSTT(config)._build_realtime_ws_url()
+    assert "include_language_detection=true" in url
+    assert "enable_logging=false" in url
+    # language_code is only delivered on *_with_timestamps events, so enabling
+    # language detection must force include_timestamps on (else it's inert).
+    assert "include_timestamps=true" in url
+
+
+def test_elevenlabs_realtime_url_omits_logging_and_language_detection_by_default():
+    # Defaults keep the server defaults: logging on, no language detection.
+    url = ElevenLabsSTT(ElevenLabsSTTConfig(api_key="k", mode="realtime"))._build_realtime_ws_url()
+    assert "enable_logging" not in url
+    assert "include_language_detection" not in url
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_sends_zero_retention_flag():
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(
+        api_key="k", mode="batch", http_client=mock_client, enable_logging=False
+    )
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    # enable_logging is a query parameter on /v1/speech-to-text, not a
+    # multipart form field (where it would be ignored).
+    call = mock_client.post.call_args
+    assert call.kwargs["params"] == {"enable_logging": "false"}
+    assert "enable_logging" not in call.kwargs.get("data", {})
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_omits_logging_flag_by_default():
+    mock_client = _make_mock_http_client("test")
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    call = mock_client.post.call_args
+    # No zero-retention requested → no enable_logging anywhere (server default).
+    assert call.kwargs.get("params") is None
+    assert "enable_logging" not in call.kwargs.get("data", {})
+
+
 def test_elevenlabs_rejects_too_many_keyterms():
     with pytest.raises(ValueError, match="at most 50 terms"):
         ElevenLabsSTTConfig(api_key="k", realtime_keyterms=[f"t{i}" for i in range(51)])
