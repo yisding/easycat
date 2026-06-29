@@ -76,6 +76,26 @@ class IVRNavigatorConfig:
     agent_retry_delay_s: float = 2.0
     hold_silence_threshold_s: float = 10.0
 
+    def __post_init__(self) -> None:
+        if isinstance(self.max_depth, bool) or not isinstance(self.max_depth, int):
+            raise ValueError("max_depth must be a positive integer")
+        if self.max_depth <= 0:
+            raise ValueError("max_depth must be a positive integer")
+        _validate_positive_number("prompt_timeout_s", self.prompt_timeout_s)
+        _validate_positive_number("agent_timeout_s", self.agent_timeout_s)
+        _validate_non_negative_number("agent_retry_delay_s", self.agent_retry_delay_s)
+        _validate_non_negative_number("hold_silence_threshold_s", self.hold_silence_threshold_s)
+
+
+def _validate_positive_number(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ValueError(f"{name} must be a positive number")
+
+
+def _validate_non_negative_number(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        raise ValueError(f"{name} must be a non-negative number")
+
 
 class DTMFDelivery:
     """Sends DTMF digits via Twilio REST API (not WebSocket).
