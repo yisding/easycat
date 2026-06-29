@@ -181,9 +181,11 @@ class RunBundle:
         for line in self.journal_ndjson.decode("utf-8", errors="replace").splitlines():
             if line.strip():
                 try:
-                    yield json.loads(line)
+                    record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(record, dict):
+                    yield record
 
     def filter_by_stage(self, stage_name: str) -> list[dict[str, Any]]:
         """Filter journal records by stage name."""

@@ -225,6 +225,18 @@ class TestRunBundleFormat:
         assert records[0]["sequence"] == 1
         assert records[1]["data"]["stage"] == "agent"
 
+    def test_records_skips_non_object_json_lines(self, tmp_path):
+        journal_lines = [
+            json.dumps(["not", "a", "record"]),
+            json.dumps("not a record"),
+            "{not valid json",
+            json.dumps({"sequence": 1, "data": {"stage": "stt"}}),
+        ]
+        bundle_path = _make_bundle_zip(tmp_path, journal_lines=journal_lines)
+        loaded = RunBundle.load(bundle_path)
+
+        assert list(loaded.records()) == [{"sequence": 1, "data": {"stage": "stt"}}]
+
     def test_filter_by_stage(self, tmp_path):
         journal_lines = [
             json.dumps({"sequence": 1, "data": {"stage": "stt"}}),
