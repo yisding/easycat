@@ -166,6 +166,24 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
     return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
 
 
+def _project_converted_pcm_bytes(
+    data: bytes,
+    *,
+    width: int,
+    channels: int,
+    target_channels: int,
+    rate: int,
+    target_rate: int,
+) -> int:
+    frames = len(data) // (width * channels)
+    if frames <= 0:
+        return 0
+    output_frames = frames
+    if rate > 0 and rate != target_rate:
+        output_frames = max(1, round(frames * target_rate / rate))
+    return output_frames * target_channels * width
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -924,6 +942,23 @@ def _coerce_frames_to_format(
         if (_audioop is None and _np is None) or width != target_width or width <= 0:
             dropped += 1
             continue
+        if channels == 2 and target_channels == 1:
+            projected_target_channels = 1
+        elif channels == target_channels:
+            projected_target_channels = target_channels
+        else:
+            dropped += 1
+            continue
+        projected_bytes = _project_converted_pcm_bytes(
+            blob,
+            width=width,
+            channels=channels,
+            target_channels=projected_target_channels,
+            rate=rate,
+            target_rate=target_rate,
+        )
+        if projected_bytes > _AUDIO_MAX_CONVERTED_BYTES:
+            raise ValueError("resampled audio frame exceeds debugger size limit")
         try:
             converted = blob
             if channels == 2 and target_channels == 1:
@@ -931,9 +966,6 @@ def _coerce_frames_to_format(
                     converted = _audioop.tomono(converted, width, 0.5, 0.5)
                 else:
                     converted = _np_tomono(converted, width)
-            elif channels != target_channels:
-                dropped += 1
-                continue
             if rate > 0 and rate != target_rate:
                 if _audioop is not None:
                     converted, _ = _audioop.ratecv(

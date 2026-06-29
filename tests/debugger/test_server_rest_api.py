@@ -574,6 +574,26 @@ def test_np_ratecv_rejects_oversized_resampled_output(monkeypatch):
         _server._np_ratecv(b"\x00\x00\x00\x00", 2, 1, 1_000, 2_000)
 
 
+def test_coerce_frames_to_format_rejects_oversized_audioop_resample(monkeypatch):
+    """The shared coercion path bounds output bytes before audioop.ratecv."""
+
+    class FailingAudioop:
+        def ratecv(self, *_args, **_kwargs):
+            raise AssertionError("audioop.ratecv should not receive oversized input")
+
+    monkeypatch.setattr(_server, "_AUDIO_MAX_CONVERTED_BYTES", 4)
+    monkeypatch.setattr(_server, "_audioop", FailingAudioop())
+    monkeypatch.setattr(_server, "_np", None)
+
+    fmt = {"sample_rate": 2000, "channels": 1, "sample_width": 2}
+    frames = [
+        (1, b"\x00\x00\x00\x00", {"sample_rate": 1000, "channels": 1, "sample_width": 2}),
+    ]
+
+    with pytest.raises(ValueError, match="exceeds debugger size limit"):
+        _coerce_frames_to_format(frames, fmt, strict=False)
+
+
 def test_collect_concat_pcm_joins_frames():
     """``_collect_concat_pcm`` returns one joined PCM blob plus the format."""
     records = [
