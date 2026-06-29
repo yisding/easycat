@@ -202,6 +202,22 @@ def test_build_latency_artifact_percentiles_skip_warmup_and_failed_samples() -> 
     assert overall["p95"] == pytest.approx(300.0)
 
 
+def test_latency_sample_from_dict_parses_string_false_warmup() -> None:
+    sample = LatencySample.from_dict(
+        {
+            "sample_id": "string-bool",
+            "condition_id": "baseline",
+            "warmup": "false",
+            "timestamp_source": "event_monotonic",
+            "stages": {"total_ms": 123.0},
+        }
+    )
+
+    assert sample.warmup is False
+    artifact = build_latency_artifact(mode=LatencyMode.SWEEP, samples=[sample])
+    assert artifact["percentiles"]["overall"]["total_ms"]["count"] == 1
+
+
 def test_build_latency_artifact_percentiles_split_by_condition() -> None:
     baseline_samples = [_make_sample(sample_id=f"b-{i}", total_ms=200.0) for i in range(5)]
     other_samples = [
