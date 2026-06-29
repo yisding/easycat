@@ -213,7 +213,7 @@ class SqliteJournal(_SqlJournalBase):
         # to crash-dumps/.  Best-effort: never block or fail journal startup.
         try:
             sweep_crashed_journals(root, skip=self._db_path)
-        except OSError:
+        except (OSError, sqlite3.DatabaseError):
             logger.debug("Crash-journal sweep failed", exc_info=True)
 
         touch_private_file(self._db_path)

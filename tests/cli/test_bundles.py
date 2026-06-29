@@ -209,6 +209,20 @@ def test_bundles_list_marks_crashed_journal_json(cli: CliRunner, tmp_path: Path)
     assert statuses["boom.sqlite"] == "crashed (uncommitted)"
 
 
+def test_bundles_list_marks_malformed_journal_live(cli: CliRunner, tmp_path: Path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    bad = journals / "bad.sqlite"
+    bad.write_text("not a sqlite database")
+
+    result = cli.invoke(app, ["bundles", "list", "--path", str(tmp_path), "--json"])
+
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    statuses = {Path(b["path"]).name: b["status"] for b in payload["bundles"]}
+    assert statuses["bad.sqlite"] == "live"
+
+
 def test_bundles_list_marks_clean_journal_as_bundle(cli: CliRunner, tmp_path: Path) -> None:
     from easycat.runtime import SqliteJournal
     from easycat.runtime.records import JournalRecordKind

@@ -126,7 +126,7 @@ def _read_only_state(db_path: Path) -> str:
     """Read-only classification of *db_path* (never opens for writing)."""
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return "skip"
     try:
         tables = {
@@ -145,7 +145,7 @@ def _read_only_state(db_path: Path) -> str:
         if not count_row or count_row[0] == 0:
             return "empty"
         return "crashed"
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return "skip"
     finally:
         conn.close()
@@ -192,7 +192,7 @@ def is_journal_live(db_path: Path) -> bool:
     """
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return True  # Unreadable -> preserve rather than risk a live DB.
     try:
         tables = {
@@ -207,7 +207,7 @@ def is_journal_live(db_path: Path) -> bool:
         ).fetchone()
         if clean is not None and clean[0] not in (None, "", "0"):
             return False  # Cleanly closed -> definitively not live.
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:
         return True
     finally:
         conn.close()
