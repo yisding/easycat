@@ -245,12 +245,16 @@ def test_voice_app_built_with_per_connection_factory(
     captured: dict[str, Any] = {}
 
     class StubVoiceApp:
-        def __init__(self, *, config_factory: Any = None, config: Any = None) -> None:
+        def __init__(
+            self, *, config_factory: Any = None, config: Any = None, dev: bool = False
+        ) -> None:
             captured["config_factory"] = config_factory
             captured["config"] = config
+            captured["dev"] = dev
 
     # The build seam now validates the config up front, which needs a key.
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("EASYCAT_DEV", raising=False)
     monkeypatch.setattr("easycat.voice_app.VoiceApp", StubVoiceApp)
 
     app = serve_mod._build_voice_app(agent_model="gpt-test", instructions="Hi.")
@@ -258,6 +262,8 @@ def test_voice_app_built_with_per_connection_factory(
     assert isinstance(app, StubVoiceApp)
     assert captured["config_factory"] is not None
     assert captured["config"] is None
+    # Dev debugger mode stays off unless EASYCAT_DEV is set.
+    assert captured["dev"] is False
 
 
 def test_build_voice_app_fails_fast_without_openai_key(
@@ -269,7 +275,9 @@ def test_build_voice_app_fails_fast_without_openai_key(
     captured: dict[str, Any] = {}
 
     class StubVoiceApp:
-        def __init__(self, *, config_factory: Any = None, config: Any = None) -> None:
+        def __init__(
+            self, *, config_factory: Any = None, config: Any = None, dev: bool = False
+        ) -> None:
             captured["built"] = True
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

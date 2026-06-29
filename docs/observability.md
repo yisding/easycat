@@ -145,6 +145,33 @@ bundle with `export_debug_bundle()`, or inspect a bundle with the `easycat` CLI.
   `127.0.0.1` unless you have a controlled, private debugging environment and
   explicitly choose `allow_remote=True`.
 
+  **Dev mode (always-available dev timeline).** For the inner development loop,
+  opt in to dev mode instead of launching the debugger by hand:
+
+  ```bash
+  EASYCAT_DEV=1 easycat serve
+  ```
+
+  ```python
+  from easycat import VoiceApp
+
+  VoiceApp(agent=agent, dev=True).run("browser")
+  ```
+
+  Dev mode (`EASYCAT_DEV=1` / `VoiceApp(dev=True)`) defaults to durable
+  debugging when you have not set `debug=` explicitly, registers every live
+  session in a process-local registry, and launches ONE loopback debugger UI per
+  process. The UI adds a **live session selector** so you can switch among
+  concurrently running browser/websocket/twilio sessions (`GET
+  /api/dev/sessions` lists them; `POST /api/dev/select` re-points every panel at
+  the selected session).
+
+  Dev mode is **purely additive** over the autolaunch guard: it is a separate,
+  explicit opt-in. `debug="full"` on its own still keeps a durable journal and
+  never opens a browser tab — durable journaling and UI autolaunch remain
+  distinct concepts. Dev mode also never opens a tab in CI / non-interactive
+  shells (same loopback + interactive-terminal guards as the autolaunch path).
+
 ### D — OpenTelemetry facade
 
 `easycat._observability` is a thin facade over the OpenTelemetry API for

@@ -1067,6 +1067,15 @@
 <header>
   <h1>EasyCat Debugger</h1>
   <span class="source" id="source-label">loading…</span>
+  <!-- Dev/prod source labeling: badge reflects whether this UI is a live dev
+       registry (EASYCAT_DEV / VoiceApp(dev=True)) or a static bundle/session. -->
+  <span class="source" id="source-mode-badge" hidden></span>
+  <!-- Live session selector (dev mode only): switch which registered session
+       every panel renders against. Hidden unless /api/dev/sessions exists. -->
+  <label id="dev-session-picker" hidden style="display:flex; align-items:center; gap:4px;">
+    session
+    <select id="dev-session-select" aria-label="Active live session"></select>
+  </label>
   <span class="live-indicator">
     <span class="live-dot" id="ws-dot"></span>
     <span id="ws-label">disconnected</span>
@@ -1385,6 +1394,9 @@ const state = {
   transcripts: [],
   annotations: {},
   issues: { issues: [], summary: {}, total: 0 },
+  // Dev mode (EASYCAT_DEV / VoiceApp(dev=True)) live-session registry selector.
+  devSessions: [],
+  devActiveSession: null,
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   recordsPage: { limit: 500, offset: 0, total: 0, pageSize: 0 },
   selectedSeq: null,
@@ -1507,13 +1519,62 @@ async function refreshAll() {
     ? `bundle ${m.name} · ${m.record_count} records · ${m.artifact_count} artifacts`
     : `live session ${m.session_id} · running=${m.is_running}`;
   $("#export-btn").hidden = !m.supports_export;
+  // Clearer dev/prod source labeling: a live dev registry surfaces a "dev"
+  // badge; a settled bundle is labeled "bundle"; a single live session "live".
+  const modeBadge = $("#source-mode-badge");
+  if (m.dev_mode) {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "dev registry";
+  } else if (m.source === "bundle") {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "bundle (read-only)";
+  } else {
+    modeBadge.hidden = false;
+    modeBadge.textContent = m.is_live ? "live session" : "session";
+  }
   $("#status-source").textContent = m.source === "bundle"
     ? `source: bundle "${m.name}"`
     : `source: live session ${m.session_id}`;
   $("#status-records").textContent = `${m.record_count ?? state.records.length} records`;
+  // Dev mode only: refresh the live-session selector.
+  await refreshDevSessions();
   // Always reload the data the active tab needs.
   await loadAllSnapshots();
   rerenderActiveTab();
+}
+
+// ── Dev mode: live session selector ──────────────────────────────
+//
+// ``/api/dev/sessions`` only exists when the debugger was launched as a dev
+// registry (EASYCAT_DEV / VoiceApp(dev=True)). A 404 means a plain
+// bundle/session source, so the selector stays hidden.
+async function refreshDevSessions() {
+  const picker = $("#dev-session-picker");
+  const select = $("#dev-session-select");
+  let data;
+  try {
+    data = await getJSON("/api/dev/sessions");
+  } catch (_e) {
+    picker.hidden = true;
+    return;
+  }
+  state.devSessions = (data && data.sessions) || [];
+  state.devActiveSession = data && data.active_session;
+  picker.hidden = false;
+  clear(select);
+  for (const s of state.devSessions) {
+    const opt = el("option", { value: s.registry_id });
+    const running = s.is_running ? "running" : "stopped";
+    opt.textContent = `${s.label} (${running})`;
+    if (s.registry_id === state.devActiveSession) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+async function selectDevSession(registryId) {
+  // Re-points every panel at the chosen session, then reloads the snapshot.
+  await postJSON("/api/dev/select", { registry_id: registryId });
+  await refreshAll();
 }
 
 async function loadAllSnapshots() {
@@ -3206,6 +3267,8 @@ document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => activateTab(t.dataset.tab));
 });
 $("#refresh-btn").addEventListener("click", () => refreshAll());
+// Dev mode: switching the selector re-points every panel at the chosen session.
+$("#dev-session-select").addEventListener("change", (e) => selectDevSession(e.target.value));
 $("#stage-filter").addEventListener("change", () => {
   state.filters.stage = $("#stage-filter").value;
   resetRecordPager();

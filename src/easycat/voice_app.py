@@ -226,12 +226,21 @@ class VoiceApp:
         ``max_sessions``) live in ``_config_kwargs`` for the transport-config
         builders, but ``EasyConfig`` and its presets have no such fields —
         forwarding them would crash the preset constructor per connection.
+
+        Dev mode (``VoiceApp(dev=True)``) defaults the session to durable
+        debugging (``debug="full"``) when no explicit ``debug`` was supplied, so
+        the dev timeline has a journal to read. Durable journaling and UI
+        autolaunch stay separate concepts: this only enables the journal; the
+        UI launch is the additive dev opt-in in :meth:`_arm_dev_debugger`.
         """
-        return {
+        forwarded = {
             key: value
             for key, value in self._config_kwargs.items()
             if key in _FORWARDED_CONFIG_FIELDS
         }
+        if self.dev and "debug" not in forwarded:
+            forwarded["debug"] = "full"
+        return forwarded
 
     # ── Public entry points ──────────────────────────────────────────
 
@@ -262,7 +271,11 @@ class VoiceApp:
         resolved = _normalize_mode(mode or "browser")
         if resolved == "local":
             await self._serve_local(**kwargs)
-        elif resolved == "browser":
+            return
+        # Per-connection server modes build sessions downstream; launch the dev
+        # registry UI once up front so the selector is ready as they register.
+        self._arm_dev_registry()
+        if resolved == "browser":
             await self._serve_browser(**kwargs)
         elif resolved == "websocket":
             await self._serve_websocket(**kwargs)
@@ -279,7 +292,11 @@ class VoiceApp:
         resolved = _normalize_mode(mode or "browser")
         if resolved == "local":
             self._run_local(**kwargs)
-        elif resolved == "browser":
+            return
+        # Per-connection server modes build sessions downstream; launch the dev
+        # registry UI once up front so the selector is ready as they register.
+        self._arm_dev_registry()
+        if resolved == "browser":
             self._run_browser(**kwargs)
         elif resolved == "websocket":
             self._run_websocket(**kwargs)
@@ -293,7 +310,31 @@ class VoiceApp:
         from easycat.config import create_session
 
         config = self._local_config(**kwargs)
-        return create_session(config)
+        session = create_session(config)
+        self._arm_dev_debugger(session)
+        return session
+
+    def _arm_dev_debugger(self, session: Session) -> None:
+        """Register *session* and launch the dev debugger UI once (dev mode only).
+
+        Purely additive over the ``_autolaunch.py`` guard (R7): this is a
+        SEPARATE trigger keyed on ``VoiceApp(dev=True)`` / ``EASYCAT_DEV`` and
+        never relaxes the ``debug='full'``-alone-never-autolaunches guarantee.
+        No-ops when dev mode is not opted in.
+        """
+        from easycat.debugger.dev import maybe_launch_dev_debugger
+
+        maybe_launch_dev_debugger(session, dev=self.dev)
+
+    def _arm_dev_registry(self) -> None:
+        """Launch the dev registry UI once for a per-connection server mode.
+
+        Additive over the ``_autolaunch.py`` guard (R7): a no-op unless dev mode
+        is opted in via ``VoiceApp(dev=True)`` / ``EASYCAT_DEV``.
+        """
+        from easycat.debugger.dev import maybe_launch_dev_registry_ui
+
+        maybe_launch_dev_registry_ui(dev=self.dev)
 
     def _local_config(self, **kwargs: Any) -> EasyConfig:
         """Resolve the local-mode :class:`EasyConfig` per construction style."""
