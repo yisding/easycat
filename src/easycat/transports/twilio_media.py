@@ -224,6 +224,8 @@ def _twilio_stream_token_valid(start: dict[str, Any], config: TwilioTransportCon
 
 
 def _parse_twilio_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.strip():
