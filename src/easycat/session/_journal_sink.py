@@ -171,8 +171,7 @@ def _redact_session_action_data(value: Any, key: str | None = None) -> Any:
     if normalized_key == "payload" and value not in ({}, None):
         return _REDACTED_SESSION_ACTION_PAYLOAD
     if normalized_key in _SESSION_ACTION_SENSITIVE_KEYS and value not in ("", None):
-        redacted = redact_value(value, key)
-        return redacted if redacted != value else _REDACTED_SESSION_ACTION_VALUE
+        return _REDACTED_SESSION_ACTION_VALUE
     if isinstance(value, dict):
         return {
             str(item_key): _redact_session_action_data(item_value, str(item_key))

@@ -376,7 +376,7 @@ async def test_journal_sink_redacts_sensitive_session_action_fields() -> None:
     )
     await bus.emit(
         SessionActionCompleted(
-            action=SendSMSAction(to="+15550001111", body="your PIN is 1234"),
+            action=SendSMSAction(to="+15550001111", body="PIN 1234 for +15551234567"),
             executor="TwilioSessionActionExecutor",
             result=SessionActionResult(metadata={"message_sid": "SM123", "to": "+15550001111"}),
         )
@@ -384,15 +384,16 @@ async def test_journal_sink_redacts_sensitive_session_action_fields() -> None:
 
     dtmf, transfer, sms = journal.read()
     assert dtmf.data["action"]["digits"] == "[REDACTED_SESSION_ACTION_VALUE]"
-    assert transfer.data["action"]["target"] == "[REDACTED_PHONE]"
+    assert transfer.data["action"]["target"] == "[REDACTED_SESSION_ACTION_VALUE]"
     assert transfer.data["action"]["plan"]["post_dial_digits"] == (
         "[REDACTED_SESSION_ACTION_VALUE]"
     )
+    assert transfer.data["action"]["plan"]["caller_id"] == "[REDACTED_SESSION_ACTION_VALUE]"
     assert transfer.data["action"]["reason"] == "escalation"
     assert sms.data["action"]["body"] == "[REDACTED_SESSION_ACTION_VALUE]"
-    assert sms.data["action"]["to"] == "[REDACTED_PHONE]"
+    assert sms.data["action"]["to"] == "[REDACTED_SESSION_ACTION_VALUE]"
     assert sms.data["result"]["metadata"]["message_sid"] == "SM123"
-    assert sms.data["result"]["metadata"]["to"] == "[REDACTED_PHONE]"
+    assert sms.data["result"]["metadata"]["to"] == "[REDACTED_SESSION_ACTION_VALUE]"
 
 
 def test_journal_sink_stores_artifact_refs_before_record() -> None:
