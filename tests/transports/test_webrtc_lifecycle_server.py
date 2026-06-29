@@ -214,6 +214,52 @@ class TestWebRTCIngressQueueOwnership:
         await transport.disconnect()
 
     @pytest.mark.asyncio
+    async def test_inbound_consume_ignores_pyav_plane_padding(self):
+        transport = WebRTCTransport()
+        target_format = transport._config.audio_format
+
+        class _StereoLayout:
+            channels = (object(), object())
+
+        class _PackedFormat:
+            is_planar = False
+            bytes = 2
+
+        class _PaddedDecodedFrame:
+            sample_rate = 48_000
+            samples = 960
+            layout = _StereoLayout()
+            format = _PackedFormat()
+
+            def __init__(self) -> None:
+                # 20 ms of valid packed stereo PCM at 48 kHz. The fake plane
+                # above mirrors PyAV's padded decoded aiortc buffers; the
+                # transport must use only these valid samples.
+                valid_pcm = bytes(960 * 2 * 2)
+                self.planes = [valid_pcm + (b"\xff" * (23_040 - len(valid_pcm)))]
+
+            def to_ndarray(self):  # pragma: no cover - must not be used
+                raise AssertionError("WebRTC inbound extraction must not require NumPy")
+
+        class _OneFrameTrack:
+            def __init__(self) -> None:
+                self._delivered = False
+
+            async def recv(self) -> object:
+                if self._delivered:
+                    raise StopAsyncIteration
+                self._delivered = True
+                return _PaddedDecodedFrame()
+
+        await transport._consume_audio(_OneFrameTrack())
+
+        chunks = [chunk async for chunk in transport.receive_audio()]
+        assert len(chunks) == 1
+        assert chunks[0].format == target_format
+        assert len(chunks[0].data) == int(target_format.bytes_per_second * 0.02)
+        assert chunks[0].duration_ms == 20
+
+    @pytest.mark.asyncio
     async def test_replacing_connected_peer_clears_wait_for_client(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
         transport = WebRTCTransport()

@@ -170,6 +170,68 @@ def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
     return snapshot
 
 
+def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
+    """Extract valid interleaved PCM16 bytes from an ``av.AudioFrame``.
+
+    ``bytes(frame.planes[0])`` can include PyAV line padding.  For decoded
+    aiortc frames that padding can be several times larger than the actual
+    samples, which makes the downstream pipeline see too much audio per RTP
+    frame.  Slice by frame metadata instead of ``to_ndarray()`` so
+    ``easycat[webrtc]`` does not need a NumPy dependency.
+    """
+    frame_rate = int(getattr(frame, "sample_rate", None) or _WEBRTC_SAMPLE_RATE)
+    layout = getattr(frame, "layout", None)
+    channels = len(getattr(layout, "channels", ()) or ()) or 1
+    frame_format = getattr(frame, "format", None)
+    sample_width = int(getattr(frame_format, "bytes", 2) or 2)
+    samples = int(getattr(frame, "samples", 0) or 0)
+    planes = list(getattr(frame, "planes", ()))
+    if not planes:
+        return b"", frame_rate, channels
+
+    is_planar = bool(getattr(frame_format, "is_planar", False))
+    if is_planar and channels > 1 and len(planes) >= channels and samples > 0:
+        raw = _interleave_audio_planes(
+            planes,
+            samples=samples,
+            channels=channels,
+            sample_width=sample_width,
+        )
+    else:
+        raw = bytes(planes[0])
+        valid_bytes = samples * channels * sample_width
+        if valid_bytes > 0:
+            raw = raw[:valid_bytes]
+    return raw, frame_rate, channels
+
+
+def _interleave_audio_planes(
+    planes: list[Any],
+    *,
+    samples: int,
+    channels: int,
+    sample_width: int,
+) -> bytes:
+    """Return interleaved bytes for planar PCM frames."""
+    plane_bytes = []
+    valid_plane_bytes = samples * sample_width
+    for plane in planes[:channels]:
+        data = bytes(plane)[:valid_plane_bytes]
+        if len(data) < valid_plane_bytes:
+            data += bytes(valid_plane_bytes - len(data))
+        plane_bytes.append(data)
+
+    interleaved = bytearray(samples * channels * sample_width)
+    offset = 0
+    for sample in range(samples):
+        start = sample * sample_width
+        end = start + sample_width
+        for channel in plane_bytes:
+            interleaved[offset : offset + sample_width] = channel[start:end]
+            offset += sample_width
+    return bytes(interleaved)
+
+
 # ── Configuration ────────────────────────────────────────────────
 
 
@@ -1499,11 +1561,10 @@ class WebRTCTransport(AudioQueueMixin):
                 if not self._is_current_peer_generation(peer_generation):
                     break
 
-                # Extract raw PCM from the av.AudioFrame.
-                # aiortc decodes Opus to s16 at 48 kHz by default.
-                raw = bytes(frame.planes[0])
-                frame_rate = frame.sample_rate or _WEBRTC_SAMPLE_RATE
-                channels = len(frame.layout.channels) if frame.layout else 1
+                # Extract raw PCM from the av.AudioFrame. aiortc decodes Opus
+                # to s16 at 48 kHz by default, but PyAV plane buffers can
+                # include padding; the helper returns only valid samples.
+                raw, frame_rate, channels = _audio_frame_pcm16_bytes(frame)
 
                 # Downmix to mono if needed.
                 if channels > 1:
