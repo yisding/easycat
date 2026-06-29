@@ -671,6 +671,29 @@ async def test_records_rejects_zero_or_negative_limit(tmp_path):
             assert resp.status == 400
 
 
+async def test_records_search_rejects_negative_offset(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.get("/api/records?q=tts&offset=-5")
+        assert resp.status == 400
+
+
+async def test_records_search_rejects_zero_or_negative_limit(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        for bad in ("0", "-1"):
+            resp = await client.get(f"/api/records?q=tts&limit={bad}")
+            assert resp.status == 400
+
+
 async def test_audio_concat_streams_wav_response(tmp_path):
     """The route should return ``Content-Type: audio/wav`` with a
     Content-Length that matches the streamed body length so browsers

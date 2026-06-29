@@ -1706,6 +1706,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         errors_only = params.get("errors") == "1"
         scan_truncated = False
         try:
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if limit is not None and limit <= 0:
+                raise ValueError("limit must be > 0")
             if query is None:
                 page, total = _filter_and_paginate(
                     source.records(),
