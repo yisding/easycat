@@ -533,6 +533,47 @@ async def test_api_audio_waveform_clamps_dimensions(tmp_path):
         assert (width, height) == (2000, 400)
 
 
+def test_collect_audio_frames_rejects_untrusted_resample_metadata(monkeypatch):
+    """Malicious bundle metadata must not expand tiny PCM blobs into huge arrays."""
+    records = [
+        {
+            "sequence": 1,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "a",
+            "data": {"stage": "stt", "sample_rate": 200_000_000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "b",
+            "data": {"stage": "stt", "sample_rate": 1, "channels": 1, "sample_width": 2},
+        },
+    ]
+    source = _audio_source(records, {"a": b"\x00\x00", "b": b"\x00\x00"})
+
+    def fail_ratecv(*_args, **_kwargs):
+        raise AssertionError("untrusted metadata reached numpy resampler")
+
+    monkeypatch.setattr(_server, "_audioop", None)
+    monkeypatch.setattr(_server, "_np", object())
+    monkeypatch.setattr(_server, "_np_ratecv", fail_ratecv)
+
+    with pytest.raises(ValueError, match="outside supported bounds"):
+        _collect_audio_frames(source, "t1", track="mic")
+
+
+def test_np_ratecv_rejects_oversized_resampled_output(monkeypatch):
+    """The numpy fallback bounds output bytes before allocating interpolation arrays."""
+    if _server._np is None:
+        pytest.skip("numpy fallback is unavailable")
+    monkeypatch.setattr(_server, "_AUDIO_MAX_CONVERTED_BYTES", 4)
+
+    with pytest.raises(ValueError, match="exceeds debugger size limit"):
+        _server._np_ratecv(b"\x00\x00\x00\x00", 2, 1, 1_000, 2_000)
+
+
 def test_collect_concat_pcm_joins_frames():
     """``_collect_concat_pcm`` returns one joined PCM blob plus the format."""
     records = [

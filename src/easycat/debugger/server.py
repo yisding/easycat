@@ -100,6 +100,30 @@ except (ImportError, RecursionError):  # pragma: no cover
     _np = None  # type: ignore[assignment]
 
 
+_AUDIO_MIN_SAMPLE_RATE = 1_000
+_AUDIO_MAX_SAMPLE_RATE = 192_000
+_AUDIO_VALID_CHANNELS = frozenset({1, 2})
+_AUDIO_VALID_SAMPLE_WIDTHS = frozenset({1, 2, 4})
+_AUDIO_MAX_CONVERTED_BYTES = 32 * 1024 * 1024
+
+
+def _valid_pcm_format(fmt: dict[str, int]) -> bool:
+    """Return whether debugger bundle PCM metadata is safe to process."""
+    return (
+        _AUDIO_MIN_SAMPLE_RATE <= fmt.get("sample_rate", 0) <= _AUDIO_MAX_SAMPLE_RATE
+        and fmt.get("channels", 0) in _AUDIO_VALID_CHANNELS
+        and fmt.get("sample_width", 0) in _AUDIO_VALID_SAMPLE_WIDTHS
+    )
+
+
+def _frame_format(data: dict[str, Any]) -> dict[str, int]:
+    return {
+        "sample_rate": int(data.get("sample_rate") or 16000),
+        "channels": int(data.get("channels") or 1),
+        "sample_width": int(data.get("sample_width") or 2),
+    }
+
+
 def _np_pcm_dtype(width: int) -> Any:
     """Return the signed little-endian numpy dtype for raw PCM samples."""
     _dtypes = {1: "int8", 2: "<i2", 4: "<i4"}
@@ -126,6 +150,9 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
     if n_frames == 0:
         return b""
     n_out = max(1, round(n_frames * outrate / inrate))
+    out_bytes = n_out * nchannels * width
+    if out_bytes > _AUDIO_MAX_CONVERTED_BYTES:
+        raise ValueError("resampled audio frame exceeds debugger size limit")
     x_in = _np.arange(n_frames)  # type: ignore[union-attr]
     x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
     if nchannels == 1:
@@ -869,13 +896,21 @@ def _coerce_frames_to_format(
     """
     blobs: list[bytes] = []
     dropped = 0
+    if not _valid_pcm_format(fmt):
+        raise ValueError("audio frame metadata outside supported bounds")
     target_rate = fmt["sample_rate"]
     target_channels = fmt["channels"]
     target_width = fmt["sample_width"]
     for _seq, blob, data in frames:
-        rate = int(data.get("sample_rate") or 0)
-        channels = int(data.get("channels") or 0)
-        width = int(data.get("sample_width") or 0)
+        frame_fmt = _frame_format(data)
+        if not _valid_pcm_format(frame_fmt):
+            if strict:
+                raise ValueError("audio frame metadata outside supported bounds")
+            dropped += 1
+            continue
+        rate = frame_fmt["sample_rate"]
+        channels = frame_fmt["channels"]
+        width = frame_fmt["sample_width"]
         if rate == target_rate and channels == target_channels and width == target_width:
             blobs.append(blob)
             continue
@@ -972,11 +1007,7 @@ def _collect_audio_frames(
 
     frames.sort(key=lambda item: item[0])
     fmt0 = frames[0][2]
-    fmt = {
-        "sample_rate": int(fmt0.get("sample_rate") or 16000),
-        "channels": int(fmt0.get("channels") or 1),
-        "sample_width": int(fmt0.get("sample_width") or 2),
-    }
+    fmt = _frame_format(fmt0)
     blobs, _dropped = _coerce_frames_to_format(frames, fmt, strict=is_tts)
     return blobs, fmt
 
