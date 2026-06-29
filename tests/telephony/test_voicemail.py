@@ -6,6 +6,8 @@ import math
 import struct
 import time
 
+import pytest
+
 from easycat.events import (
     CallAnswered,
     CallInitiated,
@@ -149,6 +151,35 @@ def _generate_silence(duration_s: float, sample_rate: int = 16000) -> bytes:
     """Generate silent PCM16 audio."""
     num_samples = int(sample_rate * duration_s)
     return b"\x00\x00" * num_samples
+
+
+class TestVoicemailDetectorConfig:
+    """Tests for voicemail detector configuration validation."""
+
+    @pytest.mark.parametrize("monologue_threshold_s", [0.0, -0.1])
+    def test_rejects_non_positive_monologue_threshold(
+        self, monologue_threshold_s: float
+    ) -> None:
+        with pytest.raises(ValueError, match="monologue_threshold_s"):
+            VoicemailDetectorConfig(monologue_threshold_s=monologue_threshold_s)
+
+    @pytest.mark.parametrize("min_duration_ms", [0, -1])
+    def test_rejects_non_positive_beep_duration(self, min_duration_ms: int) -> None:
+        with pytest.raises(ValueError, match="min_duration_ms"):
+            BeepDetectorConfig(min_duration_ms=min_duration_ms)
+
+    @pytest.mark.parametrize("sample_rate", [0, -16000])
+    def test_rejects_non_positive_beep_sample_rate(self, sample_rate: int) -> None:
+        with pytest.raises(ValueError, match="sample_rate"):
+            BeepDetectorConfig(sample_rate=sample_rate)
+
+    def test_rejects_negative_beep_energy_threshold(self) -> None:
+        with pytest.raises(ValueError, match="energy_threshold"):
+            BeepDetectorConfig(energy_threshold=-0.1)
+
+    def test_rejects_inverted_beep_frequency_range(self) -> None:
+        with pytest.raises(ValueError, match="min_frequency_hz"):
+            BeepDetectorConfig(min_frequency_hz=1200.0, max_frequency_hz=800.0)
 
 
 class TestVoicemailDetectorMonologue:

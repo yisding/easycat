@@ -119,6 +119,15 @@ class BeepDetectorConfig:
     sample_rate: int = 16000
     """Expected sample rate of input audio."""
 
+    def __post_init__(self) -> None:
+        _validate_positive_number("min_frequency_hz", self.min_frequency_hz)
+        _validate_positive_number("max_frequency_hz", self.max_frequency_hz)
+        if self.min_frequency_hz > self.max_frequency_hz:
+            raise ValueError("min_frequency_hz must not exceed max_frequency_hz")
+        _validate_positive_int("min_duration_ms", self.min_duration_ms)
+        _validate_non_negative_number("energy_threshold", self.energy_threshold)
+        _validate_positive_int("sample_rate", self.sample_rate)
+
 
 @dataclass
 class VoicemailDetectorConfig:
@@ -129,6 +138,26 @@ class VoicemailDetectorConfig:
 
     beep: BeepDetectorConfig = field(default_factory=BeepDetectorConfig)
     """Beep detection configuration."""
+
+    def __post_init__(self) -> None:
+        _validate_positive_number("monologue_threshold_s", self.monologue_threshold_s)
+        if not isinstance(self.beep, BeepDetectorConfig):
+            raise ValueError("beep must be a BeepDetectorConfig")
+
+
+def _validate_positive_int(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+def _validate_positive_number(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
+        raise ValueError(f"{name} must be a positive number")
+
+
+def _validate_non_negative_number(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        raise ValueError(f"{name} must be a non-negative number")
 
 
 class VoicemailDetector:
