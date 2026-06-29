@@ -408,12 +408,32 @@ class RunBundle:
             for name in zf.namelist():
                 _reject_traversal(name)
 
+            provider_versions = manifest_data.get("provider_versions", {})
+            config_snapshot = manifest_data.get("config_snapshot", {})
+            env_metadata = manifest_data.get("env_metadata", {})
+            for key, value in (
+                ("provider_versions", provider_versions),
+                ("config_snapshot", config_snapshot),
+                ("env_metadata", env_metadata),
+            ):
+                if not isinstance(value, dict):
+                    raise BundleValidationError(
+                        f"Bundle manifest {key} must be a JSON object",
+                        reason_code="INVALID_MANIFEST",
+                    )
+            sharing_banner = manifest_data.get("sharing_banner", "")
+            if not isinstance(sharing_banner, str):
+                raise BundleValidationError(
+                    "Bundle manifest sharing_banner must be a string",
+                    reason_code="INVALID_MANIFEST",
+                )
+
             manifest = Manifest(
                 format_version=fmt_ver,
-                provider_versions=manifest_data.get("provider_versions", {}),
-                config_snapshot=manifest_data.get("config_snapshot", {}),
-                env_metadata=manifest_data.get("env_metadata", {}),
-                sharing_banner=manifest_data.get("sharing_banner", ""),
+                provider_versions=provider_versions,
+                config_snapshot=config_snapshot,
+                env_metadata=env_metadata,
+                sharing_banner=sharing_banner,
             )
 
             # Read journal
