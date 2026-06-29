@@ -132,7 +132,8 @@ class _RetentionSweep:
             try:
                 mtime = oldest.stat().st_mtime
             except OSError:
-                self._files.pop(0)
+                missing = self._files.pop(0)
+                self._total_bytes -= self._sizes.pop(missing, 0)
                 continue
             if mtime >= cutoff:
                 break

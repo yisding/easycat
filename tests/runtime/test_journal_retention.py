@@ -38,6 +38,16 @@ def _backdate(db_path, *, age_days: float) -> None:
             os.utime(sidecar, (mtime, mtime))
 
 
+def _journal_file_bytes(db_path) -> int:
+    """Return journal DB + sidecar bytes for tests without artifacts."""
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        sidecar = type(db_path)(str(db_path) + suffix)
+        if sidecar.exists():
+            total += sidecar.stat().st_size
+    return total
+
+
 def _mark_live_pid(db_path, pid: int) -> None:
     """Stamp a closed journal with a ``live_pid`` marker for *pid*.
 
@@ -139,6 +149,38 @@ def test_age_window_tolerates_missing_file_mid_sweep(tmp_path, monkeypatch):
     removed = run_retention(tmp_path, max_age_days=14, mode="archive")
 
     # The missing file is skipped, not counted; the fresh journal survives.
+    assert removed == 0
+    assert fresh.exists()
+
+
+def test_age_window_missing_file_drops_cached_bytes_before_cap_pass(tmp_path, monkeypatch):
+    """A vanished stale candidate must not leave phantom bytes for cap pruning."""
+    stale = _seed_journal(tmp_path, "stale-sess")
+    fresh = _seed_journal(tmp_path, "fresh-sess")
+    _backdate(stale, age_days=30)
+    _backdate(fresh, age_days=1)
+    fresh_bytes = _journal_file_bytes(fresh)
+
+    original_stat = type(stale).stat
+    vanished = False
+
+    def race_stat(self, *args, **kwargs):
+        nonlocal vanished
+        if self == stale and not vanished:
+            vanished = True
+            stale.unlink(missing_ok=True)
+            raise FileNotFoundError(str(self))
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(stale), "stat", race_stat)
+
+    removed = run_retention(
+        tmp_path,
+        max_age_days=14,
+        max_bytes=fresh_bytes + 1,
+        mode="delete",
+    )
+
     assert removed == 0
     assert fresh.exists()
 
