@@ -1704,7 +1704,7 @@ def _empty_dev_source() -> DebuggerSource:
 class _DevDebuggerState:
     """Per-app dev state: the selected session and the live proxy source.
 
-    Holds a process-local :class:`SessionRegistry` and the currently selected
+    Holds a process-local :class:`SessionIndex` and the currently selected
     registry id. ``proxy_source()`` returns a single :class:`DebuggerSource`
     whose accessors resolve, on every call, against the selected session's
     source — so the standard routes (records/timeline/cost/…) follow the
@@ -1815,7 +1815,7 @@ def _make_app(
     """Build the aiohttp Application with all routes wired up.
 
     When ``registry`` is a
-    :class:`~easycat.debugger.session_registry.SessionRegistry`, the dev-mode
+    :class:`~easycat.debugger.session_registry.SessionIndex`, the dev-mode
     routes (``/api/dev/sessions``, ``/api/dev/select``) are mounted and *source*
     is replaced by a live proxy that follows the registry session the developer
     selects. All other routes are unchanged — they read through the proxy, so
@@ -2804,7 +2804,7 @@ def serve_dev_registry(
     in_thread: bool = False,
     allow_remote: bool = False,
 ) -> threading.Thread | None:
-    """Serve the dev debugger UI backed by a live :class:`SessionRegistry`.
+    """Serve the dev debugger UI backed by a live :class:`SessionIndex`.
 
     Unlike :func:`serve_session` (one fixed session), this serves a session
     *selector* over every session the process registers, so a browser/websocket

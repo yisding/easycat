@@ -837,14 +837,14 @@ class TestNoToolRegistryAfterMCP:
         # Regex patterns for broader coverage (AC2B.11 full set).
         # ``AudioRouter`` is the session-decomposition collaborator that
         # routes audio between transport and pipeline stages; it is not
-        # a tool router. ``SessionRegistry`` is the dev debugger's process-local
+        # a tool router. ``SessionIndex`` is the dev debugger's process-local
         # registry of LIVE SESSIONS (observability bookkeeping for the session
         # selector) — not an agent/MCP tool registry. Both are whitelisted here.
         regex_patterns = [
             r"class \w*Registry",
             r"class \w*Router",
         ]
-        whitelist = {"class AudioRouter", "class SessionRegistry"}
+        whitelist = {"class AudioRouter", "class SessionIndex"}
         for pattern in regex_patterns:
             result = subprocess.run(
                 ["grep", "-rE", pattern, "src/easycat/"],

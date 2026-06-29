@@ -238,11 +238,13 @@ def maybe_launch_dev_debugger(
     2. the loopback dev debugger UI is launched ONCE per process — subsequent
        sessions only register, they do not re-bind the port.
 
-    No-ops (returns ``None``) when dev mode is not opted in, when the disable
-    guard (``EASYCAT_DEBUGGER_DISABLE`` / ``PYTEST_CURRENT_TEST``) is set, or
-    when the process is non-interactive (CI, piped, no TTY) — CI must never open
-    a tab. ``launch_ui=False`` registers the session and arms the once-latch
-    without binding a port (used by the acceptance test, which mocks the launch).
+    No-ops (returns ``None``) when dev mode is not opted in or when the disable
+    guard (``EASYCAT_DEBUGGER_DISABLE``) is set. Pytest/CI/non-interactive
+    contexts suppress only the UI bind/browser launch — registration still
+    happens so headless server-mode selectors reflect live sessions. CI must
+    never open a tab. ``launch_ui=False`` registers the session and arms the
+    once-latch without binding a port (used by the acceptance test, which mocks
+    the launch).
 
     Returns the registry id when the session was registered, else ``None``.
     """
@@ -253,12 +255,13 @@ def maybe_launch_dev_debugger(
     # create_session funnel registers every session even when the UI itself is
     # suppressed in CI / non-interactive shells.
     _arm_registration()
-    if os.getenv("PYTEST_CURRENT_TEST") or _is_truthy(os.getenv(_DEV_DISABLE_ENV)):
+    if _is_truthy(os.getenv(_DEV_DISABLE_ENV)):
         return None
+    registry_id = arm_dev_session(session)
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return registry_id
     if not _interactive_context():
-        return None
-
-    registry_id = register_session(session)
+        return registry_id
 
     with _LAUNCH_LOCK:
         already_launched = _LAUNCHED

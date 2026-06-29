@@ -2,7 +2,7 @@
 
 Covers the lifecycle/correctness spine added on top of the core dev debugger:
 
-* weakref-backed, self-pruning :class:`SessionRegistry` (no dead-session leak),
+* weakref-backed, self-pruning :class:`SessionIndex` (no dead-session leak),
 * registration through the ``create_session`` funnel via ``arm_dev_session``
   (so server modes populate the selector) with unregister-on-close,
 * the ``_DevDebuggerState`` selection epoch + WS live-follow cursor reset,
@@ -61,9 +61,9 @@ class _FakeSession:
 
 
 def test_registry_prunes_after_session_collected():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     s = _FakeSession("gc-me")
     rid = reg.register(s)
     assert [x.registry_id for x in reg.list()] == [rid]
@@ -76,9 +76,9 @@ def test_registry_prunes_after_session_collected():
 
 
 def test_registry_version_bumps_on_structural_change():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     held = []  # keep refs so weakref pruning doesn't race the assertions
     v0 = reg.version()
     held.append(_FakeSession("a"))
@@ -90,9 +90,9 @@ def test_registry_version_bumps_on_structural_change():
 
 
 def test_unregister_obj_drops_only_the_matching_entry():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     a, b = _FakeSession("a"), _FakeSession("b")
     reg.register(a)
     rid_b = reg.register(b)
@@ -101,7 +101,7 @@ def test_unregister_obj_drops_only_the_matching_entry():
 
 
 def test_registry_falls_back_to_strong_ref_for_non_weakreffable():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
     class _NoWeak:
         # No __weakref__ slot -> weakref.ref raises TypeError -> strong fallback.
@@ -113,7 +113,7 @@ def test_registry_falls_back_to_strong_ref_for_non_weakreffable():
             self.turn_state = "idle"
             self.journal = None
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     rid = reg.register(_NoWeak())  # not held by the test
     gc.collect()
     # The strong fallback keeps it listed (it cannot be weakly tracked/pruned).
@@ -123,9 +123,9 @@ def test_registry_falls_back_to_strong_ref_for_non_weakreffable():
 
 
 def test_registry_concurrent_register_list_prune_is_safe():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     held: list[_FakeSession] = []
 
     def worker(i: int) -> None:
@@ -142,9 +142,9 @@ def test_registry_concurrent_register_list_prune_is_safe():
 
 
 def test_summary_surfaces_last_sequence_and_activity():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     active = _FakeSession("hot", turn_state="agent", journal=_FakeJournal([{"sequence": 7}]))
     idle = _FakeSession("cold", turn_state="idle", journal=_FakeJournal([{"sequence": 2}]))
     reg.register(active)
@@ -250,6 +250,36 @@ def test_dev_registry_ui_arms_registration_even_under_pytest(monkeypatch: pytest
     assert [x.session_id for x in list_sessions()] == ["downstream"]
 
 
+def test_create_session_registers_after_dev_registry_ui_arms(monkeypatch: pytest.MonkeyPatch):
+    """Server-mode sessions built downstream through create_session populate the selector."""
+    from easycat import EasyConfig, create_session
+    from easycat.debugger import dev as dev_mod
+    from easycat.debugger.session_registry import list_sessions
+    from easycat.stubs import (
+        ScriptedAgent,
+        ScriptedSTT,
+        ScriptedTransport,
+        ScriptedTTS,
+        ScriptedVAD,
+    )
+
+    monkeypatch.delenv("EASYCAT_DEV", raising=False)
+    assert dev_mod.maybe_launch_dev_registry_ui(dev=True, launch_ui=False) is False
+
+    session = create_session(
+        EasyConfig(
+            stt=ScriptedSTT(),
+            tts=ScriptedTTS(),
+            vad=ScriptedVAD(),
+            transport=ScriptedTransport(),
+            agent=ScriptedAgent(),
+            debug="off",
+        )
+    )
+
+    assert [item.session_id for item in list_sessions()] == [session.session_id]
+
+
 async def test_arm_dev_session_unregisters_on_close(monkeypatch: pytest.MonkeyPatch):
     """With a running loop, the watcher drops the session the moment it closes."""
     import asyncio
@@ -294,9 +324,9 @@ def test_should_reset_live_follow_pure():
 
 def test_selection_epoch_bumps_only_on_real_change():
     from easycat.debugger.server import _DevDebuggerState
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     a, b = _FakeSession("a"), _FakeSession("b")
     rid_a, rid_b = reg.register(a), reg.register(b)
     state = _DevDebuggerState(reg)
@@ -347,9 +377,9 @@ def _journal_session(session_id: str, records: list[dict]) -> _FakeSession:
 
 
 async def test_proxy_repoints_every_panel_on_select():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     a = _journal_session("alpha", [{"sequence": 1, "turn_id": "t1", "name": "a-event"}])
     b = _journal_session("beta", [{"sequence": 1, "turn_id": "t1", "name": "b-event"}])
     rid_a = reg.register(a)
@@ -373,9 +403,9 @@ async def test_proxy_repoints_every_panel_on_select():
 
 
 async def test_dev_select_validation_matrix():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     held = _FakeSession("only")
     rid = reg.register(held)
     app = _dev_app(reg)
@@ -410,9 +440,9 @@ async def test_dev_select_validation_matrix():
 
 
 async def test_dev_sessions_auto_selects_single_session():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     held = _FakeSession("solo")
     rid = reg.register(held)
     app = _dev_app(reg)
@@ -422,9 +452,9 @@ async def test_dev_sessions_auto_selects_single_session():
 
 
 async def test_dev_overview_aggregates_per_session_and_total():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    reg = SessionRegistry()
+    reg = SessionIndex()
     hot = _journal_session(
         "hot",
         [
@@ -455,9 +485,9 @@ async def test_dev_overview_aggregates_per_session_and_total():
 
 
 async def test_dev_overview_empty_is_200():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    app = _dev_app(SessionRegistry())
+    app = _dev_app(SessionIndex())
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/api/dev/overview")
         assert resp.status == 200

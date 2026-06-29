@@ -18,7 +18,7 @@ stops, or otherwise mutates the sessions it tracks. Adapting a registered
 session into the :class:`~easycat.debugger.server.DebuggerSource` the UI
 consumes is the debugger app's job, not the registry's.
 
-A monotonically increasing :meth:`SessionRegistry.version` counter bumps on
+A monotonically increasing :meth:`SessionIndex.version` counter bumps on
 every structural change (register / unregister / prune / clear) so the debugger
 can push selector updates over the live WebSocket only when something actually
 changed, instead of polling.
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "LiveSessionSummary",
-    "SessionRegistry",
+    "SessionIndex",
     "get_registry",
     "list_sessions",
     "register_session",
@@ -105,7 +105,7 @@ def _summarise(registry_id: str, session: Session, label: str) -> LiveSessionSum
     )
 
 
-class SessionRegistry:
+class SessionIndex:
     """Thread-safe process-local map of registry id -> live session (weakly held).
 
     The dev debugger serves a single instance (``get_registry()``). Each entry
@@ -262,17 +262,17 @@ def _default_label(session: Session, registry_id: str) -> str:
 # with a lock so the first ``register_session`` from a worker thread cannot race
 # a second one into building two registries.
 
-_REGISTRY: SessionRegistry | None = None
+_REGISTRY: SessionIndex | None = None
 _REGISTRY_LOCK = threading.Lock()
 
 
-def get_registry() -> SessionRegistry:
+def get_registry() -> SessionIndex:
     """Return the process-local session registry, creating it on first use."""
     global _REGISTRY
     if _REGISTRY is None:
         with _REGISTRY_LOCK:
             if _REGISTRY is None:
-                _REGISTRY = SessionRegistry()
+                _REGISTRY = SessionIndex()
     return _REGISTRY
 
 

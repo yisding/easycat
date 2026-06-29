@@ -183,6 +183,7 @@ def test_autolaunch_guard_still_blocks_debug_full(monkeypatch: pytest.MonkeyPatc
 
 def test_dev_no_op_under_ci(monkeypatch: pytest.MonkeyPatch):
     from easycat.debugger import dev as dev_mod
+    from easycat.debugger.session_registry import list_sessions
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("CI", "1")
@@ -190,8 +191,10 @@ def test_dev_no_op_under_ci(monkeypatch: pytest.MonkeyPatch):
     launches: list[int] = []
     monkeypatch.setattr(dev_mod, "_launch_dev_ui", lambda *, port: launches.append(port))
 
-    assert dev_mod.maybe_launch_dev_debugger(_FakeSession(), dev=True) is None
+    session = _FakeSession("ci")
+    assert dev_mod.maybe_launch_dev_debugger(session, dev=True) is not None
     assert launches == []
+    assert [session.session_id for session in list_sessions()] == ["ci"]
 
 
 # ── VoiceApp wiring ──────────────────────────────────────────────
@@ -257,9 +260,9 @@ def _dev_app(registry):
 
 
 async def test_dev_sessions_route_lists_and_selects():
-    from easycat.debugger.session_registry import SessionRegistry
+    from easycat.debugger.session_registry import SessionIndex
 
-    registry = SessionRegistry()
+    registry = SessionIndex()
     live = _FakeSession("live-1")  # held: the registry only weakly references it
     sid = registry.register(live, label="first")
     app = _dev_app(registry)
