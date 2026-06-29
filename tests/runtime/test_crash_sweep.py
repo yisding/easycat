@@ -108,6 +108,31 @@ def test_sweep_skips_locked_live_journal_without_raising(tmp_path) -> None:
     assert not (tmp_path / "crash-dumps" / "live.sqlite").exists()
 
 
+def test_sweep_skips_malformed_sqlite_without_raising(tmp_path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    bad = journals / "bad.sqlite"
+    bad.write_text("not a sqlite database")
+
+    assert _crashed_state(bad) == "skip"
+    assert sweep_crashed_journals(tmp_path) == 0
+    assert bad.exists()
+
+
+def test_sqlite_journal_open_ignores_malformed_sibling_journal(tmp_path) -> None:
+    journals = tmp_path / "journals"
+    journals.mkdir()
+    bad = journals / "bad.sqlite"
+    bad.write_text("not a sqlite database")
+
+    journal = SqliteJournal("fresh", data_dir=tmp_path)
+    try:
+        assert (journals / "fresh.sqlite").exists()
+        assert bad.exists()
+    finally:
+        journal.close()
+
+
 def test_sweep_skips_the_caller_owned_path(tmp_path) -> None:
     _crash_one("mine", tmp_path)
     own = tmp_path / "journals" / "mine.sqlite"
