@@ -101,9 +101,7 @@ def _normalize_dnc_number(phone: str, *, region: str | None = None) -> str:
         except _phonenumbers.NumberParseException:
             normalized = _normalize_digits_fallback(phone)
         else:
-            normalized = _phonenumbers.format_number(
-                parsed, _phonenumbers.PhoneNumberFormat.E164
-            )
+            normalized = _phonenumbers.format_number(parsed, _phonenumbers.PhoneNumberFormat.E164)
     if not _strip_to_digits(normalized):
         raise ValueError("DNC phone number must contain at least one digit")
     return normalized
