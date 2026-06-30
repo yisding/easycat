@@ -199,9 +199,7 @@ def test_dev_port_env_override_bypasses_scan(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize("raw", ["0", "-1", "70000", "not-a-port"])
-def test_dev_port_env_override_rejects_invalid_ports(
-    monkeypatch: pytest.MonkeyPatch, raw: str
-):
+def test_dev_port_env_override_rejects_invalid_ports(monkeypatch: pytest.MonkeyPatch, raw: str):
     from easycat.debugger import dev as dev_mod
 
     monkeypatch.setenv("EASYCAT_DEV_DEBUGGER_PORT", raw)
