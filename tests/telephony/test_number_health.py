@@ -148,6 +148,24 @@ class TestNumberHealthMonitor:
             monitor.stop()
 
     @pytest.mark.asyncio
+    async def test_initiated_callback_without_from_does_not_pin_empty_bucket(self) -> None:
+        """Malformed initiated callbacks must not create unreleasable empty buckets."""
+        bus = EventBus()
+        monitor = NumberHealthMonitor(bus)
+        monitor.start()
+        try:
+            await emit_call_status(
+                {"CallStatus": "initiated", "CallSid": "CA-missing-from", "To": "+1555"},
+                bus,
+            )
+
+            assert "" not in monitor._concurrent
+            assert "CA-missing-from" not in monitor._call_sid_to_number
+            assert dict(monitor._concurrent) == {}
+        finally:
+            monitor.stop()
+
+    @pytest.mark.asyncio
     async def test_untracked_sid_failure_does_not_masquerade_as_number(self) -> None:
         """A failure for an untracked SID with no number is skipped, not keyed by SID."""
         bus = EventBus()
