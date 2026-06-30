@@ -96,6 +96,13 @@ class TestParseCallStatusCallback:
         assert isinstance(result, CallEnded)
         assert result.duration_s is None
 
+    def test_completed_status_ignores_boolean_duration(self) -> None:
+        result = parse_call_status_callback(
+            {"CallStatus": "completed", "CallSid": "CA123", "Duration": True}
+        )
+        assert isinstance(result, CallEnded)
+        assert result.duration_s is None
+
     def test_busy_status(self) -> None:
         result = parse_call_status_callback(
             {"CallStatus": "busy", "CallSid": "CA123", "To": "+1555", "From": "+1999"}
