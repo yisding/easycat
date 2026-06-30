@@ -146,6 +146,32 @@ async def test_twilio_handle_start_without_custom_parameters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_twilio_handle_start_ignores_boolean_custom_parameters() -> None:
+    transport = _make_twilio_transport()
+
+    await transport._handle_start(
+        {
+            "streamSid": "MZ1",
+            "start": {
+                "callSid": "CA1",
+                "customParameters": {
+                    "From": True,
+                    "To": False,
+                    "CallerName": True,
+                    "crm_account_id": False,
+                },
+            },
+        }
+    )
+
+    assert transport.call_identity is not None
+    assert transport.call_identity.caller_number == ""
+    assert transport.call_identity.called_number == ""
+    assert transport.call_identity.display_name is None
+    assert transport.call_identity.custom_fields == {}
+
+
+@pytest.mark.asyncio
 async def test_twilio_handle_start_ignores_unsubstituted_template_parameters() -> None:
     transport = _make_twilio_transport()
     await transport._handle_start(

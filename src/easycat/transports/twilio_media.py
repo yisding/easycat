@@ -147,7 +147,9 @@ def _parse_twilio_start_identity(
     raw_params = start.get("customParameters") or {}
     if isinstance(raw_params, dict):
         for key, value in raw_params.items():
-            if isinstance(key, str) and isinstance(value, (str, int)):
+            if isinstance(key, str) and (
+                isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
+            ):
                 params[key] = str(value)
     for name in excluded_parameter_names or set():
         params.pop(name, None)
