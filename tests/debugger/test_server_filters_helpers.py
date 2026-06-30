@@ -40,6 +40,18 @@ def test_filter_records_by_sequence_range():
     assert [r["sequence"] for r in out] == [3, 4, 5, 6]
 
 
+def test_filter_records_by_sequence_range_ignores_malformed_sequence_values():
+    records = [
+        {"sequence": "2", "data": {}},
+        {"sequence": True, "data": {}},
+        {"sequence": 3, "data": {}},
+    ]
+
+    out = _filter_records(records, stage=None, turn_id=None, name=None, from_seq=1, to_seq=4)
+
+    assert [r["sequence"] for r in out] == [3]
+
+
 def test_filter_records_by_multiple_names():
     records = [
         {"sequence": 1, "name": "vad_start_speaking", "data": {}},
