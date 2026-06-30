@@ -192,3 +192,22 @@ class TestDNCNormalization:
         dnc.add("+44 20 7946 0958")  # UK, various formatting
         assert dnc.is_on_dnc("+442079460958")
         assert not dnc.is_on_dnc("+15551234567")
+
+    def test_in_memory_dnc_rejects_numbers_without_digits(self) -> None:
+        dnc = DNCList()
+
+        with pytest.raises(ValueError, match="at least one digit"):
+            dnc.add("not a phone")
+
+        assert len(dnc) == 0
+        assert not dnc.is_on_dnc("anonymous")
+
+    def test_sqlite_dnc_rejects_numbers_without_digits(self) -> None:
+        store = SQLiteDNCList(":memory:")
+
+        with pytest.raises(ValueError, match="at least one digit"):
+            store.add("not a phone")
+
+        assert len(store) == 0
+        assert not store.is_on_dnc("anonymous")
+        store.close()
