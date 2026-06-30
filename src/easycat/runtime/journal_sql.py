@@ -32,6 +32,7 @@ from easycat.runtime._private_files import (
     touch_private_file,
 )
 from easycat.runtime.crash_sweep import _copy_journal_to_crash_dump, sweep_crashed_journals
+from easycat.runtime.journal import _validate_read_limit
 from easycat.runtime.journal_retention import run_retention
 from easycat.runtime.records import (
     ErrorInfo,
@@ -117,6 +118,7 @@ class _SqlJournalBase:
             )
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        _validate_read_limit(limit)
         with self._lock:
             sql = "SELECT * FROM journal WHERE sequence >= ? ORDER BY sequence"
             params: list[Any] = [start]

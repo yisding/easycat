@@ -124,6 +124,18 @@ class TestSqliteJournalBasics:
         records = journal.read(limit=2)
         assert len(records) == 2
 
+    def test_read_rejects_negative_limit(self, journal):
+        journal.append(
+            kind=JournalRecordKind.EVENT,
+            name="event",
+            session_id="test-session",
+        )
+
+        with pytest.raises(ValueError, match="limit"):
+            journal.read(limit=-1)
+        with pytest.raises(ValueError, match="limit"):
+            ReadonlySqliteJournal(journal.db_path).read(limit=-1)
+
     def test_slice_by_kind(self, journal):
         journal.append(
             kind=JournalRecordKind.EVENT,

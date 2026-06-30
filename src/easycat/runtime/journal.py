@@ -30,6 +30,11 @@ __all__ = [
 ]
 
 
+def _validate_read_limit(limit: int | None) -> None:
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be >= 0")
+
+
 # ── Protocol ──────────────────────────────────────────────────────
 
 
@@ -116,6 +121,7 @@ class JournalView:
         self._journal = journal
 
     def read(self, start: int = 0, limit: int | None = None) -> list[JournalRecord]:
+        _validate_read_limit(limit)
         return self._journal.read(start=start, limit=limit)
 
     def slice(

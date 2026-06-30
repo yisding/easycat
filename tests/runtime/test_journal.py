@@ -6,6 +6,8 @@ import asyncio
 import logging
 import threading
 
+import pytest
+
 from easycat.runtime import InMemoryRingBuffer, JournalView, create_journal
 from easycat.runtime.records import ErrorInfo, JournalRecordKind
 from easycat.validation.redaction import REDACTED_PHONE, REDACTED_SECRET
@@ -85,6 +87,16 @@ class TestInMemoryRingBuffer:
             j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
         records = j.read(start=1, limit=3)
         assert len(records) == 3
+
+    def test_read_rejects_negative_limit(self):
+        j = InMemoryRingBuffer(capacity=100)
+        for i in range(3):
+            j.append(kind=JournalRecordKind.EVENT, name=f"e{i}", session_id="s1")
+
+        with pytest.raises(ValueError, match="limit"):
+            j.read(limit=-1)
+        with pytest.raises(ValueError, match="limit"):
+            j.snapshot().read(limit=-1)
 
     def test_slice_by_kind(self):
         j = InMemoryRingBuffer(capacity=100)
