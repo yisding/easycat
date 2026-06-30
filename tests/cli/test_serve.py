@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 import easycat.cli.serve as serve_mod
 import easycat.config as config_mod
 import easycat.integrations.agents.responses_api as responses_mod
-from easycat.cli.serve import _playground_url
+from easycat.cli.serve import _playground_url, _websocket_endpoint
 
 
 class _StubVoiceApp:
@@ -379,3 +379,11 @@ def test_playground_url_shapes() -> None:
         _playground_url("0.0.0.0", 8443, "token with/slash")
         == "http://0.0.0.0:8443/webrtc_client.html?token=token+with%2Fslash"
     )
+    assert (
+        _playground_url("2001:db8::1", 8443, "t")
+        == "http://[2001:db8::1]:8443/webrtc_client.html?token=t"
+    )
+
+
+def test_websocket_endpoint_brackets_ipv6_hosts() -> None:
+    assert _websocket_endpoint("2001:db8::1", 8765) == "ws://[2001:db8::1]:8765"
