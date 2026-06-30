@@ -397,6 +397,43 @@ class TestTwilioStreamGapDiagnostics:
 
         assert degraded == []
 
+    @pytest.mark.asyncio
+    async def test_boolean_media_metadata_breaks_gap_tracking_continuity(self) -> None:
+        event_bus = EventBus()
+        degraded: list[TransportDegraded] = []
+        event_bus.subscribe(TransportDegraded, lambda event: degraded.append(event))
+        transport = TwilioTransport(event_bus=event_bus)
+        mulaw_data = pcm16_to_mulaw(bytes(320), source_rate=8000)
+
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="2",
+                timestamp="0",
+            )
+        )
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number=True,  # type: ignore[arg-type]
+                timestamp=True,  # type: ignore[arg-type]
+            )
+        )
+        await transport._handle_message(
+            _twilio_media_msg(
+                mulaw_data,
+                "STREAM1",
+                sequence_number="4",
+                timestamp="40",
+            )
+        )
+        await _drain_transport_diagnostics(transport)
+
+        assert degraded == []
+
 
 class TestTwilioStreamLifecycleRaces:
     @pytest.mark.asyncio
