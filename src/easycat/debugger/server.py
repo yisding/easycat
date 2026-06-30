@@ -122,6 +122,9 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
     if n_frames == 0:
         return b""
     n_out = max(1, round(n_frames * outrate / inrate))
+    out_bytes = n_out * nchannels * width
+    if out_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
+        raise ValueError("resampled audio frame exceeds debugger size limit")
     x_in = _np.arange(n_frames)  # type: ignore[union-attr]
     x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
     if nchannels == 1:
@@ -133,6 +136,24 @@ def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: in
         ).ravel()
     info = _np.iinfo(dt)  # type: ignore[union-attr]
     return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
+
+
+def _project_converted_pcm_bytes(
+    data: bytes,
+    *,
+    width: int,
+    channels: int,
+    target_channels: int,
+    rate: int,
+    target_rate: int,
+) -> int:
+    frames = len(data) // (width * channels)
+    if frames <= 0:
+        return 0
+    output_frames = frames
+    if rate > 0 and rate != target_rate:
+        output_frames = max(1, round(frames * target_rate / rate))
+    return output_frames * target_channels * width
 
 
 logger = logging.getLogger(__name__)
@@ -250,6 +271,12 @@ class DebuggerSource:
     # for bundle sources and never surfaced in ``manifest()`` — the browser
     # learns it can annotate via the ``supports_annotate`` flag, never the path.
     _annotate_path: Path | None = field(default=None, repr=False)
+    # Monotonic "which session is selected" counter for dev-registry sources.
+    # The live WS loop reads it each tick and, when it advances, resets its
+    # follow-cursor and tells the UI to clear — so switching to a session whose
+    # journal sequence is *lower* than the prior one re-snapshots cleanly
+    # instead of stalling. ``None`` (every non-dev source) reads as a constant 0.
+    _selection_epoch_fn: Any | None = field(default=None, repr=False)
     is_live: bool = False
 
     def records(self) -> list[dict[str, Any]]:
@@ -292,6 +319,12 @@ class DebuggerSource:
             return self._progress_fn()
         n = len(self.records())
         return (n, n)
+
+    def selection_epoch(self) -> int:
+        """Return the dev-registry selection counter (0 for non-dev sources)."""
+        if self._selection_epoch_fn is not None:
+            return int(self._selection_epoch_fn())
+        return 0
 
     def artifact(self, ref: str) -> bytes | None:
         return self._artifact_fn(ref)
@@ -1021,6 +1054,23 @@ def _coerce_frames_to_format(
         ):
             dropped += 1
             continue
+        if channels == 2 and target_channels == 1:
+            projected_target_channels = 1
+        elif channels == target_channels:
+            projected_target_channels = target_channels
+        else:
+            dropped += 1
+            continue
+        projected_bytes = _project_converted_pcm_bytes(
+            blob,
+            width=width,
+            channels=channels,
+            target_channels=projected_target_channels,
+            rate=rate,
+            target_rate=target_rate,
+        )
+        if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
+            raise ValueError("resampled audio frame exceeds debugger size limit")
         try:
             converted = blob
             if channels == 2 and target_channels == 1:
@@ -1028,18 +1078,9 @@ def _coerce_frames_to_format(
                     converted = _audioop.tomono(converted, width, 0.5, 0.5)
                 else:
                     converted = _np_tomono(converted, width)
-            elif channels != target_channels:
-                dropped += 1
-                continue
             if rate != target_rate:
                 resample_ratio = target_rate / rate
-                estimated_size = int(len(converted) * resample_ratio) + (
-                    target_channels * target_width
-                )
-                if (
-                    resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO
-                    or estimated_size > _AUDIO_MAX_CONVERTED_FRAME_BYTES
-                ):
+                if resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO:
                     dropped += 1
                     continue
                 if _audioop is not None:
@@ -1592,17 +1633,206 @@ def _records_since(
     return batch, int(batch[-1]["sequence"])
 
 
+def _should_reset_live_follow(prev_epoch: int | None, cur_epoch: int) -> bool:
+    """Whether the WS live-follow cursor should reset (the selection changed).
+
+    Pure so it is unit-testable in isolation: resets iff a prior epoch was seen
+    and the current epoch differs (a dev-registry session switch). The first
+    tick (``prev_epoch is None``) never resets — it is the initial snapshot.
+    """
+    return prev_epoch is not None and cur_epoch != prev_epoch
+
+
+def _session_overview_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reduce one session's journal records to cheap, journal-only triage stats.
+
+    No audio decode and no issue analysis — just the per-turn rollups
+    (:func:`summarise_turns`) summed: turn count, total errors/interruptions,
+    and the wall time of the most recent turn. Powers the cross-session overview
+    strip so a developer can see which of N concurrent calls is hot or erroring.
+    """
+    turns = _summarise_turns(records)
+    error_count = sum(int(t.get("error_count", 0) or 0) for t in turns)
+    interruption_count = sum(int(t.get("interruption_count", 0) or 0) for t in turns)
+    last_turn_wall_ms = 0.0
+    if turns:
+        first_ns = turns[-1].get("first_wall_ns")
+        last_ns = turns[-1].get("last_wall_ns")
+        if isinstance(first_ns, (int, float)) and isinstance(last_ns, (int, float)):
+            last_turn_wall_ms = max(0.0, (last_ns - first_ns) / 1e6)
+    return {
+        "turn_count": len(turns),
+        "error_count": error_count,
+        "interruption_count": interruption_count,
+        "last_turn_wall_ms": round(last_turn_wall_ms, 1),
+    }
+
+
+# ── Dev-mode registry adaptation ─────────────────────────────────
+
+
+_EMPTY_DEV_SOURCE_LABEL = "no-session"
+
+
+def _empty_dev_source() -> DebuggerSource:
+    """A well-formed empty source for when no live session is selected.
+
+    Every panel renders against zero records rather than 500'ing before the
+    developer has picked a session from the selector.
+    """
+    return DebuggerSource(
+        label=_EMPTY_DEV_SOURCE_LABEL,
+        _records_fn=lambda: [],
+        _progress_fn=lambda: (0, 0),
+        _artifact_fn=lambda _ref: None,
+        _manifest_fn=lambda: {
+            "source": "dev",
+            "session_id": "",
+            "is_live": False,
+            "supports_replay": False,
+            "supports_export": False,
+            "supports_annotate": False,
+            "active_session": None,
+            "replay_entry_points": [],
+        },
+        _bundle_fn=None,
+        _replay_fn=None,
+        is_live=False,
+    )
+
+
+class _DevDebuggerState:
+    """Per-app dev state: the selected session and the live proxy source.
+
+    Holds a process-local :class:`SessionIndex` and the currently selected
+    registry id. ``proxy_source()`` returns a single :class:`DebuggerSource`
+    whose accessors resolve, on every call, against the selected session's
+    source — so the standard routes (records/timeline/cost/…) follow the
+    selector without being rebuilt.
+    """
+
+    def __init__(self, registry: Any) -> None:
+        self._registry = registry
+        self._active_id: str | None = None
+        # Bumps whenever the active session changes (explicit select OR the
+        # single-session auto-select), so the WS loop knows to reset live-follow.
+        self._selection_epoch = 0
+
+    @property
+    def registry(self) -> Any:
+        return self._registry
+
+    def selection_epoch(self) -> int:
+        return self._selection_epoch
+
+    def _set_active(self, registry_id: str | None) -> None:
+        """Point at *registry_id*, bumping the selection epoch on a real change."""
+        if registry_id != self._active_id:
+            self._active_id = registry_id
+            self._selection_epoch += 1
+
+    def select(self, registry_id: str | None) -> bool:
+        """Set the active registry id. Returns ``True`` when it resolves."""
+        if registry_id is None:
+            self._set_active(None)
+            return True
+        if self._registry.get(registry_id) is None:
+            return False
+        self._set_active(registry_id)
+        return True
+
+    def active_id(self) -> str | None:
+        # Auto-select the only running session so a single-session dev run shows
+        # data immediately without a manual selector click.
+        if self._active_id is not None and self._registry.get(self._active_id) is not None:
+            return self._active_id
+        sessions = self._registry.list()
+        if len(sessions) == 1:
+            self._set_active(sessions[0].registry_id)
+            return self._active_id
+        return None
+
+    def active_session(self) -> Any | None:
+        active = self.active_id()
+        return self._registry.get(active) if active is not None else None
+
+    def _active_source(self) -> DebuggerSource:
+        session = self.active_session()
+        if session is None:
+            return _empty_dev_source()
+        source = _session_source(session)
+        # Wire the same live-export hooks ``serve_session`` installs so the
+        # export paths work for the selected session.
+        source._export_fn = lambda s=session: _bundle_zip_from_session(s)  # type: ignore[attr-defined]
+        source._export_turn_fn = (  # type: ignore[attr-defined]
+            lambda turn_id, s=session: _turn_bundle_zip_from_session(s, turn_id)
+        )
+        return source
+
+    def proxy_source(self) -> DebuggerSource:
+        """Return a DebuggerSource that delegates to the active session source."""
+        state = self
+
+        def _manifest() -> dict[str, Any]:
+            payload = state._active_source().manifest()
+            payload["source"] = payload.get("source", "dev")
+            payload["dev_mode"] = True
+            payload["active_session"] = state.active_id()
+            return payload
+
+        proxy = DebuggerSource(
+            label="dev-registry",
+            _records_fn=lambda: state._active_source().records(),
+            _progress_fn=lambda: state._active_source().progress(),
+            _records_since_fn=lambda after, cap: state._active_source().records_since(after, cap),
+            _artifact_fn=lambda ref: state._active_source().artifact(ref),
+            _manifest_fn=_manifest,
+            _bundle_fn=lambda: state._active_source().bundle(),
+            _replay_fn=None,
+            _selection_epoch_fn=state.selection_epoch,
+            is_live=True,
+        )
+        # The export route reads these hooks off the bound source (the proxy);
+        # delegate them to the live active session via its export-aware source.
+        proxy._export_fn = lambda: getattr(  # type: ignore[attr-defined]
+            state._active_source(), "_export_fn", lambda: None
+        )()
+        proxy._export_turn_fn = lambda turn_id: getattr(  # type: ignore[attr-defined]
+            state._active_source(), "_export_turn_fn", lambda _t: None
+        )(turn_id)
+        return proxy
+
+
 # ── HTTP API ─────────────────────────────────────────────────────
 
 
-def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
-    """Build the aiohttp Application with all routes wired up."""
+def _make_app(
+    source: DebuggerSource,
+    *,
+    allow_remote: bool = False,
+    registry: Any | None = None,
+) -> Any:
+    """Build the aiohttp Application with all routes wired up.
+
+    When ``registry`` is a
+    :class:`~easycat.debugger.session_registry.SessionIndex`, the dev-mode
+    routes (``/api/dev/sessions``, ``/api/dev/select``) are mounted and *source*
+    is replaced by a live proxy that follows the registry session the developer
+    selects. All other routes are unchanged — they read through the proxy, so
+    switching the active session re-points the whole UI.
+    """
     try:
         from aiohttp import WSMsgType, web
     except ImportError as exc:  # pragma: no cover - optional dep
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
 
     static_dir = Path(__file__).parent / "static"
+
+    dev = _DevDebuggerState(registry) if registry is not None else None
+    if dev is not None:
+        # All existing routes read through ``source``; swap in the live proxy so
+        # selecting a different session re-points every panel at once.
+        source = dev.proxy_source()
 
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -1706,6 +1936,10 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         errors_only = params.get("errors") == "1"
         scan_truncated = False
         try:
+            if offset < 0:
+                raise ValueError("offset must be >= 0")
+            if limit is not None and limit <= 0:
+                raise ValueError("limit must be > 0")
             if query is None:
                 page, total = _filter_and_paginate(
                     source.records(),
@@ -2009,7 +2243,7 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         fidelity = payload.get("fidelity", "artifact")
         tool_policy = payload.get("tool_policy", "deny")
         force = bool(payload.get("force", False))
-        confirm = bool(payload.pop("confirm", False))
+        confirm = payload.pop("confirm", False) is True
         # ARTIFACT/SIMULATED with DENY/STUB are always safe; LIVE
         # fidelity, ALLOW tool policy, or force=True can re-execute
         # against live providers and need explicit confirmation so a
@@ -2239,8 +2473,37 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
         await ws.prepare(request)
         last_seq = -1
         last_pushed_seq = 0
+        last_epoch: int | None = None
+        last_sessions_version: int | None = None
         try:
             while not ws.closed:
+                # Dev-registry session switch: when the developer re-points the
+                # selector, the active session's journal sequence can be LOWER
+                # than the one we were following, which would otherwise stall the
+                # follow-cursor forever.  Reset the cursor and tell the UI to
+                # clear so the newly selected session re-snapshots from scratch.
+                cur_epoch = source.selection_epoch()
+                if _should_reset_live_follow(last_epoch, cur_epoch):
+                    last_seq = -1
+                    last_pushed_seq = 0
+                    await ws.send_json({"type": "reset", "selection_epoch": cur_epoch})
+                last_epoch = cur_epoch
+                # Dev-registry live selector: push the session list only when it
+                # actually changed (the registry's O(1) version counter bumps on
+                # register/unregister/prune), so the UI selector updates as calls
+                # come and go without polling /api/dev/sessions.
+                if dev is not None:
+                    sessions_version = dev.registry.version()
+                    if sessions_version != last_sessions_version:
+                        last_sessions_version = sessions_version
+                        await ws.send_json(
+                            {
+                                "type": "sessions",
+                                "sessions": [s.to_dict() for s in dev.registry.list()],
+                                "active_session": dev.active_id(),
+                                "selection_epoch": cur_epoch,
+                            }
+                        )
                 # Cheap O(1) growth probe — never re-reads or re-serializes
                 # the journal just to compare counts.  Only emit a snapshot
                 # when the monotonic sequence advances; the actual records
@@ -2294,6 +2557,100 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
             await ws.close()
         return ws
 
+    async def dev_sessions(_request: Any) -> Any:
+        """List the live sessions the dev registry is tracking.
+
+        Powers the UI session selector. Returns the active registry id so the
+        selector can highlight the session every other panel is showing.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        return web.json_response(
+            {
+                "sessions": [summary.to_dict() for summary in dev.registry.list()],
+                "active_session": dev.active_id(),
+            }
+        )
+
+    async def dev_select(request: Any) -> Any:
+        """Switch the active session every panel renders against.
+
+        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        on this POST. A ``null``/absent ``registry_id`` clears the selection.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001 - malformed body → 400, never 500
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "request body must be JSON"}, status=400
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "body must be a JSON object"}, status=400
+            )
+        registry_id = body.get("registry_id")
+        if registry_id is not None and not isinstance(registry_id, str):
+            return web.json_response(
+                {"error_code": "BAD_REQUEST", "message": "registry_id must be a string or null"},
+                status=400,
+            )
+        if not dev.select(registry_id):
+            return web.json_response(
+                {"error_code": "NOT_FOUND", "message": f"unknown session {registry_id!r}"},
+                status=404,
+            )
+        return web.json_response({"active_session": dev.active_id()})
+
+    async def dev_overview(_request: Any) -> Any:
+        """Cross-session triage: per-session journal stats + an aggregate strip.
+
+        At a glance: which of N concurrent live sessions is hot, idle, or
+        erroring. Journal-derived only (no audio decode); a flaky session is
+        skipped rather than 500'ing the whole strip, and zero sessions yields an
+        empty-but-200 report.
+        """
+        if dev is None:
+            return web.Response(status=404, text="dev session registry not enabled")
+        sessions_out: list[dict[str, Any]] = []
+        sessions_running = 0
+        active_turns = 0
+        errors_total = 0
+        for summary in dev.registry.list():
+            session = dev.registry.get(summary.registry_id)
+            stats = {
+                "turn_count": 0,
+                "error_count": 0,
+                "interruption_count": 0,
+                "last_turn_wall_ms": 0.0,
+            }
+            if session is not None:
+                try:
+                    stats = _session_overview_stats(_session_source(session).records())
+                except Exception:  # noqa: BLE001 - one flaky session must not 500 the strip
+                    logger.debug(
+                        "overview stats failed for %s", summary.registry_id, exc_info=True
+                    )
+            if summary.is_running:
+                sessions_running += 1
+            if summary.activity == "active":
+                active_turns += 1
+            errors_total += int(stats["error_count"])
+            sessions_out.append({**summary.to_dict(), **stats})
+        return web.json_response(
+            {
+                "summary": {
+                    "sessions_total": len(sessions_out),
+                    "sessions_running": sessions_running,
+                    "active_turns": active_turns,
+                    "errors_total": errors_total,
+                },
+                "sessions": sessions_out,
+                "active_session": dev.active_id(),
+            }
+        )
+
     app = web.Application(middlewares=[_origin_guard])
     app.router.add_get("/", index)
     app.router.add_get("/api/manifest", manifest)
@@ -2313,6 +2670,12 @@ def _make_app(source: DebuggerSource, *, allow_remote: bool = False) -> Any:
     app.router.add_get("/api/annotations", annotations)
     app.router.add_get("/api/refresh", refresh)
     app.router.add_get("/api/health", healthcheck)
+    # The dev-only registry routes are mounted only when a registry is attached
+    # (EASYCAT_DEV / VoiceApp(dev=True)); a plain bundle/session app 404s them.
+    if dev is not None:
+        app.router.add_get("/api/dev/sessions", dev_sessions)
+        app.router.add_post("/api/dev/select", dev_select)
+        app.router.add_get("/api/dev/overview", dev_overview)
     app.router.add_get("/ws", websocket)
     # Static assets directory if we ever add JS / CSS files.
     if static_dir.is_dir():
@@ -2432,6 +2795,63 @@ def serve_session(
     return thread
 
 
+def serve_dev_registry(
+    registry: Any,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    in_thread: bool = False,
+    allow_remote: bool = False,
+) -> threading.Thread | None:
+    """Serve the dev debugger UI backed by a live :class:`SessionIndex`.
+
+    Unlike :func:`serve_session` (one fixed session), this serves a session
+    *selector* over every session the process registers, so a browser/websocket
+    server fanning out many concurrent sessions exposes one UI for all of them.
+    Loopback-only by default (the journal can carry transcripts/audio); a
+    non-loopback bind requires ``allow_remote=True``.
+
+    Blocks the caller unless ``in_thread`` is set, in which case the server runs
+    on a background daemon thread and the started thread is returned.
+    """
+    _check_host(host, allow_remote)
+    # The app builds its own live proxy source from the registry; pass an empty
+    # placeholder source so the (registry-driven) proxy takes over.
+    source = _empty_dev_source()
+
+    if not in_thread:
+        _serve(
+            source,
+            host=host,
+            port=port,
+            open_browser=open_browser,
+            allow_remote=allow_remote,
+            registry=registry,
+        )
+        return None
+
+    _probe_bind(host, port)
+    thread = threading.Thread(
+        target=_serve,
+        args=(source,),
+        kwargs={
+            "host": host,
+            "port": port,
+            "open_browser": False,
+            "allow_remote": allow_remote,
+            "handle_signals": False,
+            "registry": registry,
+        },
+        daemon=True,
+        name="easycat-dev-debugger",
+    )
+    thread.start()
+    if open_browser:
+        _open_browser(f"http://{host}:{port}/")
+    return thread
+
+
 def _probe_bind(host: str, port: int) -> None:
     """Bind ``(host, port)`` once and release it so collisions surface here.
 
@@ -2504,6 +2924,7 @@ def _serve(
     open_browser: bool,
     allow_remote: bool,
     handle_signals: bool = True,
+    registry: Any | None = None,
 ) -> None:
     try:
         from aiohttp import web
@@ -2515,7 +2936,7 @@ def _serve(
     # ``webbrowser.open``) instead of popping a tab that points at a server
     # that never came up.
     _probe_bind(host, port)
-    app = _make_app(source, allow_remote=allow_remote)
+    app = _make_app(source, allow_remote=allow_remote, registry=registry)
     url = f"http://{host}:{port}/"
     logger.info("EasyCat debugger UI serving on %s (source=%s)", url, source.label)
     if open_browser:

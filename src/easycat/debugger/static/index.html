@@ -93,6 +93,49 @@
     font-size: 11px;
     font-family: var(--mono);
   }
+  /* Cross-session overview strip (dev mode): one chip per live session. */
+  #dev-overview-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 10px;
+    border-bottom: 1px solid rgba(125, 133, 151, 0.25);
+  }
+  #dev-overview-strip .ov-summary {
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+  #dev-overview-strip .ov-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(125, 133, 151, 0.4);
+    background: rgba(125, 133, 151, 0.12);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #dev-overview-strip .ov-chip.active { border-color: var(--green); }
+  #dev-overview-strip .ov-chip.has-errors {
+    border-color: var(--red);
+    background: rgba(224, 99, 90, 0.16);
+    color: var(--red);
+  }
+  #dev-overview-strip .ov-chip.stopped { opacity: 0.5; }
+  #dev-overview-strip .ov-chip .ov-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  #dev-overview-strip .ov-chip.running .ov-dot { background: var(--green); }
+  #dev-overview-strip .ov-chip.active-turn .ov-dot { background: #f0b429; }
   .live-dot {
     width: 8px;
     height: 8px;
@@ -1067,6 +1110,24 @@
 <header>
   <h1>EasyCat Debugger</h1>
   <span class="source" id="source-label">loading…</span>
+  <!-- Dev/prod source labeling: badge reflects whether this UI is a live dev
+       registry (EASYCAT_DEV / VoiceApp(dev=True)) or a static bundle/session. -->
+  <span class="source" id="source-mode-badge" hidden></span>
+  <!-- Live session selector (dev mode only): switch which registered session
+       every panel renders against. Hidden unless /api/dev/sessions exists.
+       Updates live over the WebSocket as sessions come and go; ``[``/``]``
+       cycle running sessions and "follow newest" auto-selects new calls. -->
+  <span id="dev-session-picker" hidden style="display:flex; align-items:center; gap:6px;">
+    <label style="display:flex; align-items:center; gap:4px;">
+      session
+      <select id="dev-session-select" aria-label="Active live session"></select>
+    </label>
+    <input id="dev-session-filter" type="search" placeholder="filter…"
+           aria-label="Filter live sessions" style="width:90px;" />
+    <label style="display:flex; align-items:center; gap:3px;" title="Auto-select the newest running session">
+      <input id="dev-follow-newest" type="checkbox" /> follow newest
+    </label>
+  </span>
   <span class="live-indicator">
     <span class="live-dot" id="ws-dot"></span>
     <span id="ws-label">disconnected</span>
@@ -1075,6 +1136,10 @@
   <button id="export-btn" hidden>↓ Export bundle</button>
   <button id="refresh-btn">⟳ Refresh</button>
 </header>
+<!-- Cross-session overview strip (dev mode only): one chip per live session,
+     colored by error count, click to switch. Hidden unless /api/dev/overview
+     exists. Powered by /api/dev/overview, refreshed on each WS snapshot. -->
+<div id="dev-overview-strip" hidden></div>
 <nav class="tabbar" role="tablist">
   <div class="tab active" data-tab="overview" role="tab">Overview</div>
   <div class="tab" data-tab="timeline" role="tab">Timeline</div>
@@ -1385,6 +1450,11 @@ const state = {
   transcripts: [],
   annotations: {},
   issues: { issues: [], summary: {}, total: 0 },
+  // Dev mode (EASYCAT_DEV / VoiceApp(dev=True)) live-session registry selector.
+  devSessions: [],
+  devActiveSession: null,
+  devFollowNewest: false,
+  devSessionFilter: "",
   filters: { stage: "", turn: null, name: "", query: "", regex: false, from: null, to: null, errorsOnly: false },
   recordsPage: { limit: 500, offset: 0, total: 0, pageSize: 0 },
   selectedSeq: null,
@@ -1507,13 +1577,152 @@ async function refreshAll() {
     ? `bundle ${m.name} · ${m.record_count} records · ${m.artifact_count} artifacts`
     : `live session ${m.session_id} · running=${m.is_running}`;
   $("#export-btn").hidden = !m.supports_export;
+  // Clearer dev/prod source labeling: a live dev registry surfaces a "dev"
+  // badge; a settled bundle is labeled "bundle"; a single live session "live".
+  const modeBadge = $("#source-mode-badge");
+  if (m.dev_mode) {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "dev registry";
+  } else if (m.source === "bundle") {
+    modeBadge.hidden = false;
+    modeBadge.textContent = "bundle (read-only)";
+  } else {
+    modeBadge.hidden = false;
+    modeBadge.textContent = m.is_live ? "live session" : "session";
+  }
   $("#status-source").textContent = m.source === "bundle"
     ? `source: bundle "${m.name}"`
     : `source: live session ${m.session_id}`;
   $("#status-records").textContent = `${m.record_count ?? state.records.length} records`;
+  // Dev mode only: refresh the live-session selector.
+  await refreshDevSessions();
   // Always reload the data the active tab needs.
   await loadAllSnapshots();
   rerenderActiveTab();
+}
+
+// ── Dev mode: live session selector + cross-session overview ─────
+//
+// ``/api/dev/sessions`` only exists when the debugger was launched as a dev
+// registry (EASYCAT_DEV / VoiceApp(dev=True)). A 404 means a plain
+// bundle/session source, so the selector + overview strip stay hidden. The
+// selector also updates live over the WebSocket (``{type:'sessions'}``) as
+// calls come and go, so it is never stale between manual refreshes.
+async function refreshDevSessions() {
+  let data;
+  try {
+    data = await getJSON("/api/dev/sessions");
+  } catch (_e) {
+    $("#dev-session-picker").hidden = true;
+    return;
+  }
+  renderDevSessions(data);
+  await refreshDevOverview();
+}
+
+// Pure data-in -> DOM-out render of the selector. Reused by the GET path and
+// the WebSocket push so both stay in sync. Skips a rebuild while the developer
+// has the <select> focused (mid-interaction) so it never clobbers an open
+// dropdown; the filter box narrows the listed sessions by label/id substring.
+function renderDevSessions(data) {
+  const picker = $("#dev-session-picker");
+  const select = $("#dev-session-select");
+  state.devSessions = (data && data.sessions) || [];
+  state.devActiveSession = data && data.active_session;
+  picker.hidden = false;
+  if (document.activeElement === select) return;  // don't clobber an open list
+  if (state.devFollowNewest) _applyFollowNewest();
+  const filter = (state.devSessionFilter || "").toLowerCase();
+  const shown = state.devSessions.filter((s) =>
+    !filter || `${s.label} ${s.session_id}`.toLowerCase().includes(filter));
+  clear(select);
+  if (shown.length === 0) {
+    const opt = el("option", { value: "" },
+      state.devSessions.length ? "no match" : "no live sessions yet — start a call");
+    opt.disabled = true;
+    select.appendChild(opt);
+    return;
+  }
+  for (const s of shown) {
+    const opt = el("option", { value: s.registry_id });
+    // ▶ active (turn in flight) · ● running idle · ○ stopped. Per-session error
+    // counts live on the overview strip (the sessions payload stays lightweight).
+    const mark = !s.is_running ? "○" : (s.activity === "active" ? "▶" : "●");
+    opt.textContent = `${mark} ${s.label}`;
+    if (s.registry_id === state.devActiveSession) opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
+// Cross-session overview strip: one chip per live session colored by error
+// count, plus an aggregate summary. ``/api/dev/overview`` 404s on a non-dev
+// source, so the strip simply stays hidden there.
+async function refreshDevOverview() {
+  let data;
+  try {
+    data = await getJSON("/api/dev/overview");
+  } catch (_e) {
+    $("#dev-overview-strip").hidden = true;
+    return;
+  }
+  renderDevOverview(data);
+}
+
+function renderDevOverview(data) {
+  const strip = $("#dev-overview-strip");
+  const sessions = (data && data.sessions) || [];
+  const summary = (data && data.summary) || {};
+  clear(strip);
+  if (sessions.length === 0) { strip.hidden = true; return; }
+  strip.hidden = false;
+  strip.appendChild(el("span", { class: "ov-summary" },
+    `${summary.sessions_running || 0}/${summary.sessions_total || 0} live · ` +
+    `${summary.active_turns || 0} active · ${summary.errors_total || 0} err`));
+  for (const s of sessions) {
+    const cls = ["ov-chip"];
+    if (s.registry_id === data.active_session) cls.push("active");
+    if (s.is_running) cls.push("running");
+    if (s.activity === "active") cls.push("active-turn");
+    if (!s.is_running) cls.push("stopped");
+    if (s.error_count) cls.push("has-errors");
+    const chip = el("span", { class: cls.join(" "), title: `${s.turn_count || 0} turns` });
+    chip.appendChild(el("span", { class: "ov-dot" }));
+    const errors = s.error_count ? ` ⚠${s.error_count}` : "";
+    chip.appendChild(el("span", {}, `${s.label}${errors}`));
+    chip.addEventListener("click", () => selectDevSession(s.registry_id));
+    strip.appendChild(chip);
+  }
+}
+
+// "Follow newest": auto-select the highest-id running session so a freshly
+// started call takes over the panels without a manual click.
+function _applyFollowNewest() {
+  const running = state.devSessions.filter((s) => s.is_running);
+  if (running.length === 0) return;
+  const newest = running.reduce((a, b) =>
+    (_idNum(b.registry_id) > _idNum(a.registry_id) ? b : a));
+  if (newest.registry_id !== state.devActiveSession) selectDevSession(newest.registry_id);
+}
+
+function _idNum(registryId) {
+  const n = parseInt(String(registryId).replace(/^s/, ""), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// ``[`` / ``]`` cycle the active session among the running ones (most recent
+// last), so a developer juggling several live calls switches without the mouse.
+function _cycleDevSession(step) {
+  const running = state.devSessions.filter((s) => s.is_running);
+  if (running.length === 0) return;
+  const idx = running.findIndex((s) => s.registry_id === state.devActiveSession);
+  const next = running[(idx + step + running.length) % running.length];
+  if (next && next.registry_id !== state.devActiveSession) selectDevSession(next.registry_id);
+}
+
+async function selectDevSession(registryId) {
+  // Re-points every panel at the chosen session, then reloads the snapshot.
+  await postJSON("/api/dev/select", { registry_id: registryId });
+  await refreshAll();
 }
 
 async function loadAllSnapshots() {
@@ -3123,6 +3332,10 @@ function _scheduleSnapshotRefresh() {
   setTimeout(() => {
     _snapshotPending = false;
     loadAllSnapshots().then(rerenderActiveTab).catch(() => { /* swallow */ });
+    // Keep the dev selector badges + cross-session overview live as turns and
+    // errors accumulate, not just when the session set structurally changes.
+    // No-op (404, cheap) on a plain bundle/session source.
+    refreshDevSessions().catch(() => { /* swallow */ });
   }, 750);
 }
 
@@ -3157,6 +3370,16 @@ function connectWS() {
         _scheduleSnapshotRefresh();
       } else if (msg.type === "records") {
         _appendLiveRecords(msg.records);
+      } else if (msg.type === "reset") {
+        // Dev-registry session switch: clear the live buffer so the newly
+        // selected session re-snapshots from scratch instead of appending to
+        // the previous session's tail.
+        state.liveRecords = [];
+        if (state.activeTab === "live") renderLiveView();
+      } else if (msg.type === "sessions") {
+        // Live selector update pushed when the registry changed — no poll.
+        renderDevSessions(msg);
+        refreshDevOverview();
       }
     } catch { /* ignore malformed */ }
   });
@@ -3206,6 +3429,22 @@ document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => activateTab(t.dataset.tab));
 });
 $("#refresh-btn").addEventListener("click", () => refreshAll());
+// Dev mode: switching the selector re-points every panel at the chosen session.
+$("#dev-session-select").addEventListener("change", (e) => selectDevSession(e.target.value));
+$("#dev-session-filter").addEventListener("input", (e) => {
+  state.devSessionFilter = e.target.value || "";
+  renderDevSessions({ sessions: state.devSessions, active_session: state.devActiveSession });
+});
+$("#dev-follow-newest").addEventListener("change", (e) => {
+  state.devFollowNewest = !!e.target.checked;
+  if (state.devFollowNewest) _applyFollowNewest();
+});
+// ``[`` / ``]`` cycle running dev sessions (ignored while typing in a field).
+document.addEventListener("keydown", (e) => {
+  if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (e.key === "[") _cycleDevSession(-1);
+  else if (e.key === "]") _cycleDevSession(1);
+});
 $("#stage-filter").addEventListener("change", () => {
   state.filters.stage = $("#stage-filter").value;
   resetRecordPager();

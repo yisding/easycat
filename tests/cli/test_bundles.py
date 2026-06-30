@@ -15,7 +15,12 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import _format_follow_line, _format_size, _stream_follow
+from easycat.cli.debug.bundles import (
+    _format_follow_line,
+    _format_size,
+    _redact_follow_record,
+    _stream_follow,
+)
 from easycat.debug.bundle import FORMAT_VERSION
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime.records import ErrorInfo, JournalRecord, TimingInfo
@@ -390,6 +395,34 @@ def test_format_follow_line_gap_marker() -> None:
     # A synthetic BufferOverflow gap notice renders as a one-line marker.
     line = _format_follow_line({"sequence": 7, "data": {"dropped_from": "follow_gap", "gap": 3}})
     assert line == "-- gap: 3 records dropped --"
+
+
+def test_journal_follow_json_record_redacts_sensitive_payloads() -> None:
+    record = {
+        "sequence": 1,
+        "turn_id": "t1",
+        "name": "agent_final",
+        "data": {
+            "text": "my account is overdrawn",
+            "delta": "please summarize this balance",
+            "api_key": "sk-live-secret-value",
+        },
+        "error": {
+            "type": "ProviderError",
+            "message": "Authorization: Bearer sk-live-secret-value",
+        },
+    }
+
+    redacted = _redact_follow_record(record)
+    rendered = json.dumps(redacted)
+
+    assert "my account is overdrawn" not in rendered
+    assert "please summarize this balance" not in rendered
+    assert "sk-live-secret-value" not in rendered
+    assert redacted["data"]["text"] == "[REDACTED_TRANSCRIPT]"
+    assert redacted["data"]["delta"] == "[REDACTED_TRANSCRIPT]"
+    assert redacted["data"]["api_key"] == "[REDACTED_SECRET]"
+    assert "[REDACTED_SECRET]" in rendered
 
 
 def test_format_follow_line_milestone_and_audio_bar() -> None:
@@ -800,8 +833,8 @@ def test_diff_json_flags_regression(cli: CliRunner, tmp_path: Path) -> None:
 
 
 def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> None:
-    """A phone number a caller said aloud is redacted in the diff transcript."""
-    phone = "Call me at 415-555-0199 please"
+    """Free-form caller text is suppressed in the diff transcript."""
+    sensitive_text = "Call me at 415-555-0199 about diagnosis BLUE-ORCHID"
 
     def _with_transcript(turn_id: str, session: str, text: str) -> list[JournalRecord]:
         chain: list[JournalRecord] = []
@@ -814,18 +847,23 @@ def test_diff_json_redacts_transcript_text(cli: CliRunner, tmp_path: Path) -> No
 
     bundle_a = tmp_path / "before.zip"
     bundle_b = tmp_path / "after.zip"
-    export_debug_bundle(_FakeSession(records=_with_transcript("t1", "sa", phone)), bundle_a)
+    export_debug_bundle(
+        _FakeSession(records=_with_transcript("t1", "sa", sensitive_text)), bundle_a
+    )
     export_debug_bundle(
         _FakeSession(records=_with_transcript("t1", "sb", "Different words")), bundle_b
     )
 
     result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--json"])
     assert result.exit_code == 0, result.stderr
-    # The raw phone number must never reach stdout.
+    # The raw transcript body must never reach stdout, even for text that
+    # substring redaction cannot recognize as sensitive.
     assert "415-555-0199" not in result.stdout
+    assert "diagnosis BLUE-ORCHID" not in result.stdout
     payload = json.loads(result.stdout)
     (turn,) = payload["turns"]
-    assert "415-555-0199" not in turn["transcript"]["user_a"]
+    assert turn["transcript"]["user_a"] == "[REDACTED_TRANSCRIPT]"
+    assert turn["transcript"]["user_b"] == "[REDACTED_TRANSCRIPT]"
     # Transcript drift is still detected after redaction.
     assert turn["transcript"]["changed"] is True
 
@@ -2035,6 +2073,38 @@ def test_promote_writes_replayable_single_turn_slice(cli: CliRunner, tmp_path: P
     assert "assert_no_error" in result.stdout
     assert "assert_turn_completed(bundle, 't1')" in result.stdout
     assert "expected='hello there'" in result.stdout
+
+
+def test_promote_stub_omits_sensitive_expected_text(cli: CliRunner, tmp_path: Path) -> None:
+    src = tmp_path / "src.zip"
+    out = tmp_path / "t1.zip"
+    records = [
+        {
+            "sequence": 1,
+            "kind": "event",
+            "name": "turn_started",
+            "turn_id": "t1",
+            "session_id": "s",
+        },
+        {
+            "sequence": 2,
+            "kind": "event",
+            "name": "agent_final",
+            "turn_id": "t1",
+            "session_id": "s",
+            "data": {"stage": "agent", "text": "PII token=tok-123456789012"},
+        },
+        {"sequence": 3, "kind": "event", "name": "turn_ended", "turn_id": "t1", "session_id": "s"},
+    ]
+    _make_bundle(src, records, provider_versions={})
+
+    result = cli.invoke(app, ["journal", "promote", str(src), "t1", "--out", str(out), "--json"])
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+
+    assert "tok-123456789012" not in result.stdout
+    assert "TODO: fill in the expected agent reply" in payload["stub"]
+    assert "assert_exact_match(bundle, expected='PII" not in payload["stub"]
 
 
 def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:

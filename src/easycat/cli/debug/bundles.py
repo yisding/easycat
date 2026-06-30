@@ -1565,20 +1565,21 @@ def latency_command(
 
 # ── `easycat diff` ───────────────────────────────────────────────
 
-# Transcript fields whose free-form text must be redacted before any diff
-# row is emitted (JSON envelope or human table).  A regressed milestone is
-# just numbers; only the transcript can carry a phone number or secret a
-# caller said aloud.
+# Transcript fields whose free-form text must be suppressed before any diff
+# result is emitted (JSON envelope or human table).  A regressed milestone or
+# cost delta is just numbers; transcript bodies can carry arbitrary sensitive
+# caller/agent text, so substring redaction is not sufficient here.
 _DIFF_TRANSCRIPT_TEXT_FIELDS = ("user_a", "user_b", "agent_a", "agent_b")
 
 
 def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Redact every transcript string in a ``diff_bundles`` result in place.
+    """Suppress every transcript body in a ``diff_bundles`` result in place.
 
-    The diff carries raw user/agent transcripts so the ``changed`` flag is
-    meaningful, but the CLI must never print unredacted caller text.  Each
-    transcript cell's text fields are passed through :func:`redact_text`;
-    milestones and the summary are numbers and pass through untouched.
+    The diff engine carries raw user/agent transcripts only long enough to
+    compute the ``changed`` flag.  Before any CLI output, replace those bodies
+    with a constant marker so arbitrary conversation content cannot leak to
+    stdout, CI logs, or shared JSON artifacts.  Milestones, costs, and the
+    summary are numbers and pass through untouched.
     """
     for turn in result.get("turns", ()):
         transcript = turn.get("transcript")
@@ -1587,7 +1588,7 @@ def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
         for field_name in _DIFF_TRANSCRIPT_TEXT_FIELDS:
             value = transcript.get(field_name)
             if isinstance(value, str) and value:
-                transcript[field_name] = redact_text(value)
+                transcript[field_name] = REDACTED_TRANSCRIPT
     return result
 
 
@@ -1783,16 +1784,32 @@ def _promote_test_stub(*, bundle_name: str, turn_id: str, expected: str | None) 
 
 
 def _promoted_agent_text(records: list[dict[str, Any]]) -> str | None:
-    """Return the turn's ``agent_final`` reply text, or ``None`` if absent."""
+    """Return a safe ``agent_final`` expected value, or ``None`` if sensitive.
+
+    ``journal promote`` prints a copy-pasteable pytest stub.  Journals can
+    contain transcripts, tool payloads, and provider text, so never echo an
+    ``agent_final`` value when the shared redaction policy would modify it or
+    still considers it sensitive after redaction.  Returning ``None`` keeps the
+    promoted bundle usable while making the stub ask the author to fill in the
+    exact expectation locally.
+    """
     for record in records:
         if record.get("name") != "agent_final":
             continue
         data = record.get("data")
+        expected: str | None = None
         if isinstance(data, Mapping) and isinstance(data.get("text"), str):
-            return data["text"]
-        text = record.get("text")
-        if isinstance(text, str):
-            return text
+            expected = data["text"]
+        else:
+            text = record.get("text")
+            if isinstance(text, str):
+                expected = text
+        if expected is None:
+            return None
+        redacted = redact_text(expected)
+        if redacted != expected or contains_unredacted_sensitive_text(redacted):
+            return None
+        return expected
     return None
 
 
@@ -2300,7 +2317,7 @@ def _redact_follow_record(record: Mapping[str, Any]) -> dict[str, Any]:
     data = redacted.get("data")
     if isinstance(data, dict):
         for key in _FOLLOW_FREE_TEXT_KEYS:
-            if data.get(key):
+            if key in data:
                 data[key] = REDACTED_TRANSCRIPT
     return redacted
 
