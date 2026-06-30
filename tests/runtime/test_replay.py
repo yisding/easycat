@@ -366,6 +366,18 @@ class TestReplayRunner:
         # committable validation, so the walk simply slices [3, 5].
         assert [f.sequence for f in result.frames] == [3, 4, 5]
 
+    def test_skips_records_with_malformed_sequences(self, tmp_path):
+        records = [
+            {"sequence": "2", "kind": "event", "name": "bad-string"},
+            {"sequence": True, "kind": "event", "name": "bad-bool"},
+            {"sequence": 3, "kind": "event", "name": "ok"},
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+
+        result = bundle.replay(_spec(from_sequence=1, to_sequence=4))
+
+        assert [f.sequence for f in result.frames] == [3]
+
 
 # ── Version-match policy on ReplayRunner ─────────────────────────
 
@@ -518,6 +530,26 @@ class TestToolPolicyEnforcement:
             bundle.replay(_spec(tool_policy=ToolReplayPolicy.DENY))
         assert "get_weather" in str(exc_info.value)
         assert "c1" in str(exc_info.value)
+
+    def test_deny_blocks_tool_record_with_malformed_sequence(self, tmp_path):
+        records = [
+            {
+                "sequence": "2",
+                "kind": "framework_transition",
+                "name": "tool_call",
+                "data": {
+                    "phase": "start",
+                    "tool_name": "get_weather",
+                    "tool_call_id": "c1",
+                },
+            },
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+
+        with pytest.raises(ReplaySideEffectBlocked) as exc_info:
+            bundle.replay(_spec(tool_policy=ToolReplayPolicy.DENY))
+        assert "get_weather" in str(exc_info.value)
+        assert "2" in str(exc_info.value)
 
     def test_stub_records_substitution(self, tmp_path):
         bundle = self._bundle_with_tool(tmp_path)

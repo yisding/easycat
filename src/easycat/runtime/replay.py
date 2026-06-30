@@ -286,6 +286,13 @@ def mask_nondeterministic(
     return _walk(copy.deepcopy(value), ())
 
 
+def _record_sequence(record: dict[str, Any]) -> int | None:
+    seq = record.get("sequence")
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        return None
+    return seq
+
+
 # ── Provider version match ───────────────────────────────────────
 
 
@@ -498,8 +505,11 @@ class ReplayRunner:
 
             input_ref = record.get("input_ref")
             output_ref = record.get("output_ref")
+            sequence = _record_sequence(record)
+            if sequence is None:
+                continue
             frame = ReplayFrame(
-                sequence=int(record.get("sequence") or 0),
+                sequence=sequence,
                 stage=frame_stage,
                 kind=str(record.get("kind") or ""),
                 name=name,
@@ -529,8 +539,10 @@ class ReplayRunner:
         low = self._spec.from_sequence
         high = self._spec.to_sequence
         for record in self._bundle.records():
-            seq = record.get("sequence")
+            seq = _record_sequence(record)
             if seq is None:
+                if _is_tool_phase(record):
+                    yield record
                 continue
             if low is not None and seq < low:
                 continue
