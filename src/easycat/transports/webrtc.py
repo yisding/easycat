@@ -338,6 +338,12 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_auth_token(token: str | None) -> str | None:
+    if token is None or not token.strip():
+        return None
+    return token
+
+
 def _is_loopback_host(host: str) -> bool:
     normalized = host.strip().strip("[]").lower()
     if normalized == "localhost":
@@ -408,7 +414,7 @@ def webrtc_transport_config_from_env(
         port=int(os.getenv(port_env, "8080")),
         ice_servers=webrtc_ice_servers_from_env(),
         static_dir=static_dir,
-        auth_token=os.getenv(auth_token_env) or None,
+        auth_token=_normalize_auth_token(os.getenv(auth_token_env)),
         max_sessions=int(os.getenv(max_sessions_env, "64")),
         expose_ice_credentials=_env_flag(expose_ice_credentials_env),
     )
@@ -460,9 +466,10 @@ async def serve_webrtc_config_sessions(
     # asymmetry: this helper previously raised unconditionally with no escape
     # hatch). A configured ``auth_token`` satisfies the guard; the escape hatch
     # mirrors the WebSocket helper.
+    auth_token = _normalize_auth_token(settings.auth_token)
     bind_auth = (
-        BearerTokenAuth(token=settings.auth_token, allow_query_token=settings.allow_query_token)
-        if settings.auth_token is not None
+        BearerTokenAuth(token=auth_token, allow_query_token=settings.allow_query_token)
+        if auth_token is not None
         else None
     )
     enforce_bind_guard(
@@ -930,7 +937,7 @@ class WebRTCTransport(AudioQueueMixin):
         accepted ONLY when ``allow_query_token=True`` (default off — the bundled
         WebRTC client sends the ``Authorization`` header and is unaffected).
         """
-        token = self._config.auth_token
+        token = _normalize_auth_token(self._config.auth_token)
         if token is None:
             return True
         value = getattr(request, "headers", {}).get("Authorization")
@@ -960,7 +967,7 @@ class WebRTCTransport(AudioQueueMixin):
         validation/demo servers and same-origin browser requests. This keeps a
         non-loopback signaling server from exposing an unauthenticated append sink.
         """
-        if self._config.auth_token is not None:
+        if _normalize_auth_token(self._config.auth_token) is not None:
             return self._request_authorized(request)
 
         if not _is_loopback_host(self._config.host):
@@ -1031,7 +1038,8 @@ class WebRTCTransport(AudioQueueMixin):
         if self._connected:
             return
 
-        if not _is_loopback_host(self._config.host) and self._config.auth_token is None:
+        auth_token = _normalize_auth_token(self._config.auth_token)
+        if not _is_loopback_host(self._config.host) and auth_token is None:
             raise ValueError(
                 "WebRTCTransportConfig.auth_token is required when binding WebRTC "
                 "signaling to a non-loopback host"
