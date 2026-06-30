@@ -52,6 +52,8 @@ _DEV_ENV = "EASYCAT_DEV"
 _DEV_DISABLE_ENV = "EASYCAT_DEBUGGER_DISABLE"
 _DEV_PORT_ENV = "EASYCAT_DEV_DEBUGGER_PORT"
 _DEFAULT_DEV_PORT = 8765
+_MIN_TCP_PORT = 1
+_MAX_TCP_PORT = 65535
 # How many consecutive loopback ports to try when the default is taken, so a
 # second dev process (or anything sitting on 8765) gets the next free port
 # instead of permanently suppressing the UI.
@@ -347,17 +349,22 @@ def _find_free_dev_port(host: str, start: int, span: int) -> int | None:
 def _dev_port() -> int | None:
     """Resolve the port for the dev debugger UI.
 
-    An explicit ``EASYCAT_DEV_DEBUGGER_PORT`` is honored verbatim (no scan) so a
-    developer can pin a port. Otherwise scan a small loopback range from the
-    default so a second dev process — or anything already on 8765 — lands on the
-    next free port instead of silently never showing a UI. Returns ``None`` when
-    the whole range is occupied (the caller leaves the launch latch un-consumed
-    so a later session can retry).
+    An explicit, valid ``EASYCAT_DEV_DEBUGGER_PORT`` is honored verbatim (no
+    scan) so a developer can pin a port. Invalid overrides fall back to the
+    normal scan: port ``0`` would bind an ephemeral server port while the
+    browser opens ``:0``, and out-of-range values fail later in the bind path.
+    Otherwise scan a small loopback range from the default so a second dev
+    process — or anything already on 8765 — lands on the next free port instead
+    of silently never showing a UI. Returns ``None`` when the whole range is
+    occupied (the caller leaves the launch latch un-consumed so a later session
+    can retry).
     """
     override = os.getenv(_DEV_PORT_ENV)
     if override is not None:
         try:
-            return int(override)
+            port = int(override)
         except ValueError:
-            return _DEFAULT_DEV_PORT
+            port = 0
+        if _MIN_TCP_PORT <= port <= _MAX_TCP_PORT:
+            return port
     return _find_free_dev_port("127.0.0.1", _DEFAULT_DEV_PORT, _DEV_PORT_SCAN_SPAN)
