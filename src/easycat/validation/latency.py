@@ -351,7 +351,7 @@ class LatencySample:
         return cls(
             sample_id=str(payload["sample_id"]),
             condition_id=str(payload["condition_id"]),
-            warmup=bool(payload.get("warmup", False)),
+            warmup=_bool_from_payload(payload.get("warmup", False)),
             timestamp_source=str(payload.get("timestamp_source", "unknown")),
             provider=_string_dict(payload.get("provider")),
             model=_string_dict(payload.get("model")),
@@ -426,8 +426,8 @@ class ReliabilitySample:
             sample_id=str(payload["sample_id"]),
             condition_id=str(payload["condition_id"]),
             mode=str(payload.get("mode", "unknown")),
-            informational=bool(payload.get("informational", True)),
-            eligible=bool(payload.get("eligible", False)),
+            informational=_bool_from_payload(payload.get("informational", True)),
+            eligible=_bool_from_payload(payload.get("eligible", False)),
             signals=ReliabilitySignals.from_dict(signals),
         )
 
@@ -931,6 +931,18 @@ def _int_or_none(value: object) -> int | None:
 def _bool_or_none(value: object) -> bool | None:
     if value is None:
         return None
+    return _bool_from_payload(value)
+
+
+def _bool_from_payload(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"", "0", "false", "no", "off"}:
+            return False
     return bool(value)
 
 

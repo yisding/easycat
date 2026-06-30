@@ -162,6 +162,24 @@ def test_capture_reliability_sample_preserves_provided_signals() -> None:
     assert sample.signals.unavailable_reason is None
 
 
+def test_reliability_sample_from_dict_parses_string_booleans() -> None:
+    sample = ReliabilitySample.from_dict(
+        {
+            "sample_id": "string-bool",
+            "condition_id": "baseline",
+            "mode": "smoke",
+            "informational": "true",
+            "eligible": "false",
+            "signals": {"journal_degraded": "false"},
+        }
+    )
+
+    assert sample.informational is True
+    assert sample.eligible is False
+    assert sample.signals.journal_degraded is False
+    assert evaluate_reliability_budgets([sample], DEFAULT_RELIABILITY_BUDGETS) == []
+
+
 # ---------------------------------------------------------------------------
 # 4. Latency artifact attaches reliability samples
 # ---------------------------------------------------------------------------
