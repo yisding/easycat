@@ -1102,6 +1102,13 @@ def _coerce_frames_to_format(
     return blobs, dropped
 
 
+def _record_sequence(record: dict[str, Any]) -> int | None:
+    seq = record.get("sequence")
+    if isinstance(seq, bool) or not isinstance(seq, int):
+        return None
+    return seq
+
+
 def _collect_audio_frames(
     source: DebuggerSource, turn_id: str, *, track: str
 ) -> tuple[list[bytes], dict[str, int]]:
@@ -1153,7 +1160,10 @@ def _collect_audio_frames(
         blob = source.artifact(ref)
         if blob is None:
             continue
-        frames.append((int(r.get("sequence") or 0), blob, data))
+        seq = _record_sequence(r)
+        if seq is None:
+            continue
+        frames.append((seq, blob, data))
 
     if not frames:
         return [], {}
@@ -1463,7 +1473,10 @@ def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
         blob = source.artifact(ref)
         if blob is None:
             continue
-        frames.append((int(record.get("sequence") or 0), blob))
+        seq = _record_sequence(record)
+        if seq is None:
+            continue
+        frames.append((seq, blob))
     frames.sort(key=lambda item: item[0])
     return [blob for _seq, blob in frames]
 

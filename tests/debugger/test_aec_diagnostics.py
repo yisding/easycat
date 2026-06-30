@@ -119,6 +119,37 @@ class _DictSource:
         return self._blobs.get(ref)
 
 
+def test_vad_whatif_frames_skips_malformed_sequence_values():
+    from easycat.debugger.server import _vad_whatif_frames
+
+    records = [
+        {
+            "sequence": "bad",
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "bad",
+            "data": {"stage": "vad"},
+        },
+        {
+            "sequence": True,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "bool",
+            "data": {"stage": "vad"},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "ok",
+            "data": {"stage": "vad"},
+        },
+    ]
+    source = _DictSource(records, {"bad": b"NO", "bool": b"NO", "ok": b"OK"})
+
+    assert _vad_whatif_frames(source, "t1") == [b"OK"]
+
+
 def test_align_tracks_groups_by_track_and_orders_by_mono_ns():
     records = [
         {

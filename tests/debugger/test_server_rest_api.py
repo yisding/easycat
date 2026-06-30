@@ -616,6 +616,38 @@ def test_collect_audio_frames_drops_untrusted_resample_metadata(monkeypatch):
     assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
 
 
+def test_collect_audio_frames_skips_malformed_sequence_values():
+    records = [
+        {
+            "sequence": "bad",
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "bad",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": True,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "bool",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+        {
+            "sequence": 2,
+            "name": "stage_start",
+            "turn_id": "t1",
+            "input_ref": "ok",
+            "data": {"stage": "stt", "sample_rate": 16000, "channels": 1, "sample_width": 2},
+        },
+    ]
+    source = _audio_source(records, {"bad": b"NO", "bool": b"NO", "ok": b"OK"})
+
+    blobs, fmt = _collect_audio_frames(source, "t1", track="mic")
+
+    assert blobs == [b"OK"]
+    assert fmt == {"sample_rate": 16000, "channels": 1, "sample_width": 2}
+
+
 def test_np_ratecv_rejects_oversized_resampled_output(monkeypatch):
     """The numpy fallback bounds output bytes before allocating interpolation arrays."""
     if _server._np is None:
