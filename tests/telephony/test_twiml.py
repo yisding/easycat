@@ -100,7 +100,7 @@ def test_twilio_app_settings_from_env_reads_standard_vars() -> None:
 
 def test_twilio_app_settings_stream_url_override_and_missing_error() -> None:
     settings = twilio_app_settings_from_env(
-        stream_url="wss://override.example.com/stream",
+        stream_url="  wss://override.example.com/stream  ",
         environ={"TWILIO_STREAM_URL": "wss://ignored.example.com/stream"},
     )
 
@@ -108,6 +108,32 @@ def test_twilio_app_settings_stream_url_override_and_missing_error() -> None:
 
     with pytest.raises(RuntimeError, match="TWILIO_STREAM_URL is required"):
         twilio_app_settings_from_env(environ={})
+
+    with pytest.raises(RuntimeError, match="TWILIO_STREAM_URL is required"):
+        twilio_app_settings_from_env(environ={"TWILIO_STREAM_URL": "   "})
+
+
+def test_twilio_app_settings_treats_whitespace_env_values_as_missing() -> None:
+    settings = twilio_app_settings_from_env(
+        environ={
+            "TWILIO_STREAM_URL": "wss://voice.example.com/stream",
+            "TWILIO_ACCOUNT_SID": "   ",
+            "TWILIO_AUTH_TOKEN": "   ",
+            "TWILIO_VOICE_FROM": "   ",
+            "TWILIO_TWIML_URL": "   ",
+            "TWILIO_CALL_API_TOKEN": "   ",
+            "TWILIO_SMS_FROM": "   ",
+            "TWILIO_STREAM_TOKEN_SECRET": "   ",
+        }
+    )
+
+    assert settings.account_sid == ""
+    assert settings.auth_token == ""
+    assert settings.stream_token_secret_or_auth_token is None
+    assert settings.call_api_token == ""
+    assert settings.sms_from == ""
+    assert settings.outbound_calling_enabled is False
+    assert settings.twilio_actions_enabled is False
 
 
 def test_twilio_app_settings_optional_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
