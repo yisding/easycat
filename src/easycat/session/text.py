@@ -84,6 +84,8 @@ _FIRST_CLAUSE_MIN_CHARS = 12
 # terminators ``split_at_sentence_boundaries`` honours plus mid-sentence
 # punctuation (comma/semicolon/colon) that marks a natural early pause.
 _FIRST_CLAUSE_BOUNDARY_CHARS = ".!?。！？．,;:"
+_URL_SCHEMES_HELD_FOR_LOOKAHEAD = frozenset({"ftp", "ftps", "http", "https", "ws", "wss"})
+_URL_LEADING_WRAPPERS = "([{<\"'`"
 
 
 def split_first_clause(text: str) -> tuple[str, str]:
@@ -109,6 +111,8 @@ def split_first_clause(text: str) -> tuple[str, str]:
     for i, ch in enumerate(text):
         if ch not in _FIRST_CLAUSE_BOUNDARY_CHARS:
             continue
+        if _is_url_separator(text, i):
+            continue
         if _is_numeric_separator(text, i):
             continue
         # Include any trailing whitespace so the remaining buffer starts at
@@ -122,6 +126,30 @@ def split_first_clause(text: str) -> tuple[str, str]:
         # Too short to ship on its own; keep scanning for a later boundary.
 
     return "", text
+
+
+def _is_url_separator(text: str, index: int) -> bool:
+    start = index - 1
+    while start >= 0 and not text[start].isspace():
+        start -= 1
+    token_prefix = text[start + 1 : index].lstrip(_URL_LEADING_WRAPPERS)
+    if text[index] == ":" and text[index + 1 : index + 3] == "//":
+        scheme = token_prefix
+        return _is_url_scheme(scheme)
+    if text[index] == ":" and index + 1 == len(text):
+        scheme = token_prefix.lower()
+        return scheme in _URL_SCHEMES_HELD_FOR_LOOKAHEAD
+
+    scheme, sep, _ = token_prefix.partition("://")
+    if not sep or not _is_url_scheme(scheme):
+        return False
+    return index + 1 < len(text) and not text[index + 1].isspace()
+
+
+def _is_url_scheme(scheme: str) -> bool:
+    return (
+        bool(scheme) and scheme[0].isalpha() and all(ch.isalnum() or ch in "+-." for ch in scheme)
+    )
 
 
 def _is_numeric_separator(text: str, index: int) -> bool:
