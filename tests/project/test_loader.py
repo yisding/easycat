@@ -147,6 +147,34 @@ def test_non_integer_port_raises_e602() -> None:
     assert exc_info.value.code == "EASYCAT_E602"
 
 
+@pytest.mark.parametrize("port", [-1, 65536])
+def test_port_out_of_range_raises_e602(port: int) -> None:
+    with pytest.raises(EasyCatError) as exc_info:
+        parse_manifest({"server": {"port": port}, "voice": {"default": {"transport": "local"}}})
+    assert exc_info.value.code == "EASYCAT_E602"
+    assert "port" in str(exc_info.value)
+
+
+def test_port_zero_is_valid_for_ephemeral_bind() -> None:
+    manifest = parse_manifest(
+        {"server": {"port": 0}, "voice": {"default": {"transport": "local"}}}
+    )
+    assert manifest.server.port == 0
+
+
+@pytest.mark.parametrize("max_sessions", [0, -1])
+def test_non_positive_max_sessions_raises_e602(max_sessions: int) -> None:
+    with pytest.raises(EasyCatError) as exc_info:
+        parse_manifest(
+            {
+                "server": {"max_sessions": max_sessions},
+                "voice": {"default": {"transport": "local"}},
+            }
+        )
+    assert exc_info.value.code == "EASYCAT_E602"
+    assert "max_sessions" in str(exc_info.value)
+
+
 # ── secret contract (acceptance) ───────────────────────────────────────
 
 
