@@ -220,6 +220,19 @@ def test_summarise_turns_tracks_audio_bytes():
     assert turns[0]["stage_counts"] == {"stt": 1, "tts": 2}
 
 
+def test_summarise_turns_ignores_malformed_sequence_values():
+    records = [
+        {"sequence": "2", "turn_id": "t1", "name": "stage_start"},
+        {"sequence": True, "turn_id": "t1", "name": "agent_delta"},
+        {"sequence": 1, "turn_id": "t1", "name": "stage_complete"},
+    ]
+
+    (turn,) = _summarise_turns(records)
+
+    assert turn["first_sequence"] == 1
+    assert turn["last_sequence"] == 1
+
+
 def test_serve_bundle_raises_helpful_error_when_aiohttp_missing(monkeypatch, tmp_path):
     """If aiohttp is unavailable, the entry points must fail with a clear
     message rather than a bare ImportError."""
