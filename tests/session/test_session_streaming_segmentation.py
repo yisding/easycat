@@ -134,6 +134,30 @@ def test_split_first_clause_skips_url_scheme_colon() -> None:
     assert remaining == "then continue."
 
 
+def test_split_first_clause_holds_url_scheme_colon_for_lookahead() -> None:
+    ready, remaining = split_first_clause("Visit https:")
+    assert ready == ""
+    assert remaining == "Visit https:"
+
+
+def test_split_first_clause_splits_after_complete_url_at_comma() -> None:
+    ready, remaining = split_first_clause("Visit https://example.com, then continue.")
+    assert ready == "Visit https://example.com, "
+    assert remaining == "then continue."
+
+
+def test_split_first_clause_skips_wrapped_url_scheme_colon() -> None:
+    ready, remaining = split_first_clause("Visit (https://example.com) now, then continue.")
+    assert ready == "Visit (https://example.com) now, "
+    assert remaining == "then continue."
+
+
+def test_split_first_clause_holds_wrapped_url_scheme_colon_for_lookahead() -> None:
+    ready, remaining = split_first_clause("Visit [https:")
+    assert ready == ""
+    assert remaining == "Visit [https:"
+
+
 def test_split_first_clause_holds_trailing_numeric_period_for_lookahead() -> None:
     ready, remaining = split_first_clause("The estimate is 3.")
     assert ready == ""
