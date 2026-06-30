@@ -387,7 +387,7 @@ def webrtc_ice_servers_from_env(
     if include_public_stun:
         servers.append(ICEServer(urls="stun:stun.l.google.com:19302"))
 
-    turn_url = os.getenv(turn_url_env)
+    turn_url = os.getenv(turn_url_env, "").strip()
     if turn_url:
         servers.append(
             ICEServer(
