@@ -541,6 +541,8 @@ class ReplayRunner:
         for record in self._bundle.records():
             seq = _record_sequence(record)
             if seq is None:
+                if _is_tool_phase(record):
+                    yield record
                 continue
             if low is not None and seq < low:
                 continue

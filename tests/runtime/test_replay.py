@@ -531,6 +531,26 @@ class TestToolPolicyEnforcement:
         assert "get_weather" in str(exc_info.value)
         assert "c1" in str(exc_info.value)
 
+    def test_deny_blocks_tool_record_with_malformed_sequence(self, tmp_path):
+        records = [
+            {
+                "sequence": "2",
+                "kind": "framework_transition",
+                "name": "tool_call",
+                "data": {
+                    "phase": "start",
+                    "tool_name": "get_weather",
+                    "tool_call_id": "c1",
+                },
+            },
+        ]
+        bundle = RunBundle.load(_write_bundle(tmp_path, records=records))
+
+        with pytest.raises(ReplaySideEffectBlocked) as exc_info:
+            bundle.replay(_spec(tool_policy=ToolReplayPolicy.DENY))
+        assert "get_weather" in str(exc_info.value)
+        assert "2" in str(exc_info.value)
+
     def test_stub_records_substitution(self, tmp_path):
         bundle = self._bundle_with_tool(tmp_path)
         result = bundle.replay(_spec(tool_policy=ToolReplayPolicy.STUB))
