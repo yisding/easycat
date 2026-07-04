@@ -11,7 +11,7 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import STTEventType
-from easycat.stt import elevenlabs_provider
+from easycat.stt import base, elevenlabs_provider
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
 
@@ -360,6 +360,19 @@ def test_elevenlabs_rejects_too_many_keyterms():
 def test_elevenlabs_rejects_overlong_keyterm():
     with pytest.raises(ValueError, match="<= 20 characters"):
         ElevenLabsSTTConfig(api_key="k", realtime_keyterms=["x" * 21])
+
+
+def test_elevenlabs_stt_config_rejects_negative_max_retries():
+    with pytest.raises(ValueError, match="max_retries"):
+        ElevenLabsSTTConfig(api_key="k", max_retries=-1)
+
+
+def test_elevenlabs_config_final_timeout_default():
+    """The bounded final-wait defaults to the module constant."""
+    config = ElevenLabsSTTConfig(api_key="k")
+
+    assert config.final_transcript_timeout_s == elevenlabs_provider._FINAL_TRANSCRIPT_TIMEOUT_S
+    assert config.final_transcript_timeout_s == pytest.approx(5.0)
 
 
 @pytest.mark.asyncio
@@ -906,6 +919,72 @@ async def test_elevenlabs_batch_error_handling():
 
     with pytest.raises(httpx.HTTPStatusError):
         await stt.end_stream()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_batch_retries_on_transient_429(monkeypatch):
+    """A transient 429 is retried and the recovered transcript survives."""
+    # Neutralize the exponential backoff so the 2**0=1s sleep does not run.
+    monkeypatch.setattr(base.asyncio, "sleep", AsyncMock())
+
+    request = httpx.Request("POST", "https://api.elevenlabs.io/v1/speech-to-text")
+    rate_limited = httpx.Response(status_code=429, text="rate limited", request=request)
+    recovered = httpx.Response(status_code=200, json={"text": "recovered"}, request=request)
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.post = AsyncMock(side_effect=[rate_limited, recovered])
+    mock_client.aclose = AsyncMock()
+
+    config = ElevenLabsSTTConfig(api_key="k", mode="batch", http_client=mock_client)
+    stt = ElevenLabsSTT(config)
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    events = await collect_stt_events(stt, make_audio_chunks(pcm))
+
+    finals = [e for e in events if e.type == STTEventType.FINAL]
+    assert len(finals) == 1
+    assert finals[0].text == "recovered"
+    assert mock_client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_promotes_partial_on_final_timeout_via_config_field():
+    """The config field — not just the module constant — drives the wait."""
+    ws = _BlockingWebSocket([])
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    config = ElevenLabsSTTConfig(
+        api_key="k",
+        mode="realtime",
+        ws_connect=mock_connect,
+        final_transcript_timeout_s=0.05,
+    )
+    stt = ElevenLabsSTT(config)
+
+    collected: list = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collect_task = asyncio.create_task(_collect())
+    chunk = make_audio_chunks(generate_pcm_sine(duration_ms=100), chunk_duration_ms=100)[0]
+    await stt.send_audio(chunk)
+
+    # A partial arrives, then the commit times out (per the config field) and
+    # promotes the partial to FINAL.
+    stt._handle_json_message(json.loads(_el_transcript("hello wor", is_final=False)))
+    assert await stt._send_commit(wait_for_final=True) is True
+
+    await stt.end_stream()
+    await collect_task
+
+    finals = [e for e in collected if e.type == STTEventType.FINAL]
+    assert len(finals) == 1
+    assert finals[0].text == "hello wor"
 
 
 # ── Mode property ────────────────────────────────────────────────
