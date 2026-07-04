@@ -6,6 +6,7 @@ and records execution state to the journal via :class:`AgentRecorder`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -181,14 +182,25 @@ class OpenAIAgentsBridge:
 
         accumulated = ""
         pending_tool_calls: dict[str, str] = {}
-        interrupted = False
+        run_cancelled = False
         cursor_exited = False
 
         try:
             async for event in result.stream_events():
                 if cancel_token and cancel_token.is_cancelled:
-                    if not interrupted:
-                        interrupted = True
+                    if not run_cancelled:
+                        run_cancelled = True
+                        # ``Runner.run_streamed`` drives the agent loop in a
+                        # background task; abandoning ``stream_events()`` does
+                        # not stop it -- on GC-finalize the SDK awaits the run
+                        # to completion, firing post-cancel tool side-effects,
+                        # billing tokens, and snapshotting ``to_input_list()``/
+                        # ``last_response_id`` from a still-mutating run.
+                        # Explicitly cancel: ``after_turn`` drains in-flight
+                        # tools, ``immediate`` stops now.  Keep consuming
+                        # ``stream_events()`` afterwards so the cancellation
+                        # settles, as the SDK requires.
+                        result.cancel(mode="after_turn" if pending_tool_calls else "immediate")
                     if pending_tool_calls:
                         if event.type == "run_item_stream_event":
                             bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
@@ -202,7 +214,10 @@ class OpenAIAgentsBridge:
                                 yield bridge_ev
                         continue
                     else:
-                        break
+                        # No tools in flight: an ``immediate`` cancel set
+                        # ``is_complete``, so drain to the natural end of the
+                        # stream rather than abandoning the generator.
+                        continue
 
                 if event.type == "raw_response_event":
                     delta = extract_text_delta(event.data)
@@ -217,6 +232,16 @@ class OpenAIAgentsBridge:
                     bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                     if bridge_ev is not None:
                         yield bridge_ev
+        except (GeneratorExit, asyncio.CancelledError):
+            # An external ``aclose()`` of this generator (a text-session
+            # barge-in closes ``invoke()``) or a hard task cancel tears the
+            # turn down without the cooperative ``cancel_token``.  Neither is
+            # an ``Exception``, so the arm below is skipped and the ``finally``
+            # would snapshot a still-running background run.  Explicitly cancel
+            # it (mirroring the Llama bridge); a cancelled turn is not a
+            # framework fault, so do not record a framework error.
+            result.cancel(mode="immediate")
+            raise
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
