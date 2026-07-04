@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -36,10 +36,18 @@ from easycat.integrations.agents.base import (
 )
 from easycat.runtime.records import ErrorInfo
 
-try:
+# Optional dependency: under type-checking mypy sees the real ``Runner`` type,
+# while at runtime it may be absent.  This keeps the gated type-check stable
+# regardless of whether openai-agents is installed in the check env (the
+# ``except`` branch is not analysed, so ``Runner = None`` never conflicts with
+# the imported type).
+if TYPE_CHECKING:
     from agents import Runner
-except ImportError:
-    Runner = None
+else:
+    try:
+        from agents import Runner
+    except ImportError:
+        Runner = None
 
 logger = logging.getLogger(__name__)
 

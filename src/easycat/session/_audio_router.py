@@ -427,7 +427,7 @@ class AudioRouter:
                 # (e.g. interleaved synthesis or hold audio), which could
                 # leave BOT_SPEAKING early and truncate the replayed tail.
                 try:
-                    chunk._easycat_replay_chunk = True
+                    chunk._easycat_replay_chunk = True  # type: ignore[attr-defined]
                 except Exception:
                     logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
@@ -827,9 +827,9 @@ class AudioRouter:
         """Attach session/turn ownership so buffered transports can report later delivery."""
         try:
             session_id, _ = self._correlation_ids()
-            chunk._easycat_session_id = session_id
-            chunk._easycat_turn_id = turn.id if turn is not None else None
-            chunk._easycat_turn_ref = turn
+            chunk._easycat_session_id = session_id  # type: ignore[attr-defined]
+            chunk._easycat_turn_id = turn.id if turn is not None else None  # type: ignore[attr-defined]
+            chunk._easycat_turn_ref = turn  # type: ignore[attr-defined]
         except Exception:
             logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
 
