@@ -867,21 +867,19 @@ _MULAW_CLIP = 32635
 
 def _mulaw_decode(mulaw_data: bytes) -> bytes:
     """Decode G.711 mu-law bytes into PCM16 little-endian bytes."""
-    out = bytearray(len(mulaw_data) * 2)
-    for i, value in enumerate(mulaw_data):
-        sample = _mulaw_decode_sample(value)
-        out[i * 2 : i * 2 + 2] = sample.to_bytes(2, "little", signed=True)
-    return bytes(out)
+    if not mulaw_data:
+        return b""
+    return struct.pack(f"<{len(mulaw_data)}h", *map(_MULAW_DECODE_LUT.__getitem__, mulaw_data))
 
 
 def _mulaw_encode(pcm_data: bytes) -> bytes:
     """Encode PCM16 little-endian bytes into G.711 mu-law bytes."""
     if len(pcm_data) % 2 != 0:
         pcm_data = pcm_data[:-1]
-    out = bytearray(len(pcm_data) // 2)
-    for i, (sample,) in enumerate(struct.iter_unpack("<h", pcm_data)):
-        out[i] = _mulaw_encode_sample(sample)
-    return bytes(out)
+    if not pcm_data:
+        return b""
+    count = len(pcm_data) // 2
+    return bytes(map(_MULAW_ENCODE_LUT.__getitem__, struct.unpack(f"<{count}H", pcm_data)))
 
 
 def _mulaw_decode_sample(value: int) -> int:
@@ -916,6 +914,15 @@ def _mulaw_encode_sample(sample: int) -> int:
         exp_mask >>= 1
     mantissa = (sample >> (exponent + 3)) & 0x0F
     return (~(sign | (exponent << 4) | mantissa)) & 0xFF
+
+
+# Table-driven G.711 codec. The tables are precomputed from the reference
+# per-sample formulas above, so table-driven output is byte-identical to the
+# per-sample loops while avoiding per-sample Python work on the hot audio path.
+_MULAW_DECODE_LUT: tuple[int, ...] = tuple(_mulaw_decode_sample(i) for i in range(256))
+_MULAW_ENCODE_LUT: bytes = bytes(
+    _mulaw_encode_sample(s if s < 32768 else s - 65536) for s in range(65536)
+)
 
 
 class TwilioConnectionTransport(AudioQueueMixin):
