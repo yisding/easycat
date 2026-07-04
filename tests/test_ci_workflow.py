@@ -11,6 +11,7 @@ WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PRE_COMMIT_CONFIG = REPO_ROOT / ".pre-commit-config.yaml"
 NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
+RELEASE_PUBLISH_WORKFLOW = REPO_ROOT / ".github/workflows/release.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 NIGHTLY_LIVE_COMMAND = (
     "easycat validate live --provider openai --provider deepgram "
@@ -417,6 +418,7 @@ def test_validation_workflows_parse_as_yaml() -> None:
     yaml.safe_load(WORKFLOW.read_text())
     yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    yaml.safe_load(RELEASE_PUBLISH_WORKFLOW.read_text())
 
 
 def test_every_uv_sync_enforces_the_lockfile() -> None:
@@ -441,7 +443,12 @@ def test_third_party_actions_are_sha_pinned_and_checkout_drops_credentials() -> 
     # `actions/checkout` must set `persist-credentials: false` so the git token
     # is not left on disk for later steps (docs.yml already does both).
     sha_re = re.compile(r"^[0-9a-f]{40}$")
-    for workflow_path in (WORKFLOW, NIGHTLY_WORKFLOW, RELEASE_WORKFLOW):
+    for workflow_path in (
+        WORKFLOW,
+        NIGHTLY_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_PUBLISH_WORKFLOW,
+    ):
         data = yaml.safe_load(workflow_path.read_text())
         for job in data["jobs"].values():
             for step in job.get("steps", []):
@@ -809,3 +816,93 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
         "absence of placeholder jobs",
     ):
         assert phrase in normalized_section
+
+
+# --- QP2: tag-triggered publish via PyPI Trusted Publishing (release.yml) ---
+#
+# release.yml is the only workflow that ever holds `id-token: write`, so its
+# security shape (tag-only trigger, `pypi` environment gate, minimal OIDC
+# permissions, SHA-pinned publisher, no stored PyPI token) is guarded here the
+# same "derive expectations from the live workflow" way the rest of this module
+# guards ci/nightly/release-validation.
+
+
+def _release_publish_workflow() -> dict:
+    return yaml.safe_load(RELEASE_PUBLISH_WORKFLOW.read_text())
+
+
+def test_release_publish_workflow_triggers_only_on_version_tags() -> None:
+    workflow = _release_publish_workflow()
+    # PyYAML parses the bare `on:` key as the boolean True.
+    triggers = workflow[True]
+    assert set(triggers) == {"push"}, "publish must fire on tag pushes only"
+    assert "v*" in triggers["push"]["tags"]
+
+
+def test_release_publish_workflow_default_permissions_are_read_only() -> None:
+    workflow = _release_publish_workflow()
+    assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_release_publish_workflow_job_graph_gates_the_privileged_job() -> None:
+    jobs = _release_publish_workflow()["jobs"]
+
+    # Exactly the documented three-job graph: validate -> build -> publish.
+    assert set(jobs) == {"validate", "build", "publish"}
+    # `validate` reuses the existing release gate instead of duplicating it.
+    assert jobs["validate"]["uses"] == "./.github/workflows/release-validation.yml"
+    # `build` waits on the gate and stays unprivileged (no id-token here).
+    assert jobs["build"]["needs"] == "validate"
+    assert "id-token" not in (jobs["build"].get("permissions") or {})
+    # `publish` waits on `build` (which waits on `validate`), so the privileged
+    # job runs last, only after the gate and build both pass.
+    assert jobs["publish"]["needs"] == "build"
+
+
+def test_release_publish_job_runs_in_the_pypi_environment() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # The required-reviewer approval gate lives on the `pypi` environment, so a
+    # human must approve before the OIDC token is ever minted.
+    assert publish["environment"] == "pypi"
+
+
+def test_release_publish_job_grants_only_id_token_write() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # id-token: write ONLY. Anything broader (contents: write, etc.) widens the
+    # blast radius of the single privileged job.
+    assert publish["permissions"] == {"id-token": "write"}
+
+
+def test_release_publisher_step_is_sha_pinned_not_a_mutable_tag() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    sha_re = re.compile(r"^[0-9a-f]{40}$")
+
+    publisher_steps = [
+        step
+        for step in publish["steps"]
+        if isinstance(step, dict)
+        and str(step.get("uses", "")).startswith("pypa/gh-action-pypi-publish@")
+    ]
+    assert len(publisher_steps) == 1, "expected exactly one pypi-publish step"
+    ref = publisher_steps[0]["uses"].rsplit("@", 1)[1]
+    assert sha_re.fullmatch(ref), (
+        "pypa/gh-action-pypi-publish must be pinned to a full 40-char commit "
+        f"SHA (not a mutable @vN / @release/v1 tag), got {ref!r}"
+    )
+
+
+def test_release_publish_is_tokenless_trusted_publishing() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # No long-lived PyPI token anywhere in the privileged job: Trusted
+    # Publishing supplies the credential via OIDC. Re-dump the parsed job so
+    # this catches a token passed via env, with:, or a secrets.PYPI_* reference.
+    publish_text = yaml.safe_dump(publish)
+    assert "PYPI_" not in publish_text
+    assert "secrets.PYPI" not in publish_text
+
+    # And the publisher takes no `password:`/token input — OIDC only.
+    for step in publish["steps"]:
+        if isinstance(step, dict) and str(step.get("uses", "")).startswith(
+            "pypa/gh-action-pypi-publish@"
+        ):
+            assert "password" not in (step.get("with") or {})

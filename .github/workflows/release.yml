@@ -1,0 +1,96 @@
+name: Release
+
+# Tag-triggered publish to PyPI via Trusted Publishing (OIDC, no stored token).
+# Three-job graph: validate -> build -> publish. Only `publish` is privileged
+# (`id-token: write`) and is gated behind the `pypi` environment's required
+# reviewers, so the short-lived OIDC token is never minted until a human
+# approves the deployment.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Minimal default token scope for every job (only checkout needs read). The
+# privileged `publish` job narrowly overrides this with `id-token: write` for
+# the OIDC exchange; no other job needs more.
+permissions:
+  contents: read
+
+jobs:
+  # Reuse the full release gate (build + twine check + clean out-of-tree wheel
+  # install + smoke + strict live/latency validation) so the tag path cannot
+  # drift from the manually dispatchable gate. `secrets: inherit` passes the
+  # live provider keys the gate reads; the reusable workflow keeps its own
+  # `release-validation` environment and minimal `contents: read` scope.
+  validate:
+    uses: ./.github/workflows/release-validation.yml
+    # Pass only the four provider keys the gate reads, explicitly (not
+    # `secrets: inherit`, which would hand the reusable workflow every repo
+    # secret). No PyPI credential is passed — publishing is tokenless via OIDC.
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
+
+  # Build the distributions once, unprivileged (no `id-token` here), and hand
+  # them to the publish job as a short-lived artifact. Keeping the build out of
+  # the OIDC job means the credential is only ever exchanged after a human
+  # approves the `pypi` environment.
+  build:
+    name: Build distributions
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          # No cache on the release build: it runs once per tag, so the cache
+          # saves little, and an enabled cache in a publishing workflow is a
+          # cache-poisoning vector (zizmor cache-poisoning).
+          enable-cache: false
+          python-version: "3.12"
+      - run: uv build --sdist --wheel
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/**
+          # Short-lived hand-off to the publish job only; not a durable release
+          # artifact (PyPI is the durable store).
+          retention-days: 1
+          if-no-files-found: error
+
+  # The only privileged job. Publishes to PyPI via Trusted Publishing: the
+  # `pypi` environment's required-reviewer gate must approve before the
+  # short-lived OIDC token is minted, and `pypa/gh-action-pypi-publish`
+  # exchanges it at upload time. No long-lived PYPI_* token is stored anywhere.
+  # PEP 740 attestations stay at their (enabled) default.
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Required-reviewer approval gate configured on the GitHub environment.
+    environment: pypi
+    # `id-token: write` ONLY — the narrowest scope that lets the OIDC exchange
+    # work. Do not also grant `contents: write` etc.; a broader token widens
+    # the blast radius of the one privileged job.
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: release-dist-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist
+      # pypa/gh-action-pypi-publish v1.14.0 — pinned to a full 40-char commit
+      # SHA (not the mutable @release/v1 tag), mirroring docs.yml's privileged
+      # deploy-pages pin. Trusted Publishing supplies the credential via OIDC,
+      # so there is deliberately no `password:` input.
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0

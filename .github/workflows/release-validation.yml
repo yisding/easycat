@@ -2,6 +2,20 @@ name: Release Validation
 
 on:
   workflow_dispatch:
+  # Reusable entry point so release.yml's tag-triggered `validate` job can run
+  # this exact gate (via `uses:`) instead of duplicating the
+  # build/twine/clean-install/live steps and letting them drift. The caller
+  # passes the provider keys explicitly (declared here, not `secrets: inherit`).
+  workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+      DEEPGRAM_API_KEY:
+        required: false
+      ELEVENLABS_API_KEY:
+        required: false
+      CARTESIA_API_KEY:
+        required: false
 
 # Minimal default token scope for every job (only checkout needs read).
 # Individual jobs override this if they ever need more.
