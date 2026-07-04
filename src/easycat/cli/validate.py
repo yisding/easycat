@@ -483,7 +483,6 @@ def latency(
             "validate latency",
             "choose only one of --smoke or --sweep",
             json_output=json_output,
-            human_console=stdout_console,
         )
         raise typer.Exit(2)
 
@@ -505,9 +504,10 @@ def latency(
         status = "ok" if result.exit_code == 0 else "error"
         emit_json(
             json_envelope(
-                f"validate latency {mode.value}",
+                "validate latency",
                 status=status,
                 exit_code=result.exit_code,
+                mode=mode.value,
                 report_path=str(report or result.report_path),
                 validation=result.run.to_dict(),
             )
