@@ -17,7 +17,7 @@ from typing import ClassVar
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports._base import AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin, make_version_info
 
 logger = logging.getLogger(__name__)
 
@@ -468,15 +468,4 @@ class LocalTransport(AudioQueueMixin):
         loop.call_soon_threadsafe(_emit)
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            sd_ver = version("sounddevice")
-        except Exception:
-            sd_ver = "unknown"
-        return {
-            "provider": "local",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": sd_ver,
-        }
+        return make_version_info("local", "sounddevice")

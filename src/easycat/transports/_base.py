@@ -79,6 +79,28 @@ def _enqueue_inbound_chunk(
         )
 
 
+def _sdk_version(package: str) -> str:
+    """Best-effort installed version of *package*, or ``"unknown"``."""
+    try:
+        from importlib.metadata import version
+
+        return version(package)
+    except Exception:
+        return "unknown"
+
+
+def make_version_info(
+    provider: str, sdk_package: str, *, api_version: str = "unknown"
+) -> dict[str, str]:
+    """Stable-shape transport version dict (provider/model/api_version/sdk_version)."""
+    return {
+        "provider": provider,
+        "model": "unknown",
+        "api_version": api_version,
+        "sdk_version": _sdk_version(sdk_package),
+    }
+
+
 # ── Shared queue / receive_audio logic ────────────────────────────
 
 

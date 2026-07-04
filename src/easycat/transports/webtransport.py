@@ -109,6 +109,7 @@ from easycat.transports._base import (
 from easycat.transports._base import (
     AudioQueueMixin,
     _enqueue_inbound_chunk,
+    make_version_info,
 )
 from easycat.transports.websocket import _valid_config_sample_rate
 
@@ -1302,18 +1303,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     # ``self._event_bus`` live and tags events with ``transport_kind``.
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            aioquic_ver = version("aioquic")
-        except Exception:
-            aioquic_ver = "unknown"
-        return {
-            "provider": "webtransport-connection",
-            "model": "unknown",
-            "api_version": "h3",
-            "sdk_version": aioquic_ver,
-        }
+        return make_version_info("webtransport-connection", "aioquic", api_version="h3")
 
 
 # ── Multi-client server ────────────────────────────────────────────
@@ -1647,15 +1637,4 @@ class WebTransportTransport(AudioQueueMixin):
             yield chunk
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            aioquic_ver = version("aioquic")
-        except Exception:
-            aioquic_ver = "unknown"
-        return {
-            "provider": "webtransport",
-            "model": "unknown",
-            "api_version": "h3",
-            "sdk_version": aioquic_ver,
-        }
+        return make_version_info("webtransport", "aioquic", api_version="h3")

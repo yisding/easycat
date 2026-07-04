@@ -7,10 +7,15 @@ from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from easycat.transports._base import AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin, _sdk_version, make_version_info
 from easycat.transports.local import LocalTransport
+from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
-from easycat.transports.websocket import WebSocketTransport
+from easycat.transports.websocket import WebSocketConnectionTransport, WebSocketTransport
+from easycat.transports.webtransport import (
+    WebTransportConnectionTransport,
+    WebTransportTransport,
+)
 from easycat.tts.base import TTSBase
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTS, ElevenLabsTTSConfig
@@ -104,6 +109,53 @@ class TestTransportVersionInfo:
         info = WebRTCTransport().version_info()
         assert set(info.keys()) == EXPECTED_KEYS
         assert info["provider"] == "webrtc"
+
+    def test_twilio_transport(self):
+        # version_info() does not touch instance state; invoke unbound.
+        info = TwilioTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "twilio"
+
+    def test_twilio_connection_transport(self):
+        info = TwilioConnectionTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "twilio-connection"
+
+    def test_websocket_connection_transport(self):
+        info = WebSocketConnectionTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "websocket-connection"
+
+    def test_webtransport_transport(self):
+        info = WebTransportTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "webtransport"
+        assert info["api_version"] == "h3"
+
+    def test_webtransport_connection_transport(self):
+        info = WebTransportConnectionTransport.version_info(None)
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "webtransport-connection"
+        assert info["api_version"] == "h3"
+
+
+class TestVersionInfoHelpers:
+    """Unit coverage for the shared ``_base`` version helpers."""
+
+    def test_sdk_version_unknown_for_missing_package(self):
+        assert _sdk_version("definitely-not-a-real-pkg") == "unknown"
+
+    def test_make_version_info_shape_and_api_version(self):
+        info = make_version_info("x", "definitely-not-a-real-pkg", api_version="h3")
+        assert set(info.keys()) == EXPECTED_KEYS
+        assert info["provider"] == "x"
+        assert info["model"] == "unknown"
+        assert info["api_version"] == "h3"
+        assert info["sdk_version"] == "unknown"
+
+    def test_make_version_info_default_api_version(self):
+        info = make_version_info("y", "definitely-not-a-real-pkg")
+        assert info["api_version"] == "unknown"
 
 
 class TestVersionInfoShapeInvariant:

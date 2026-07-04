@@ -40,7 +40,7 @@ from easycat._net import is_loopback_host, normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
-from easycat.transports._base import AudioQueueMixin
+from easycat.transports._base import AudioQueueMixin, make_version_info
 
 logger = logging.getLogger(__name__)
 
@@ -1652,15 +1652,4 @@ class WebRTCTransport(AudioQueueMixin):
         return self._pc is not None and self._pc.connectionState == "connected"
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            rtc_ver = version("aiortc")
-        except Exception:
-            rtc_ver = "unknown"
-        return {
-            "provider": "webrtc",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": rtc_ver,
-        }
+        return make_version_info("webrtc", "aiortc")

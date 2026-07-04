@@ -32,7 +32,7 @@ from easycat.events import (
     PlaybackMarkAck,
 )
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
-from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
 logger = logging.getLogger(__name__)
 
@@ -829,18 +829,7 @@ class TwilioTransport(ServerTransportBase):
         return self._call_sid
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "twilio",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("twilio", "websockets")
 
 
 # ── Audio conversion helpers ──────────────────────────────────────
@@ -1238,18 +1227,7 @@ class TwilioConnectionTransport(AudioQueueMixin):
         return self._call_sid
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "twilio-connection",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("twilio-connection", "websockets")
 
 
 # ── TwiML helpers ─────────────────────────────────────────────────

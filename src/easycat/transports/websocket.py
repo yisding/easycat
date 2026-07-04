@@ -31,7 +31,7 @@ from easycat._net import normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.session_manager import SessionManager
-from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -483,18 +483,7 @@ class WebSocketTransport(ServerTransportBase):
             logger.debug("Unknown control message type: %s", msg_type)
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "websocket",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("websocket", "websockets")
 
 
 class WebSocketConnectionTransport(AudioQueueMixin):
@@ -639,15 +628,4 @@ class WebSocketConnectionTransport(AudioQueueMixin):
                 )
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "websocket-connection",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("websocket-connection", "websockets")
