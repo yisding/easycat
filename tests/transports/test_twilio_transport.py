@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import struct
 from collections.abc import Callable
 
@@ -21,6 +22,7 @@ from easycat.transports.twilio_media import (
     TwilioStreamTokenStore,
     TwilioTransport,
     TwilioTransportConfig,
+    _TwilioProtocolMixin,
     mulaw_to_pcm16,
     pcm16_to_mulaw,
     twiml_connect_stream,
@@ -569,6 +571,40 @@ class TestTwilioStreamLifecycleRaces:
         assert transport.stream_sid is None
         assert transport.call_sid is None
         assert ended == ["CALL2"]
+
+
+class TestTwilioProtocolConsolidation:
+    """Lock the shared Twilio protocol mixin and the drift it fixed."""
+
+    def test_both_transports_share_protocol_mixin(self) -> None:
+        # Structural lock: prevents the two classes from re-forking their own
+        # verbatim copy of the Media Streams wire protocol.
+        assert issubclass(TwilioTransport, _TwilioProtocolMixin)
+        assert issubclass(TwilioConnectionTransport, _TwilioProtocolMixin)
+
+    @pytest.mark.asyncio
+    async def test_connection_transport_logs_connected_and_unknown_events(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The connection variant previously dropped the ``connected`` branch and
+        # the unknown-event log; the shared copy restores both.
+        transport = TwilioConnectionTransport(_DummyTwilioWebSocket(), event_bus=EventBus())
+        with caplog.at_level(logging.DEBUG, logger="easycat.transports.twilio_media"):
+            await transport._handle_message(_twilio_connected_msg())
+            await transport._handle_message(json.dumps({"event": "bogus"}))
+        assert "Twilio connected event" in caplog.text
+        assert "Unknown Twilio event" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_server_transport_logs_connected_and_unknown_events(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        transport = TwilioTransport(event_bus=EventBus())
+        with caplog.at_level(logging.DEBUG, logger="easycat.transports.twilio_media"):
+            await transport._handle_message(_twilio_connected_msg())
+            await transport._handle_message(json.dumps({"event": "bogus"}))
+        assert "Twilio connected event" in caplog.text
+        assert "Unknown Twilio event" in caplog.text
 
 
 @pytest.mark.integration_socket
