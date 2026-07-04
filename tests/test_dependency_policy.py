@@ -102,8 +102,11 @@ def test_mypy_gated_paths_match_pyproject_overrides() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     match = re.search(r'^mypy_gated_paths\s*:=\s*"(?P<paths>[^"]+)"', justfile, re.MULTILINE)
     assert match is not None, "justfile `mypy_gated_paths` variable not found"
+    # Directory paths map to package globs; a single ``.py`` file maps to its
+    # own module glob (strip the extension before dotting).
     expected_modules = [
-        path.removeprefix("src/").replace("/", ".") + ".*" for path in match.group("paths").split()
+        path.removeprefix("src/").removesuffix(".py").replace("/", ".") + ".*"
+        for path in match.group("paths").split()
     ]
     overrides = _pyproject()["tool"]["mypy"]["overrides"]
     gated = next(o for o in overrides if o.get("check_untyped_defs"))

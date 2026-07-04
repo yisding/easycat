@@ -34,6 +34,9 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
     )[0]
     script_source = (REPO_ROOT / "scripts/validate.py").read_text(encoding="utf-8")
     runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    harness_source = (REPO_ROOT / "src/easycat/validation/_lane_harness.py").read_text(
+        encoding="utf-8"
+    )
     test_source = (REPO_ROOT / "tests/cli/test_validate_runner.py").read_text(encoding="utf-8")
     quick_selector = (
         "not integration_socket and not integration_live and not integration_external "
@@ -53,16 +56,21 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
         '"socket"',
         '"stress"',
         '"contracts"',
-        'run_dir = artifacts_root / "runs" / run_id',
         "junit.xml",
         "stdout.log",
         "stderr.log",
-        "report.json",
-        "latest.json",
         "tool_exit_codes",
         "redact_runtime_secrets",
     ):
         assert token in runner_source
+    # The shared run-id/run-dir/report-path prologue and the latest.json epilogue
+    # now live in the extracted lane harness (QS5), not inline in each lane.
+    for token in (
+        'run_dir = artifacts_root / "runs" / run_id',
+        "report.json",
+        "latest.json",
+    ):
+        assert token in harness_source
     for test_name in (
         "test_validation_runner_quick_writes_report_junit_logs_and_latest",
         "test_validation_runner_failed_pytest_still_writes_report",

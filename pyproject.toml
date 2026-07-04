@@ -447,6 +447,7 @@ module = [
     "easycat.stages.*",
     "easycat.session.*",
     "easycat.integrations.*",
+    "easycat.validation._lane_harness.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
