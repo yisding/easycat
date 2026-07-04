@@ -6,6 +6,7 @@ import logging
 import pytest
 
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+from easycat.cancel import CancelToken
 from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
@@ -450,6 +451,77 @@ async def test_barge_in_starts_new_turn():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["vad_idle", "barge_in", "manual"])
+async def test_begin_turn_shared_bookkeeping_across_paths(path):
+    """All three turn-start paths share the consolidated ``_begin_turn`` logic.
+
+    Each of VAD-IDLE, barge-in, and manual (push-to-talk) must: bump the turn
+    counter by 1, mint a ``turn-NNNN-xxxxxxxx`` id, issue a fresh non-cancelled
+    ``cancel_token``, flush pre-roll into ``turn_audio``, and emit exactly one
+    ``TurnStarted``.
+    """
+    bus = EventBus()
+
+    async def mock_cancel():
+        await bus.emit(Interruption())  # Real callback emits Interruption
+
+    tm = TurnManager(bus, cancel_turn_callback=mock_cancel)
+    collector = EventCollector(bus)
+
+    if path == "barge_in":
+        tm._state = TurnManagerState.BOT_SPEAKING
+
+    # Feed pre-roll audio that must land in turn_audio after the turn starts.
+    for _ in range(3):
+        tm.on_audio_frame(_chunk(value=7))
+
+    counter_before = tm._turn_counter
+
+    if path == "vad_idle":
+        await tm.on_vad_event(VADStartSpeaking())
+    elif path == "barge_in":
+        await tm.on_vad_event(VADStartSpeaking())
+    else:
+        await tm.start_turn()
+
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    # Counter bumped by exactly one and a well-formed turn id minted.
+    assert tm._turn_counter == counter_before + 1
+    assert tm._current_turn_id is not None
+    assert tm._current_turn_id.startswith(f"turn-{tm._turn_counter:04d}-")
+    assert len(tm._current_turn_id.split("-")[-1]) == 8
+    # Fresh, non-cancelled token issued for the new turn.
+    assert tm.cancel_token is not None
+    assert not tm.cancel_token.is_cancelled
+    # Pre-roll flushed into turn_audio.
+    assert len(tm.turn_audio) > 0
+    # Exactly one TurnStarted emitted for this turn.
+    assert collector.type_names.count("TurnStarted") == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_start_does_not_cancel_stale_token():
+    """The manual path uses ``cancel_previous_token=False``.
+
+    A stale token lingering while IDLE must be *replaced* by ``start_turn()``
+    but NOT cancelled — only the barge-in path cancels the prior token.
+    """
+    bus = EventBus()
+    tm = TurnManager(bus)
+
+    stale = CancelToken()
+    tm._cancel_token = stale
+
+    await tm.start_turn()
+
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    # Stale token replaced by a fresh one...
+    assert tm.cancel_token is not stale
+    # ...and NOT cancelled (manual path preserves the prior token).
+    assert not stale.is_cancelled
+
+
+@pytest.mark.asyncio
 async def test_barge_in_during_processing_cancels_inflight_token():
     """VAD start during PROCESSING is a barge-in that cancels the in-flight turn.
 
@@ -630,6 +702,35 @@ async def test_reset_returns_to_idle():
     assert tm.cancel_token is None
     # The prior token must be cancelled so any in-flight work bound to it stops.
     assert active_token.is_cancelled
+
+
+@pytest.mark.asyncio
+async def test_reset_preserve_token_leaves_token_uncancelled():
+    """reset(preserve_token=True) returns to IDLE but does NOT cancel the token.
+
+    Contrasts ``test_reset_returns_to_idle`` (default ``reset()`` cancels the
+    active token).  The gated keep-alive path needs the manager back at IDLE
+    with buffers cleared while the current turn's token stays live.
+    """
+    bus = EventBus()
+    tm = TurnManager(bus)
+
+    await tm.on_vad_event(VADStartSpeaking())
+    tm.on_audio_frame(_chunk())
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    assert len(tm.turn_audio) > 0
+
+    active_token = tm.cancel_token
+    assert active_token is not None
+    assert not active_token.is_cancelled
+
+    tm.reset(preserve_token=True)
+
+    assert tm.state == TurnManagerState.IDLE
+    assert len(tm.turn_audio) == 0
+    # Reference dropped either way, but the token itself is left uncancelled.
+    assert tm.cancel_token is None
+    assert not active_token.is_cancelled
 
 
 @pytest.mark.asyncio

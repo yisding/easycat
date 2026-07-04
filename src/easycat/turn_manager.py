@@ -398,24 +398,44 @@ class TurnManager:
 
         if self._state == TurnManagerState.IDLE:
             # New turn starting
-            self._cancel_token = CancelToken()
+            await self._begin_turn("vad_speech_start")
 
-            # Flush pre-roll buffer into turn audio
-            self._turn_audio = deque(self._pre_roll_buffer)
-            self._turn_audio_duration_ms = self._pre_roll_duration_ms
-            self._trim_turn_audio()
-            self._pre_roll_buffer.clear()
-            self._pre_roll_duration_ms = 0.0
+    def _flush_pre_roll_into_turn_audio(self) -> None:
+        """Move the pre-roll buffer into the active turn's audio and trim it."""
+        self._turn_audio = deque(self._pre_roll_buffer)
+        self._turn_audio_duration_ms = self._pre_roll_duration_ms
+        self._trim_turn_audio()
+        self._pre_roll_buffer.clear()
+        self._pre_roll_duration_ms = 0.0
 
-            self._turn_counter += 1
-            self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
-            self._transition(
-                TurnManagerState.USER_SPEAKING,
-                reason="vad_speech_start",
-            )
-            await self._event_bus.emit(
-                TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
-            )
+    async def _begin_turn(self, reason: str, *, cancel_previous_token: bool = False) -> None:
+        """Start a fresh user turn: the shared turn-start bookkeeping.
+
+        Canonical order (matching the historic VAD-IDLE path): flush the
+        pre-roll buffer into ``turn_audio`` *before* the state transition and
+        ``TurnStarted`` emit, so the turn's audio is populated the moment the
+        turn becomes observable.
+
+        ``cancel_previous_token`` is only set on the barge-in path: when the
+        barge-in interrupts a PROCESSING turn there is an in-flight agent run
+        bound to the prior token; cancelling it prevents a stale response from
+        leaking through once the new turn has started.  The VAD-IDLE and manual
+        (push-to-talk) paths start from a state with no live in-flight turn, so
+        they leave the (already-detached) prior token alone.
+        """
+        if cancel_previous_token and self._cancel_token is not None:
+            self._cancel_token.cancel()
+        self._cancel_token = CancelToken()
+        self._flush_pre_roll_into_turn_audio()
+        self._turn_counter += 1
+        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
+        self._transition(
+            TurnManagerState.USER_SPEAKING,
+            reason=reason,
+        )
+        await self._event_bus.emit(
+            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
+        )
 
     async def _handle_speech_stop(self) -> None:
         """Handle VAD speech stop — transition to UserPaused and start timer."""
@@ -566,32 +586,8 @@ class TurnManager:
             if result is False:
                 return
 
-        # Cancel the prior turn's token before issuing a fresh one.  When the
-        # barge-in interrupts a PROCESSING turn there is an in-flight agent run
-        # bound to this token; cancelling it prevents a stale response from
-        # leaking through once the new turn has started.
-        if self._cancel_token is not None:
-            self._cancel_token.cancel()
-
-        # Start new turn
-        self._cancel_token = CancelToken()
-        self._turn_counter += 1
-        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
-        self._transition(
-            TurnManagerState.USER_SPEAKING,
-            reason="barge_in",
-        )
-
-        # Flush pre-roll buffer into turn audio
-        self._turn_audio = deque(self._pre_roll_buffer)
-        self._turn_audio_duration_ms = self._pre_roll_duration_ms
-        self._trim_turn_audio()
-        self._pre_roll_buffer.clear()
-        self._pre_roll_duration_ms = 0.0
-
-        await self._event_bus.emit(
-            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
-        )
+        # Start new turn, cancelling the prior token (see ``_begin_turn``).
+        await self._begin_turn("barge_in", cancel_previous_token=True)
 
     # ── Push-to-talk mode ───────────────────────────────────────
 
@@ -614,24 +610,7 @@ class TurnManager:
             await self._handle_barge_in()
             return
 
-        self._cancel_token = CancelToken()
-        self._turn_counter += 1
-        self._current_turn_id = f"turn-{self._turn_counter:04d}-{uuid4().hex[:8]}"
-        self._transition(
-            TurnManagerState.USER_SPEAKING,
-            reason="manual_start",
-        )
-
-        # Flush pre-roll
-        self._turn_audio = deque(self._pre_roll_buffer)
-        self._turn_audio_duration_ms = self._pre_roll_duration_ms
-        self._trim_turn_audio()
-        self._pre_roll_buffer.clear()
-        self._pre_roll_duration_ms = 0.0
-
-        await self._event_bus.emit(
-            TurnStarted(session_id=self._session_id, turn_id=self._current_turn_id)
-        )
+        await self._begin_turn("manual_start")
 
     async def end_turn(self) -> None:
         """Manually signal end of user turn (push-to-talk mode).
@@ -693,19 +672,25 @@ class TurnManager:
         self._mode = mode
         logger.debug("Turn mode set to %s", mode.value)
 
-    def reset(self) -> None:
-        """Reset turn manager to idle state."""
+    def reset(self, *, preserve_token: bool = False) -> None:
+        """Reset turn manager to idle state.
+
+        By default the active token is cancelled before being dropped,
+        mirroring ``_handle_barge_in`` so any work bound to it is cooperatively
+        stopped rather than left referencing an abandoned (uncancelled) token.
+
+        Pass ``preserve_token=True`` when the current turn's token must stay
+        live (e.g. the gated-replay keep-alive path, where a concurrently
+        running agent stream still depends on it): the reference is still
+        dropped, but the token is left uncancelled.
+        """
         self._cancel_silence_timer()
         self._state = TurnManagerState.IDLE
         self._turn_audio.clear()
         self._turn_audio_duration_ms = 0.0
         self._pre_roll_buffer.clear()
         self._pre_roll_duration_ms = 0.0
-        # Cancel the active token before dropping it, mirroring
-        # ``_handle_barge_in``.  Both teardown paths now share the same token
-        # semantics, so any work bound to the token is cooperatively stopped
-        # rather than left referencing an abandoned (uncancelled) token.
-        if self._cancel_token is not None:
+        if not preserve_token and self._cancel_token is not None:
             self._cancel_token.cancel()
         self._cancel_token = None
         self._silence_start_time = None

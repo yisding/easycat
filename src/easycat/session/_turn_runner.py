@@ -357,14 +357,7 @@ class TurnRunner:
         first so ``reset()`` has nothing to cancel; the turn retains its own
         token via ``turn.cancel_token`` / the captured ``token`` local.
         """
-        manager = self._turn_manager
-        # Snapshot the live token then detach it from the manager so reset()
-        # cancels nothing.  We restore the reference on the (unlikely) event
-        # the manager has no token, to avoid changing observable state.
-        live_token = manager.cancel_token
-        if live_token is not None:
-            manager._cancel_token = None
-        manager.reset()
+        self._turn_manager.reset(preserve_token=True)
 
     # ── Streaming agent path ───────────────────────────────────────
 
@@ -553,15 +546,14 @@ class TurnRunner:
         elif st.synth_started and not st.playback_started:
             if st.gated:
                 # Keep current turn alive for gated replay mark accounting.
-                # ``TurnManager.reset()`` now cancels the active token before
+                # ``TurnManager.reset()`` cancels the active token before
                 # dropping it (so barge-in/idle teardown cooperatively stops
                 # bound work).  Here we deliberately want the *opposite*: the
                 # turn's token (still in use by the concurrently-running agent
                 # stream and the gated replay) must survive the manager reset,
                 # or the agent turn is killed mid-flight and never emits its
-                # AgentFinal.  Detach the live token from the manager before
-                # resetting so reset() has nothing to cancel; the turn keeps
-                # its own token.
+                # AgentFinal.  ``reset(preserve_token=True)`` leaves the token
+                # uncancelled; the turn keeps its own token.
                 self._audio.reset_speech_detection()
                 self._reset_turn_manager_preserving_token()
             else:
