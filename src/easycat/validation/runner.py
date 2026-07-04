@@ -296,15 +296,17 @@ def run_latency_validation(
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id(f"latency-{mode.value}", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        f"latency-{mode.value}",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_dir = ctx.run_dir
 
     junit_path = run_dir / "junit.xml"
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     samples_path = run_dir / "latency" / "samples.json"
     reliability_samples_path = run_dir / "latency" / "reliability.json"
     latency_path = run_dir / "latency" / f"{mode.value}.json"
@@ -459,18 +461,16 @@ def run_latency_validation(
     if baseline_regression_failure is not None:
         failures.append(baseline_regression_failure)
 
-    artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
-        **check_artifacts,
-    }
-    if requested_report_path is not None:
+    artifacts: dict[str, ArtifactRef] = {**ctx.artifacts, **check_artifacts}
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
 
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=command,
         started_at=started_at,
         finished_at=finished_at,
@@ -491,8 +491,6 @@ def run_latency_validation(
                 else {}
             ),
         },
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=_latency_checks(
             mode=mode,
             pytest_exit_code=result.exit_code,
@@ -512,19 +510,6 @@ def run_latency_validation(
         failures=failures,
         latency=latency_payload,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        # Authoritative writer of the CLI ``--report`` path; the CLI relies
-        # on this and does not write the report itself.
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
     )
 
 
