@@ -131,6 +131,15 @@ def test_public_api_registry_tracks_snapshot() -> None:
     assert tuple(sorted(LAZY_EXPORTS)) == PUBLIC_API_SNAPSHOT
 
 
+def test_type_checking_block_matches_lazy_exports() -> None:
+    static = _type_checking_imports_from_init()
+    registry = set(LAZY_EXPORTS.values())
+    missing = registry - static
+    extra = static - registry
+    assert not missing, f"__init__ TYPE_CHECKING block missing: {sorted(missing)}"
+    assert not extra, f"__init__ TYPE_CHECKING block has stale imports: {sorted(extra)}"
+
+
 def test_public_api_contract_doc_tracks_top_level_exports() -> None:
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     readme = Path("README.md").read_text(encoding="utf-8")
@@ -334,6 +343,25 @@ def _easycat_imports_from_ast(source: str, filename: str) -> Iterable[tuple[int,
             for alias in node.names:
                 if alias.name != "*":
                     yield node.lineno, alias.name
+
+
+def _type_checking_imports_from_init() -> set[tuple[str, str]]:
+    source = Path("src/easycat/__init__.py").read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="src/easycat/__init__.py")
+    pairs: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Name)
+            and node.test.id == "TYPE_CHECKING"
+        ):
+            continue
+        for stmt in ast.walk(node):
+            if isinstance(stmt, ast.ImportFrom) and stmt.module:
+                for alias in stmt.names:
+                    if alias.name != "*":
+                        pairs.add((stmt.module, alias.name))
+    return pairs
 
 
 def _easycat_imports_from_markdown(path: Path) -> Iterable[tuple[int, str]]:
