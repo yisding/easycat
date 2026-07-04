@@ -237,8 +237,8 @@ def test_stats_quota_error_rate_limit_parity(tmp_path: Path) -> None:
         assert transport._stats_quota_error(stats_path, _SNAPSHOT) is None
         assert routes._stats_quota_error(stats_path, _SNAPSHOT) is None
         stamp = time.monotonic()
-        transport._stats_request_times.append(stamp)
-        routes._stats_request_times.append(stamp)
+        transport._stats_state.request_times.append(stamp)
+        routes._stats_state.request_times.append(stamp)
 
     transport_error = transport._stats_quota_error(stats_path, _SNAPSHOT)
     routes_error = routes._stats_quota_error(stats_path, _SNAPSHOT)

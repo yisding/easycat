@@ -31,8 +31,7 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar
-from urllib.parse import parse_qsl, urlencode
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
@@ -40,6 +39,10 @@ from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
 from easycat.transports._base import AudioQueueMixin, make_version_info
+
+if TYPE_CHECKING:
+    from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
+    from easycat.server.auth import AuthPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +180,22 @@ def _append_webrtc_stats_record(stats_path: Path, snapshot: dict[str, object]) -
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     with stats_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+
+
+@dataclass
+class WebRTCStatsState:
+    """Per-server stats rate-limit window + record counter.
+
+    Owned by each signaling surface (the singleton :class:`WebRTCTransport`, or
+    one per multi-session ``WebRTCRoutes`` unit) and passed to the shared
+    :class:`easycat.server._webrtc_handlers.WebRTCSignalingHandlers` so the
+    rate-limit / quota semantics stay per-server, matching the pre-convergence
+    behavior exactly. Defined here (not in the server package) so the transport
+    can own it without importing ``easycat.server`` at module load.
+    """
+
+    request_times: deque[float] = field(default_factory=deque)
+    record_count: int | None = None
 
 
 def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
@@ -887,29 +906,44 @@ class WebRTCTransport(AudioQueueMixin):
         self._offer_lock = asyncio.Lock()
         self._peer_closed = asyncio.Event()
         self._peer_closed.set()
-        self._stats_request_times: deque[float] = deque()
-        self._stats_record_count: int | None = None
+        # Per-server stats rate-limit / record state, shared with each lazily
+        # built signaling-handlers instance (see ``_signaling``).
+        self._stats_state = WebRTCStatsState()
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _ice_servers_as_dicts(self, *, include_credentials: bool = True) -> list[dict[str, Any]]:
-        """Serialize configured ICE servers to plain dicts.
+    def _auth_policy(self) -> AuthPolicy | None:
+        """Build the unified bearer-token policy, or ``None`` for open access.
 
-        The ``/offer`` handler needs the complete configuration to build
-        server-side ``RTCIceServer`` objects.  The ``/config`` endpoint is
-        public by default, so callers can request URL-only entries for
-        browser-facing responses unless a deployment explicitly opts in.
+        No configured token maps to ``None`` (open); otherwise a
+        :class:`~easycat.server.auth.BearerTokenAuth` carrying ``allow_query_token``
+        is returned. Imported lazily so ``import easycat.transports.webrtc`` pulls
+        no server package.
         """
-        result: list[dict[str, Any]] = []
-        for srv in self._config.ice_servers:
-            entry: dict[str, Any] = {"urls": srv.urls}
-            if include_credentials:
-                if srv.username:
-                    entry["username"] = srv.username
-                if srv.credential:
-                    entry["credential"] = srv.credential
-            result.append(entry)
-        return result
+        from easycat.server.auth import BearerTokenAuth
+
+        token = normalize_auth_token(self._config.auth_token)
+        if token is None:
+            return None
+        return BearerTokenAuth(token=token, allow_query_token=self._config.allow_query_token)
+
+    def _signaling(self) -> WebRTCSignalingHandlers:
+        """Build the shared stateless signaling surface from current state.
+
+        Imported LAZILY (the optional ``webrtc`` server deps stay optional) and
+        built fresh each call so it always reflects the live ``_web`` /
+        ``_has_bundled_client``; the per-server rate-limit / record state persists
+        across calls via the shared ``self._stats_state`` object passed in.
+        """
+        from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
+
+        return WebRTCSignalingHandlers(
+            self._config,
+            web=self._web,
+            auth=self._auth_policy(),
+            stats=self._stats_state,
+            has_bundled_client=self._has_bundled_client,
+        )
 
     def _is_current_peer_generation(self, peer_generation: int | None) -> bool:
         return peer_generation is None or peer_generation == self._peer_generation
@@ -918,142 +952,29 @@ class WebRTCTransport(AudioQueueMixin):
         if self._is_current_peer_generation(peer_generation):
             self._enqueue_sentinel()
 
+    # The stateless signaling surface (CORS, auth, stats permission/quota/deque)
+    # lives ONCE in ``easycat.server._webrtc_handlers.WebRTCSignalingHandlers``;
+    # these thin delegators keep the transport's private names for the offer path
+    # and the transport unit tests. ``_request_authorized`` is retained (rather
+    # than inlined) because the offer path and the auth tests call it by name.
+
     def _cors_headers(self, request: Any) -> dict[str, str]:
-        origin = getattr(request, "headers", {}).get("Origin")
-        if not origin:
-            return {}
-
-        configured_origins = self._config.cors_allowed_origins
-        if isinstance(configured_origins, str):
-            configured_origins = (configured_origins,)
-        allowed = {item.rstrip("/") for item in configured_origins}
-        if "*" in allowed:
-            allowed_origin = "*"
-        elif origin.rstrip("/") in allowed or self._origin_matches_request(origin, request):
-            allowed_origin = origin
-        else:
-            return {}
-
-        return {
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": _CORS_ALLOW_METHODS,
-            "Access-Control-Allow-Headers": _CORS_ALLOW_HEADERS,
-        }
-
-    @staticmethod
-    def _origin_matches_request(origin: str, request: Any) -> bool:
-        scheme = getattr(request, "scheme", None)
-        host = getattr(request, "host", None)
-        if not scheme or not host:
-            return False
-        return origin.rstrip("/") == f"{scheme}://{host}"
+        return self._signaling().cors_headers(request)
 
     def _request_authorized(self, request: Any) -> bool:
-        """Authorize a signaling request against the optional shared token.
-
-        Delegates to the unified :class:`easycat.server.auth.BearerTokenAuth`:
-        no configured token means open access; otherwise accept a
-        ``Authorization: Bearer <token>`` header, and a ``?token=`` query value
-        ONLY when ``allow_query_token=True`` (default off — the bundled WebRTC
-        client sends the ``Authorization`` header and is unaffected). Routing
-        through :class:`BearerTokenAuth` GUARDS the attacker-controlled
-        credential against a non-ASCII value: ``hmac.compare_digest`` raises
-        ``TypeError`` on a non-ASCII ``str``, and this handler is (deliberately)
-        try-less, so an unguarded compare would surface as HTTP 500 — a latent
-        DoS. The policy instead returns a clean deny (-> 401).
-        """
-        token = normalize_auth_token(self._config.auth_token)
-        if token is None:
-            return True
-        from easycat.server.auth import BearerTokenAuth, from_aiohttp_request
-
-        policy = BearerTokenAuth(token=token, allow_query_token=self._config.allow_query_token)
-        return policy.authorize(from_aiohttp_request(request)).allowed
-
-    def _unauthorized_response(self, request: Any) -> Any:
-        web = self._web
-        return web.Response(
-            status=401,
-            text=json.dumps({"error": "Missing or invalid bearer token"}),
-            content_type="application/json",
-            headers=self._cors_headers(request),
-        )
+        return self._signaling().authorized(request)
 
     def _stats_write_permitted(self, request: Any) -> bool:
-        """Return whether an unauthenticated stats write is validation-local.
-
-        A configured ``auth_token`` always authorizes through ``_request_authorized``.
-        Without a token, stats artifacts are only writable for loopback-bound
-        validation/demo servers and same-origin browser requests. This keeps a
-        non-loopback signaling server from exposing an unauthenticated append sink.
-        """
-        if normalize_auth_token(self._config.auth_token) is not None:
-            return self._request_authorized(request)
-
-        if not is_loopback_host(self._config.host):
-            return False
-
-        origin = getattr(request, "headers", {}).get("Origin")
-        return bool(origin and self._origin_matches_request(origin, request))
+        return self._signaling().stats_write_permitted(request)
 
     def _stats_forbidden_response(self, request: Any) -> Any:
-        web = self._web
-        return web.Response(
-            status=403,
-            text=json.dumps(
-                {
-                    "error": (
-                        "WebRTC stats collection requires a bearer token for non-loopback "
-                        "servers or a same-origin loopback validation request"
-                    )
-                }
-            ),
-            content_type="application/json",
-            headers=self._cors_headers(request),
-        )
+        return self._signaling().stats_forbidden_response(request)
 
     def _stats_quota_response(self, request: Any, message: str) -> Any:
-        web = self._web
-        return web.Response(
-            status=429,
-            text=json.dumps({"error": message}),
-            content_type="application/json",
-            headers=self._cors_headers(request),
-        )
+        return self._signaling().stats_quota_response(request, message)
 
     def _stats_quota_error(self, stats_path: Path, snapshot: dict[str, object]) -> str | None:
-        now = time.monotonic()
-        window_start = now - 60.0
-        while self._stats_request_times and self._stats_request_times[0] < window_start:
-            self._stats_request_times.popleft()
-
-        max_requests = self._config.stats_max_requests_per_minute
-        if max_requests >= 0 and len(self._stats_request_times) >= max_requests:
-            return "WebRTC stats rate limit exceeded"
-
-        encoded = json.dumps(snapshot, sort_keys=True) + "\n"
-        current_size = stats_path.stat().st_size if stats_path.exists() else 0
-        max_bytes = self._config.stats_max_file_bytes
-        if max_bytes >= 0 and current_size + len(encoded.encode("utf-8")) > max_bytes:
-            return "WebRTC stats artifact size limit exceeded"
-
-        max_records = self._config.stats_max_records
-        if max_records >= 0:
-            if self._stats_record_count is None:
-                current_records = 0
-                if stats_path.exists():
-                    with stats_path.open("r", encoding="utf-8") as handle:
-                        current_records = sum(1 for _ in handle)
-                self._stats_record_count = current_records
-            if self._stats_record_count >= max_records:
-                return "WebRTC stats artifact record limit exceeded"
-
-        return None
-
-    def _record_stats_write(self) -> None:
-        self._stats_request_times.append(time.monotonic())
-        if self._stats_record_count is not None:
-            self._stats_record_count += 1
+        return self._signaling().stats_quota_error(stats_path, snapshot)
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -1257,13 +1178,14 @@ class WebRTCTransport(AudioQueueMixin):
     async def _handle_offer_locked(self, request: Any) -> Any:
         """Handle an SDP offer with peer replacement serialized."""
         web = self._web
+        handlers = self._signaling()
         # Bail before doing any work if teardown has already begun. ``disconnect``
         # clears ``_connected`` under ``_offer_lock``, so once we hold the lock the
         # value is stable for the duration of this handler.
         if not self._connected:
             return self._unavailable_response(request)
-        if not self._request_authorized(request):
-            return self._unauthorized_response(request)
+        if not handlers.authorized(request):
+            return handlers.unauthorized_response(request)
         aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
         RTCPeerConnection = aiortc.RTCPeerConnection
         RTCSessionDescription = aiortc.RTCSessionDescription
@@ -1304,7 +1226,10 @@ class WebRTCTransport(AudioQueueMixin):
         peer_generation = self._peer_generation + 1
 
         # Build ICE configuration from the shared serializer.
-        ice_servers = [RTCIceServer(**entry) for entry in self._ice_servers_as_dicts()]
+        ice_servers = [
+            RTCIceServer(**entry)
+            for entry in handlers.ice_servers_as_dicts(include_credentials=True)
+        ]
         rtc_config = RTCConfiguration(iceServers=ice_servers)
 
         pc = None
@@ -1457,123 +1382,26 @@ class WebRTCTransport(AudioQueueMixin):
             headers=self._cors_headers(request),
         )
 
-    async def _handle_config(self, request: Any) -> Any:
-        """Return ICE server configuration for browser clients.
+    # ── Stateless signaling handlers (shared) ─────────────────────
+    # ``/config``, ``/stats``, ``/health``, ``/`` (root), and the CORS preflight
+    # are the byte-identical stateless surface lifted into
+    # ``WebRTCSignalingHandlers``; the singleton transport serves the FLAT
+    # ``status: ok`` health payload and the flat root (``client_base=""``).
 
-        When ``auth_token`` is configured, this endpoint requires the same
-        shared-token authorization as ``/offer`` and ``/stats`` so TURN
-        credentials are not exposed outside the signaling auth boundary.
-        TURN usernames and credentials stay hidden unless
-        ``expose_ice_credentials`` is enabled.
-        """
-        web = self._web
-        if not self._request_authorized(request):
-            return self._unauthorized_response(request)
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {
-                    "iceServers": self._ice_servers_as_dicts(
-                        include_credentials=self._config.expose_ice_credentials
-                    )
-                }
-            ),
-            headers=self._cors_headers(request),
-        )
+    async def _handle_config(self, request: Any) -> Any:
+        return await self._signaling().handle_config(request)
 
     async def _handle_stats(self, request: Any) -> Any:
-        """Receive summarized browser-side WebRTC stats snapshots.
-
-        This endpoint is optional: without ``stats_path`` it acknowledges
-        snapshots so the bundled client can run unchanged, but no artifact is
-        written. Validation runs set ``EASYCAT_WEBRTC_STATS_PATH`` so posted
-        snapshots become a first-class JSONL artifact.
-        """
-        web = self._web
-        if not self._request_authorized(request):
-            return self._unauthorized_response(request)
-        try:
-            payload = await request.json()
-            snapshot = _sanitize_webrtc_stats_snapshot(payload)
-        except Exception as exc:
-            return web.Response(
-                status=400,
-                text=json.dumps({"error": f"Invalid WebRTC stats payload: {exc}"}),
-                content_type="application/json",
-                headers=self._cors_headers(request),
-            )
-
-        if self._config.stats_path:
-            if not self._stats_write_permitted(request):
-                return self._stats_forbidden_response(request)
-            stats_path = Path(self._config.stats_path)
-            quota_error = self._stats_quota_error(stats_path, snapshot)
-            if quota_error is not None:
-                return self._stats_quota_response(request, quota_error)
-            await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
-            self._record_stats_write()
-
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps({"status": "ok"}),
-            headers=self._cors_headers(request),
-        )
+        return await self._signaling().handle_stats(request)
 
     async def _handle_health(self, request: Any) -> Any:
-        web = self._web
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps({"status": "ok"}),
-            headers=self._cors_headers(request),
-        )
+        return await self._signaling().handle_health(request)
 
     async def _handle_root(self, request: Any) -> Any:
-        """Return a friendly landing response for signaling server root.
-
-        When the bundled demo client is served, redirect to it. Otherwise,
-        return a small JSON payload describing available endpoints so first
-        time users can immediately discover how to connect.
-        """
-        web = self._web
-        if self._has_bundled_client:
-            location = "/webrtc_client.html"
-            query_string = getattr(request, "query_string", "")
-            params: list[tuple[str, str]] = []
-            user_base = ""
-            for key, value in parse_qsl(query_string, keep_blank_values=True):
-                if key == "webrtc":
-                    if not user_base:
-                        user_base = value
-                    continue
-                params.append((key, value))
-            # The standalone helper serves FLAT routes, so there is no trusted
-            # mount base to substitute: preserve only a sanitized same-origin
-            # ``?webrtc=`` prefix (e.g. a reverse-proxy path prefix) and drop
-            # any untrusted/cross-origin value instead of echoing the raw query.
-            base = _sanitize_webrtc_base(user_base)
-            if base:
-                params.append(("webrtc", base))
-            if params:
-                location = f"{location}?{urlencode(params, doseq=True, safe='/')}"
-            raise web.HTTPFound(location)
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {
-                    "service": "easycat-webrtc-signaling",
-                    "endpoints": ["/offer", "/stats", "/config", "/health"],
-                    "note": (
-                        "Set WebRTCTransportConfig.static_dir to serve "
-                        "the demo browser client from this server."
-                    ),
-                }
-            ),
-            headers=self._cors_headers(request),
-        )
+        return await self._signaling().handle_root(request)
 
     async def _handle_cors_preflight(self, request: Any) -> Any:
-        web = self._web
-        return web.Response(headers=self._cors_headers(request))
+        return await self._signaling().handle_cors_preflight(request)
 
     # ── Audio track consumer ──────────────────────────────────────
 

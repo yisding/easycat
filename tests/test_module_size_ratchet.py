@@ -44,7 +44,7 @@ ALLOWLIST: dict[str, int] = {
     "server/voice_server.py": 1059,
     "session/_session.py": 1514,
     "transports/twilio_media.py": 1279,
-    "transports/webrtc.py": 1655,
+    "transports/webrtc.py": 1482,
     "transports/webtransport.py": 1640,
     "validation/runner.py": 1625,
 }
