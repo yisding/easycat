@@ -18,6 +18,18 @@ repos:
       require_serial: true
       exclude: ^src/easycat/cli/scaffold/templates/
 
+# Import Linter layering contracts ([tool.importlinter] in pyproject.toml).
+# Runs through the single uv-locked import-linter; it analyzes the whole
+# package from config, so it takes no filenames and always runs.
+- repo: local
+  hooks:
+    - id: lint-imports
+      name: import linter
+      entry: uv run lint-imports
+      language: system
+      pass_filenames: false
+      always_run: true
+
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
   hooks:

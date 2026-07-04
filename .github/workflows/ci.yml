@@ -30,6 +30,9 @@ jobs:
       - run: uv sync --locked --group dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      # Enforce the package layering contracts ([tool.importlinter] in
+      # pyproject.toml): provider-family independence + the webrtc forbidden edge.
+      - run: uv run lint-imports
       # Static analysis of the workflows themselves: SHA-pinned actions,
       # persist-credentials, template-injection, etc.
       - run: uvx zizmor .github/workflows
