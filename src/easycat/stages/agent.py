@@ -217,66 +217,84 @@ class AgentStage:
                 {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
             ):
                 stream = bridge.invoke(turn_input, recorder, cancel_token)
-                async for event in stream:
-                    kind = getattr(event, "kind", None)
-                    text = getattr(event, "text", "")
-                    if kind == "text_delta" and text:
-                        # Record the delivered token before yielding it.  Async
-                        # generator cleanup (``aclose()``, disconnects, or
-                        # cancellation) resumes by injecting ``GeneratorExit``
-                        # at the suspended yield, so post-yield code is not a
-                        # reliable audit boundary for text already handed to
-                        # downstream TTS or text clients.
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={"type": "TEXT_DELTA", "text": text},
-                        )
-                        if not (cancel_token and cancel_token.is_cancelled):
-                            accumulated.append(text)
-                        yield event
-                        continue
-                    elif kind == "done":
-                        if text:
+                try:
+                    async for event in stream:
+                        kind = getattr(event, "kind", None)
+                        text = getattr(event, "text", "")
+                        if kind == "text_delta" and text:
+                            # Record the delivered token before yielding it.
+                            # Async generator cleanup (``aclose()``, disconnects,
+                            # or cancellation) resumes by injecting
+                            # ``GeneratorExit`` at the suspended yield, so
+                            # post-yield code is not a reliable audit boundary
+                            # for text already handed to downstream TTS or text
+                            # clients.
                             journal_append_event(
                                 ctx,
                                 stage=self.name,
                                 name="agent_delta",
                                 turn_id=turn.id,
-                                data_extra={"type": "DONE", "text": text},
+                                data_extra={"type": "TEXT_DELTA", "text": text},
                             )
-                            accumulated = [text]
-                    elif kind == "tool_started" and getattr(event, "tool_name", ""):
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={
-                                "type": "TOOL_STARTED",
-                                "tool_name": event.tool_name,
-                                "call_id": getattr(event, "call_id", ""),
-                            },
-                        )
-                    elif kind == "tool_result":
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={
-                                "type": "TOOL_RESULT",
-                                "call_id": getattr(event, "call_id", ""),
-                                "result": getattr(event, "result", ""),
-                            },
-                        )
-                    if kind == "done":
-                        await close_stream_after_done(stream)
+                            if not (cancel_token and cancel_token.is_cancelled):
+                                accumulated.append(text)
+                            yield event
+                            continue
+                        elif kind == "done":
+                            if text:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={"type": "DONE", "text": text},
+                                )
+                                accumulated = [text]
+                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
+                            journal_append_event(
+                                ctx,
+                                stage=self.name,
+                                name="agent_delta",
+                                turn_id=turn.id,
+                                data_extra={
+                                    "type": "TOOL_STARTED",
+                                    "tool_name": event.tool_name,
+                                    "call_id": getattr(event, "call_id", ""),
+                                },
+                            )
+                        elif kind == "tool_result":
+                            journal_append_event(
+                                ctx,
+                                stage=self.name,
+                                name="agent_delta",
+                                turn_id=turn.id,
+                                data_extra={
+                                    "type": "TOOL_RESULT",
+                                    "call_id": getattr(event, "call_id", ""),
+                                    "result": getattr(event, "result", ""),
+                                },
+                            )
+                        if kind == "done":
+                            await close_stream_after_done(stream)
+                            yield event
+                            return
                         yield event
-                        return
-                    yield event
+                finally:
+                    # Forward an early consumer close (a barge-in ``aclose()``
+                    # injects ``GeneratorExit`` at a ``yield event`` above) down
+                    # into ``bridge.invoke()``.  ``async for`` does not do this
+                    # on its own, so without it the wrapped bridge is left
+                    # suspended and only GC-finalized, letting its
+                    # ``BaseException`` cleanup (which persists the partial
+                    # turn) race the next ``apply_interruption()``.  On normal
+                    # completion the stream is already drained via
+                    # ``close_stream_after_done`` so this is a no-op.
+                    aclose = getattr(stream, "aclose", None)
+                    if aclose is not None:
+                        try:
+                            await aclose()
+                        except Exception:
+                            pass
         except Exception as exc:
             errored = True
             elapsed_ms = (time.perf_counter() - started) * 1000
