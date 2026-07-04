@@ -412,7 +412,7 @@ class STTCommitter:
         try:
             await self._stt_getter().end_stream()
         except Exception:
-            pass
+            logger.debug("STT end_stream during cancel raised", exc_info=True)
         self._active = False
         self._on_speech_detection_reset()
         await self._runtime_scope.cancel_and_drain("stt_event_loop")
