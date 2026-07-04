@@ -576,7 +576,9 @@ Current CI:
 - `test` on Python 3.12 and 3.14 with the quick selector excluding socket,
   live, external-dependency, contract, slow, stress, and flaky tests
 - `integration-socket` on Python 3.12 and 3.14 with `integration_socket`
-- manual `integration-live` on Python 3.12 with `integration_live`
+- live provider tests run only in `nightly-validation.yml`'s `live-canaries`
+  job (protected `live-validation` environment); ci.yml no longer carries a
+  self-skipping `integration-live` job
 
 Planned PR-required CI:
 

@@ -129,6 +129,15 @@ def test_ci_has_package_build_smoke() -> None:
     assert 'python-version: "3.12"' in text
 
 
+def test_ci_has_no_fake_integration_live_job() -> None:
+    # The old workflow_dispatch-gated `integration-live` job had no secrets
+    # wired, so it self-skipped permanently — a green check that tested
+    # nothing. The real secret-gated live lane is nightly-validation.yml's
+    # `live-canaries` job (environment: live-validation, ref_protected).
+    workflow = yaml.safe_load(_workflow_text())
+    assert "integration-live" not in workflow["jobs"]
+
+
 def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
     workflow = yaml.safe_load(_workflow_text())
     matrix_versions = workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"]
