@@ -177,6 +177,11 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             logger.exception("Error in %s receive loop", self._provider_log_label)
         finally:
             self._on_receive_loop_end()
+            ws = self._ws
+            if ws is not None and ws.died_abnormally:
+                self._emit_provider_error(
+                    ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
+                )
             queue.put_nowait(None)
 
     async def _handle_ws_bytes_message(self, message: bytes) -> None:
