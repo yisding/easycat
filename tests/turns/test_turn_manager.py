@@ -567,6 +567,42 @@ async def test_barge_in_via_push_to_talk():
     assert tm.state == TurnManagerState.USER_SPEAKING
 
 
+@pytest.mark.asyncio
+async def test_barge_in_via_push_to_talk_during_processing():
+    """PTT start_turn during PROCESSING is a barge-in: cancel stale token, new turn."""
+    bus = EventBus()
+    config = TurnManagerConfig(mode=TurnMode.PUSH_TO_TALK)
+    cancel_called = [False]
+
+    async def mock_cancel():
+        cancel_called[0] = True
+        await bus.emit(Interruption())
+
+    tm = TurnManager(bus, config=config, cancel_turn_callback=mock_cancel)
+    collector = EventCollector(bus)
+
+    # IDLE -> USER_SPEAKING -> PROCESSING via the PTT API.
+    await tm.start_turn()
+    await tm.end_turn()
+    assert tm.state == TurnManagerState.PROCESSING
+
+    inflight_token = tm.cancel_token
+    assert inflight_token is not None
+    assert not inflight_token.is_cancelled
+
+    # PTT press again while agent is processing -> barge-in (was a silent no-op).
+    await tm.start_turn()
+
+    assert cancel_called[0]
+    assert tm.state == TurnManagerState.USER_SPEAKING
+    assert inflight_token.is_cancelled
+    assert tm.cancel_token is not None
+    assert tm.cancel_token is not inflight_token
+    assert not tm.cancel_token.is_cancelled
+    turn_started_count = sum(1 for n in collector.type_names if n == "TurnStarted")
+    assert turn_started_count == 2
+
+
 # ── Reset / cleanup tests ───────────────────────────────────────────
 
 

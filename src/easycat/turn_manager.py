@@ -600,6 +600,13 @@ class TurnManager:
 
         Can also be used in VAD mode to force-start a turn.
         """
+        if self._state == TurnManagerState.PROCESSING:
+            # PTT press while the agent is processing — treat as a barge-in
+            # to cancel the stale response and start a fresh turn (mirrors the
+            # VAD path in _handle_speech_start).
+            await self._handle_barge_in()
+            return
+
         if self._state not in (TurnManagerState.IDLE, TurnManagerState.BOT_SPEAKING):
             return
 
