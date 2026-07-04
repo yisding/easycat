@@ -535,7 +535,15 @@ def _prepare_output_dir(
     json_output: bool,
 ) -> None:
     resolved = output_path.resolve(strict=False)
-    if resolved == Path(resolved.anchor) or resolved == Path.cwd().resolve():
+    cwd = Path.cwd().resolve()
+    home = Path.home().resolve()
+    if (
+        resolved == Path(resolved.anchor)
+        or resolved == cwd
+        or resolved in cwd.parents
+        or resolved == home
+        or resolved in home.parents
+    ):
         emit_command_error(
             command,
             f"Refusing to export into {output_path}.",

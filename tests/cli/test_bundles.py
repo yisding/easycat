@@ -1601,6 +1601,27 @@ def test_bundles_export_refuses_existing_output_json_envelope(
     assert (output / "old.txt").exists()
 
 
+def test_bundles_export_force_refuses_ancestor_of_cwd(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --force must never rmtree an ancestor of the working dir. `-o ..`
+    # resolves above cwd; refuse it instead of deleting the parent tree.
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    bundle = work / "demo.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+    sentinel = tmp_path / "keep.txt"
+    sentinel.write_text("do not delete")
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", "..", "--force"])
+
+    assert result.exit_code == 1
+    assert "Refusing to export" in _unwrapped(result.stderr)
+    assert sentinel.read_text() == "do not delete"
+    assert work.is_dir()
+
+
 def test_bundles_export_rejects_unknown_target(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
