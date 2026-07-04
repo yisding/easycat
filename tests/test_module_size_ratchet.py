@@ -36,7 +36,7 @@ EXCLUDED_PREFIX = "cli/scaffold/templates/"
 # and are expected to drop sharply once the QS2/QS3/QS5/QS6 splits land.
 ALLOWLIST: dict[str, int] = {
     "config/easy.py": 1074,
-    "debugger/server.py": 2995,
+    "debugger/server.py": 1793,
     "integrations/agents/langgraph.py": 1588,
     "integrations/agents/llama_agents.py": 1362,
     "integrations/agents/pydantic_ai.py": 1021,
