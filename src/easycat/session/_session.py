@@ -1219,7 +1219,7 @@ class Session:
         Prefer :meth:`stop` or ``async with session:`` for normal teardown.
         Only valid after the session has stopped. Safe to call multiple times.
         """
-        if self._is_running:
+        if self._is_running or self._stopping:
             raise RuntimeError(
                 "Session.close() is a low-level compatibility alias and cannot stop "
                 "a running session; call await session.stop() instead"
@@ -1249,7 +1249,7 @@ class Session:
         Prefer :meth:`stop` or ``async with session:`` for normal teardown.
         Only valid after the session has stopped. Safe to call multiple times.
         """
-        if self._is_running:
+        if self._is_running or self._stopping:
             raise RuntimeError(
                 "Session.destroy() is a low-level compatibility alias and cannot stop "
                 "a running session; call await session.stop() instead"

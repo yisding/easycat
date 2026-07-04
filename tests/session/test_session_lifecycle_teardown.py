@@ -209,6 +209,49 @@ def test_session_destroy_compatibility_alias_retries_after_close_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method_name", ["close", "destroy"])
+async def test_session_low_level_compatibility_aliases_reject_stopping_session(
+    method_name: str,
+):
+    reached = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingTransport(FakeTransport):
+        async def disconnect(self) -> None:
+            reached.set()
+            await release.wait()
+            await super().disconnect()
+
+    journal = TrackingJournal()
+    session = Session(
+        _full_config(transport=BlockingTransport(), journal=journal, session_id="sess")
+    )
+
+    await session.start()
+    stop_task = asyncio.create_task(session.stop())
+    await reached.wait()
+
+    # Mid-stop window: stopping has begun, running has cleared, and the
+    # clean-close teardown tail has NOT been written yet.
+    assert session._stopping is True
+    assert not session.is_running
+    assert journal.finalize_calls == 0
+
+    # The public alias must refuse to run during the stopping window so it
+    # cannot write the clean-close marker early and corrupt the teardown tail.
+    with pytest.raises(RuntimeError, match="await session.stop"):
+        getattr(session, method_name)()
+    assert journal.finalize_calls == 0
+
+    release.set()
+    await stop_task
+
+    # stop() finishes its own teardown tail exactly once.
+    assert journal.finalize_calls == 1
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["stop", "shutdown"])
 async def test_session_teardown_closes_audio_providers(method_name: str):
     calls: list[str] = []
