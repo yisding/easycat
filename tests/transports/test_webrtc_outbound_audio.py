@@ -168,6 +168,38 @@ class TestOutboundAudioAecReference:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_recv_schedules_delivery_emit_without_blocking(self):
+        """_recv must not await EventBus.emit on the RTP pacing path: the
+        TransportAudioDelivered event is scheduled as a tracked task and is not
+        delivered until the loop yields after _recv returns."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)  # yield: recv must not have awaited us
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xAA]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+
+        # Scheduled, not awaited: handler has not completed, but a task exists.
+        assert delivered == []
+        assert source._emit_tasks
+        # Draining the scheduled task delivers the event.
+        await asyncio.gather(*list(source._emit_tasks))
+        assert [e.chunk.data for e in delivered] == [played]
+        assert not source._emit_tasks  # done-callback discarded it
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_keeps_reference_but_drops_pending_audio(self):
         source = _OutboundAudioSource()
         _disable_pacing(source)

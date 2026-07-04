@@ -574,6 +574,11 @@ class _OutboundAudioSource:
         self._pts = 0
         self._start: float | None = None
         self._event_bus: EventBus | None = None
+        # Fire-and-forget bus.emit tasks (TransportAudioDelivered), tracked so
+        # they are not GC'd mid-flight.  Observability must never block the RTP
+        # pacing hot path, so emission is scheduled, not awaited (mirrors
+        # LocalTransport / AudioQueueMixin._emit_tasks).
+        self._emit_tasks: set[asyncio.Task[None]] = set()
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
         # AEC far-end reference drain queue.  ``_recv`` appends each delivered
@@ -751,14 +756,18 @@ class _OutboundAudioSource:
         if self._event_bus is not None:
             for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
                 if delivered_chunk.data:
-                    await self._event_bus.emit(
-                        TransportAudioDelivered(
-                            chunk=delivered_chunk,
-                            session_id=session_id,
-                            turn_id=turn_id,
-                            turn_ref=turn_ref,
+                    task = asyncio.create_task(
+                        self._event_bus.emit(
+                            TransportAudioDelivered(
+                                chunk=delivered_chunk,
+                                session_id=session_id,
+                                turn_id=turn_id,
+                                turn_ref=turn_ref,
+                            )
                         )
                     )
+                    self._emit_tasks.add(task)
+                    task.add_done_callback(self._emit_tasks.discard)
         return frame
 
     def drain_aec_reference_frames(self) -> list[bytes]:
