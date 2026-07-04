@@ -69,13 +69,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode
 
+from easycat._net import is_loopback_host
 from easycat.transports.webrtc import (
     _CORS_ALLOW_HEADERS,
     _CORS_ALLOW_METHODS,
     WebRTCTransport,
     WebRTCTransportConfig,
     _append_webrtc_stats_record,
-    _is_loopback_host,
     _sanitize_webrtc_base,
     _sanitize_webrtc_stats_snapshot,
 )
@@ -546,7 +546,7 @@ class WebRTCRoutes:
         """
         if self._auth is not None:
             return self._authorized(request)
-        if not _is_loopback_host(self._config.host):
+        if not is_loopback_host(self._config.host):
             return False
         origin = getattr(request, "headers", {}).get("Origin")
         return bool(origin and WebRTCTransport._origin_matches_request(origin, request))

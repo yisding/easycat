@@ -42,12 +42,12 @@ import wave
 import webbrowser
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from ipaddress import ip_address
 from pathlib import Path
 from re import _parser as re_parser
 from typing import Any
 from urllib.parse import urlsplit
 
+from easycat._net import is_loopback_host
 from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
 from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._pcm import full_scale as _full_scale
@@ -1854,30 +1854,19 @@ def _make_app(
 
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-    def _hostname_is_loopback(hostname: str | None) -> bool:
-        if not hostname:
-            return False
-        normalized = hostname.strip().lower()
-        if normalized == "localhost":
-            return True
-        try:
-            return ip_address(normalized).is_loopback
-        except ValueError:
-            return False
-
     def _origin_is_safe(origin: str) -> bool:
         if not origin:
             return False
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"}:
             return False
-        return _hostname_is_loopback(parsed.hostname)
+        return is_loopback_host(parsed.hostname)
 
     def _host_is_safe(host: str) -> bool:
         if not host:
             return False
         parsed = urlsplit(f"//{host}")
-        return _hostname_is_loopback(parsed.hostname)
+        return is_loopback_host(parsed.hostname)
 
     @web.middleware
     async def _origin_guard(request: Any, handler: Any) -> Any:

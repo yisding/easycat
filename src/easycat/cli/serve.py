@@ -25,6 +25,7 @@ from urllib.parse import urlencode
 import typer
 
 from easycat._env import is_truthy
+from easycat._net import is_loopback_host
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stdout_console
 
@@ -45,11 +46,8 @@ def _serve_token_from_env() -> str | None:
 def _is_loopback(host: str) -> bool:
     """Reuse the canonical loopback check (covers all 127.0.0.0/8 / ``::1`` /
     ``::ffff:127.*`` forms, not just the three literals) so the CLI pre-flight
-    guard is never STRICTER than VoiceApp's authoritative one. Imported lazily to
-    keep the CLI module-load light."""
-    from easycat.transports.webrtc import _is_loopback_host
-
-    return _is_loopback_host(host)
+    guard is never STRICTER than VoiceApp's authoritative one."""
+    return is_loopback_host(host)
 
 
 def _url_host(host: str) -> str:

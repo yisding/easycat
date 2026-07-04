@@ -31,12 +31,12 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hmac import compare_digest
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qsl, urlencode
 
 from easycat._extras import require_module
+from easycat._net import is_loopback_host, normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
@@ -348,22 +348,6 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _normalize_auth_token(token: str | None) -> str | None:
-    if token is None or not token.strip():
-        return None
-    return token
-
-
-def _is_loopback_host(host: str) -> bool:
-    normalized = host.strip().strip("[]").lower()
-    if normalized == "localhost":
-        return True
-    try:
-        return ip_address(normalized).is_loopback
-    except ValueError:
-        return False
-
-
 def _sanitize_webrtc_base(raw: str) -> str:
     """Return a safe same-origin path prefix from an untrusted ``?webrtc=`` value.
 
@@ -424,7 +408,7 @@ def webrtc_transport_config_from_env(
         port=int(os.getenv(port_env, "8080")),
         ice_servers=webrtc_ice_servers_from_env(),
         static_dir=static_dir,
-        auth_token=_normalize_auth_token(os.getenv(auth_token_env)),
+        auth_token=normalize_auth_token(os.getenv(auth_token_env)),
         max_sessions=int(os.getenv(max_sessions_env, "64")),
         expose_ice_credentials=_env_flag(expose_ice_credentials_env),
     )
@@ -476,7 +460,7 @@ async def serve_webrtc_config_sessions(
     # asymmetry: this helper previously raised unconditionally with no escape
     # hatch). A configured ``auth_token`` satisfies the guard; the escape hatch
     # mirrors the WebSocket helper.
-    auth_token = _normalize_auth_token(settings.auth_token)
+    auth_token = normalize_auth_token(settings.auth_token)
     bind_auth = (
         BearerTokenAuth(token=auth_token, allow_query_token=settings.allow_query_token)
         if auth_token is not None
@@ -974,7 +958,7 @@ class WebRTCTransport(AudioQueueMixin):
         accepted ONLY when ``allow_query_token=True`` (default off — the bundled
         WebRTC client sends the ``Authorization`` header and is unaffected).
         """
-        token = _normalize_auth_token(self._config.auth_token)
+        token = normalize_auth_token(self._config.auth_token)
         if token is None:
             return True
         value = getattr(request, "headers", {}).get("Authorization")
@@ -1004,10 +988,10 @@ class WebRTCTransport(AudioQueueMixin):
         validation/demo servers and same-origin browser requests. This keeps a
         non-loopback signaling server from exposing an unauthenticated append sink.
         """
-        if _normalize_auth_token(self._config.auth_token) is not None:
+        if normalize_auth_token(self._config.auth_token) is not None:
             return self._request_authorized(request)
 
-        if not _is_loopback_host(self._config.host):
+        if not is_loopback_host(self._config.host):
             return False
 
         origin = getattr(request, "headers", {}).get("Origin")
@@ -1079,8 +1063,8 @@ class WebRTCTransport(AudioQueueMixin):
         if self._connected:
             return
 
-        auth_token = _normalize_auth_token(self._config.auth_token)
-        if not _is_loopback_host(self._config.host) and auth_token is None:
+        auth_token = normalize_auth_token(self._config.auth_token)
+        if not is_loopback_host(self._config.host) and auth_token is None:
             raise ValueError(
                 "WebRTCTransportConfig.auth_token is required when binding WebRTC "
                 "signaling to a non-loopback host"

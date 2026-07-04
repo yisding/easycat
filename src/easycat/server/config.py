@@ -17,8 +17,8 @@ from pathlib import Path
 
 # ``AuthPolicy`` is a real type as of M5 (``easycat.server.auth``). The import
 # is light (auth.py pulls only hmac/dataclasses/typing/os and the leaf
-# ``_is_loopback_host``), so importing it at module load does not pull aiohttp
-# or any heavy SDK and keeps ``import easycat.server`` light.
+# ``is_loopback_host`` from ``easycat._net``), so importing it at module load
+# does not pull aiohttp or any heavy SDK and keeps ``import easycat.server`` light.
 from easycat.server.auth import AuthPolicy
 
 
