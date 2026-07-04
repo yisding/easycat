@@ -947,6 +947,21 @@ def test_diff_turn_filter_restricts_output(cli: CliRunner, tmp_path: Path) -> No
     assert payload["turns"][0]["index"] == 1
 
 
+def test_diff_non_integer_turn_exits_2(cli: CliRunner, tmp_path: Path) -> None:
+    """A non-integer ``--turn`` is a usage error (exit 2), not a silent empty diff."""
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=_milestone_records("t1", 1_000_000_000)), bundle_a)
+    export_debug_bundle(_FakeSession(records=_milestone_records("u1", 1_000_000_000)), bundle_b)
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--turn", "abc", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "diff"
+    assert payload["status"] == "error"
+
+
 def test_diff_missing_bundle_exits_5(cli: CliRunner, tmp_path: Path) -> None:
     """A missing bundle path exits 5 like the other journal commands."""
     present = tmp_path / "present.zip"

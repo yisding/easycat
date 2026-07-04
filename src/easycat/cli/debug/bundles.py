@@ -1687,6 +1687,18 @@ def diff_command(
     worst regression across the whole run.  Transcript text is redacted before
     it is printed.  See docs/latency.md.
     """
+    if turn is not None:
+        try:
+            int(turn)
+        except (TypeError, ValueError):
+            emit_command_error(
+                "diff",
+                f"--turn must be an integer turn index (got {turn!r}).",
+                json_output=json_output,
+                exit_code=2,
+            )
+            raise typer.Exit(2)
+
     bundle_a = _load_bundle_or_journal(path_a, command="diff", json_output=json_output)
     bundle_b = _load_bundle_or_journal(path_b, command="diff", json_output=json_output)
 
