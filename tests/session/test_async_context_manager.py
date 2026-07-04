@@ -82,7 +82,7 @@ async def test_wait_closed_wakes_when_session_shuts_down():
     # Let the waiter register before we shut down.
     await asyncio.sleep(0)
 
-    await session.shutdown()
+    await session.stop(force=True)
     await asyncio.wait_for(waiter, timeout=0.5)
     assert waiter.done()
 
@@ -120,7 +120,7 @@ async def test_aenter_is_noop_when_session_already_closed():
     """A session that has been shut down must not try to restart on re-entry."""
     session = Session(_config())
     await session.start()
-    await session.shutdown()
+    await session.stop(force=True)
     assert session._closed is True
 
     start_calls = 0

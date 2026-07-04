@@ -1071,7 +1071,7 @@ async def test_shutdown_force_closes_everything(monkeypatch: pytest.MonkeyPatch)
     await asyncio.sleep(0.05)
 
     # Shutdown should complete quickly despite slow agent and TTS
-    await asyncio.wait_for(session.shutdown(), timeout=5.0)
+    await asyncio.wait_for(session.stop(force=True), timeout=5.0)
     assert not session.is_running
 
 

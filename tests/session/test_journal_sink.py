@@ -479,7 +479,7 @@ async def test_session_journal_stays_read_only_after_shutdown() -> None:
         queue_len=200,
         total_drops=1,
     )
-    await session.shutdown()
+    await session.stop(force=True)
 
     assert view is not None
     records = view.read()

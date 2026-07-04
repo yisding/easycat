@@ -35,6 +35,7 @@ dependencies = [
     "httpx>=0.28.1",
     "rich>=15.0.0",
     "sentencesplit>=0.0.4",
+    "typing-extensions>=4.5",
     "typer>=0.16",
     "websockets>=15.0.1,<17",
 ]

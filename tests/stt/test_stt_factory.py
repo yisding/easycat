@@ -157,10 +157,12 @@ def test_factory_top_level_api_key_takes_precedence_over_params():
 
 def test_factory_accepts_deprecated_settings_alias():
     # ``settings`` is a deprecated alias for ``params``; it must keep
-    # working so it stays symmetric with TTSProviderConfig.
-    config = STTProviderConfig(
-        provider="openai", settings={"api_key": "settings-key", "model": "whisper-1"}
-    )
+    # working (emitting a ``DeprecationWarning``) so it stays symmetric with
+    # TTSProviderConfig.
+    with pytest.warns(DeprecationWarning):
+        config = STTProviderConfig(
+            provider="openai", settings={"api_key": "settings-key", "model": "whisper-1"}
+        )
     provider = create_stt_provider(config)
     assert isinstance(provider, OpenAISTT)
     assert provider._config.api_key == "settings-key"

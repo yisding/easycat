@@ -341,7 +341,7 @@ async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
     assert task is not None
     assert session._runtime_scope.tasks("stt_pause_commit") == (task,)
 
-    await session.shutdown()
+    await session.stop(force=True)
 
     records = [
         record for record in journal.read() if record.data.get("task_name") == "stt_pause_commit"

@@ -37,11 +37,13 @@ class TestTTSProviderConfig:
         assert config.params["api_key"] == "test"
 
     def test_settings_alias_folds_into_params(self):
-        # ``settings`` is a deprecated alias for ``params``.
-        config = TTSProviderConfig(
-            provider="openai",
-            settings={"api_key": "test", "model": "tts-1-hd"},
-        )
+        # ``settings`` is a deprecated alias for ``params``; folding it emits
+        # a ``DeprecationWarning`` (PEP 702 / QW8).
+        with pytest.warns(DeprecationWarning):
+            config = TTSProviderConfig(
+                provider="openai",
+                settings={"api_key": "test", "model": "tts-1-hd"},
+            )
         assert config.settings is None
         assert config.params == {"api_key": "test", "model": "tts-1-hd"}
 
@@ -50,7 +52,7 @@ class TestCreateTTSProvider:
     def test_create_openai(self):
         config = TTSProviderConfig(
             provider="openai",
-            settings={"api_key": "test-key"},
+            params={"api_key": "test-key"},
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, OpenAITTS)
@@ -58,7 +60,7 @@ class TestCreateTTSProvider:
     def test_create_deepgram(self):
         config = TTSProviderConfig(
             provider="deepgram",
-            settings={"api_key": "test-key"},
+            params={"api_key": "test-key"},
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, DeepgramTTS)
@@ -66,7 +68,7 @@ class TestCreateTTSProvider:
     def test_create_elevenlabs(self):
         config = TTSProviderConfig(
             provider="elevenlabs",
-            settings={"api_key": "test-key"},
+            params={"api_key": "test-key"},
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, ElevenLabsTTS)
@@ -74,7 +76,7 @@ class TestCreateTTSProvider:
     def test_create_cartesia(self):
         config = TTSProviderConfig(
             provider="cartesia",
-            settings={"api_key": "test-key"},
+            params={"api_key": "test-key"},
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, CartesiaTTS)
@@ -82,7 +84,7 @@ class TestCreateTTSProvider:
     def test_cartesia_with_custom_settings(self):
         config = TTSProviderConfig(
             provider="cartesia",
-            settings={
+            params={
                 "api_key": "c-test",
                 "model_id": "sonic-turbo",
                 "voice_id": "voice-custom",
@@ -98,7 +100,7 @@ class TestCreateTTSProvider:
     def test_case_insensitive_provider_name(self):
         config = TTSProviderConfig(
             provider="OpenAI",
-            settings={"api_key": "test"},
+            params={"api_key": "test"},
         )
         provider = create_tts_provider(config)
         assert isinstance(provider, OpenAITTS)
@@ -158,7 +160,7 @@ class TestCreateTTSProvider:
         assert provider._config.model == "tts-1-hd"
 
     def test_empty_settings_rejects_missing_api_key(self):
-        config = TTSProviderConfig(provider="openai", settings={})
+        config = TTSProviderConfig(provider="openai", params={})
         with pytest.raises(ValueError, match="API key is required"):
             create_tts_provider(config)
 
@@ -168,14 +170,14 @@ class TestCreateTTSProvider:
             create_tts_provider(config)
 
     def test_rejects_empty_api_key(self):
-        config = TTSProviderConfig(provider="openai", settings={"api_key": ""})
+        config = TTSProviderConfig(provider="openai", params={"api_key": ""})
         with pytest.raises(ValueError, match="API key is required"):
             create_tts_provider(config)
 
     def test_openai_with_custom_settings(self):
         config = TTSProviderConfig(
             provider="openai",
-            settings={
+            params={
                 "api_key": "sk-test",
                 "model": "tts-1-hd",
                 "voice": "nova",
@@ -191,7 +193,7 @@ class TestCreateTTSProvider:
     def test_deepgram_with_custom_settings(self):
         config = TTSProviderConfig(
             provider="deepgram",
-            settings={
+            params={
                 "api_key": "dg-test",
                 "model": "aura-orpheus-en",
                 "sample_rate": 16000,
@@ -205,7 +207,7 @@ class TestCreateTTSProvider:
     def test_elevenlabs_with_custom_settings(self):
         config = TTSProviderConfig(
             provider="elevenlabs",
-            settings={
+            params={
                 "api_key": "el-test",
                 "voice_id": "custom-voice",
                 "stability": 0.9,

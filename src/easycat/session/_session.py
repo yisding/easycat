@@ -18,6 +18,8 @@ from re import sub
 from typing import Any, TypeVar
 from uuid import uuid4
 
+from typing_extensions import deprecated
+
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._health_check import PeriodicHealthChecker
@@ -1203,6 +1205,10 @@ class Session:
         self._session_log_token = None
         reset_session(token)
 
+    @deprecated(
+        "Session.shutdown() is deprecated; use await session.stop(force=True) "
+        "or 'async with session:'."
+    )
     async def shutdown(self) -> None:
         """Force-cancel in-flight work, then release backend resources.
 
@@ -1212,6 +1218,9 @@ class Session:
         """
         await self.stop(force=True)
 
+    @deprecated(
+        "Session.close() is deprecated; use await session.stop() or 'async with session:'."
+    )
     def close(self) -> None:
         """Finalize the session journal without tearing down backends.
 
@@ -1242,6 +1251,9 @@ class Session:
         self._journal = state.journal
         self._artifact_store = state.artifact_store
 
+    @deprecated(
+        "Session.destroy() is deprecated; use await session.stop() or 'async with session:'."
+    )
     def destroy(self) -> None:
         """Release live debug backends while keeping post-stop inspection working.
 

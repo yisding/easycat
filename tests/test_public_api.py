@@ -219,6 +219,22 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     assert "extending/" in section
 
 
+def test_public_api_documents_deprecation_and_removal_policy() -> None:
+    """The public-API contract must name the `@deprecated` aliases and removal window."""
+    doc = Path("docs/public-api.md").read_text(encoding="utf-8")
+    try:
+        section = doc.split("## Deprecation & Removal Policy", 1)[1]
+    except IndexError as exc:
+        raise AssertionError(
+            "docs/public-api.md is missing the Deprecation & Removal Policy section"
+        ) from exc
+
+    assert "`@deprecated`" in section
+    assert "`Session.shutdown()`" in section
+    assert "`settings=`" in section
+    assert "minor release" in section
+
+
 def test_curated_public_api_lazy_imports() -> None:
     from easycat import (
         EasyConfig,

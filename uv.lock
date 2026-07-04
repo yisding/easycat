@@ -1119,6 +1119,7 @@ dependencies = [
     { name = "rich" },
     { name = "sentencesplit" },
     { name = "typer" },
+    { name = "typing-extensions" },
     { name = "websockets" },
 ]
 
@@ -1315,6 +1316,7 @@ requires-dist = [
     { name = "twilio", marker = "extra == 'all'", specifier = ">=9.0.0" },
     { name = "twilio", marker = "extra == 'telephony'", specifier = ">=9.0.0" },
     { name = "typer", specifier = ">=0.16" },
+    { name = "typing-extensions", specifier = ">=4.5" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.29.0" },
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=15.0.1,<17" },
