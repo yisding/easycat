@@ -74,6 +74,7 @@ from easycat.transports.webrtc import (
     _CORS_ALLOW_METHODS,
     WebRTCTransport,
     WebRTCTransportConfig,
+    _append_webrtc_stats_record,
     _is_loopback_host,
     _sanitize_webrtc_base,
     _sanitize_webrtc_stats_snapshot,
@@ -153,6 +154,9 @@ class WebRTCRoutes:
         # ``_stats_request_times`` deque so the rate limit is per-server, not
         # per-request — matching the previous behavior exactly).
         self._stats_request_times: deque[float] = deque()
+        # In-memory record counter for the stats artifact quota; seeded lazily
+        # from the on-disk line count and incremented per successful append.
+        self._stats_record_count: int | None = None
         # Set by ``register`` when a bundled client is served so ``handle_root``
         # redirects to it (mirrors ``WebRTCTransport._has_bundled_client``).
         self._has_bundled_client = False
@@ -520,10 +524,10 @@ class WebRTCRoutes:
             quota_error = self._stats_quota_error(stats_path, snapshot)
             if quota_error is not None:
                 return self._stats_quota_response(request, quota_error)
-            stats_path.parent.mkdir(parents=True, exist_ok=True)
-            with stats_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+            await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
             self._stats_request_times.append(time.monotonic())
+            if self._stats_record_count is not None:
+                self._stats_record_count += 1
 
         return web.Response(
             content_type="application/json",
@@ -589,11 +593,13 @@ class WebRTCRoutes:
 
         max_records = self._config.stats_max_records
         if max_records >= 0:
-            current_records = 0
-            if stats_path.exists():
-                with stats_path.open("r", encoding="utf-8") as handle:
-                    current_records = sum(1 for _ in handle)
-            if current_records >= max_records:
+            if self._stats_record_count is None:
+                current_records = 0
+                if stats_path.exists():
+                    with stats_path.open("r", encoding="utf-8") as handle:
+                        current_records = sum(1 for _ in handle)
+                self._stats_record_count = current_records
+            if self._stats_record_count >= max_records:
                 return "WebRTC stats artifact record limit exceeded"
 
         return None

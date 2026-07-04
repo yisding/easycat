@@ -65,6 +65,44 @@ class TestWebRTCStatsArtifact:
         assert "192.168.1.20" not in line
 
     @pytest.mark.asyncio
+    async def test_stats_endpoint_enforces_record_limit_via_in_memory_counter(
+        self, tmp_path, monkeypatch
+    ):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=2)
+        )
+        transport._web = _FakeWeb
+
+        # The append must run off the event loop via ``asyncio.to_thread`` and the
+        # record-count quota must be served from an in-memory counter without
+        # re-reading the whole JSONL artifact on every request.
+        to_thread_calls = 0
+        real_to_thread = webrtc_mod.asyncio.to_thread
+
+        async def _counting_to_thread(func, *args, **kwargs):
+            nonlocal to_thread_calls
+            to_thread_calls += 1
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(webrtc_mod.asyncio, "to_thread", _counting_to_thread)
+
+        def _post():
+            return transport._handle_stats(
+                _FakeSameOriginJsonRequest({"kind": "webrtc_client_stats", "schema_version": 1})
+            )
+
+        assert (await _post()).status == 200
+        assert (await _post()).status == 200
+        over_limit = await _post()
+
+        assert over_limit.status == 429
+        assert "record limit exceeded" in over_limit.text
+        assert to_thread_calls == 2
+        lines = stats_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+    @pytest.mark.asyncio
     async def test_stats_endpoint_rejects_non_object_payload(self, tmp_path):
         stats_path = tmp_path / "webrtc-stats.jsonl"
         transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))

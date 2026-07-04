@@ -170,6 +170,16 @@ def _sanitize_webrtc_stats_snapshot(payload: object) -> dict[str, object]:
     return snapshot
 
 
+def _append_webrtc_stats_record(stats_path: Path, snapshot: dict[str, object]) -> None:
+    """Append one sanitized stats record to ``stats_path`` (blocking file I/O).
+
+    Runs off the event loop via ``asyncio.to_thread`` from the stats handlers.
+    """
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    with stats_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+
+
 def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:
     """Extract valid interleaved PCM16 bytes from an ``av.AudioFrame``.
 
@@ -878,6 +888,7 @@ class WebRTCTransport(AudioQueueMixin):
         self._peer_closed = asyncio.Event()
         self._peer_closed.set()
         self._stats_request_times: deque[float] = deque()
+        self._stats_record_count: int | None = None
 
     # ── Helpers ─────────────────────────────────────────────────
 
@@ -1028,17 +1039,21 @@ class WebRTCTransport(AudioQueueMixin):
 
         max_records = self._config.stats_max_records
         if max_records >= 0:
-            current_records = 0
-            if stats_path.exists():
-                with stats_path.open("r", encoding="utf-8") as handle:
-                    current_records = sum(1 for _ in handle)
-            if current_records >= max_records:
+            if self._stats_record_count is None:
+                current_records = 0
+                if stats_path.exists():
+                    with stats_path.open("r", encoding="utf-8") as handle:
+                        current_records = sum(1 for _ in handle)
+                self._stats_record_count = current_records
+            if self._stats_record_count >= max_records:
                 return "WebRTC stats artifact record limit exceeded"
 
         return None
 
     def _record_stats_write(self) -> None:
         self._stats_request_times.append(time.monotonic())
+        if self._stats_record_count is not None:
+            self._stats_record_count += 1
 
     # ── Transport protocol ────────────────────────────────────────
 
@@ -1491,9 +1506,7 @@ class WebRTCTransport(AudioQueueMixin):
             quota_error = self._stats_quota_error(stats_path, snapshot)
             if quota_error is not None:
                 return self._stats_quota_response(request, quota_error)
-            stats_path.parent.mkdir(parents=True, exist_ok=True)
-            with stats_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(snapshot, sort_keys=True) + "\n")
+            await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
             self._record_stats_write()
 
         return web.Response(
