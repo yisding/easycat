@@ -17,12 +17,11 @@ from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F4
 from easycat.runtime.records import JournalRecordKind
 
 if TYPE_CHECKING:
-    # Annotation-only imports.  At runtime ``ReplaySpec`` resolves via
-    # ``__getattr__`` below so we stay clear of the import cycle with
-    # ``runtime.replay``.  ``ReplayCassette`` is only referenced in the
-    # ``Stage.replay`` signature, so the lazy ``TYPE_CHECKING`` import is
-    # sufficient and keeps the module load order independent of
-    # ``runtime.replay``.
+    # Annotation-only imports.  ``ReplaySpec`` and ``ReplayCassette`` appear
+    # only in ``Stage.replay``'s signature, which stays a string thanks to
+    # ``from __future__ import annotations`` and is never evaluated at
+    # runtime.  Importing them under ``TYPE_CHECKING`` keeps module load
+    # order independent of ``runtime.replay`` (which imports from here).
     from easycat.runtime.replay import ReplayCassette, ReplaySpec
 
 # ── Control signals ──────────────────────────────────────────────
@@ -157,21 +156,6 @@ class Stage(Protocol):
 # ── Non-deterministic fields ─────────────────────────────────────
 # Re-exported from ``runtime.nondeterministic`` (canonical home).
 # Extended in ``runtime.replay`` as ``REPLAY_IGNORE_FIELDS``.
-
-
-# ── Lazy re-export: ReplaySpec lives in runtime.replay ──────────
-# ``runtime.replay`` imports from this package, so a top-level
-# ``from easycat.runtime.replay import ReplaySpec`` would deadlock
-# during initial module load.  We defer the lookup to attribute
-# access time instead.
-
-
-def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder
-    if name == "ReplaySpec":
-        from easycat.runtime.replay import ReplaySpec
-
-        return ReplaySpec
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ── Shared capture helpers ───────────────────────────────────────
