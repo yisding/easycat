@@ -145,6 +145,7 @@ class SileroVAD(_VADBase):
 
         # Accumulation buffer for sub-frame chunks
         self._buffer: bytes = b""
+        self._buffer_rate: int | None = None
 
         self._load_model()
 
@@ -203,6 +204,14 @@ class SileroVAD(_VADBase):
             chunk = resample_chunk(chunk, _SILERO_DEFAULT_RATE)
         target_rate = chunk.format.sample_rate
 
+        # A mid-stream 8k<->16k switch would concatenate old-rate remainder
+        # bytes with new-rate bytes and slice at the new frame size, garbling
+        # one boundary frame. Drop the stale remainder instead of raising —
+        # VAD is continuous.
+        if self._buffer_rate is not None and self._buffer_rate != target_rate:
+            self._buffer = b""
+        self._buffer_rate = target_rate
+
         # Accumulate into buffer
         self._buffer += chunk.data
 
@@ -256,6 +265,7 @@ class SileroVAD(_VADBase):
         """Reset VAD internal state."""
         super().reset()
         self._buffer = b""
+        self._buffer_rate = None
         if self._model is not None:
             try:
                 self._model.reset_states()
@@ -266,6 +276,7 @@ class SileroVAD(_VADBase):
         """Release the loaded model (onnxruntime session)."""
         super().close()
         self._buffer = b""
+        self._buffer_rate = None
 
     def __del__(self) -> None:
         self.close()
