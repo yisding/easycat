@@ -48,7 +48,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
-| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations` |
+| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py src/easycat/debugger/_aec_routes.py` |
 | Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
