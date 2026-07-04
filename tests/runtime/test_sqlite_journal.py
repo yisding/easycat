@@ -1221,6 +1221,65 @@ class TestLitestreamSqliteJournal:
 # ── libSQL adapter tests ────────────────────────────────────────
 
 
+class _LockProbeCursor:
+    """Minimal libSQL cursor: enough for LibsqlJournal.__init__ bootstrap."""
+
+    def fetchone(self):
+        return (0,)
+
+    def fetchall(self):
+        return []
+
+
+class _LockProbeConn:
+    """Fake libSQL connection whose ``sync()`` verifies the writer lock.
+
+    A correctly-locked caller already holds the non-reentrant
+    ``LibsqlJournal._lock``, so ``acquire(blocking=False)`` returns ``False``.
+    If it acquires, the caller bypassed single-writer discipline — recorded as
+    a violation.
+    """
+
+    def __init__(self):
+        self.journal = None
+        self.violations: list[str] = []
+        self.sync_threads: set[str] = set()
+
+    def executescript(self, sql):
+        return None
+
+    def execute(self, sql, params=None):
+        return _LockProbeCursor()
+
+    def commit(self):
+        return None
+
+    def close(self):
+        return None
+
+    def sync(self):
+        import threading
+
+        journal = self.journal
+        if journal is None:
+            # __init__/thread-start race before the test wires us up.
+            return
+        self.sync_threads.add(threading.current_thread().name)
+        if journal._lock.acquire(blocking=False):
+            self.violations.append(threading.current_thread().name)
+            journal._lock.release()
+
+
+class _FakeLibsqlModule:
+    """Stand-in for the ``libsql_experimental`` SDK module."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connect(self, **kwargs):
+        return self._conn
+
+
 class TestLibsqlJournal:
     def test_fallback_when_sdk_missing(self, tmp_path):
         """When libsql_experimental is not installed, factory falls back to SQLite."""
@@ -1340,6 +1399,66 @@ class TestLibsqlJournal:
         assert ro.degraded is False
         records = ro.read(start=0)
         assert [record.name for record in records] == ["fresh"]
+
+    def test_libsql_sync_paths_hold_writer_lock(self, tmp_path):
+        """Regression (bug #5): the periodic ``sync()`` daemon, ``flush()``,
+        and ``finalize()`` must touch the libSQL connection under the
+        single-writer ``threading.Lock``.
+
+        Without the lock the daemon sync races the append thread on the same
+        connection; ``append`` treats any error as fatal (``_enter_degraded``
+        → returns ``-1`` forever), silently dropping every later record.
+
+        Runs without the real ``libsql_experimental`` SDK by injecting a fake
+        connection whose ``sync()`` probes the lock: a correctly-locked caller
+        already holds the non-reentrant lock, so ``acquire(blocking=False)``
+        returns ``False``.  If it acquires, the caller bypassed the lock.
+        """
+        from easycat.runtime import LibsqlJournal
+
+        probe = _LockProbeConn()
+        fake_libsql = _FakeLibsqlModule(probe)
+
+        with mock.patch.dict("sys.modules", {"libsql_experimental": fake_libsql}):
+            j = LibsqlJournal(
+                "sess-lock",
+                data_dir=tmp_path,
+                sync_url="libsql://example.invalid",
+                sync_interval_s=0.01,
+            )
+            probe.journal = j
+            try:
+                start_seq = j.latest_sequence
+                # Same-thread probes: flush()/finalize() must hold the lock.
+                for _ in range(3):
+                    j.flush()
+                    j.finalize()
+                # Exercise the append path while the daemon loop ticks.
+                for i in range(20):
+                    assert (
+                        j.append(
+                            kind=JournalRecordKind.EVENT,
+                            name=f"e{i}",
+                            session_id="sess-lock",
+                            data={"i": i},
+                        )
+                        != -1
+                    )
+                # Wait until the background daemon sync loop has ticked.
+                deadline = time.monotonic() + 2.0
+                while "libsql-sync" not in probe.sync_threads and time.monotonic() < deadline:
+                    time.sleep(0.01)
+            finally:
+                # ``close()`` is out of the fixed scope (it stops the daemon
+                # before its own final sync); disarm the probe so its teardown
+                # sync does not register a spurious violation.
+                probe.journal = None
+                j.close()
+
+        assert "libsql-sync" in probe.sync_threads, "background sync loop never ran"
+        assert probe.violations == [], f"sync ran without the writer lock: {probe.violations}"
+        assert j.degraded is False
+        assert j.latest_sequence == start_seq + 20
 
 
 # ── AC1.18: Credential redaction tests ──────────────────────────

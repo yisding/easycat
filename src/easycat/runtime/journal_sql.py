@@ -917,7 +917,8 @@ class LibsqlJournal(_SqlJournalBase):
         if self._closed:
             return
         try:
-            self._conn.sync()
+            with self._lock:
+                self._conn.sync()
         except Exception:
             logger.debug("libsql sync failed during flush", exc_info=True)
 
@@ -925,15 +926,17 @@ class LibsqlJournal(_SqlJournalBase):
         if self._closed:
             return
         try:
-            self._conn.execute(
-                "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
-            )
-            self._conn.commit()
-            harden_sqlite_files(self._db_path)
+            with self._lock:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO session_state (key, value) VALUES ('clean_close', '1')"
+                )
+                self._conn.commit()
+                harden_sqlite_files(self._db_path)
         except Exception:
             logger.debug("libsql clean_close marker write failed", exc_info=True)
         try:
-            self._conn.sync()
+            with self._lock:
+                self._conn.sync()
         except Exception:
             logger.debug("libsql sync failed during finalize", exc_info=True)
 
@@ -1017,7 +1020,8 @@ class LibsqlJournal(_SqlJournalBase):
         """Background thread: periodically call ``conn.sync()``."""
         while not self._sync_stop.wait(timeout=self._sync_interval):
             try:
-                self._conn.sync()
+                with self._lock:
+                    self._conn.sync()
             except Exception:
                 logger.debug("libsql periodic sync failed", exc_info=True)
 
