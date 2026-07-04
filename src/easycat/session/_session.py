@@ -904,8 +904,6 @@ class Session:
         if event is None:
             event = asyncio.Event()
             self._closed_event = event
-            if self._closed:
-                event.set()
         await event.wait()
 
     def _mark_closed(self) -> None:
