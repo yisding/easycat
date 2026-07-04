@@ -28,6 +28,10 @@ from easycat.debug.bundle import (
 )
 
 
+def _format_ms(value: object) -> str:
+    return f"{value:.1f}" if isinstance(value, int | float) else "-"
+
+
 def _annotations_tally(annotations: Mapping[str, Any]) -> dict[str, Any]:
     """Roll a per-turn verdict sidecar map into a small pass/fail tally.
 

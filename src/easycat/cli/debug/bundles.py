@@ -63,13 +63,15 @@ from easycat.cli._output import (
 )
 from easycat.cli.debug._common import (
     _add_annotations_row,
+    _format_ms,
     _load_bundle_or_journal,
     _print_wide,
     _summarise_bundle,
 )
+from easycat.cli.debug.diff import diff_command
+from easycat.cli.debug.latency import latency_command
 from easycat.debug._issues import build_issues
-from easycat.debug._turn_diff import diff_bundles
-from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
+from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id
 from easycat.debug.annotations import load_annotations
 from easycat.debug.bundle import (
     BundleError,
@@ -87,7 +89,6 @@ from easycat.runtime.replay import (
     ReplaySpec,
     ToolReplayPolicy,
 )
-from easycat.validation.latency import LatencyPercentileStats
 from easycat.validation.redaction import (
     REDACTED_TRANSCRIPT,
     REDACTION_VERSION,
@@ -761,10 +762,6 @@ def _issues_table(report: Mapping[str, Any]) -> Table:
     return table
 
 
-def _format_ms(value: object) -> str:
-    return f"{value:.1f}" if isinstance(value, int | float) else "-"
-
-
 def _turn_waterfall_table(turns: list[dict[str, Any]]) -> Table:
     """Render the per-turn latency waterfall for ``bundles show``/``inspect``.
 
@@ -1229,292 +1226,6 @@ def replay_bundle(
         spec=spec,
         json_output=json_output,
     )
-
-
-# ── `easycat latency` ────────────────────────────────────────────
-
-# The five critical-path milestone deltas, in pipeline order, paired with
-# the compact column labels the per-turn table renders.  These mirror the
-# debugger critical-path panel (debugger/static/index.html CP_SEGMENTS) and
-# the ``turn_waterfall`` milestone keys, so the CLI and SPA stay in lockstep.
-_LATENCY_MILESTONES: tuple[tuple[str, str], ...] = (
-    ("vad->stt", "vad_endpoint_to_stt_final_ms"),
-    ("stt->req", "stt_final_to_agent_request_ms"),
-    ("req->token", "agent_request_to_first_token_ms"),
-    ("token->tts", "agent_first_token_to_tts_first_byte_ms"),
-    ("vad->tts", "vad_endpoint_to_tts_first_byte_ms"),
-)
-
-
-def _latency_percentiles(turns: list[dict[str, Any]]) -> dict[str, LatencyPercentileStats]:
-    """Per-milestone p50/p90/p95/p99 across all turns.
-
-    Reuses ``validation.latency.LatencyPercentileStats.from_values`` (which
-    drops ``None`` deltas) so the CLI never reimplements percentile math.
-    """
-    stats: dict[str, LatencyPercentileStats] = {}
-    for label, key in _LATENCY_MILESTONES:
-        values = [turn.get("milestones", {}).get(key) for turn in turns]
-        stats[label] = LatencyPercentileStats.from_values(values)
-    return stats
-
-
-def _latency_turn_table(turns: list[dict[str, Any]]) -> Table:
-    """One row per turn: the five critical-path milestone deltas in ms."""
-    table = Table(
-        title="Per-turn critical path (ms) — see docs/latency.md",
-        show_header=True,
-        header_style="bold",
-        box=None,
-        padding=(0, 1),
-        title_justify="left",
-    )
-    table.add_column("turn", no_wrap=True, overflow="fold")
-    for label, _key in _LATENCY_MILESTONES:
-        table.add_column(label, justify="right", no_wrap=True)
-    for turn in turns:
-        milestones = turn.get("milestones") or {}
-        table.add_row(
-            escape(str(turn.get("turn_id", ""))),
-            *[_format_ms(milestones.get(key)) for _label, key in _LATENCY_MILESTONES],
-        )
-    return table
-
-
-def _latency_percentile_table(stats: dict[str, LatencyPercentileStats]) -> Table:
-    """Percentile summary: one row per milestone, count + p50/p90/p95/p99."""
-    table = Table(
-        title="Critical-path percentiles (ms) — see docs/latency.md",
-        show_header=True,
-        header_style="bold",
-        box=None,
-        padding=(0, 1),
-        title_justify="left",
-    )
-    table.add_column("milestone", no_wrap=True)
-    table.add_column("count", justify="right", no_wrap=True)
-    table.add_column("p50", justify="right", no_wrap=True)
-    table.add_column("p90", justify="right", no_wrap=True)
-    table.add_column("p95", justify="right", no_wrap=True)
-    table.add_column("p99", justify="right", no_wrap=True)
-    for label, _key in _LATENCY_MILESTONES:
-        stat = stats[label]
-        table.add_row(
-            label,
-            str(stat.count),
-            _format_ms(stat.p50),
-            _format_ms(stat.p90),
-            _format_ms(stat.p95),
-            _format_ms(stat.p99),
-        )
-    return table
-
-
-@cli_command
-def latency_command(
-    bundle_path: Path = typer.Argument(
-        ...,
-        help=(
-            "Path to a ZIP bundle archive (``.zip``, ``.bundle``, or "
-            "``.easycat-bundle``) or a ``.sqlite`` journal."
-        ),
-    ),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
-) -> None:
-    """Summarise critical-path latency percentiles across a bundle's turns.
-
-    Rolls up the VAD endpoint → STT final → agent request → first token →
-    TTS first byte milestone deltas per turn and reports p50/p90/p95/p99
-    for each, without opening the debugger UI.  See docs/latency.md.
-    """
-    bundle = _load_bundle_or_journal(bundle_path, command="latency", json_output=json_output)
-    turns = turn_waterfall(list(bundle.records()))
-    percentiles = _latency_percentiles(turns)
-
-    if json_output:
-        emit_json(
-            json_envelope(
-                "latency",
-                path=str(bundle_path),
-                turns=turns,
-                percentiles={label: stat.to_dict() for label, stat in percentiles.items()},
-            )
-        )
-        raise typer.Exit(0)
-
-    stderr_console.print(f"[bold]Latency[/] [cyan]{escape(str(bundle_path))}[/]")
-    stderr_console.print()
-    if not turns:
-        warn("No turn-scoped records found; nothing to summarise.")
-        return
-    width = max(stdout_console.width, 120)
-    _print_wide(_latency_turn_table(turns), width)
-    stdout_console.print()
-    _print_wide(_latency_percentile_table(percentiles), width)
-
-
-# ── `easycat diff` ───────────────────────────────────────────────
-
-# Transcript fields whose free-form text must be suppressed before any diff
-# result is emitted (JSON envelope or human table).  A regressed milestone or
-# cost delta is just numbers; transcript bodies can carry arbitrary sensitive
-# caller/agent text, so substring redaction is not sufficient here.
-_DIFF_TRANSCRIPT_TEXT_FIELDS = ("user_a", "user_b", "agent_a", "agent_b")
-
-
-def _redact_diff_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Suppress every transcript body in a ``diff_bundles`` result in place.
-
-    The diff engine carries raw user/agent transcripts only long enough to
-    compute the ``changed`` flag.  Before any CLI output, replace those bodies
-    with a constant marker so arbitrary conversation content cannot leak to
-    stdout, CI logs, or shared JSON artifacts.  Milestones, costs, and the
-    summary are numbers and pass through untouched.
-    """
-    for turn in result.get("turns", ()):
-        transcript = turn.get("transcript")
-        if not isinstance(transcript, dict):
-            continue
-        for field_name in _DIFF_TRANSCRIPT_TEXT_FIELDS:
-            value = transcript.get(field_name)
-            if isinstance(value, str) and value:
-                transcript[field_name] = REDACTED_TRANSCRIPT
-    return result
-
-
-def _diff_turn_filter(result: dict[str, Any], turn: str | None) -> dict[str, Any]:
-    """Restrict a diff result to a single positional turn ``index`` (string).
-
-    ``turn`` is matched against each turn's positional ``index`` so a user can
-    drill into one before/after pair.  The summary is left intact so the
-    worst-regression headline still reflects the whole run.
-    """
-    if turn is None:
-        return result
-    try:
-        wanted = int(turn)
-    except (TypeError, ValueError):
-        wanted = None
-    filtered = [t for t in result.get("turns", ()) if wanted is not None and t["index"] == wanted]
-    return {**result, "turns": filtered}
-
-
-def _diff_table(turns: list[dict[str, Any]]) -> Table:
-    """Render the per-turn diff: regressed milestones in red, drift.
-
-    One row per aligned turn pair: the positional index, both turn ids, each
-    milestone's ``a→b`` delta (red when it regressed), and whether the
-    transcript changed.  Unmatched turns (a dropped or extra turn) render the
-    missing side as ``-``.
-    """
-    table = Table(
-        title="Two-source diff (ms) — regressions in red",
-        show_header=True,
-        header_style="bold",
-        box=None,
-        padding=(0, 1),
-        title_justify="left",
-    )
-    table.add_column("idx", justify="right", no_wrap=True)
-    table.add_column("turn (a→b)", no_wrap=True, overflow="fold")
-    table.add_column("milestones (Δms)", overflow="fold")
-    table.add_column("transcript", no_wrap=True)
-    for turn in turns:
-        turn_a = turn.get("turn_id_a")
-        turn_b = turn.get("turn_id_b")
-        turn_label = f"{turn_a or '-'}→{turn_b or '-'}"
-        if turn.get("unmatched"):
-            turn_label = f"[yellow]{escape(turn_label)} (unmatched)[/]"
-        else:
-            turn_label = escape(turn_label)
-        cells = []
-        for name, cell in (turn.get("milestones") or {}).items():
-            delta = cell.get("delta_ms")
-            text = f"{name.removesuffix('_ms')}={_format_ms(delta)}"
-            cells.append(f"[red]{escape(text)}[/]" if cell.get("regressed") else escape(text))
-        milestone_text = ", ".join(cells) if cells else "[dim](none)[/]"
-        transcript = turn.get("transcript") or {}
-        drift = "[yellow]changed[/]" if transcript.get("changed") else "same"
-        table.add_row(
-            str(turn.get("index", "")),
-            turn_label,
-            milestone_text,
-            drift,
-        )
-    return table
-
-
-@cli_command
-def diff_command(
-    path_a: Path = typer.Argument(
-        ...,
-        help="Baseline bundle or ``.sqlite`` journal (the 'before' run).",
-    ),
-    path_b: Path = typer.Argument(
-        ...,
-        help="Comparison bundle or ``.sqlite`` journal (the 'after' run).",
-    ),
-    turn: str | None = typer.Option(
-        None,
-        "--turn",
-        help="Restrict the diff to a single positional turn index.",
-    ),
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
-) -> None:
-    """Diff two bundles turn-by-turn: milestone and transcript deltas.
-
-    Aligns turns positionally (turn 0 of A vs turn 0 of B) and reports each
-    milestone's ``b - a`` delta, whether it regressed (default: >10% AND >5ms
-    slower), and whether the transcript drifted.  The summary names the single
-    worst regression across the whole run.  Transcript text is redacted before
-    it is printed.  See docs/latency.md.
-    """
-    if turn is not None:
-        try:
-            int(turn)
-        except (TypeError, ValueError):
-            emit_command_error(
-                "diff",
-                f"--turn must be an integer turn index (got {turn!r}).",
-                json_output=json_output,
-                exit_code=2,
-            )
-            raise typer.Exit(2)
-
-    bundle_a = _load_bundle_or_journal(path_a, command="diff", json_output=json_output)
-    bundle_b = _load_bundle_or_journal(path_b, command="diff", json_output=json_output)
-
-    result = diff_bundles(list(bundle_a.records()), list(bundle_b.records()))
-    _redact_diff_result(result)
-    result = _diff_turn_filter(result, turn)
-
-    if json_output:
-        emit_json(
-            json_envelope(
-                "diff",
-                a=str(path_a),
-                b=str(path_b),
-                **result,
-            )
-        )
-        raise typer.Exit(0)
-
-    stderr_console.print(
-        f"[bold]Diff[/] [cyan]{escape(str(path_a))}[/] → [cyan]{escape(str(path_b))}[/]"
-    )
-    stderr_console.print()
-    turns = result["turns"]
-    if not turns:
-        warn("No aligned turns to diff.")
-        return
-    _print_wide(_diff_table(turns), max(stdout_console.width, 120))
-    worst = result["summary"]["worst_regression"]
-    if worst:
-        stdout_console.print()
-        stdout_console.print(
-            f"[red]Worst regression[/]: turn {worst['index']} "
-            f"{escape(str(worst['milestone']))} +{_format_ms(worst['delta_ms'])}ms"
-        )
 
 
 # ── `easycat journal promote` ────────────────────────────────────
