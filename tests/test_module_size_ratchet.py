@@ -46,7 +46,7 @@ ALLOWLIST: dict[str, int] = {
     "transports/twilio_media.py": 1279,
     "transports/webrtc.py": 1655,
     "transports/webtransport.py": 1640,
-    "validation/runner.py": 1736,
+    "validation/runner.py": 1625,
 }
 
 

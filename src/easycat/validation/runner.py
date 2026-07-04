@@ -20,10 +20,7 @@ from easycat._provider_catalog import provider_names
 from easycat.validation._lane_harness import (
     PROVIDER_ENV_VARS,
     ValidationRunResult,
-    _collect_environment_metadata,
-    _collect_git_metadata,
     _finish_lane_run,
-    _make_run_id,
     _start_lane_run,
     _write_atomic,
 )
@@ -59,7 +56,6 @@ from easycat.validation.report import (
     ProviderCheckState,
     ValidationCheck,
     ValidationFailure,
-    ValidationRun,
     ValidationSkip,
     redact_runtime_secrets,
 )
@@ -770,12 +766,15 @@ def run_release_validation(
     started_at = started_at or datetime.now(UTC)
     started_monotonic = time.perf_counter()
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id("release", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        "release",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_id = ctx.run_id
+    run_dir = ctx.run_dir
 
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
     dist_dir = run_dir / "dist"
@@ -797,15 +796,15 @@ def run_release_validation(
     checks: list[ValidationCheck] = []
     failures: list[ValidationFailure] = []
     artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
+        **ctx.artifacts,
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
         "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
         "dist": ArtifactRef(kind="directory", path=str(dist_dir)),
     }
-    if requested_report_path is not None:
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
     tool_exit_codes: dict[str, int] = {}
     stdout_log: list[str] = []
@@ -1088,8 +1087,9 @@ def run_release_validation(
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=_release_validation_command(
             python_version=python_version,
             extras=release_extras,
@@ -1103,22 +1103,9 @@ def run_release_validation(
         status=status,
         exit_code=exit_code,
         tool_exit_codes=tool_exit_codes,
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=checks,
         failures=failures,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
     )
 
 
