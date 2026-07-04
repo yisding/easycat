@@ -1197,6 +1197,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
         self._enqueue_sentinel()
         self._enqueue_out_sentinel()
         self._on_close.set()
+        await self._drain_emit_tasks()
 
     def force_close(self, *, reason: str = "") -> None:
         """Actively terminate the QUIC connection, even before ``connect()``.

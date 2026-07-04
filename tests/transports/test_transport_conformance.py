@@ -10,21 +10,45 @@ from easycat.events import EventBus
 from easycat.transports.local import LocalTransport
 from easycat.transports.twilio_media import TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
-from easycat.transports.websocket import WebSocketTransport
+from easycat.transports.websocket import (
+    WebSocketConnectionTransport,
+    WebSocketTransport,
+)
+from easycat.transports.webtransport import WebTransportConnectionTransport
 
 from .conftest import make_chunk
 
 _make_chunk = make_chunk
 
 
+class _FakeServerWS:
+    """Minimal stand-in for a live server WebSocket connection."""
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        return None
+
+
+def _make_connection_transports() -> dict[str, object]:
+    """Build one bare instance of every transport that owns a ``disconnect``."""
+
+    return {
+        "websocket_server": WebSocketTransport(),
+        "websocket_connection": WebSocketConnectionTransport(_FakeServerWS()),
+        "webrtc": WebRTCTransport(),
+        "webtransport_connection": WebTransportConnectionTransport(),
+        "local": LocalTransport(),
+    }
+
+
 class TestEmitTaskDrain:
     """Fire-and-forget _emit_degraded tasks are drained on disconnect."""
 
     @pytest.mark.asyncio
-    async def test_disconnect_drains_pending_emit_tasks(self):
+    @pytest.mark.parametrize("transport_name", sorted(_make_connection_transports()))
+    async def test_disconnect_drains_pending_emit_tasks(self, transport_name):
         from easycat.events import TransportDegraded
 
-        transport = WebSocketTransport()
+        transport = _make_connection_transports()[transport_name]
         bus = EventBus()
         seen: list[TransportDegraded] = []
 

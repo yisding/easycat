@@ -329,6 +329,7 @@ class LocalTransport(AudioQueueMixin):
         self._enqueue_sentinel()
         self._connected = False
         self._loop = None
+        await self._drain_emit_tasks()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Queue an audio chunk for speaker playback.

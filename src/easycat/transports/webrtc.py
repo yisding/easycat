@@ -1160,6 +1160,7 @@ class WebRTCTransport(AudioQueueMixin):
         self._enqueue_sentinel()
         self._client_connected.clear()
         self._peer_closed.set()
+        await self._drain_emit_tasks()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         """Send an audio chunk to the remote WebRTC peer."""

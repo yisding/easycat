@@ -564,6 +564,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         except Exception:
             logger.debug("Error closing WebSocket connection", exc_info=True)
         self._enqueue_sentinel()
+        await self._drain_emit_tasks()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if not self._connected:
