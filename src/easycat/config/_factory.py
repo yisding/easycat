@@ -126,7 +126,7 @@ def _create_transport(config: TransportConfig, event_bus: EventBus) -> Any:
     # audio contract but do not implement version_info(), routing them to the
     # config-factory path and raising a misleading "Unsupported ..." error.
     if isinstance(config, TransportLike):
-        if hasattr(config, "_event_bus") and getattr(config, "_event_bus") is None:
+        if hasattr(config, "_event_bus") and config._event_bus is None:
             config._event_bus = event_bus
         return config
     factory = _transport_factories().get(type(config))

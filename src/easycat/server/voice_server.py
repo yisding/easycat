@@ -965,7 +965,7 @@ class VoiceServer:
         auth = self.config.auth
         if auth is None or not hasattr(auth, "allow_query_token"):
             return
-        if getattr(auth, "allow_query_token"):
+        if auth.allow_query_token:
             return  # already opted in — nothing to reconcile
         # Opt in WITHOUT mutating the caller-owned policy object (a single
         # ``BearerTokenAuth`` may be shared across servers). Store a fresh copy on

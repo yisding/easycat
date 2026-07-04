@@ -1361,7 +1361,7 @@ def is_llama_workflow_instance(agent: Any) -> bool:
     ):
         try:
             module = __import__(module_name, fromlist=["Workflow"])
-            workflow_cls = getattr(module, "Workflow")
+            workflow_cls = module.Workflow
         except (ImportError, AttributeError):
             continue
         if isinstance(agent, workflow_cls):

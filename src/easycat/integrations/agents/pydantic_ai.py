@@ -914,7 +914,7 @@ def _graph_item_output(item: Any) -> Any:
     if not _is_graph_end_item(item):
         return _UNSET
     if hasattr(item, "value"):
-        return getattr(item, "value")
+        return item.value
     return getattr(item, "_value", None)
 
 

@@ -35,7 +35,7 @@ test-fast:
 test-one TARGET:
     uv run pytest "{{ TARGET }}"
 
-# Lint with ruff (E, F, I, W, UP).
+# Lint with ruff (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006).
 lint:
     uv run ruff check .
 

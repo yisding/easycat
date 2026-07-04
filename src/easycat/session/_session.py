@@ -1462,9 +1462,9 @@ class Session:
         """Attach the session EventBus to provider configs that support it."""
         attached = False
         cfg = getattr(provider, "_config", None)
-        if cfg is not None and hasattr(cfg, "event_bus") and getattr(cfg, "event_bus") is None:
+        if cfg is not None and hasattr(cfg, "event_bus") and cfg.event_bus is None:
             try:
-                setattr(cfg, "event_bus", self.event_bus)
+                cfg.event_bus = self.event_bus
                 attached = True
             except Exception:
                 logger.warning(
@@ -1472,10 +1472,10 @@ class Session:
                     provider,
                     exc_info=True,
                 )
-        has_unset_bus = hasattr(provider, "_event_bus") and getattr(provider, "_event_bus") is None
+        has_unset_bus = hasattr(provider, "_event_bus") and provider._event_bus is None
         if not attached and has_unset_bus:
             try:
-                setattr(provider, "_event_bus", self.event_bus)
+                provider._event_bus = self.event_bus
             except Exception:
                 logger.warning(
                     "Failed to attach session EventBus to %r; provider-scoped events may be muted",

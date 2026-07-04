@@ -115,7 +115,7 @@ class ContractSuite:
                 pytrace=False,
             )
         if isinstance(factory, staticmethod | classmethod):
-            return getattr(cls, "provider_factory")()
+            return cls.provider_factory()
         return factory()
 
     @classmethod

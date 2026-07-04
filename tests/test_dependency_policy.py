@@ -108,3 +108,35 @@ def test_mypy_gated_paths_match_pyproject_overrides() -> None:
     overrides = _pyproject()["tool"]["mypy"]["overrides"]
     gated = next(o for o in overrides if o.get("check_untyped_defs"))
     assert gated["module"] == expected_modules
+
+
+def _ruff_lint() -> dict:
+    return _pyproject()["tool"]["ruff"]["lint"]
+
+
+def test_ruff_lint_enables_async_bugbear_and_ruf006() -> None:
+    """QW9: flake8-async/bugbear + RUF006 stay in the ruff select set."""
+    select = set(_ruff_lint()["select"])
+    assert {"ASYNC", "B", "RUF006"} <= select
+
+
+def test_ruff_permanently_ignores_async109() -> None:
+    """Explicit async timeout params (incl. timeouts.py) are deliberate public API."""
+    assert "ASYNC109" in _ruff_lint().get("ignore", [])
+
+
+def test_ruff_flake8_bugbear_treats_typer_defaults_as_immutable() -> None:
+    """typer.Option / typer.Argument defaults are the Typer idiom, not B008 bugs."""
+    bugbear = _ruff_lint()["flake8-bugbear"]
+    assert bugbear["extend-immutable-calls"] == ["typer.Option", "typer.Argument"]
+
+
+def test_rule_list_docs_stay_in_sync_with_ruff_select() -> None:
+    """CLAUDE.md and justfile rule-list prose must mirror tool.ruff.lint.select."""
+    expected = ", ".join(_ruff_lint()["select"])
+
+    claude_md = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert f"- Ruff rules: {expected}" in claude_md
+
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    assert f"# Lint with ruff ({expected})." in justfile
