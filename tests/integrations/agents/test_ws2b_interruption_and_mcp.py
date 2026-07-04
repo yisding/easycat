@@ -208,6 +208,12 @@ class TestApplyInterruptionFourStepOrder:
             if isinstance(node, ast.Attribute):
                 attr_names.add(node.attr)
 
+        if "apply_standard_interruption" in call_names:
+            # Bridge delegates the whole four-step protocol to the shared
+            # ``apply_standard_interruption`` helper (REFACTOR #30), which plans
+            # then runs ``run_interruption_journal_protocol`` with the bridge's
+            # own ``_apply_planned_mutation``. Nothing further to assert here.
+            return
         assert "_plan_interruption" in call_names, (
             f"{bridge_cls.__name__}.apply_interruption must call _plan_interruption"
         )

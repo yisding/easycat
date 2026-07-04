@@ -40,7 +40,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
-    run_interruption_journal_protocol,
+    apply_standard_interruption,
 )
 from easycat.runtime.records import ErrorInfo
 
@@ -476,15 +476,7 @@ class LangChainBridge:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
-            plan,
-            mode,
-            recorder,
-            caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
-        )
+        apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
 
     def reset(self) -> None:
         self._message_history.clear()
