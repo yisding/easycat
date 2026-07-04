@@ -34,6 +34,7 @@ import sys
 import threading
 from typing import TYPE_CHECKING
 
+from easycat._env import is_truthy
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 from easycat.debugger.session_registry import (
     get_registry,
@@ -78,13 +79,6 @@ _DEV_REGISTRATION_ARMED = False
 _WATCHERS: set[asyncio.Task[None]] = set()
 
 
-def _is_truthy(value: str | None) -> bool:
-    """Interpret an env-var string as a boolean opt-in flag."""
-    if value is None:
-        return False
-    return value.strip().lower() not in ("", "0", "false", "no", "off")
-
-
 def dev_mode_opted_in(*, dev: bool = False) -> bool:
     """Whether dev debugger mode was explicitly requested.
 
@@ -95,7 +89,7 @@ def dev_mode_opted_in(*, dev: bool = False) -> bool:
     """
     if dev:
         return True
-    return _is_truthy(os.getenv(_DEV_ENV))
+    return is_truthy(os.getenv(_DEV_ENV))
 
 
 def _interactive_context() -> bool:
@@ -104,7 +98,7 @@ def _interactive_context() -> bool:
     Requires stderr to be a TTY and ``CI`` to be unset/falsy — a daemonised
     server or a CI runner should never have a browser tab opened for it.
     """
-    if _is_truthy(os.getenv("CI")):
+    if is_truthy(os.getenv("CI")):
         return False
     try:
         return bool(sys.stderr.isatty())
@@ -120,7 +114,7 @@ def _registration_armed() -> bool:
     Unlike the UI launch, this is NOT gated by the interactive/CI/pytest guards:
     the registry must reflect every live session even headless or under test.
     """
-    return _is_truthy(os.getenv(_DEV_ENV)) or _DEV_REGISTRATION_ARMED
+    return is_truthy(os.getenv(_DEV_ENV)) or _DEV_REGISTRATION_ARMED
 
 
 def _arm_registration() -> None:
@@ -257,7 +251,7 @@ def maybe_launch_dev_debugger(
     # create_session funnel registers every session even when the UI itself is
     # suppressed in CI / non-interactive shells.
     _arm_registration()
-    if _is_truthy(os.getenv(_DEV_DISABLE_ENV)):
+    if is_truthy(os.getenv(_DEV_DISABLE_ENV)):
         return None
     registry_id = arm_dev_session(session)
     if os.getenv("PYTEST_CURRENT_TEST"):
@@ -301,7 +295,7 @@ def maybe_launch_dev_registry_ui(*, dev: bool = False, launch_ui: bool = True) -
     # Arm registration up front so per-connection sessions register as they are
     # built downstream, even though the UI launch below is gated by CI/TTY.
     _arm_registration()
-    if os.getenv("PYTEST_CURRENT_TEST") or _is_truthy(os.getenv(_DEV_DISABLE_ENV)):
+    if os.getenv("PYTEST_CURRENT_TEST") or is_truthy(os.getenv(_DEV_DISABLE_ENV)):
         return False
     if not _interactive_context():
         return False

@@ -608,7 +608,9 @@ def create_session(config: EasyConfig) -> Session:
     import os
     import sys
 
-    if os.getenv("EASYCAT_DEV") or "easycat.debugger.dev" in sys.modules:
+    from easycat._env import is_truthy
+
+    if is_truthy(os.getenv("EASYCAT_DEV")) or "easycat.debugger.dev" in sys.modules:
         from easycat.debugger.dev import arm_dev_session
 
         arm_dev_session(session)
@@ -619,14 +621,16 @@ def create_session(config: EasyConfig) -> Session:
 def _emergency_export_enabled(config: Any) -> bool:
     """Whether opt-in emergency export should be armed for *config*.
 
-    Opt-in only: armed when ``EASYCAT_EMERGENCY_EXPORT=1`` is set in the
+    Opt-in only: armed when ``EASYCAT_EMERGENCY_EXPORT`` is truthy in the
     environment, or an ``observability.emergency_export`` knob is truthy.
     Defaults off so a normal process never installs ``atexit`` / excepthook
     hooks.
     """
     import os
 
-    if os.environ.get("EASYCAT_EMERGENCY_EXPORT") == "1":
+    from easycat._env import is_truthy
+
+    if is_truthy(os.environ.get("EASYCAT_EMERGENCY_EXPORT")):
         return True
     observability = getattr(config, "observability", None)
     return bool(getattr(observability, "emergency_export", False))

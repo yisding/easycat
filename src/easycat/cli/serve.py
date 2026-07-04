@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 
 import typer
 
+from easycat._env import is_truthy
 from easycat.cli._errors import cli_command
 from easycat.cli._output import emit_command_error, stdout_console
 
@@ -150,10 +151,7 @@ def _dev_mode_enabled() -> bool:
     Mirrors the truthy parsing in :mod:`easycat.debugger.dev`: any value other
     than ``""``/``0``/``false``/``no``/``off`` (case-insensitive) enables it.
     """
-    value = os.environ.get("EASYCAT_DEV")
-    if value is None:
-        return False
-    return value.strip().lower() not in ("", "0", "false", "no", "off")
+    return is_truthy(os.environ.get("EASYCAT_DEV"))
 
 
 def _build_voice_app(

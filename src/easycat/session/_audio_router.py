@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
 from easycat.events import (
@@ -82,7 +83,7 @@ def _aec_reference_env_override() -> bool | None:
     raw = os.getenv("EASYCAT_CAPTURE_AEC_REFERENCE")
     if raw is None:
         return None
-    return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return is_truthy(raw)
 
 
 class _PipelineTornDown(Exception):
