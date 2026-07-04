@@ -580,3 +580,25 @@ ignore_imports = [
     "easycat.server.voice_server -> easycat.transports.webrtc",
     "easycat.server.webrtc_routes -> easycat.transports.webrtc",
 ]
+
+# Orchestration direction: SessionManager owns the Sessions that drive the
+# pipeline, which in turn wraps the transport providers — so the transport layer
+# must never import back up into SessionManager. (A fuller Session -> Stages
+# spine is deliberately NOT modelled here: `events` and `config` both import
+# `session.actions` as a shared leaf, which is intentional, permanent
+# architecture rather than a ratchetable violation.) The three current upward
+# edges — one module-level (websocket) and two function-local (webrtc /
+# webtransport) — are grandfathered below (mirrors the C901 convention). Ratchet
+# this list down as the transports stop importing session_manager — never grow it.
+[[tool.importlinter.contracts]]
+name = "Transport providers do not import the SessionManager orchestrator"
+type = "layers"
+layers = [
+    "easycat.session_manager",
+    "easycat.transports",
+]
+ignore_imports = [
+    "easycat.transports.websocket -> easycat.session_manager",
+    "easycat.transports.webrtc -> easycat.session_manager",
+    "easycat.transports.webtransport -> easycat.session_manager",
+]
