@@ -3,8 +3,14 @@
 Pure, aiohttp-free projections split out of :mod:`easycat.debugger.server`
 (QS3): record filtering/pagination for ``/api/records``, the bounded
 grep-style regex compiler with its catastrophic-backtracking analyzer, the
-full-text search scan shared with ``easycat journal grep``, the transcript
-projection, and the JournalRecord/ErrorInfo → JSON-dict coercions.
+full-text search scan shared with ``easycat journal grep``, and the transcript
+projection.
+
+The JournalRecord → JSON-dict coercion is **not** defined here: it is the
+canonical generic dataclass walk in :mod:`easycat.debug._serialize`, re-exported
+below as ``_record_to_dict`` so the live debugger and the export bundle
+serialize records through one implementation (this is the #28 consolidation —
+the server previously dropped ``tags`` and record-subclass fields).
 
 ``server.py`` re-exports every name here so the historical
 ``from easycat.debugger.server import _helper`` import sites keep resolving.
@@ -18,6 +24,7 @@ from collections.abc import Iterable
 from re import _parser as re_parser  # type: ignore[attr-defined]
 from typing import Any
 
+from easycat.debug._serialize import record_to_dict as _record_to_dict
 from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 
 # Hard cap on records scanned by full-text search (``/api/records?q=`` and
@@ -37,44 +44,6 @@ _SEARCH_MAX_QUERY_LEN = 500
 # catastrophic backtracking in Python's backtracking ``re`` engine before the
 # pattern is run against journal-controlled text.
 _UNSAFE_REGEX_MESSAGE = "unsafe regex"
-
-
-def _record_to_dict(record: Any) -> dict[str, Any]:
-    """Convert a JournalRecord-like object to a JSON-friendly dict."""
-    if isinstance(record, dict):
-        return record
-    out: dict[str, Any] = {}
-    for attr in (
-        "sequence",
-        "session_id",
-        "kind",
-        "name",
-        "turn_id",
-        "data",
-        "input_ref",
-        "output_ref",
-    ):
-        value = getattr(record, attr, None)
-        if hasattr(value, "value"):
-            value = value.value  # type: ignore[union-attr]
-        out[attr] = value
-    timing = getattr(record, "timing", None)
-    if timing is not None:
-        out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
-    error = getattr(record, "error", None)
-    if error is not None:
-        out["error"] = _error_to_dict(error)
-    return out
-
-
-def _error_to_dict(error: Any) -> dict[str, Any]:
-    return {
-        "type": getattr(error, "type", None),
-        "message": getattr(error, "message", None),
-        "traceback": getattr(error, "traceback", None),
-        "notes": getattr(error, "notes", None),
-        "children": [_error_to_dict(child) for child in getattr(error, "children", ())],
-    }
 
 
 def _filter_records(
@@ -392,7 +361,6 @@ __all__ = [
     "_UNSAFE_REGEX_MESSAGE",
     "_build_transcript",
     "_compile_search_regex",
-    "_error_to_dict",
     "_filter_and_paginate",
     "_filter_records",
     "_record_match_fields",

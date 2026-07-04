@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
+from easycat.debug._serialize import safe_config_snapshot_from_session
 from easycat.debug.bundle import RunBundle
 from easycat.debugger._audio import _serialize_frame
 from easycat.debugger._records import _record_to_dict
@@ -361,7 +362,7 @@ def _session_source(session: Any) -> DebuggerSource:
         return {
             "source": "session",
             "session_id": getattr(session, "session_id", ""),
-            "config_snapshot": _safe_session_config_snapshot(session),
+            "config_snapshot": safe_config_snapshot_from_session(session),
             "is_running": bool(getattr(session, "is_running", False)),
             "turn_state": str(getattr(session, "turn_state", "")),
             "supports_replay": False,
@@ -387,25 +388,11 @@ def _session_source(session: Any) -> DebuggerSource:
     )
 
 
-def _safe_session_config_snapshot(session: Any) -> dict[str, Any]:
-    """Return the allowlisted config snapshot for live debugger sessions."""
-    try:
-        from easycat.runtime.safe_defaults import safe_config_snapshot
-
-        config = getattr(session, "_easycat_config", None) or getattr(session, "_config", None)
-        if config is None:
-            return {}
-        return safe_config_snapshot(config)
-    except ImportError:
-        return {}
-
-
 __all__ = [
     "DebuggerSource",
     "_bundle_source",
     "_run_bundle_source",
     "_safe_ref",
-    "_safe_session_config_snapshot",
     "_safe_turn_id",
     "_session_source",
     "_validated_replay_kwargs",

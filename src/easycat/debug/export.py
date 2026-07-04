@@ -8,14 +8,13 @@ containing the journal, artifacts, and manifest metadata.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import json
 import tempfile
 import zipfile
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from easycat.debug._serialize import record_to_dict, safe_config_snapshot_from_session
 from easycat.debug.bundle import (
     FORMAT_VERSION,
     ArtifactEntry,
@@ -57,7 +56,7 @@ def export_debug_bundle(
     if journal is not None:
         records = journal.read() if hasattr(journal, "read") else []
         for record in records:
-            journal_lines.append(json.dumps(_record_to_dict(record), default=str))
+            journal_lines.append(json.dumps(record_to_dict(record), default=str))
     journal_ndjson = "\n".join(journal_lines).encode("utf-8")
 
     # Collect artifacts. The refs are already content-addressed
@@ -84,7 +83,7 @@ def export_debug_bundle(
     provider_versions = _collect_provider_versions(session)
 
     # Safe config snapshot (use safe_defaults allowlist)
-    config_snapshot = _safe_config_snapshot(session)
+    config_snapshot = safe_config_snapshot_from_session(session)
 
     # Sharing banner
     try:
@@ -198,38 +197,6 @@ def export_turn_bundle(source: RunBundle, turn_id: str, path: str | Path) -> Non
     sliced.save(path)
 
 
-def _record_to_dict(record: Any) -> dict[str, Any]:
-    """Convert a journal record to a JSON-safe dict."""
-    value = _json_safe_value(record)
-    return value if isinstance(value, dict) else record
-
-
-def _json_safe_value(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if hasattr(value, "value") and not isinstance(value, (str, bytes, int, float, bool)):
-        return _json_safe_value(value.value)
-    if dataclasses.is_dataclass(value):
-        return {
-            field.name: _json_safe_value(getattr(value, field.name))
-            for field in dataclasses.fields(value)
-            if not field.name.startswith("_")
-        }
-    if isinstance(value, Mapping):
-        return {str(k): _json_safe_value(v) for k, v in value.items()}
-    if isinstance(value, frozenset):
-        return sorted((_json_safe_value(v) for v in value), key=repr)
-    if isinstance(value, set):
-        return sorted((_json_safe_value(v) for v in value), key=repr)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_json_safe_value(v) for v in value]
-    if hasattr(value, "__dict__"):
-        return {k: _json_safe_value(v) for k, v in value.__dict__.items() if not k.startswith("_")}
-    return value
-
-
 def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
     d: dict[str, Any] = {}
     for k, v in manifest.__dict__.items():
@@ -248,23 +215,3 @@ def _collect_provider_versions(session: Any) -> dict[str, Any]:
             except Exception:
                 pass
     return versions
-
-
-def _safe_config_snapshot(session: Any) -> dict[str, Any]:
-    """Extract only allowlisted config fields, redacting secrets.
-
-    Prefers ``_easycat_config`` (the original user-facing config) over
-    ``_config`` (SessionConfig with live provider instances) so the
-    snapshot captures meaningful settings like debug mode, journal
-    backend, and turn-taking policy instead of ``<object at 0x…>``
-    repr strings.
-    """
-    try:
-        from easycat.runtime.safe_defaults import safe_config_snapshot
-
-        config = getattr(session, "_easycat_config", None) or getattr(session, "_config", None)
-        if config is None:
-            return {}
-        return safe_config_snapshot(config)
-    except ImportError:
-        return {}

@@ -8,6 +8,7 @@ import json
 import zipfile
 
 from easycat.debug.bundle import RunBundle
+from easycat.debug.export import export_debug_bundle
 from easycat.debugger.server import (
     _build_issues,
     _build_transcript,
@@ -17,7 +18,13 @@ from easycat.debugger.server import (
 )
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import InMemoryArtifactStore
-from easycat.runtime.records import ErrorInfo, JournalRecordKind
+from easycat.runtime.records import (
+    ErrorInfo,
+    FrameworkTransitionRecord,
+    JournalRecord,
+    JournalRecordKind,
+    TimingInfo,
+)
 
 from ._server_helpers import _build_voice_bundle
 
@@ -302,6 +309,103 @@ def test_debugger_source_session_adapts_live_journal():
     record = next(r for r in records if r["name"] == "test")
     assert record["error"]["children"][0]["type"] == "ValueError"
     assert record["error"]["children"][0]["message"] == "bad input"
+
+
+class _ListJournal:
+    """Journal stub returning pre-built records for both live and export reads."""
+
+    def __init__(self, records):
+        self._records = list(records)
+
+    def read(self, start=0, limit=None):
+        out = self._records[start:]
+        if limit is not None:
+            out = out[:limit]
+        return out
+
+    @property
+    def latest_sequence(self):
+        return self._records[-1].sequence if self._records else 0
+
+
+class _DualSession:
+    """Session stub the live debugger source and the export bundle both read."""
+
+    session_id = "sess-agree"
+    is_running = True
+    turn_state = "IDLE"
+    _artifact_store = None
+    _debug = "light"
+    _easycat_config = None
+    _config = None
+
+    def __init__(self, records):
+        self._records = records
+
+    @property
+    def journal(self):
+        return _ListJournal(self._records)
+
+    @property
+    def _journal(self):
+        return _ListJournal(self._records)
+
+
+def test_live_and_bundle_serialization_agree_with_tags_and_subclass_fields(tmp_path):
+    """The live debugger view and the exported bundle must serialize the *same*
+    record identically — including ``tags`` and record-subclass fields.
+
+    Regression for #28: the server used to walk a hardcoded attribute tuple that
+    dropped ``tags`` and ``FrameworkTransitionRecord`` fields
+    (``framework`` / ``direction`` / ``bridge_latency_ms``), so a record looked
+    narrower live than in a bundle. Both paths now share
+    :func:`easycat.debug._serialize.record_to_dict`, so they must agree.
+    """
+    records = [
+        JournalRecord(
+            sequence=1,
+            session_id="sess-agree",
+            kind=JournalRecordKind.EVENT,
+            name="stt_final",
+            timing=TimingInfo(wall_ns=1, mono_ns=2, cpu_ns=3),
+            turn_id="turn-1",
+            data={"text": "hello"},
+            tags=frozenset({"debug", "runtime"}),
+        ),
+        FrameworkTransitionRecord(
+            sequence=2,
+            session_id="sess-agree",
+            name="framework_enter",
+            timing=TimingInfo(wall_ns=4, mono_ns=5, cpu_ns=6),
+            turn_id="turn-1",
+            tags=frozenset({"agent"}),
+            framework="openai_agents",
+            direction="enter",
+            bridge_latency_ms=12.5,
+        ),
+    ]
+    session = _DualSession(records)
+
+    # Live debugger serialization (what the /api/records + WS ticks emit).
+    live = _session_source(session).records()
+
+    # Export bundle serialization (journal.ndjson lines).
+    path = tmp_path / "export.zip"
+    export_debug_bundle(session, path)
+    with zipfile.ZipFile(path, "r") as zf:
+        lines = zf.read("journal.ndjson").decode("utf-8").splitlines()
+    bundle = [json.loads(line) for line in lines]
+
+    # The whole point of #28: identical shape live vs. bundle.
+    assert live == bundle
+
+    # The server now GAINS the fields it used to drop.
+    base, transition = live
+    assert base["tags"] == ["debug", "runtime"]
+    assert transition["tags"] == ["agent"]
+    assert transition["framework"] == "openai_agents"
+    assert transition["direction"] == "enter"
+    assert transition["bridge_latency_ms"] == 12.5
 
 
 def test_journal_view_exposes_latest_sequence():
