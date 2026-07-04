@@ -453,6 +453,7 @@ module = [
     "easycat.validation._lane_harness.*",
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
+    "easycat.debugger._aec_routes.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
