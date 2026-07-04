@@ -38,13 +38,53 @@ class TestInMemoryArtifactStore:
         assert not store.has(ref)
         assert store.get(ref) is None
 
-    def test_eviction(self):
+    def test_refuses_new_writes_past_cap(self):
+        """Once the byte cap is reached, new artifacts are refused (return "")
+        while prior artifacts still resolve — referenced blobs are never evicted."""
         store = InMemoryArtifactStore(max_bytes=100)
         ref1 = store.put(b"a" * 60)
+        assert ref1
+        assert store.has(ref1)
+
+        # Second 60-byte write would push the total to 120 > 100: refused.
         ref2 = store.put(b"b" * 60)
-        # ref1 should have been evicted to make room for ref2.
-        assert not store.has(ref1)
-        assert store.has(ref2)
+        assert ref2 == ""
+        assert not store.has(hashlib.sha256(b"b" * 60).hexdigest())
+
+        # The earlier artifact is untouched — the in-memory store never evicts
+        # blobs that a still-buffered journal row may already reference.
+        assert store.get(ref1) == b"a" * 60
+
+    def test_cap_refusal_keeps_referenced_blobs_resolvable(self, caplog):
+        """Fill past the byte cap while a record still references an early blob;
+        the referenced blob stays resolvable and exactly one warning is logged."""
+        import logging
+
+        store = InMemoryArtifactStore(max_bytes=100)
+        buf = InMemoryRingBuffer(capacity=8, artifact_store=store)
+
+        early = store.put(b"a" * 60)
+        assert early
+        buf.append(
+            kind=JournalRecordKind.EVENT,
+            name="test",
+            session_id="s1",
+            input_ref=early,
+        )
+
+        with caplog.at_level(logging.WARNING, logger="easycat.runtime.artifacts"):
+            refused = store.put(b"b" * 60)  # would exceed the 100-byte cap
+            again = store.put(b"c" * 60)  # refused again, no second warning
+
+        # Over-cap writes are refused, not silently swallowing the early blob.
+        assert refused == ""
+        assert again == ""
+        # The still-referenced early blob remains resolvable — no dangling ref.
+        assert store.has(early)
+        assert store.get(early) == b"a" * 60
+
+        cap_warnings = [r for r in caplog.records if "reached max_bytes" in r.getMessage()]
+        assert len(cap_warnings) == 1
 
     def test_close_clears(self):
         store = InMemoryArtifactStore()
