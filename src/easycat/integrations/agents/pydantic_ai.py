@@ -401,55 +401,41 @@ class PydanticAIBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        recorder.record_unit_entered(agent_cursor)
-
         accumulated = ""
         raw_output: Any = None
         done_emitted = False
 
-        saved_mcp_servers = _UNSET
-        try:
-            if self._mcp_servers is not None and hasattr(agent, "mcp_servers"):
-                saved_mcp_servers = getattr(agent, "mcp_servers", None)
-                agent.mcp_servers = list(self._mcp_servers)
-            if hasattr(agent, "iter"):
-                async for ev in self._stream_via_iter(
-                    turn_input, recorder, cancel_token, history_key
-                ):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    elif ev.kind == "done":
-                        done_emitted = True
-                    yield ev
-                raw_output = self._last_output
-            else:
-                async for ev in self._stream_via_run_stream(turn_input, cancel_token, history_key):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    yield ev
-                raw_output = self._last_output
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # block above is skipped and the still-open agent cursor would
-            # be left without a ``unit_exited`` record, breaking the
-            # recorder's strict stack invariant for the postmortem journal.
-            # Close it defensively (so a recorder error can't mask the
-            # cancellation) before re-raising; no ``record_framework_error``
-            # since a cancelled turn isn't a framework fault.
-            recorder.safe_exit_cursor(agent_cursor)
-            raise
-        finally:
-            if saved_mcp_servers is not _UNSET:
-                agent.mcp_servers = saved_mcp_servers
+        # ``turn_cursor`` centralizes enter → error → BaseException → clean
+        # exit; the inner bare ``try/finally`` restores the agent's mcp_servers
+        # on every path (including cancellation) before the cm records the exit.
+        with recorder.turn_cursor(agent_cursor):
+            saved_mcp_servers = _UNSET
+            try:
+                if self._mcp_servers is not None and hasattr(agent, "mcp_servers"):
+                    saved_mcp_servers = getattr(agent, "mcp_servers", None)
+                    agent.mcp_servers = list(self._mcp_servers)
+                if hasattr(agent, "iter"):
+                    async for ev in self._stream_via_iter(
+                        turn_input, recorder, cancel_token, history_key
+                    ):
+                        if ev.kind == "text_delta":
+                            accumulated += ev.text
+                        elif ev.kind == "done":
+                            done_emitted = True
+                        yield ev
+                    raw_output = self._last_output
+                else:
+                    async for ev in self._stream_via_run_stream(
+                        turn_input, cancel_token, history_key
+                    ):
+                        if ev.kind == "text_delta":
+                            accumulated += ev.text
+                        yield ev
+                    raw_output = self._last_output
+            finally:
+                if saved_mcp_servers is not _UNSET:
+                    agent.mcp_servers = saved_mcp_servers
 
-        recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",

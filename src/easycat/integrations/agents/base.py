@@ -272,6 +272,11 @@ class AgentRecorder(Protocol):
         """Context manager wrapping enter/exit with guaranteed cleanup."""
         ...
 
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
+        """Per-turn cursor lifecycle: enter, error/cancel cleanup, clean commit."""
+        ...
+
     def record_tool_call(
         self,
         phase: Literal["start", "delta", "result", "error"],
@@ -342,6 +347,10 @@ class NullAgentRecorder:
     def unit(
         self, cursor: ExecutionCursor, *, commit_on_exit: bool = True
     ) -> Iterator[ExecutionCursor]:
+        yield cursor
+
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
         yield cursor
 
     def record_tool_call(

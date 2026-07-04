@@ -164,6 +164,16 @@ class OpenAIAgentsBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
+        # NOTE: this bridge deliberately does NOT wrap the turn in
+        # ``recorder.turn_cursor(...)`` (the canonical enter → error →
+        # BaseException → clean-exit ordering used by the other bridges).  Its
+        # clean/cancelled cursor close lives inside the ``finally`` below so the
+        # SDK-state snapshot (``to_input_list`` / ``last_response_id``) runs on
+        # every path, and a handoff exit ENTERS a second cursor -- neither fits
+        # a single-cursor context manager.  The arms below still follow
+        # ``turn_cursor``'s semantics: setup/stream ``Exception`` →
+        # framework_error + unit_exited(reason="error"); non-handoff clean/cancel
+        # exit → committed exit(reason=None).
         recorder.record_unit_entered(agent_cursor)
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)

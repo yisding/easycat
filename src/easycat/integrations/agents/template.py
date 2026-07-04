@@ -92,7 +92,6 @@ from easycat.integrations.agents.base import (
     UnitKind,
     run_interruption_journal_protocol,
 )
-from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -218,36 +217,21 @@ class BridgeTemplate:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        recorder.record_unit_entered(cursor)
-
         accumulated = ""
-        try:
+        # ``turn_cursor`` centralizes the enter → error → BaseException →
+        # clean-exit ordering.  The ``BaseException`` arm matters because the
+        # default ``AgentRunner`` enforces its timeout by cancelling the pending
+        # ``__anext__()`` (and calling ``aclose()``), injecting
+        # ``asyncio.CancelledError`` / ``GeneratorExit`` here; the cm closes the
+        # still-open turn cursor defensively before re-raising.
+        with recorder.turn_cursor(cursor):
             self._last_output = None
             self.on_turn_start(turn_input, recorder)
             async for ev in self.stream_events(turn_input, recorder, cancel_token):
                 if ev.kind == "text_delta":
                     accumulated += ev.text
                 yield ev
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(cursor, reason="error")
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # block above is skipped and the still-open turn cursor would
-            # be left without a ``unit_exited`` record, breaking the
-            # recorder's strict stack invariant for the postmortem
-            # journal.  Close it defensively (so a recorder error can't
-            # mask the cancellation) before re-raising; no
-            # ``record_framework_error`` since a cancelled turn isn't a
-            # framework fault.
-            recorder.safe_exit_cursor(cursor)
-            raise
 
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,
