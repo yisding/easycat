@@ -60,7 +60,16 @@ def map_run_item(
         return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
     if item_type == "tool_call_output_item":
         raw = getattr(item, "raw_item", None)
-        call_id = getattr(raw, "call_id", "") or ""
+        # ToolCallOutputItem.raw_item is a FunctionCallOutput dict in the SDK,
+        # so mirror the SDK's .call_id accessor: prefer the item property, then
+        # fall back to reading the dict (or a model) directly.
+        call_id = getattr(item, "call_id", None)
+        if call_id is None:
+            if isinstance(raw, dict):
+                call_id = raw.get("call_id") or raw.get("id")
+            else:
+                call_id = getattr(raw, "call_id", "")
+        call_id = call_id or ""
         result_str = str(getattr(item, "output", "")) if hasattr(item, "output") else ""
         name = pending.pop(call_id, "")
         recorder.record_tool_call(phase="result", name=name, call_id=call_id)
