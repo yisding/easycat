@@ -55,7 +55,7 @@ fmt-check:
 # Keep in sync with the `[[tool.mypy.overrides]]` module list in
 # pyproject.toml; CI runs `just typecheck` so this is the single source
 # of truth for the gated paths.
-mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py"
+mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py"
 
 # Authoritative type gate: the clean core CI gates on (must stay green).
 typecheck:
