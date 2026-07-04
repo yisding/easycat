@@ -56,7 +56,6 @@ from easycat.validation.report import (
     ValidationRun,
     ValidationSkip,
     redact_runtime_secrets,
-    redact_text,
 )
 
 VALIDATION_SELECTORS = {
@@ -193,8 +192,8 @@ def run_validation_slice(
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
 
-    stdout_path.write_text(redact_text(result.stdout))
-    stderr_path.write_text(redact_text(result.stderr))
+    stdout_path.write_text(redact_runtime_secrets(result.stdout, runtime_secret_values))
+    stderr_path.write_text(redact_runtime_secrets(result.stderr, runtime_secret_values))
     if junit_path.exists():
         junit_path.write_text(
             redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
@@ -247,7 +246,10 @@ def run_validation_slice(
         failures.append(
             ValidationFailure(
                 name=f"pytest.{slice_name}",
-                message=result.stderr or result.stdout or f"pytest exited {result.exit_code}",
+                message=redact_runtime_secrets(
+                    result.stderr or result.stdout or f"pytest exited {result.exit_code}",
+                    runtime_secret_values,
+                ),
             )
         )
     if reliability_failure is not None:
