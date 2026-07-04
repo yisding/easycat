@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from easycat.cli._app import app
 from easycat.cli.debug.bundles import (
+    _follow_with_retry,
     _format_follow_line,
     _format_size,
     _redact_follow_record,
@@ -491,6 +492,50 @@ async def test_stream_follow_json_redacts_record_payloads(
     assert payload["data"]["api_key"] == "[REDACTED_SECRET]"
     assert payload["data"]["provider_request_id"] == "[REDACTED_REQUEST_ID]"
     assert payload["error"]["message"] == "Authorization: [REDACTED_SECRET]"
+
+
+@pytest.mark.asyncio
+async def test_follow_with_retry_resumes_past_yielded_sequence(capsys) -> None:
+    # A mid-stream OperationalError (the live writer holds the file lock) must
+    # resume from ``last_yielded + 1`` on retry, not from the original
+    # ``from_sequence`` — otherwise ``--from-sequence 0`` re-emits printed
+    # records and the default silently skips records written during the outage.
+    class _FlakyFollowView:
+        def __init__(self) -> None:
+            self._attempt = 0
+            self.seen_from: list[int | None] = []
+
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+            del poll_interval
+            self.seen_from.append(from_sequence)
+            self._attempt += 1
+            if self._attempt == 1:
+                yield {"sequence": 1, "name": "TurnStarted"}
+                yield {"sequence": 2, "name": "STTFinal"}
+                raise sqlite3.OperationalError("database is locked")
+            yield {"sequence": 3, "name": "AgentFinal"}
+            yield {"sequence": 4, "name": "TTSAudio"}
+
+    view = _FlakyFollowView()
+    await _follow_with_retry(
+        view,
+        from_sequence=0,
+        errors_only=False,
+        turn_id=None,
+        json_output=True,
+    )
+
+    # First attempt honours the caller's ``from_sequence``; the retry resumes
+    # from the highest sequence already streamed plus one (not the original 0).
+    assert view.seen_from == [0, 3]
+    printed = [
+        json.loads(line)["sequence"]
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    # Every record appears exactly once — no duplicate and no gap across the
+    # retry boundary.
+    assert printed == [1, 2, 3, 4]
 
 
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:

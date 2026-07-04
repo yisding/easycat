@@ -2226,6 +2226,7 @@ async def _stream_follow(
     errors_only: bool,
     turn_id: str | None,
     json_output: bool,
+    cursor: list[int | None] | None = None,
 ) -> None:
     """Drive a :meth:`JournalView.follow` loop, printing one line per record.
 
@@ -2238,6 +2239,12 @@ async def _stream_follow(
     seen_tts_first: set[str] = set()
     async for record in view.follow(from_sequence=from_sequence, poll_interval=0.25):
         record_dict = _record_to_follow_dict(record)
+        # Advance the resume cursor for EVERY yielded record, before any
+        # ``errors_only``/``turn_id`` filtering below drops it: a post-outage
+        # retry must resume past filtered-out records too, or they are re-read.
+        seq = record_dict.get("sequence")
+        if cursor is not None and isinstance(seq, int):
+            cursor[0] = seq if cursor[0] is None else max(cursor[0], seq)
         # ``errors_only`` filters to records that carry an error, but always
         # let the synthetic gap notice through so a dropped-record warning is
         # never hidden by the filter.
@@ -2271,6 +2278,46 @@ async def _stream_follow(
             else:
                 seen_tts_first.add(rec_turn)
         stdout_console.print(escape(_format_follow_line(record_dict)))
+
+
+async def _follow_with_retry(
+    view: Any,
+    *,
+    from_sequence: int | None,
+    errors_only: bool,
+    turn_id: str | None,
+    json_output: bool,
+) -> None:
+    """Drive :func:`_stream_follow`, resuming past records already streamed.
+
+    Persistent SQLite journals are written by a separate live session, so a
+    mid-stream ``FileNotFoundError`` / ``sqlite3.OperationalError`` (the writer
+    has not created the table yet, or the file is mid-rotation) is retried after
+    a short back-off.  The retry MUST resume from ``last_yielded + 1`` rather
+    than the original ``from_sequence``: keeping the original argument would
+    re-emit every already-printed record (``--from-sequence 0``) or recompute
+    ``latest_sequence + 1`` at retry time and silently skip records written
+    during the outage.  A shared ``cursor`` holder carries the highest yielded
+    sequence back out even when the generator unwinds via a propagating
+    exception rather than a normal return.
+    """
+    cursor: list[int | None] = [None]
+    resume = from_sequence
+    while True:
+        try:
+            await _stream_follow(
+                view,
+                from_sequence=resume,
+                errors_only=errors_only,
+                turn_id=turn_id,
+                json_output=json_output,
+                cursor=cursor,
+            )
+            return
+        except (FileNotFoundError, sqlite3.OperationalError):
+            if cursor[0] is not None:
+                resume = cursor[0] + 1
+            await asyncio.sleep(0.25)
 
 
 def _record_to_follow_dict(record: Any) -> dict[str, Any]:
@@ -2386,20 +2433,13 @@ def follow_journal(
         )
 
     async def _runner() -> None:
-        while True:
-            try:
-                await _stream_follow(
-                    view,
-                    from_sequence=from_sequence,
-                    errors_only=errors_only,
-                    turn_id=turn,
-                    json_output=json_output,
-                )
-                return
-            except (FileNotFoundError, sqlite3.OperationalError):
-                # The live writer may not have created the table yet, or the
-                # file is mid-rotation; back off briefly and retry the tail.
-                await asyncio.sleep(0.25)
+        await _follow_with_retry(
+            view,
+            from_sequence=from_sequence,
+            errors_only=errors_only,
+            turn_id=turn,
+            json_output=json_output,
+        )
 
     # A bare Ctrl-C propagates out of ``asyncio.run`` as ``KeyboardInterrupt``;
     # the top-level ``main()`` handler maps it to a clean exit code 130.
