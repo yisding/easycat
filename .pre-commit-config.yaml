@@ -1,13 +1,21 @@
 repos:
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
-  rev: v0.15.8
+# Run ruff through the single uv-locked version rather than a separately
+# pinned ruff-pre-commit rev, so exactly one ruff exists in the repo.
+- repo: local
   hooks:
-    # Run the linter.
     - id: ruff-check
+      name: ruff check
+      entry: uv run ruff check --force-exclude
+      language: system
+      types_or: [python, pyi]
+      require_serial: true
       exclude: ^src/easycat/cli/scaffold/templates/
-    # Run the formatter.
     - id: ruff-format
+      name: ruff format
+      entry: uv run ruff format --force-exclude
+      language: system
+      types_or: [python, pyi]
+      require_serial: true
       exclude: ^src/easycat/cli/scaffold/templates/
 
 - repo: https://github.com/pre-commit/pre-commit-hooks

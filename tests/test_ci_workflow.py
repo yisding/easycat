@@ -8,6 +8,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+PRE_COMMIT_CONFIG = REPO_ROOT / ".pre-commit-config.yaml"
 NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
@@ -458,6 +459,39 @@ def test_third_party_actions_are_sha_pinned_and_checkout_drops_credentials() -> 
                         f"{workflow_path.name}: checkout step must set "
                         "`persist-credentials: false`"
                     )
+
+
+def test_ci_runs_pre_commit_with_cached_locked_sync() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+    assert "pre-commit" in workflow["jobs"]
+    steps = workflow["jobs"]["pre-commit"]["steps"]
+    run_bodies = [s.get("run", "") for s in steps if isinstance(s, dict)]
+    assert any("uv sync --locked --group dev" in b for b in run_bodies)
+    assert any("uv run pre-commit run --all-files" in b for b in run_bodies)
+    assert not any("uvx pre-commit" in b for b in run_bodies)
+    cache_steps = [
+        s
+        for s in steps
+        if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/cache@")
+    ]
+    assert any(
+        "~/.cache/pre-commit" in str(s.get("with", {}).get("path", "")) for s in cache_steps
+    )
+
+
+def test_pre_commit_uses_single_uv_locked_ruff() -> None:
+    config = yaml.safe_load(PRE_COMMIT_CONFIG.read_text())
+    for repo in config["repos"]:
+        assert "ruff-pre-commit" not in repo.get("repo", ""), (
+            "ruff must run via the uv-locked version, not a separately pinned ruff-pre-commit rev"
+        )
+    local_hooks = [
+        h for repo in config["repos"] if repo.get("repo") == "local" for h in repo.get("hooks", [])
+    ]
+    by_id = {h["id"]: h for h in local_hooks}
+    assert {"ruff-check", "ruff-format"} <= set(by_id)
+    assert "uv run ruff check" in by_id["ruff-check"]["entry"]
+    assert "uv run ruff format" in by_id["ruff-format"]["entry"]
 
 
 def test_ci_cancels_superseded_pull_request_runs() -> None:
