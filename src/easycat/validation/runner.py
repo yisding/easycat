@@ -527,12 +527,14 @@ def run_live_validation(
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id("live", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        "live",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_dir = ctx.run_dir
 
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     provider_report_dir = run_dir / "providers"
     provider_report_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = run_dir / "stdout.log"
@@ -549,14 +551,14 @@ def run_live_validation(
     provider_checks: list[ProviderCheck] = []
     provider_reports: list[dict[str, object]] = []
     artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
+        **ctx.artifacts,
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
         "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
     }
-    if requested_report_path is not None:
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
 
     stdout_log: list[str] = []
@@ -727,8 +729,9 @@ def run_live_validation(
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=_live_validation_command(
             providers=providers,
             surfaces=surfaces,
@@ -741,27 +744,12 @@ def run_live_validation(
         status=status,
         exit_code=exit_code,
         tool_exit_codes=tool_exit_codes,
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=checks,
         skips=skips,
         failures=failures,
         providers=provider_checks,
         provider_reports=provider_reports,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        # Authoritative writer of the CLI ``--report`` path; the CLI relies
-        # on this and does not write the report itself.
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
     )
 
 
