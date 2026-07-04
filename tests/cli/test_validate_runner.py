@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from easycat.validation.runner import (
     run_release_validation,
     run_validation_slice,
 )
+from scripts._justfile import just_recipe_commands
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -93,6 +95,17 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
         "tests/cli/test_validate_runner.py",
     ):
         assert f"`{token}`" in section
+
+
+def test_justfile_test_fast_and_cov_recipes_match_quick_validation_selector() -> None:
+    recipes = just_recipe_commands(REPO_ROOT)
+    for recipe in ("test-fast", "cov"):
+        command = recipes[recipe]
+        match = re.search(r'-m "(?P<expr>[^"]+)"', command)
+        assert match is not None, f"justfile `{recipe}` recipe has no -m expression"
+        assert match.group("expr") == VALIDATION_SELECTORS["quick"], (
+            f"justfile `{recipe}` -m expression drifted from VALIDATION_SELECTORS['quick']"
+        )
 
 
 def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: Path) -> None:
