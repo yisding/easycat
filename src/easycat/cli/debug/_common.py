@@ -26,10 +26,40 @@ from easycat.debug.bundle import (
     BundleVersionError,
     RunBundle,
 )
+from easycat.validation.redaction import redact_text
 
 
 def _format_ms(value: object) -> str:
     return f"{value:.1f}" if isinstance(value, int | float) else "-"
+
+
+def _record_stage(record: Mapping[str, Any]) -> str:
+    data = record.get("data")
+    if isinstance(data, Mapping):
+        for key in ("stage", "observed_stage"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _record_detail(record: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    data = record.get("data")
+    if isinstance(data, Mapping):
+        for key in ("tool_name", "tool_call_id", "call_id", "phase", "unit_id", "unit_kind"):
+            value = data.get(key)
+            if value not in (None, ""):
+                parts.append(f"{key}={redact_text(str(value))}")
+    error = record.get("error")
+    if isinstance(error, Mapping):
+        error_type = error.get("type")
+        omitted = error.get("omitted_error_fields")
+        if error_type:
+            parts.append(f"error_type={redact_text(str(error_type))}")
+        if omitted:
+            parts.append(f"omitted_error_fields={redact_text(str(omitted))}")
+    return "; ".join(parts)
 
 
 def _annotations_tally(annotations: Mapping[str, Any]) -> dict[str, Any]:
