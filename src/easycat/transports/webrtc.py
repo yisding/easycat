@@ -815,8 +815,25 @@ class _OutboundAudioSource:
         """Signal that no more data will be enqueued.
 
         No-op: the track is discarded along with the peer connection on
-        disconnect, so there is nothing to clean up here.
+        disconnect, so there is nothing to clean up here.  In-flight
+        observability emits are drained separately via :meth:`aclose`.
         """
+
+    async def aclose(self) -> None:
+        """Await any in-flight ``TransportAudioDelivered`` emit tasks.
+
+        ``_recv`` schedules these off the RTP pacing hot path (fire-and-forget
+        so observability never blocks pacing), tracking them in
+        ``self._emit_tasks``.  Teardown must drain that set so pending delivery
+        emits are awaited rather than cancelled-and-lost at loop teardown
+        ("Task was destroyed but it is pending").  Mirrors
+        ``AudioQueueMixin._drain_emit_tasks`` / ``LocalTransport.stop()``.
+        """
+        if not self._emit_tasks:
+            return
+        # Snapshot: the done-callback mutates ``_emit_tasks`` during gather.
+        await asyncio.gather(*list(self._emit_tasks), return_exceptions=True)
+        self._emit_tasks.clear()
 
 
 # ── WebRTC Transport ─────────────────────────────────────────────
@@ -1161,6 +1178,10 @@ class WebRTCTransport(AudioQueueMixin):
         self._close_browser_event_forwarder()
         self._events_channel = None
         self._outbound.stop()  # no-op by design; track is discarded with the PC
+        # Drain the outbound source's own off-RTP-path emit tasks (a *different*
+        # set from the transport-level ``_emit_tasks`` drained below), mirroring
+        # LocalTransport.stop() -> _drain_emit_tasks().
+        await self._outbound.aclose()
 
         # Shut down HTTP server.
         if self._site is not None:

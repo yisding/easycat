@@ -200,6 +200,81 @@ class TestOutboundAudioAecReference:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_aclose_drains_scheduled_emit_tasks(self):
+        """Teardown must drain the source's off-RTP-path emit tasks so in-flight
+        TransportAudioDelivered events are awaited, not cancelled-and-lost at
+        loop teardown (mirrors LocalTransport.stop() -> _drain_emit_tasks())."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)  # yield so recv/aclose caller cannot inline us
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xAA]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+        # Scheduled off the RTP path, not yet delivered.
+        assert delivered == []
+        assert source._emit_tasks
+
+        # Teardown drains: the in-flight emit is awaited (delivered), not lost.
+        await source.aclose()
+        assert [e.chunk.data for e in delivered] == [played]
+        assert not source._emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_aclose_is_noop_without_pending_tasks(self):
+        """aclose() on a source that never scheduled an emit is a safe no-op."""
+        source = _OutboundAudioSource()
+        assert not source._emit_tasks
+        await source.aclose()
+        assert not source._emit_tasks
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_disconnect_drains_outbound_emit_tasks(self):
+        """WebRTCTransport.disconnect() must drain the outbound source's own
+        emit-task set (a different set from the transport-level one), so
+        scheduled delivery emits are awaited rather than dangling."""
+        transport = WebRTCTransport()
+        source = transport._outbound
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xBB]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+        assert source._emit_tasks  # scheduled, still pending
+        assert delivered == []
+
+        # Mark connected so disconnect() runs its full teardown path.
+        transport._connected = True
+        await transport.disconnect()
+
+        # Teardown awaited the in-flight emit and cleared the source's set.
+        assert not source._emit_tasks
+        assert [e.chunk.data for e in delivered] == [played]
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_keeps_reference_but_drops_pending_audio(self):
         source = _OutboundAudioSource()
         _disable_pacing(source)
