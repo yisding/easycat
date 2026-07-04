@@ -61,6 +61,25 @@ def test_all_extra_includes_funasr_runtime_frontend_dependency() -> None:
     assert "kaldi-native-fbank>=1.22.3" in deps
 
 
+def test_all_extra_is_union_of_non_conflicting_extras() -> None:
+    """``all`` must be the union of every extra except three deliberate exclusions."""
+    extras = _pyproject()["project"]["optional-dependencies"]
+    # ten-vad: non-permissive license. pydantic-ai / pydantic-ai-v2-beta:
+    # mutually exclusive via [tool.uv].conflicts.
+    excluded = {"ten-vad", "pydantic-ai", "pydantic-ai-v2-beta"}
+
+    # Stale-exclusion guard (mirrors scripts/extras_matrix.py contract).
+    assert excluded <= set(extras), "exclusion set names an extra pyproject no longer declares"
+
+    union: set[str] = set()
+    for name, deps in extras.items():
+        if name == "all" or name in excluded:
+            continue
+        union |= set(deps)
+
+    assert set(extras["all"]) == union
+
+
 def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
     onnx_packages = _locked_packages("onnx")
     vulnerable = [
