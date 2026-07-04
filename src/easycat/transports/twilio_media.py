@@ -625,14 +625,27 @@ class TwilioTransport(ServerTransportBase):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
-            await self._emit_call_ended_once()
-            self._ws = None
-            self._client_connected.clear()
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
+            if self._ws is ws:
+                await self._emit_call_ended_once()
+                self._ws = None
+                self._client_connected.clear()
+                self._stream_sid = None
+                self._call_sid = None
+                self._answered_at = None
+                self._diagnostics.reset()
+                self._enqueue_sentinel()
+            elif self._ws is None:
+                # ``send_audio``/``send_mark`` may already have noticed this
+                # connection is closed and cleared the slot. Finish cleanup only
+                # if no newer client has claimed it in the meantime.
+                await self._emit_call_ended_once()
+                self._client_connected.clear()
+                self._stream_sid = None
+                self._call_sid = None
+                self._answered_at = None
+                self._diagnostics.reset()
+                self._enqueue_sentinel()
+            # else: a newer client owns ``self._ws`` -> leave it alone.
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -1046,8 +1059,9 @@ class TwilioConnectionTransport(AudioQueueMixin):
         return await self.send_mark(name=name)
 
     async def _receive_loop(self) -> None:
+        ws = self._ws
         try:
-            async for raw in self._ws:
+            async for raw in ws:
                 if isinstance(raw, bytes):
                     try:
                         raw = raw.decode("utf-8")
@@ -1058,14 +1072,27 @@ class TwilioConnectionTransport(AudioQueueMixin):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
-            await self._emit_call_ended_once()
-            self._connected = False
-            self._client_connected.clear()
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
+            if self._ws is ws:
+                await self._emit_call_ended_once()
+                self._connected = False
+                self._client_connected.clear()
+                self._stream_sid = None
+                self._call_sid = None
+                self._answered_at = None
+                self._diagnostics.reset()
+                self._enqueue_sentinel()
+            elif self._ws is None:
+                # A newer client may already have cleared the slot. Finish
+                # cleanup only if no newer client has claimed it meanwhile.
+                await self._emit_call_ended_once()
+                self._connected = False
+                self._client_connected.clear()
+                self._stream_sid = None
+                self._call_sid = None
+                self._answered_at = None
+                self._diagnostics.reset()
+                self._enqueue_sentinel()
+            # else: a newer client owns ``self._ws`` -> leave it alone.
 
     async def _handle_message(self, raw: str) -> None:
         try:

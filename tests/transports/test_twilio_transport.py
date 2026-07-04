@@ -435,7 +435,83 @@ class TestTwilioStreamGapDiagnostics:
         assert degraded == []
 
 
+class _BlockingTwilioWebSocket:
+    """Async-iterable fake ws that blocks in ``__anext__`` until released.
+
+    Mirrors ``_RaceServerWS`` in ``test_degraded_events`` but is async-iterable
+    so it can suspend inside ``TwilioTransport._handle_connection``'s inline
+    ``async for raw in ws`` receive loop.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.fail_sends = False
+        self.closed_with: tuple[object, ...] | None = None
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    def __aiter__(self) -> _BlockingTwilioWebSocket:
+        return self
+
+    async def __anext__(self) -> str:
+        self.entered.set()
+        await self.release.wait()
+        raise StopAsyncIteration
+
+    async def send(self, message: str) -> None:
+        if self.fail_sends:
+            close_frame = websockets.frames.Close(1006, "abnormal")
+            raise websockets.exceptions.ConnectionClosed(close_frame, None)
+        self.sent.append(message)
+
+    async def close(self, *args: object) -> None:
+        self.closed_with = args
+
+
 class TestTwilioStreamLifecycleRaces:
+    @pytest.mark.asyncio
+    async def test_server_transport_stale_finally_does_not_tear_down_replacement(self) -> None:
+        bus = EventBus()
+        ended: list[str] = []
+        bus.subscribe(CallEnded, lambda event: ended.append(event.call_sid))
+        transport = TwilioTransport(event_bus=bus)
+
+        old_ws = _BlockingTwilioWebSocket()
+        new_ws = _BlockingTwilioWebSocket()
+
+        old_task = asyncio.create_task(transport._handle_connection(old_ws))  # type: ignore[arg-type]
+        await asyncio.wait_for(old_ws.entered.wait(), timeout=1.0)
+
+        # Establish an active stream so ``send_audio`` actually attempts a send.
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+
+        # ``send_audio`` notices the closed socket and clears the slot, letting a
+        # replacement connection be accepted before the stale ``finally`` runs.
+        old_ws.fail_sends = True
+        assert await transport.send_audio(make_chunk()) is False
+        assert transport._ws is None
+
+        new_task = asyncio.create_task(transport._handle_connection(new_ws))  # type: ignore[arg-type]
+        await asyncio.wait_for(new_ws.entered.wait(), timeout=1.0)
+        assert transport._ws is new_ws
+        await transport._handle_message(_twilio_start_msg("STREAM2", "CALL2"))
+
+        # Now let the stale old handler's ``finally`` run.
+        old_ws.release.set()
+        await asyncio.wait_for(old_task, timeout=1.0)
+        await transport._drain_emit_tasks()
+
+        # The replacement must survive: the stale finally must not null ``_ws``,
+        # wipe the new stream, emit a spurious CallEnded, or poison the queue.
+        assert transport._ws is new_ws
+        assert transport.stream_sid == "STREAM2"
+        assert transport.call_sid == "CALL2"
+        assert ended == []
+        assert transport._in_queue.empty()
+
+        new_ws.release.set()
+        await asyncio.wait_for(new_task, timeout=1.0)
+
     @pytest.mark.asyncio
     async def test_server_transport_ignores_stale_stop_and_media_after_new_start(self) -> None:
         event_bus = EventBus()
