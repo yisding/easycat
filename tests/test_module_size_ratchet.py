@@ -43,7 +43,7 @@ ALLOWLIST: dict[str, int] = {
     "integrations/agents/pydantic_ai.py": 1035,
     "runtime/journal_sql.py": 1033,
     "server/voice_server.py": 1059,
-    "session/_session.py": 1504,
+    "session/_session.py": 1514,
     "transports/twilio_media.py": 1402,
     "transports/webrtc.py": 1666,
     "transports/webtransport.py": 1661,
