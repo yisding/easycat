@@ -316,7 +316,6 @@ class SqliteJournal(_SqlJournalBase):
         ).fetchone()
         self._original_session_id = prior_session_row[0] if prior_session_row else session_id
         crash_dir = self._root / "crash-dumps"
-        mkdir_private(crash_dir)
         crash_path = crash_dir / f"{session_id}.sqlite"
 
         # Copy rather than move so we can keep writing to the current path.
@@ -324,6 +323,7 @@ class SqliteJournal(_SqlJournalBase):
         # concurrent append() can use the connection while it's closed.
         with self._lock:
             try:
+                mkdir_private(crash_dir)
                 # Close our live connection so the shared file-level promoter
                 # can checkpoint+copy the on-disk database (the same core the
                 # orphan sweep uses), then reopen.  Checkpointing folds any
@@ -349,7 +349,7 @@ class SqliteJournal(_SqlJournalBase):
                     prior_count,
                     crash_path,
                 )
-            except OSError:
+            except (OSError, sqlite3.Error):
                 logger.warning(
                     "Failed to promote crash dump for session %s",
                     session_id,

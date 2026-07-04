@@ -658,6 +658,28 @@ class TestCrashRecovery:
         assert j2.degraded is False
         j2.close()
 
+    def test_crash_dump_checkpoint_databaseerror_degrades_not_raises(self, tmp_path):
+        # A malformed WAL — the very crash being recovered — makes the crash-dump
+        # checkpoint raise sqlite3.DatabaseError, a non-OperationalError the copy
+        # helper does not swallow. __init__ must degrade gracefully, not let it
+        # escape and crash journal startup.
+        j1 = SqliteJournal("sess", data_dir=tmp_path)
+        j1.append(kind=JournalRecordKind.EVENT, name="ev1", session_id="sess")
+        j1.append(kind=JournalRecordKind.EVENT, name="ev2", session_id="sess")
+        j1._conn.close()
+        j1._closed = True
+
+        with mock.patch(
+            "easycat.runtime.journal_sql._copy_journal_to_crash_dump",
+            side_effect=sqlite3.DatabaseError("database disk image is malformed"),
+        ):
+            j2 = SqliteJournal("sess", data_dir=tmp_path)  # must not raise
+
+        assert j2._recovered is False
+        seq = j2.append(kind=JournalRecordKind.EVENT, name="fresh", session_id="sess")
+        assert seq == 1
+        j2.close()
+
     def test_clean_close_no_recovery(self, tmp_path):
         j1 = SqliteJournal("sess", data_dir=tmp_path)
         j1.append(kind=JournalRecordKind.EVENT, name="ev", session_id="sess")
