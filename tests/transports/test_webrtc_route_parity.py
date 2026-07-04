@@ -164,18 +164,10 @@ def test_non_ascii_credential_denied_by_routes() -> None:
     assert routes._authorized(request_obj) is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "QS6 PR2 swaps the transport auth to server.auth.BearerTokenAuth; today "
-        "the raw hmac.compare_digest raises TypeError -> HTTP 500 on a non-ASCII "
-        "credential instead of a clean 401 deny. Flip to a passing assertion in "
-        "PR2."
-    ),
-)
 def test_non_ascii_credential_denied_by_transport() -> None:
-    # Target (post-PR2): a clean deny (-> 401). Today: raw ``compare_digest``
-    # raises ``TypeError`` on the non-ASCII credential (-> 500), so this xfails.
+    # Since QS6 PR2 the transport delegates to ``BearerTokenAuth``, which guards
+    # ``credential.isascii()`` and returns a clean deny (-> 401) for a non-ASCII
+    # credential instead of the old raw ``compare_digest`` TypeError (-> 500).
     transport, _ = _make_pair(WebRTCTransportConfig(auth_token="sekrit"))
     request_obj = _Req(authorization="Bearer nön-ascii-töken")
     assert transport._request_authorized(request_obj) is False

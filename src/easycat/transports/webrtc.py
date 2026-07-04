@@ -30,7 +30,6 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from hmac import compare_digest
 from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qsl, urlencode
@@ -952,24 +951,24 @@ class WebRTCTransport(AudioQueueMixin):
     def _request_authorized(self, request: Any) -> bool:
         """Authorize a signaling request against the optional shared token.
 
-        Same contract as the unified :class:`easycat.server.auth.BearerTokenAuth`:
+        Delegates to the unified :class:`easycat.server.auth.BearerTokenAuth`:
         no configured token means open access; otherwise accept a
-        ``Authorization: Bearer <token>`` header. A ``?token=`` query value is
-        accepted ONLY when ``allow_query_token=True`` (default off — the bundled
-        WebRTC client sends the ``Authorization`` header and is unaffected).
+        ``Authorization: Bearer <token>`` header, and a ``?token=`` query value
+        ONLY when ``allow_query_token=True`` (default off — the bundled WebRTC
+        client sends the ``Authorization`` header and is unaffected). Routing
+        through :class:`BearerTokenAuth` GUARDS the attacker-controlled
+        credential against a non-ASCII value: ``hmac.compare_digest`` raises
+        ``TypeError`` on a non-ASCII ``str``, and this handler is (deliberately)
+        try-less, so an unguarded compare would surface as HTTP 500 — a latent
+        DoS. The policy instead returns a clean deny (-> 401).
         """
         token = normalize_auth_token(self._config.auth_token)
         if token is None:
             return True
-        value = getattr(request, "headers", {}).get("Authorization")
-        if value is not None:
-            scheme, separator, credential = value.partition(" ")
-            if separator == " " and scheme.lower() == "bearer":
-                return compare_digest(credential, token)
-        if self._config.allow_query_token:
-            query_token = getattr(request, "query", {}).get("token")
-            return query_token is not None and compare_digest(query_token, token)
-        return False
+        from easycat.server.auth import BearerTokenAuth, from_aiohttp_request
+
+        policy = BearerTokenAuth(token=token, allow_query_token=self._config.allow_query_token)
+        return policy.authorize(from_aiohttp_request(request)).allowed
 
     def _unauthorized_response(self, request: Any) -> Any:
         web = self._web
