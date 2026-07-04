@@ -314,6 +314,24 @@ class STTBase:
                 exc,
             )
 
+    def _drain_buffer_to_wav(self) -> bytes | None:
+        """Wrap the buffered batch PCM into WAV bytes and clear the buffer.
+
+        Shared prologue for the batch ``finalize`` hooks. Returns ``None`` when
+        there is nothing to transcribe (empty buffer or no latched format);
+        otherwise returns the buffered PCM as a single WAV blob and clears the
+        buffer in place. Clearing in place (not a rebind) keeps the buffer
+        reference held by the in-progress ``_buffer_batch_audio_or_finalize``
+        call the same object, letting the chunk that tripped the cap restart a
+        fresh stream. The latched ``_audio_format`` is preserved so the next
+        utterance keeps the same first-seen format contract.
+        """
+        if not self._buffer or self._audio_format is None:
+            return None
+        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
+        self._buffer.clear()
+        return wav_data
+
     def _validate_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.encoding != "pcm":
             raise ValueError(f"Expected PCM encoding, got '{chunk.format.encoding}'")

@@ -20,7 +20,6 @@ from easycat.stt.base import (
     DEFAULT_MAX_AUDIO_CHUNK_BYTES,
     DEFAULT_MAX_AUDIO_DURATION_MS,
     STTBase,
-    pcm_to_wav,
 )
 from easycat.stt.websocket_base import WebSocketSTTBase
 
@@ -553,14 +552,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         latched format is preserved so the next utterance keeps the same
         first-seen format contract.
         """
-        if not self._buffer or self._audio_format is None:
+        wav_data = self._drain_buffer_to_wav()
+        if wav_data is None:
             return
-
-        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
-        # Clear in place (not a rebind) so the buffer reference held by the
-        # in-progress ``_buffer_batch_audio_or_finalize`` call stays the same
-        # object, letting the chunk that tripped the cap restart a fresh stream.
-        self._buffer.clear()
         result = await self._transcribe_batch(wav_data)
         if result:
             self._emit_event(
