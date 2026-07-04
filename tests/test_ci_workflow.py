@@ -75,7 +75,7 @@ def test_contract_validation_ci_runs_once_on_python_312() -> None:
 
     assert contracts_job["name"] == "Validate Contracts"
     assert contracts_job["timeout-minutes"] == 20
-    assert any("uv sync --group dev --python 3.12" in body for body in run_bodies)
+    assert any("uv sync --locked --group dev --python 3.12" in body for body in run_bodies)
     assert any(
         "uv run --python 3.12 easycat validate contracts" in body
         and "--show-output" in body
@@ -418,6 +418,32 @@ def test_validation_workflows_parse_as_yaml() -> None:
     yaml.safe_load(RELEASE_WORKFLOW.read_text())
 
 
+def test_every_uv_sync_enforces_the_lockfile() -> None:
+    # `uv sync` without `--locked` silently re-resolves on drift, defeating the
+    # committed lockfile as a supply-chain control. Every sync must pin it.
+    for workflow_path in (WORKFLOW, NIGHTLY_WORKFLOW, RELEASE_WORKFLOW):
+        data = yaml.safe_load(workflow_path.read_text())
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                body = str(step.get("run", ""))
+                if "uv sync" in body:
+                    assert "uv sync --locked" in body, (
+                        f"{workflow_path.name}: `uv sync` without `--locked`: {body!r}"
+                    )
+
+
+def test_ci_cancels_superseded_pull_request_runs() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+
+    assert workflow["concurrency"]["group"] == "ci-${{ github.ref }}"
+    assert (
+        workflow["concurrency"]["cancel-in-progress"]
+        == "${{ github.event_name == 'pull_request' }}"
+    )
+
+
 def test_nightly_validation_has_real_latency_job() -> None:
     data = yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     jobs = data["jobs"]
@@ -563,7 +589,7 @@ def test_live_canary_workflows_are_guarded_and_redacted() -> None:
     assert "::add-mask::" in nightly
     assert NIGHTLY_LIVE_COMMAND in nightly
     # Deepgram/ElevenLabs live probes need their SDK extras synced.
-    assert "uv sync --group dev --extra deepgram --extra elevenlabs" in nightly
+    assert "uv sync --locked --group dev --extra deepgram --extra elevenlabs" in nightly
     assert "Upload redacted live validation artifacts" in nightly
 
     assert "environment: release-validation" in release
@@ -603,7 +629,7 @@ def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
         step.get("run", "") for step in install.get("steps", []) if isinstance(step, dict)
     ]
     assert any(
-        'uv sync --extra "${{ matrix.extra }}" --group dev' in body for body in run_bodies
+        'uv sync --locked --extra "${{ matrix.extra }}" --group dev' in body for body in run_bodies
     ), "each cell must sync exactly its one extra plus the dev group"
     assert any(
         'scripts/extras_smoke.py "${{ matrix.extra }}"' in body and "--no-sync" in body

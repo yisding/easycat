@@ -26,8 +26,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: mkdir -p "$VALIDATION_ARTIFACTS_DIR"
       - run: uv run --python 3.12 pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not integration_external and not stress and not flaky"
       - name: Upload full local validation artifacts
@@ -48,8 +50,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-quick" --show-output
       - name: Upload quick validation artifacts
         if: always()
@@ -69,8 +73,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-socket" --show-output
       - name: Upload socket validation artifacts
         if: always()
@@ -90,8 +96,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-stress" --show-output
       - name: Upload stress validation artifacts
         if: always()
@@ -109,8 +117,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       # The stale-`review_by` check already runs at collection time via
       # tests/conftest.py -> validate_flaky_marker, so a past date fails this
       # step. pipefail propagates that error; `|| [ "$?" -eq 5 ]` tolerates
@@ -166,8 +176,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --extra "${{ matrix.extra }}" --group dev --python 3.12
+      - run: uv sync --locked --extra "${{ matrix.extra }}" --group dev --python 3.12
       # --no-sync everywhere below: a bare `uv run` would re-sync the
       # environment to dev defaults and silently remove the extra under test.
       - name: Import-smoke the synced extra
@@ -195,6 +207,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
       - name: Mask live provider secrets
         shell: bash
@@ -206,7 +220,7 @@ jobs:
           done
       # Deepgram/ElevenLabs live probes need their SDK extras installed;
       # OpenAI and Cartesia adapters run on core dependencies alone.
-      - run: uv sync --group dev --extra deepgram --extra elevenlabs --python 3.12
+      - run: uv sync --locked --group dev --extra deepgram --extra elevenlabs --python 3.12
       # Non-strict: a provider whose secret is absent records an expected skip
       # instead of failing the canary run.
       #
@@ -235,8 +249,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - name: Run latency validation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
