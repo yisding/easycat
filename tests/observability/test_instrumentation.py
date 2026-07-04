@@ -330,6 +330,51 @@ async def test_vad_error_increments_provider_errors_counter(
 
 
 @pytest.mark.asyncio
+async def test_audio_stage_attributes_error_to_failed_component(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AudioStage must attribute a failure to the in-flight component.
+
+    The echo canceller runs before the noise reducer; when it raises, the
+    ``easycat.provider`` counter attribute must name the echo canceller
+    (not ``self._provider``, the noise reducer). This locks the
+    ``record_stage_failure(provider=error_provider)`` threading after the
+    stage-wrapper consolidation.
+    """
+    from easycat.audio_format import PCM16_MONO_16K, AudioChunk
+    from easycat.stages.audio import AudioStage
+
+    class _StubNR:
+        async def process(self, chunk):  # noqa: ANN001
+            return chunk
+
+    class _BrokenEcho:
+        async def process(self, chunk):  # noqa: ANN001
+            raise ValueError("aec-bad")
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: _FakeTracer())
+    meter = _FakeMeter()
+    monkeypatch.setattr(observability, "_get_meter", lambda: meter)
+
+    stage = AudioStage(_StubNR(), echo_canceller=_BrokenEcho())
+    chunk = AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+    with pytest.raises(ValueError, match="aec-bad"):
+        await stage.execute(chunk, _make_run_ctx(), _make_turn_ctx())
+
+    err_counter = meter.counters["easycat.provider.errors.total"]
+    assert err_counter.adds == [
+        (
+            1,
+            {
+                "easycat.surface": "stt",
+                "easycat.provider": "_brokenecho",
+                "easycat.error_type": "ValueError",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stt_error_increments_provider_errors_counter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
