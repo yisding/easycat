@@ -35,7 +35,6 @@ EXCLUDED_PREFIX = "cli/scaffold/templates/"
 # seams. Several counts below were re-baselined after audited Wave 1 bug fixes
 # and are expected to drop sharply once the QS2/QS3/QS5/QS6 splits land.
 ALLOWLIST: dict[str, int] = {
-    "cli/debug/bundles.py": 2505,
     "config/easy.py": 1074,
     "debugger/server.py": 2995,
     "integrations/agents/langgraph.py": 1588,
