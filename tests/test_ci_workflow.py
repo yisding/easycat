@@ -89,7 +89,7 @@ def test_validation_ci_uploads_reports_junit_and_logs_even_on_failure() -> None:
     text = _workflow_text()
 
     assert text.count("if: always()") >= 2
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "--show-output" in text
     assert "validation-report" in text
     assert "junit.xml" in text
@@ -211,7 +211,7 @@ def test_nightly_validation_workflow_skeleton_exists() -> None:
     assert "flaky-quarantine:" in text
     assert "latency:" in text
     assert "live-canaries:" in text
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "if: always()" in text
     assert "retention-days:" in text
 
@@ -250,7 +250,7 @@ def test_release_validation_workflow_skeleton_exists() -> None:
     assert 'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky' in text
     assert "unexpected release validation skips" in text
     assert "environment: release-validation" in text
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "if: always()" in text
     assert "retention-days:" in text
 
@@ -299,7 +299,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         '"$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples',
         'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky',
         "unexpected release validation skips",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
         "if: always()",
         "retention-days: 30",
         "dist/**",
@@ -383,7 +383,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "unexpected release validation skips",
         "VALIDATION_ARTIFACTS_DIR",
         "dist/**",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
         "if: always()",
         "retention-days: 30",
         "run_release_validation(...)",
@@ -431,6 +431,32 @@ def test_every_uv_sync_enforces_the_lockfile() -> None:
                 if "uv sync" in body:
                     assert "uv sync --locked" in body, (
                         f"{workflow_path.name}: `uv sync` without `--locked`: {body!r}"
+                    )
+
+
+def test_third_party_actions_are_sha_pinned_and_checkout_drops_credentials() -> None:
+    # Mutable tags (`@v4`) let a compromised upstream tag inject code into the
+    # secret-bearing lanes; pin every `uses:` to a 40-char commit SHA. And every
+    # `actions/checkout` must set `persist-credentials: false` so the git token
+    # is not left on disk for later steps (docs.yml already does both).
+    sha_re = re.compile(r"^[0-9a-f]{40}$")
+    for workflow_path in (WORKFLOW, NIGHTLY_WORKFLOW, RELEASE_WORKFLOW):
+        data = yaml.safe_load(workflow_path.read_text())
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                uses = step.get("uses")
+                if not uses or "@" not in uses:
+                    continue
+                ref = uses.rsplit("@", 1)[1]
+                assert sha_re.fullmatch(ref), (
+                    f"{workflow_path.name}: `{uses}` is not pinned to a 40-char commit SHA"
+                )
+                if uses.startswith("actions/checkout@"):
+                    assert step.get("with", {}).get("persist-credentials") is False, (
+                        f"{workflow_path.name}: checkout step must set "
+                        "`persist-credentials: false`"
                     )
 
 
@@ -542,7 +568,7 @@ def test_nightly_validation_has_real_latency_job() -> None:
     assert upload_steps, "latency job must upload artifacts like other nightly jobs"
     upload = upload_steps[0]
     assert upload.get("if") == "always()", "upload step must run with if: always()"
-    assert upload.get("uses") == "actions/upload-artifact@v4"
+    assert upload.get("uses", "").startswith("actions/upload-artifact@")
     with_block = upload.get("with", {})
     assert with_block.get("path") == "${{ env.VALIDATION_ARTIFACTS_DIR }}"
     assert "retention-days" in with_block
@@ -695,8 +721,8 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
     assert NIGHTLY_LIVE_COMMAND in nightly_text
     assert "--release --provider openai --surface stt --surface tts" in release_text
     assert "easycat validate latency --require-samples" in nightly_text
-    assert "actions/upload-artifact@v4" in nightly_text
-    assert "actions/upload-artifact@v4" in release_text
+    assert "actions/upload-artifact@" in nightly_text
+    assert "actions/upload-artifact@" in release_text
     assert "retention-days: 14" in nightly_text
     assert "retention-days: 30" in release_text
     assert release["jobs"]["release-validation"]["environment"] == "release-validation"
@@ -730,7 +756,7 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
         "VALIDATION_ARTIFACTS_DIR",
         "dist/**",
         "tests/test_ci_workflow.py",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
     ):
         assert f"`{token}`" in section
     for phrase in (

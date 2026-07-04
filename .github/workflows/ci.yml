@@ -20,27 +20,34 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
       - run: uv sync --locked --group dev
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      # Static analysis of the workflows themselves: SHA-pinned actions,
+      # persist-credentials, template-injection, etc.
+      - run: uvx zizmor .github/workflows
 
   typecheck:
     name: Type Check (mypy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b  # v3.1.0
       - run: uv sync --locked --group dev --python 3.12
       # Advisory: full-repo type report. Never fails the build today
       # (~72 known errors across optional providers / config / cli /
@@ -65,8 +72,10 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
@@ -75,7 +84,7 @@ jobs:
       - run: uv run --python ${{ matrix.python-version }} easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "quick-py${{ matrix.python-version }}" --show-output
       - name: Upload quick validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: validation-report-quick-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -90,10 +99,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
           fetch-depth: 0  # diff-cover needs origin/main history
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
@@ -110,13 +120,18 @@ jobs:
       # Does NOT fail the build yet (see opt-in --fail-under below).
       - name: Diff coverage vs main
         if: github.event_name == 'pull_request'
+        # Pass github.base_ref through env instead of interpolating it directly
+        # into the shell command, so a crafted branch name cannot inject code
+        # (zizmor template-injection).
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: >-
           uv run --python 3.12 diff-cover coverage.xml
-          --compare-branch=origin/${{ github.base_ref }}
+          --compare-branch="origin/$BASE_REF"
           --markdown-report=diff-cover.md || true
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: coverage-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -130,8 +145,10 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
@@ -140,7 +157,7 @@ jobs:
       - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "socket-py3.12" --show-output
       - name: Upload socket validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: validation-report-socket-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -158,8 +175,10 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
@@ -168,7 +187,7 @@ jobs:
       - run: uv run --python 3.12 easycat validate contracts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "contracts-py3.12" --show-output
       - name: Upload contract validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: validation-report-contracts-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -183,8 +202,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"

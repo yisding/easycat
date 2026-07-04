@@ -9,3 +9,23 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "weekly"
+    # Let a freshly published release soak before Dependabot opens a PR, so a
+    # compromised/yanked version does not land the day it ships.
+    cooldown:
+      default-days: 7
+  # Keep the SHA-pinned GitHub Actions current. Dependabot bumps the pin and
+  # rewrites the trailing `# vX.Y.Z` comment, so pins never silently rot.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+  # Docs toolchain (requirements-docs.txt, hash-pinned). Best-effort: if the
+  # first PR cannot regenerate `--require-hashes` cleanly, drop this block.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

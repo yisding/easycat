@@ -48,3 +48,9 @@ repos:
   rev: v1.7.7
   hooks:
     - id: actionlint
+
+- repo: https://github.com/woodruffw/zizmor-pre-commit
+  # Keep this pin aligned with the `uvx zizmor` CLI used by ci.yml's lint job.
+  rev: v1.26.1
+  hooks:
+    - id: zizmor
