@@ -37,16 +37,16 @@ EXCLUDED_PREFIX = "cli/scaffold/templates/"
 ALLOWLIST: dict[str, int] = {
     "cli/debug/bundles.py": 2505,
     "config/easy.py": 1074,
-    "debugger/server.py": 3006,
-    "integrations/agents/langgraph.py": 1596,
-    "integrations/agents/llama_agents.py": 1372,
-    "integrations/agents/pydantic_ai.py": 1035,
+    "debugger/server.py": 2995,
+    "integrations/agents/langgraph.py": 1588,
+    "integrations/agents/llama_agents.py": 1362,
+    "integrations/agents/pydantic_ai.py": 1021,
     "runtime/journal_sql.py": 1033,
     "server/voice_server.py": 1059,
     "session/_session.py": 1514,
-    "transports/twilio_media.py": 1402,
-    "transports/webrtc.py": 1666,
-    "transports/webtransport.py": 1661,
+    "transports/twilio_media.py": 1279,
+    "transports/webrtc.py": 1655,
+    "transports/webtransport.py": 1640,
     "validation/runner.py": 1736,
 }
 
