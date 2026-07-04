@@ -35,8 +35,8 @@ test-fast:
 test-one TARGET:
     uv run pytest "{{ TARGET }}"
 
-# Lint with ruff (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006)
-# plus the Import Linter layering contracts ([tool.importlinter] in pyproject).
+# Lint with ruff (E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006).
+# Also runs the Import Linter layering contracts ([tool.importlinter] in pyproject).
 lint:
     uv run ruff check .
     uv run lint-imports
