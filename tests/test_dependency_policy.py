@@ -68,3 +68,11 @@ def test_lockfile_does_not_pin_vulnerable_onnx() -> None:
         if Version(package["version"]) < Version("1.21.0")
     ]
     assert not vulnerable, "uv.lock pins vulnerable ONNX versions: " + ", ".join(vulnerable)
+
+
+def test_project_declares_license_metadata() -> None:
+    project = _pyproject()["project"]
+
+    assert project["license"] == "BSD-2-Clause"
+    assert project["license-files"] == ["LICENSE"]
+    assert (REPO_ROOT / "LICENSE").exists()

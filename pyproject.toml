@@ -5,6 +5,8 @@ description = "Slim, batteries-included voice bot framework for AI Agents"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "EasyCat contributors" }]
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
 keywords = [
     "agent-framework",
     "speech-to-text",
