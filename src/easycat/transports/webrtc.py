@@ -1369,7 +1369,7 @@ class WebRTCTransport(AudioQueueMixin):
             self._emit_degraded(
                 _DEGRADED_NEGOTIATION_FAILED,
                 f"SDP negotiation failed: {type(exc).__name__}: {exc}",
-                fatal=True,
+                fatal=False,
             )
             if pc is not None:
                 await pc.close()
