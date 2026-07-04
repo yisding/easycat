@@ -303,6 +303,32 @@ class TestTelephonyConfigExtension:
         manager = next(helper for helper in helpers if isinstance(helper, _Manager))
         assert manager.dnc_list is dnc
 
+    def test_outbound_manager_warns_on_blank_twilio_creds(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Blank Twilio creds surface a loud warning, not a silent skip.
+
+        Regression: manager-enabled + blank creds used to skip the manager
+        with no log, so the app failed later with a NoneType AttributeError.
+        """
+        import logging
+
+        bus = EventBus()
+        with caplog.at_level(logging.WARNING, logger="easycat.config"):
+            result = _create_telephony_helpers(
+                bus,
+                TelephonyConfig(
+                    enable_outbound_call_manager=True,
+                    outbound=OutboundCallConfig(from_number="+15559876543"),
+                ),
+            )
+        # Graceful degradation: manager skipped, but loudly.
+        assert not any(type(h).__name__ == "OutboundCallManager" for h in result.helpers)
+        assert any(
+            "twilio" in rec.message.lower() and rec.levelno == logging.WARNING
+            for rec in caplog.records
+        )
+
 
 class TestOutboundPipelineWiring:
     @pytest.mark.asyncio
