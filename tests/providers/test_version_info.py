@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from easycat._provider_helpers import get_package_version
 from easycat.stt.base import STTBase
 from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from easycat._provider_helpers import get_package_version
 from easycat.transports._base import AudioQueueMixin, make_version_info
 from easycat.transports.local import LocalTransport
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport

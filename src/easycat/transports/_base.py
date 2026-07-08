@@ -18,8 +18,8 @@ from typing import Any
 import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
-from easycat.audio_format import AudioChunk, AudioFormat
 from easycat._provider_helpers import get_package_version
+from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportDegraded
 from easycat.transports._browser_events import BrowserEventForwarder
 

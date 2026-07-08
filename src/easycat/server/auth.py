@@ -197,7 +197,9 @@ class BearerTokenAuth:
         propagate as a 500 DoS / confusing diagnostic instead of a clean 401.
         """
         return (
-            credential.isascii() and self.token.isascii() and compare_digest(credential, self.token)
+            credential.isascii()
+            and self.token.isascii()
+            and compare_digest(credential, self.token)
         )
 
 
