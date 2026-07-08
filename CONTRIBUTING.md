@@ -48,8 +48,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
-| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py src/easycat/debugger/_aec_routes.py` |
-| Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
+| Type gate (mypy, whole package) | `just typecheck` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
@@ -74,16 +73,16 @@ in the `justfile`, then re-run the script.
 | Guard teaching ladder chapters, generated README blocks, and learner route hints | `just guard-teaching` | `uv run pytest tests/teaching tests/docs/test_route_contracts.py::test_teaching_ladder_docs_route_matches_learner_start_commands tests/install/test_teaching_prerequisites.py` |
 | Guard examples README, support files, script smoke checks, and docs-route hints | `just guard-examples` | `uv run pytest tests/examples tests/docs/test_route_contracts.py::test_examples_docs_route_matches_examples_fast_path` |
 | Guard scaffold templates, init flows, catalog output, generated project smoke, and secret/artifact hygiene | `just guard-templates` | `uv run pytest tests/cli/test_templates.py tests/cli/test_init.py tests/cli/e2e/test_scaffold_smoke.py -m 'not integration_external'` |
-| Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py tests/install/test_agent_guides.py` |
-| Guard validation workflow docs, validation reference docs, and validate CLI behavior | `just guard-validation` | `uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py` |
+| Guard contributor guidance, agent guide contracts, validation state, and route hints | `just guard-contributing` | `uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py` |
+| Guard validation workflow docs, validation reference docs, and validate CLI behavior | `just guard-validation` | `uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py` |
 | Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix | `just guard-contracts` | `uv run pytest tests/docs/test_route_contracts.py::test_provider_contract_docs_route_matches_contract_commands tests/test_contributing.py::test_contributing_provider_section_points_to_contract_map tests/contracts tests/testing` |
 | Guard operator docs, deployment guide, observability docs, journal CLI, and durability | `just guard-ops` | `uv run pytest tests/docs/test_route_contracts.py::test_deployment_docs_route_matches_docker_commands tests/docs/test_route_contracts.py::test_observability_docs_route_matches_journal_cli_entry_points tests/docs/test_route_contracts.py::test_journal_durability_docs_route_matches_inspection_commands tests/examples/test_deploy_and_browser_docs.py tests/observability tests/cli/test_bundles.py tests/runtime/test_sqlite_journal.py` |
 | Guard maintained Markdown links, anchors, and docs-route Markdown targets | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 <!-- END auto:guard-commands -->
 
-> `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`
-> work right after `uv sync --group dev`. `just typecheck-fast` runs Astral
-> `ty` on demand via `uvx` (no install needed; it's advisory, not a gate).
+> `mypy` ships in the `dev` group, so `just typecheck` works right after
+> `uv sync --group dev`. `just typecheck-fast` runs Astral `ty` on demand
+> via `uvx` (no install needed; it's advisory, not a gate).
 > `just cov` is plain `pytest --cov` and has no type-checker dependency.
 
 If local tests emit dependency warnings right after a lockfile or Dependabot
@@ -108,8 +107,8 @@ surface before the broader validation lane:
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
 | Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
 | Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, generated project smoke, and generated project secret/artifact hygiene |
-| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, docs-route hints, and plan current-state evidence |
-| Validation workflow, validation reference, or validate CLI behavior | `just guard-validation` | The `docs/validation.md` workflow, validation reference route hints, validation plan current state, validate CLI reports, JSON envelopes, latency options, and error handling |
+| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, and docs-route hints |
+| Validation workflow, validation reference, or validate CLI behavior | `just guard-validation` | The `docs/validation.md` workflow, validation reference route hints, validate CLI reports, JSON envelopes, latency options, and error handling |
 | Provider protocols, cassettes, contract matrix, or bridge event grammar | `just guard-contracts` | Provider contract docs-route hints, contributor provider guidance, offline contract suite, cassette redaction/replay, schema fingerprints, bridge contracts, and provider wiring matrix |
 | Operator deployment, observability, or journal durability docs | `just guard-ops` | Docker deployment guide, operator docs-route hints, journal CLI entry points, debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, and SQLite journal durability |
 | Markdown links in maintained docs | `just guard-markdown` | Local links, anchors, and docs-route Markdown targets |
@@ -124,12 +123,13 @@ contracts, packaging, live canaries, or stress behavior.
 
 ## Parallel runs and xdist safety
 
-`just test-fast` and `just cov` use `pytest -n auto --dist loadscope`.
-`loadscope` keeps every test in a module on the **same** worker, which matters
-for async event-loop tests and any socket/port-binding tests. If you add tests
-that bind a **fixed** port (rather than port `0`), keep them in one module and
-prefer marking them `integration_socket`. `just test` (serial) is the source of
-truth; parallel runs are an opt-in speedup. Always run coverage as
+`just test-fast`, `just cov`, and the `quick` validation lane use
+`pytest -n auto --dist loadscope`. `loadscope` keeps every test in a module on
+the **same** worker, which matters for async event-loop tests and any
+socket/port-binding tests. If you add tests that bind a **fixed** port (rather
+than port `0`), keep them in one module and prefer marking them
+`integration_socket` — the socket, stress, and contracts lanes stay serial.
+`just test` (serial) is the source of truth. Always run coverage as
 `pytest --cov` — never `coverage run -m pytest -n auto`, which reports 0% under
 xdist.
 
@@ -338,10 +338,10 @@ use the matching raw command from
 
 - `just check` is green (format + lint + tests).
 - New code is typed (Python `>=3.11`, typing-first). `mypy` is the
-  authoritative type checker: `just typecheck` gates the clean core
-  (`easycat.debug`, `easycat.runtime`, `easycat.stages`, `easycat.session`,
-  and `easycat.integrations`) and must stay green, while `just typecheck-all`
-  is the advisory whole-repo report we ratchet down over time.
+  authoritative type checker: `just typecheck` gates the whole package at
+  zero errors (vendored `vad/_funasr_runtime` excluded), with stricter
+  checks layered on the core packages (`easycat.debug`, `easycat.runtime`,
+  `easycat.stages`, `easycat.session`, and `easycat.integrations`).
   `just typecheck-fast` (Astral `ty`) is faster local feedback but advisory
   only (beta).
 - **Patch coverage**: cover the lines your PR changes (`just cov` locally).

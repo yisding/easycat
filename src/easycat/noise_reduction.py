@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import struct
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias
 
 from easycat._audio_utils import resample_chunk
 from easycat._extras import require_module
@@ -48,7 +48,7 @@ def _validate_noise_reducer_backend(backend: str) -> NoiseReducerBackend:
     if backend not in _VALID_NOISE_REDUCER_BACKENDS:
         allowed = ", ".join(_VALID_NOISE_REDUCER_BACKENDS)
         raise ValueError(f"Unknown noise reducer backend '{backend}'. Expected one of: {allowed}.")
-    return cast(NoiseReducerBackend, backend)
+    return backend
 
 
 def _validate_noise_reducer_fallback_policy(policy: str) -> NoiseReducerFallbackPolicy:
@@ -57,7 +57,7 @@ def _validate_noise_reducer_fallback_policy(policy: str) -> NoiseReducerFallback
         raise ValueError(
             f"Unknown noise reducer fallback_policy '{policy}'. Expected one of: {allowed}."
         )
-    return cast(NoiseReducerFallbackPolicy, policy)
+    return policy
 
 
 # ── RNNoise integration (open-source fallback) ─────────────────────

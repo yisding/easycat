@@ -132,7 +132,7 @@ def _make_handler() -> logging.Handler:
         from rich.console import Console
         from rich.logging import RichHandler
 
-        handler = RichHandler(
+        rich_handler = RichHandler(
             console=Console(stderr=True, force_terminal=True),
             show_path=False,
             rich_tracebacks=True,
@@ -140,8 +140,8 @@ def _make_handler() -> logging.Handler:
         # Without a formatter, RichHandler renders only %(message)s, dropping the
         # session/turn ids the CorrelationFilter populates. Prepend them to the
         # message column so the interactive color path stays correlated too.
-        handler.setFormatter(logging.Formatter(_RICH_LOG_FORMAT))
-        return handler
+        rich_handler.setFormatter(logging.Formatter(_RICH_LOG_FORMAT))
+        return rich_handler
     return _plain_text_handler()
 
 

@@ -17,29 +17,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Single lint gate: pre-commit runs every hook — ruff check/format,
+  # Import Linter layering contracts, check-yaml, whitespace hygiene,
+  # codespell, actionlint, and zizmor (workflow static analysis) — so CI,
+  # the local pre-commit hook, and `just pre-commit` all grade the exact
+  # same surface with no duplicated jobs.
   lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: "**/uv.lock"
-      - run: uv sync --locked --group dev
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      # Enforce the package layering contracts ([tool.importlinter] in
-      # pyproject.toml): provider-family independence + the webrtc forbidden edge.
-      - run: uv run lint-imports
-      # Static analysis of the workflows themselves: SHA-pinned actions,
-      # persist-credentials, template-injection, etc. Pinned so a new zizmor
-      # release cannot change or fail this job without a repo change; keep in
-      # sync with the zizmor-pre-commit rev in .pre-commit-config.yaml.
-      - run: uvx zizmor==1.26.1 .github/workflows
-
-  pre-commit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -56,10 +39,7 @@ jobs:
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
-      - name: Run pre-commit
-        env:
-          # ruff is already covered by the dedicated `lint` job above.
-          SKIP: ruff-check,ruff-format
+      - name: Run pre-commit (all hooks)
         run: uv run pre-commit run --all-files --show-diff-on-failure
 
   typecheck:
@@ -77,16 +57,11 @@ jobs:
           python-version: "3.12"
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b  # v3.1.0
       - run: uv sync --locked --group dev --python 3.12
-      # Advisory: full-repo type report. Never fails the build today
-      # (~72 known errors across optional providers / config / cli /
-      # debugger); surfaces the count so we can ratchet it down over time.
-      - name: mypy (advisory, whole repo)
-        continue-on-error: true
-        run: uv run --python 3.12 mypy src/easycat
-      # Gate: the clean core must stay green. The gated path list lives in
-      # the justfile (`mypy_gated_paths`) so local `just typecheck` and CI
-      # grade exactly the same packages.
-      - name: mypy (gate, clean core)
+      # Gate: the whole package at zero errors (vendored vad/_funasr_runtime
+      # excluded, stricter checks layered on the core packages — see the
+      # [[tool.mypy.overrides]] tables in pyproject.toml). `just typecheck`
+      # keeps local runs and CI grading the exact same surface.
+      - name: mypy (gate, whole package)
         run: just typecheck
 
   test:
@@ -96,7 +71,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # PRs run the oldest and newest supported Pythons; 3.12 is covered
+        # per-PR by the coverage job below, and nightly-validation.yml runs
+        # the full-local suite across every advertised version.
+        python-version: ["3.11", "3.14"]
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/ci/${{ github.job }}-py${{ matrix.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -138,10 +116,12 @@ jobs:
           python-version: "3.12"
       - run: uv sync --locked --group dev --python 3.12
       # pytest --cov (NOT `coverage run -m pytest -n auto`, which reports 0%
-      # under xdist). Safe slice mirrors `easycat validate quick` exactly.
+      # under xdist; pytest-cov itself is xdist-safe). Mirrors `just cov` and
+      # the `easycat validate quick` slice, so this job doubles as the per-PR
+      # Python 3.12 test signal.
       - name: Run safe slice with coverage
         run: >-
-          uv run --python 3.12 pytest -q
+          uv run --python 3.12 pytest -q -n auto --dist loadscope
           -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"
           --cov --cov-report=term-missing --cov-report=xml:coverage.xml
       # Report-only: PRs see how much of the changed lines they cover.
@@ -238,6 +218,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --locked --group dev --python 3.12
+      # No project sync: `uv build` resolves the build backend in its own
+      # isolated environment and twine runs via uvx.
       - run: uv build
       - run: uvx twine check dist/*

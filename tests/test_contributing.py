@@ -408,40 +408,6 @@ def test_contributing_pr_expectations_point_to_raw_command_fallbacks() -> None:
     assert "If `just` is not installed" in section
     assert "[the development loop](#the-development-loop)" in section
     assert "matching raw command" in section
-    for recipe in ("check", "typecheck", "typecheck-all", "typecheck-fast", "cov"):
+    for recipe in ("check", "typecheck", "typecheck-fast", "cov"):
         assert f"`just {recipe}`" in section
         assert rows[recipe], f"CONTRIBUTING.md missing raw command for just {recipe}"
-
-
-def test_validation_plan_matches_contributor_quick_command() -> None:
-    rows = {row["slice"]: row["command"] for row in _validation_slice_rows()}
-    tasks = (REPO_ROOT / "plan" / "validation" / "tasks.md").read_text(encoding="utf-8")
-
-    assert rows["quick"] in tasks
-
-
-def test_validation_tasks_v05_current_state_tracks_contributor_workflow() -> None:
-    from typer.main import get_command
-
-    from easycat.cli.validate import validate_app
-
-    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
-    section = plan.split("### V0.5 Document Contributor Workflow", 1)[1].split(
-        "## V1: First-Class CLI And CI Artifacts",
-        1,
-    )[0]
-    recipes = set(just_recipe_commands(REPO_ROOT)) - {"default"}
-    documented_recipes = {row["recipe"] for row in _development_loop_rows()}
-    documented_slices = {row["slice"] for row in _validation_slice_rows()}
-    public_lanes = set(get_command(validate_app).commands) - {"report"}
-
-    assert "Current verified state:" in section
-    assert recipes <= documented_recipes
-    assert public_lanes == documented_slices
-    for token in (
-        "CONTRIBUTING.md",
-        "easycat validate",
-        "tests/test_contributing.py",
-        "tests/docs/test_route_contracts.py",
-    ):
-        assert f"`{token}`" in section

@@ -145,6 +145,13 @@ class Session:
     for lower latency.
     """
 
+    # Set dynamically by ``easycat.config._factory``: a lightweight config
+    # snapshot for debug-bundle export, and the emergency-export unregister
+    # hook. Declared (not assigned) so ``getattr(..., default)`` probes keep
+    # their runtime behavior.
+    _easycat_config: Any
+    _emergency_export_unregister: Callable[[], None]
+
     def __init__(self, config: SessionConfig | None = None) -> None:
         cfg = config or SessionConfig()
         self._config = cfg

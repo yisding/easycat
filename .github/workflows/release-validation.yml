@@ -72,7 +72,8 @@ jobs:
           # hypothesis is needed at collection time: the quick slice includes
           # unmarked property-based tests (tests/**/*_property.py) that import
           # it at module level, so the wheel-only env must provide it too.
-          uv pip install --python "$RELEASE_VENV/bin/python" pytest pytest-asyncio hypothesis
+          # pytest-xdist is required because the quick slice runs -n auto.
+          uv pip install --python "$RELEASE_VENV/bin/python" pytest pytest-asyncio pytest-xdist hypothesis
       - name: Verify installed package outside source tree
         working-directory: ${{ runner.temp }}
         env:

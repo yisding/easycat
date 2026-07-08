@@ -624,7 +624,7 @@ class _OutboundAudioSource:
     def create_track(self) -> Any:
         """Return an aiortc MediaStreamTrack wrapping this source."""
         transport_src = self
-        aiortc = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
+        aiortc: Any = require_module("aiortc", extra="webrtc", purpose="WebRTC transport")
 
         class _Track(aiortc.MediaStreamTrack):
             kind = "audio"
@@ -684,7 +684,7 @@ class _OutboundAudioSource:
         frame_bytes = _FRAME_SAMPLES * 2  # 16-bit mono
 
         buf = bytearray()
-        delivered_chunks: list[tuple[AudioChunk, str | None, object | None]] = []
+        delivered_chunks: list[tuple[AudioChunk, str | None, str | None, object | None]] = []
 
         while len(buf) < frame_bytes:
             if not self._pending:
@@ -796,6 +796,7 @@ class _OutboundAudioSource:
 
     async def _drain_emit_queue(self) -> None:
         """Emit queued ``TransportAudioDelivered`` events in delivery order."""
+        assert self._event_bus is not None
         while self._emit_queue:
             event = self._emit_queue.popleft()
             try:
@@ -915,7 +916,7 @@ class WebRTCTransport(AudioQueueMixin):
         # ``TransportAudioDelivered``) once a peer connects.
 
         # HTTP signaling server (aiohttp).
-        self._web: Any | None = None  # cached aiohttp.web module
+        self._web: Any = None  # cached aiohttp.web module
         self._app: Any | None = None
         self._runner: Any | None = None
         self._site: Any | None = None
