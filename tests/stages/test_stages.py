@@ -270,6 +270,16 @@ class TestNondeterministicFields:
 
 
 class TestReplaySpec:
+    def test_base_module_runtime_reexport(self):
+        # ``runtime.replay`` documents that ``stages.base.ReplaySpec``
+        # re-exports its class; out-of-tree stages import it from there.
+        from easycat.runtime.replay import ReplaySpec as canonical
+        from easycat.stages import base
+
+        assert base.ReplaySpec is canonical
+        with pytest.raises(AttributeError):
+            base.no_such_attribute  # noqa: B018
+
     def test_fidelity_required(self):
         from easycat.runtime.replay import ReplayFidelity
 

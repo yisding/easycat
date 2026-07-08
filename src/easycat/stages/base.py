@@ -26,6 +26,20 @@ if TYPE_CHECKING:
     # order independent of ``runtime.replay`` (which imports from here).
     from easycat.runtime.replay import ReplayCassette, ReplaySpec
 
+
+def __getattr__(name: str) -> Any:
+    # Runtime re-export: ``runtime.replay`` documents that
+    # ``stages.base.ReplaySpec`` resolves to its class, and out-of-tree
+    # stages import it from here.  ``runtime.replay`` imports from this
+    # module, so a top-level import would deadlock during initial module
+    # load; defer the lookup to attribute-access time instead.
+    if name == "ReplaySpec":
+        from easycat.runtime.replay import ReplaySpec
+
+        return ReplaySpec
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 # ── Control signals ──────────────────────────────────────────────
 
 
