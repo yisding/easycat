@@ -131,6 +131,28 @@ class TestWebRTCStatsArtifact:
         assert len(lines) == 2
 
     @pytest.mark.asyncio
+    async def test_stats_endpoint_record_cap_resets_after_external_rotation(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=1)
+        )
+        transport._web = _FakeWeb
+
+        def _post():
+            return transport._handle_stats(
+                _FakeSameOriginJsonRequest({"kind": "webrtc_client_stats", "schema_version": 1})
+            )
+
+        assert (await _post()).status == 200
+        assert (await _post()).status == 429
+
+        # An operator rotating the artifact must not brick /stats with 429s
+        # until process restart: the cached in-memory count resets with it.
+        stats_path.unlink()
+        assert (await _post()).status == 200
+        assert len(stats_path.read_text(encoding="utf-8").splitlines()) == 1
+
+    @pytest.mark.asyncio
     async def test_stats_endpoint_rejects_non_object_payload(self, tmp_path):
         stats_path = tmp_path / "webrtc-stats.jsonl"
         transport = WebRTCTransport(WebRTCTransportConfig(stats_path=str(stats_path)))

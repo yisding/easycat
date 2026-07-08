@@ -222,12 +222,15 @@ class WebRTCSignalingHandlers:
 
         max_records = self._config.stats_max_records
         if max_records >= 0:
-            if self._stats.record_count is None:
-                current_records = 0
-                if stats_path.exists():
-                    with stats_path.open("r", encoding="utf-8") as handle:
-                        current_records = sum(1 for _ in handle)
-                self._stats.record_count = current_records
+            # The count is cached per server and advanced by this process's own
+            # writes (avoiding a full-file recount per request). If the artifact
+            # was rotated/removed externally, drop the stale cache so an empty
+            # file doesn't keep returning 429 until the process restarts.
+            if not stats_path.exists():
+                self._stats.record_count = 0
+            elif self._stats.record_count is None:
+                with stats_path.open("r", encoding="utf-8") as handle:
+                    self._stats.record_count = sum(1 for _ in handle)
             if self._stats.record_count >= max_records:
                 return "WebRTC stats artifact record limit exceeded"
 
