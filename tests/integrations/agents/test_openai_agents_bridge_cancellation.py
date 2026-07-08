@@ -213,6 +213,67 @@ async def test_barge_in_mid_text_cancels_immediate(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_generator_close_strips_dangling_tool_calls(monkeypatch):
+    """A hard aclose() mid-tool-call must not poison the captured history.
+
+    The snapshot can contain a ``function_call`` whose output never arrived;
+    replaying that input list is rejected by the Responses API, so the bridge
+    drops the unmatched call."""
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    agent = _Agent()
+    settled = [
+        {"role": "user", "content": "look it up"},
+        {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call-2", "name": "other", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call-2", "output": "done"},
+    ]
+    result = _CancellableRunResult(
+        last_agent=agent,
+        settled_input=settled,
+        events=[_tool_call_event("lookup", "call-1"), _text_event("x")],
+    )
+    monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner(result))
+    bridge = OpenAIAgentsBridge(agent)
+
+    agen = bridge.invoke(AgentTurnInput.from_text("look it up"), _recorder())
+    first = await agen.__anext__()
+    assert first.kind == "tool_started"
+    await agen.aclose()
+
+    assert result.cancel_calls == ["immediate"]
+    # call-1 never got an output -> dropped; the completed call-2 pair stays.
+    assert bridge._message_history == [settled[0], settled[2], settled[3]]
+
+
+@pytest.mark.asyncio
+async def test_generator_close_survives_cancel_error(monkeypatch):
+    """An SDK error from cancel() must not supersede the GeneratorExit —
+    that would turn a clean barge-in aclose() into
+    RuntimeError('async generator ignored GeneratorExit')."""
+    import easycat.integrations.agents.openai_agents as openai_agents_module
+
+    agent = _Agent()
+
+    class _RaisingCancelResult(_CancellableRunResult):
+        def cancel(self, mode: str = "immediate") -> None:
+            raise RuntimeError("run already finalized")
+
+    result = _RaisingCancelResult(
+        last_agent=agent,
+        settled_input=[{"role": "user", "content": "hi"}],
+        events=[_text_event("Hel"), _text_event("lo")],
+    )
+    monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner(result))
+    bridge = OpenAIAgentsBridge(agent)
+
+    agen = bridge.invoke(AgentTurnInput.from_text("hi"), _recorder())
+    first = await agen.__anext__()
+    assert first.kind == "text_delta"
+    await agen.aclose()  # must not raise
+
+
+@pytest.mark.asyncio
 async def test_generator_close_cancels_run(monkeypatch):
     import easycat.integrations.agents.openai_agents as openai_agents_module
 

@@ -54,6 +54,31 @@ logger = logging.getLogger(__name__)
 _OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS = 2.0
 
 
+def _drop_dangling_function_calls(history: list[Any]) -> list[Any]:
+    """Remove ``function_call`` items whose output never arrived.
+
+    A hard-cancelled run (barge-in ``aclose()``) can snapshot
+    ``to_input_list()`` mid-tool-call; the Responses API rejects an input
+    list containing a ``function_call`` with no matching
+    ``function_call_output``, so replaying such a snapshot would fail every
+    later turn. Non-dict items and everything else pass through unchanged.
+    """
+    output_ids = {
+        item.get("call_id")
+        for item in history
+        if isinstance(item, dict) and item.get("type") == "function_call_output"
+    }
+    return [
+        item
+        for item in history
+        if not (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") not in output_ids
+        )
+    ]
+
+
 def _resolve_model_id(candidate: Any) -> str | None:
     """Best-effort string model id from a string or SDK ``Model`` candidate.
 
@@ -259,8 +284,14 @@ class OpenAIAgentsBridge:
             # an ``Exception``, so the arm below is skipped and the ``finally``
             # would snapshot a still-running background run.  Explicitly cancel
             # it (mirroring the Llama bridge); a cancelled turn is not a
-            # framework fault, so do not record a framework error.
-            result.cancel(mode="immediate")
+            # framework fault, so do not record a framework error.  Guard the
+            # cancel itself: an SDK error here would supersede the in-flight
+            # ``GeneratorExit`` and turn a clean close into
+            # ``RuntimeError("async generator ignored GeneratorExit")``.
+            try:
+                result.cancel(mode="immediate")
+            except Exception:
+                logger.debug("RunResultStreaming.cancel() raised during close", exc_info=True)
             raise
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
@@ -279,9 +310,16 @@ class OpenAIAgentsBridge:
             if hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = saved_mcp_servers
             try:
-                self._message_history = result.to_input_list()
+                history = result.to_input_list()
             except Exception:
                 pass
+            else:
+                # A hard ``aclose()`` cancel can snapshot before the run
+                # settles, capturing a ``function_call`` item whose
+                # ``function_call_output`` never arrived; replaying that
+                # history is rejected by the Responses API. Drop the
+                # unmatched calls rather than poisoning every later turn.
+                self._message_history = _drop_dangling_function_calls(history)
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
             if not cursor_exited:
