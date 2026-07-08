@@ -13,6 +13,13 @@ updates:
     # compromised/yanked version does not land the day it ships.
     cooldown:
       default-days: 7
+    # Roll every in-range bump from this ecosystem into ONE PR per run instead
+    # of one PR per package, so a weekly refresh is a single review and a single
+    # CI run rather than a scattered stack.
+    groups:
+      uv:
+        patterns:
+          - "*"
   # Keep the SHA-pinned GitHub Actions current. Dependabot bumps the pin and
   # rewrites the trailing `# vX.Y.Z` comment, so pins never silently rot.
   - package-ecosystem: "github-actions"
@@ -21,6 +28,10 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
   # Docs toolchain (requirements-docs.txt, hash-pinned). Best-effort: if the
   # first PR cannot regenerate `--require-hashes` cleanly, drop this block.
   - package-ecosystem: "pip"
@@ -29,3 +40,16 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    groups:
+      pip:
+        patterns:
+          - "*"
+    # The pip ecosystem also parses pyproject.toml, where the `pydantic-ai`
+    # extra is deliberately capped at the v1 line (`pydantic-ai-v2` covers 2.x).
+    # Left alone, pip re-proposes widening that cap to <3.0.0 (see closed #397)
+    # and edits pyproject.toml without regenerating uv.lock, breaking CI. The
+    # uv ecosystem is the real owner of pyproject.toml/uv.lock and respects the
+    # cap, so keep pip off pydantic-ai major bumps.
+    ignore:
+      - dependency-name: "pydantic-ai"
+        update-types: ["version-update:semver-major"]
