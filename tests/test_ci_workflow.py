@@ -122,6 +122,25 @@ def test_validation_ci_shows_pytest_output_in_github_logs() -> None:
     assert "--show-output" in contracts_run["run"]
 
 
+def test_ci_zizmor_pin_matches_pre_commit_rev() -> None:
+    # The lint job pins zizmor inline (uvx zizmor==X) and pre-commit pins the
+    # same tool via its hook rev (vX). The two are kept in sync only by this
+    # guard — a drifted pair silently runs different zizmor versions locally
+    # vs in CI.
+    ci_match = re.search(r"uvx zizmor==(\S+)", _workflow_text())
+    assert ci_match is not None, "ci.yml lint job must pin zizmor (uvx zizmor==<version>)"
+    pre_commit = yaml.safe_load(PRE_COMMIT_CONFIG.read_text(encoding="utf-8"))
+    revs = [
+        repo["rev"]
+        for repo in pre_commit["repos"]
+        if isinstance(repo, dict) and "zizmor" in str(repo.get("repo", ""))
+    ]
+    assert revs, ".pre-commit-config.yaml must contain the zizmor-pre-commit repo"
+    assert revs[0].lstrip("v") == ci_match.group(1), (
+        f"zizmor pins drifted: ci.yml has {ci_match.group(1)}, pre-commit has {revs[0]}"
+    )
+
+
 def test_ci_has_package_build_smoke() -> None:
     text = _workflow_text()
 
