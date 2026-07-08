@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
 import shlex
 import subprocess
 import sys
@@ -18,6 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from easycat._provider_catalog import provider_names
+from easycat.validation._lane_harness import (
+    PROVIDER_ENV_VARS,
+    ValidationRunResult,
+    _finish_lane_run,
+    _start_lane_run,
+    _write_atomic,
+)
 from easycat.validation.latency import (
     DEFAULT_RELIABILITY_BUDGETS,
     FailureCategory,
@@ -27,7 +33,6 @@ from easycat.validation.latency import (
     LatencyStageDurations,
     ReliabilityBudget,
     ReliabilitySample,
-    _is_ci,
     build_latency_artifact,
     build_reliability_artifact,
     classify_failure_category,
@@ -47,16 +52,12 @@ from easycat.validation.provider_reports import (
 )
 from easycat.validation.report import (
     ArtifactRef,
-    GitMetadata,
     ProviderCheck,
     ProviderCheckState,
     ValidationCheck,
-    ValidationEnvironment,
     ValidationFailure,
-    ValidationRun,
     ValidationSkip,
     redact_runtime_secrets,
-    redact_text,
 )
 
 VALIDATION_SELECTORS = {
@@ -68,13 +69,6 @@ VALIDATION_SELECTORS = {
     "stress": "stress and not integration_live and not flaky",
     "contracts": "contract and not integration_live and not flaky",
 }
-
-PROVIDER_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "DEEPGRAM_API_KEY",
-    "ELEVENLABS_API_KEY",
-    "CARTESIA_API_KEY",
-)
 
 DEFAULT_RELEASE_EXTRAS = ("openai", "openai-agents")
 DEFAULT_RELEASE_PROVIDERS = ("openai",)
@@ -122,14 +116,6 @@ class CommandResult:
     stderr: str = ""
 
 
-@dataclass(frozen=True)
-class ValidationRunResult:
-    run: ValidationRun
-    run_dir: Path
-    report_path: Path
-    exit_code: int
-
-
 CommandRunner = Callable[..., CommandResult]
 
 
@@ -154,16 +140,18 @@ def run_validation_slice(
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id(slice_name, started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        slice_name,
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_dir = ctx.run_dir
 
     junit_path = Path(junit_path) if junit_path is not None else run_dir / "junit.xml"
     junit_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     reliability_samples_path = run_dir / "reliability" / "samples.json"
     reliability_samples_path.parent.mkdir(parents=True, exist_ok=True)
     webrtc_stats_path = run_dir / "webrtc" / "stats.jsonl"
@@ -193,8 +181,8 @@ def run_validation_slice(
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
 
-    stdout_path.write_text(redact_text(result.stdout))
-    stderr_path.write_text(redact_text(result.stderr))
+    stdout_path.write_text(redact_runtime_secrets(result.stdout, runtime_secret_values))
+    stderr_path.write_text(redact_runtime_secrets(result.stderr, runtime_secret_values))
     if junit_path.exists():
         junit_path.write_text(
             redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
@@ -232,14 +220,11 @@ def run_validation_slice(
             path=str(webrtc_stats_path),
         )
 
-    artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
-        **check_artifacts,
-    }
-    if requested_report_path is not None:
+    artifacts: dict[str, ArtifactRef] = {**ctx.artifacts, **check_artifacts}
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
 
     failures = []
@@ -247,7 +232,10 @@ def run_validation_slice(
         failures.append(
             ValidationFailure(
                 name=f"pytest.{slice_name}",
-                message=result.stderr or result.stdout or f"pytest exited {result.exit_code}",
+                message=redact_runtime_secrets(
+                    result.stderr or result.stdout or f"pytest exited {result.exit_code}",
+                    runtime_secret_values,
+                ),
             )
         )
     if reliability_failure is not None:
@@ -255,8 +243,9 @@ def run_validation_slice(
     if reliability_budget_failure is not None:
         failures.append(reliability_budget_failure)
 
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=command,
         started_at=started_at,
         finished_at=finished_at,
@@ -268,8 +257,6 @@ def run_validation_slice(
             **({"reliability_samples": 1} if reliability_failure is not None else {}),
             **({"reliability_budget": 1} if reliability_budget_failure is not None else {}),
         },
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=[
             ValidationCheck(
                 name=f"pytest.{slice_name}",
@@ -282,20 +269,6 @@ def run_validation_slice(
         failures=failures,
         reliability=reliability_payload,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        # Authoritative writer of the CLI ``--report`` path; the CLI relies
-        # on this and does not write the report itself.
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    result_report_path = requested_report_path or run_report_path
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=result_report_path,
-        exit_code=exit_code,
     )
 
 
@@ -319,15 +292,17 @@ def run_latency_validation(
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id(f"latency-{mode.value}", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        f"latency-{mode.value}",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_dir = ctx.run_dir
 
     junit_path = run_dir / "junit.xml"
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     samples_path = run_dir / "latency" / "samples.json"
     reliability_samples_path = run_dir / "latency" / "reliability.json"
     latency_path = run_dir / "latency" / f"{mode.value}.json"
@@ -482,18 +457,16 @@ def run_latency_validation(
     if baseline_regression_failure is not None:
         failures.append(baseline_regression_failure)
 
-    artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
-        **check_artifacts,
-    }
-    if requested_report_path is not None:
+    artifacts: dict[str, ArtifactRef] = {**ctx.artifacts, **check_artifacts}
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
 
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=command,
         started_at=started_at,
         finished_at=finished_at,
@@ -514,8 +487,6 @@ def run_latency_validation(
                 else {}
             ),
         },
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=_latency_checks(
             mode=mode,
             pytest_exit_code=result.exit_code,
@@ -537,19 +508,6 @@ def run_latency_validation(
         artifacts=artifacts,
     )
 
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        # Authoritative writer of the CLI ``--report`` path; the CLI relies
-        # on this and does not write the report itself.
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
-    )
-
 
 def run_live_validation(
     *,
@@ -565,12 +523,14 @@ def run_live_validation(
     command_runner = command_runner or _run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id("live", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        "live",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_dir = ctx.run_dir
 
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     provider_report_dir = run_dir / "providers"
     provider_report_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = run_dir / "stdout.log"
@@ -587,14 +547,14 @@ def run_live_validation(
     provider_checks: list[ProviderCheck] = []
     provider_reports: list[dict[str, object]] = []
     artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
+        **ctx.artifacts,
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
         "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
     }
-    if requested_report_path is not None:
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
 
     stdout_log: list[str] = []
@@ -765,8 +725,9 @@ def run_live_validation(
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=_live_validation_command(
             providers=providers,
             surfaces=surfaces,
@@ -779,27 +740,12 @@ def run_live_validation(
         status=status,
         exit_code=exit_code,
         tool_exit_codes=tool_exit_codes,
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=checks,
         skips=skips,
         failures=failures,
         providers=provider_checks,
         provider_reports=provider_reports,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        # Authoritative writer of the CLI ``--report`` path; the CLI relies
-        # on this and does not write the report itself.
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
     )
 
 
@@ -820,12 +766,15 @@ def run_release_validation(
     started_at = started_at or datetime.now(UTC)
     started_monotonic = time.perf_counter()
     artifacts_root = Path(artifacts_dir)
-    run_id = _make_run_id("release", started_at)
-    run_dir = artifacts_root / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    ctx = _start_lane_run(
+        "release",
+        started_at=started_at,
+        artifacts_root=artifacts_root,
+        report_path=report_path,
+    )
+    run_id = ctx.run_id
+    run_dir = ctx.run_dir
 
-    run_report_path = run_dir / "report.json"
-    requested_report_path = Path(report_path) if report_path is not None else None
     stdout_path = run_dir / "stdout.log"
     stderr_path = run_dir / "stderr.log"
     dist_dir = run_dir / "dist"
@@ -847,15 +796,15 @@ def run_release_validation(
     checks: list[ValidationCheck] = []
     failures: list[ValidationFailure] = []
     artifacts: dict[str, ArtifactRef] = {
-        "report": ArtifactRef(kind="validation_report", path=str(run_report_path)),
+        **ctx.artifacts,
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
         "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
         "dist": ArtifactRef(kind="directory", path=str(dist_dir)),
     }
-    if requested_report_path is not None:
+    if ctx.requested_report_path is not None:
         artifacts["requested_report"] = ArtifactRef(
             kind="validation_report",
-            path=str(requested_report_path),
+            path=str(ctx.requested_report_path),
         )
     tool_exit_codes: dict[str, int] = {}
     stdout_log: list[str] = []
@@ -1138,8 +1087,9 @@ def run_release_validation(
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
-    run = ValidationRun(
-        run_id=run_id,
+    return _finish_lane_run(
+        ctx,
+        artifacts_root=artifacts_root,
         command=_release_validation_command(
             python_version=python_version,
             extras=release_extras,
@@ -1153,22 +1103,9 @@ def run_release_validation(
         status=status,
         exit_code=exit_code,
         tool_exit_codes=tool_exit_codes,
-        git=_collect_git_metadata(),
-        environment=_collect_environment_metadata(),
         checks=checks,
         failures=failures,
         artifacts=artifacts,
-    )
-
-    _write_atomic(run_report_path, run.to_json())
-    if requested_report_path is not None:
-        _write_atomic(requested_report_path, run.to_json())
-    _write_atomic(artifacts_root / "latest.json", run.to_json())
-    return ValidationRunResult(
-        run=run,
-        run_dir=run_dir,
-        report_path=requested_report_path or run_report_path,
-        exit_code=exit_code,
     )
 
 
@@ -1686,49 +1623,3 @@ def _live_validation_command(
     if release:
         command.append("--release")
     return command
-
-
-def _make_run_id(slice_name: str, started_at: datetime) -> str:
-    timestamp = started_at.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-    suffix = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-    return f"{timestamp}-{slice_name}-{suffix}"
-
-
-def _collect_git_metadata() -> GitMetadata:
-    return GitMetadata(
-        sha=_git_output(["rev-parse", "--short", "HEAD"]),
-        branch=_git_output(["branch", "--show-current"]),
-        dirty=bool(_git_output(["status", "--porcelain"])),
-    )
-
-
-def _git_output(args: list[str]) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
-
-
-def _collect_environment_metadata() -> ValidationEnvironment:
-    return ValidationEnvironment(
-        python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-        platform=platform.platform(),
-        ci=_is_ci(),
-        env_vars={name: name in os.environ for name in PROVIDER_ENV_VARS},
-    )
-
-
-def _write_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-    tmp_path.write_text(text)
-    os.replace(tmp_path, path)

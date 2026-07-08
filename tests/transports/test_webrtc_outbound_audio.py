@@ -168,6 +168,148 @@ class TestOutboundAudioAecReference:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_recv_schedules_delivery_emit_without_blocking(self):
+        """_recv must not await EventBus.emit on the RTP pacing path: the
+        TransportAudioDelivered event is scheduled as a tracked task and is not
+        delivered until the loop yields after _recv returns."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)  # yield: recv must not have awaited us
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xAA]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+
+        # Scheduled, not awaited: handler has not completed, but a task exists.
+        assert delivered == []
+        assert source._emit_tasks
+        # Draining the scheduled task delivers the event.
+        await asyncio.gather(*list(source._emit_tasks))
+        assert [e.chunk.data for e in delivered] == [played]
+        assert not source._emit_tasks  # done-callback discarded it
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_delivery_emits_preserve_chunk_order_with_suspending_handler(self):
+        """Off-path emission must stay FIFO: a subscriber that suspends
+        mid-handler must never observe chunk N+1 before chunk N (the single
+        drain worker guarantees this; per-chunk fire-and-forget tasks did
+        not)."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[bytes] = []
+
+        async def _handler(e):
+            # Suspend twice so interleaved per-event tasks would reorder.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            delivered.append(e.chunk.data)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        chunk_a = bytes([0x01]) * frame_bytes
+        chunk_b = bytes([0x02]) * frame_bytes
+        chunk_c = bytes([0x03]) * frame_bytes
+        for data in (chunk_a, chunk_b, chunk_c):
+            source.enqueue(data, original_chunk=AudioChunk(data=data, format=PCM16_MONO_16K))
+        while True:
+            await source._recv()
+            if source._queue.empty() and not source._pending:
+                break
+
+        await source.aclose()
+        assert delivered == [chunk_a, chunk_b, chunk_c]
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_aclose_drains_scheduled_emit_tasks(self):
+        """Teardown must drain the source's off-RTP-path emit tasks so in-flight
+        TransportAudioDelivered events are awaited, not cancelled-and-lost at
+        loop teardown (mirrors LocalTransport.stop() -> _drain_emit_tasks())."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)  # yield so recv/aclose caller cannot inline us
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xAA]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+        # Scheduled off the RTP path, not yet delivered.
+        assert delivered == []
+        assert source._emit_tasks
+
+        # Teardown drains: the in-flight emit is awaited (delivered), not lost.
+        await source.aclose()
+        assert [e.chunk.data for e in delivered] == [played]
+        assert not source._emit_tasks
+
+    @pytest.mark.asyncio
+    async def test_aclose_is_noop_without_pending_tasks(self):
+        """aclose() on a source that never scheduled an emit is a safe no-op."""
+        source = _OutboundAudioSource()
+        assert not source._emit_tasks
+        await source.aclose()
+        assert not source._emit_tasks
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_disconnect_drains_outbound_emit_tasks(self):
+        """WebRTCTransport.disconnect() must drain the outbound source's own
+        emit-task set (a different set from the transport-level one), so
+        scheduled delivery emits are awaited rather than dangling."""
+        transport = WebRTCTransport()
+        source = transport._outbound
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[TransportAudioDelivered] = []
+
+        async def _handler(e):
+            await asyncio.sleep(0)
+            delivered.append(e)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        played = bytes([0xBB]) * frame_bytes
+        source.enqueue(played, original_chunk=AudioChunk(data=played, format=PCM16_MONO_16K))
+
+        await source._recv()
+        assert source._emit_tasks  # scheduled, still pending
+        assert delivered == []
+
+        # Mark connected so disconnect() runs its full teardown path.
+        transport._connected = True
+        await transport.disconnect()
+
+        # Teardown awaited the in-flight emit and cleared the source's set.
+        assert not source._emit_tasks
+        assert [e.chunk.data for e in delivered] == [played]
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_clear_keeps_reference_but_drops_pending_audio(self):
         source = _OutboundAudioSource()
         _disable_pacing(source)

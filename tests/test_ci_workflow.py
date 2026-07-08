@@ -8,8 +8,10 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+PRE_COMMIT_CONFIG = REPO_ROOT / ".pre-commit-config.yaml"
 NIGHTLY_WORKFLOW = REPO_ROOT / ".github/workflows/nightly-validation.yml"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release-validation.yml"
+RELEASE_PUBLISH_WORKFLOW = REPO_ROOT / ".github/workflows/release.yml"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 NIGHTLY_LIVE_COMMAND = (
     "easycat validate live --provider openai --provider deepgram "
@@ -75,7 +77,7 @@ def test_contract_validation_ci_runs_once_on_python_312() -> None:
 
     assert contracts_job["name"] == "Validate Contracts"
     assert contracts_job["timeout-minutes"] == 20
-    assert any("uv sync --group dev --python 3.12" in body for body in run_bodies)
+    assert any("uv sync --locked --group dev --python 3.12" in body for body in run_bodies)
     assert any(
         "uv run --python 3.12 easycat validate contracts" in body
         and "--show-output" in body
@@ -89,7 +91,7 @@ def test_validation_ci_uploads_reports_junit_and_logs_even_on_failure() -> None:
     text = _workflow_text()
 
     assert text.count("if: always()") >= 2
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "--show-output" in text
     assert "validation-report" in text
     assert "junit.xml" in text
@@ -120,6 +122,25 @@ def test_validation_ci_shows_pytest_output_in_github_logs() -> None:
     assert "--show-output" in contracts_run["run"]
 
 
+def test_ci_zizmor_pin_matches_pre_commit_rev() -> None:
+    # The lint job pins zizmor inline (uvx zizmor==X) and pre-commit pins the
+    # same tool via its hook rev (vX). The two are kept in sync only by this
+    # guard — a drifted pair silently runs different zizmor versions locally
+    # vs in CI.
+    ci_match = re.search(r"uvx zizmor==(\S+)", _workflow_text())
+    assert ci_match is not None, "ci.yml lint job must pin zizmor (uvx zizmor==<version>)"
+    pre_commit = yaml.safe_load(PRE_COMMIT_CONFIG.read_text(encoding="utf-8"))
+    revs = [
+        repo["rev"]
+        for repo in pre_commit["repos"]
+        if isinstance(repo, dict) and "zizmor" in str(repo.get("repo", ""))
+    ]
+    assert revs, ".pre-commit-config.yaml must contain the zizmor-pre-commit repo"
+    assert revs[0].lstrip("v") == ci_match.group(1), (
+        f"zizmor pins drifted: ci.yml has {ci_match.group(1)}, pre-commit has {revs[0]}"
+    )
+
+
 def test_ci_has_package_build_smoke() -> None:
     text = _workflow_text()
 
@@ -127,6 +148,15 @@ def test_ci_has_package_build_smoke() -> None:
     assert "uv build" in text
     assert "uvx twine check dist/*" in text
     assert 'python-version: "3.12"' in text
+
+
+def test_ci_has_no_fake_integration_live_job() -> None:
+    # The old workflow_dispatch-gated `integration-live` job had no secrets
+    # wired, so it self-skipped permanently — a green check that tested
+    # nothing. The real secret-gated live lane is nightly-validation.yml's
+    # `live-canaries` job (environment: live-validation, ref_protected).
+    workflow = yaml.safe_load(_workflow_text())
+    assert "integration-live" not in workflow["jobs"]
 
 
 def test_validation_tasks_v12_current_state_tracks_ci_workflow() -> None:
@@ -202,7 +232,7 @@ def test_nightly_validation_workflow_skeleton_exists() -> None:
     assert "flaky-quarantine:" in text
     assert "latency:" in text
     assert "live-canaries:" in text
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "if: always()" in text
     assert "retention-days:" in text
 
@@ -241,7 +271,7 @@ def test_release_validation_workflow_skeleton_exists() -> None:
     assert 'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky' in text
     assert "unexpected release validation skips" in text
     assert "environment: release-validation" in text
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@" in text
     assert "if: always()" in text
     assert "retention-days:" in text
 
@@ -290,7 +320,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         '"$RELEASE_VENV/bin/easycat" validate latency --sweep --require-samples',
         'python" -m pytest "$GITHUB_WORKSPACE/tests" --collect-only -q -m flaky',
         "unexpected release validation skips",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
         "if: always()",
         "retention-days: 30",
         "dist/**",
@@ -374,7 +404,7 @@ def test_validation_tasks_v53_current_state_tracks_release_validation_workflow()
         "unexpected release validation skips",
         "VALIDATION_ARTIFACTS_DIR",
         "dist/**",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
         "if: always()",
         "retention-days: 30",
         "run_release_validation(...)",
@@ -407,6 +437,97 @@ def test_validation_workflows_parse_as_yaml() -> None:
     yaml.safe_load(WORKFLOW.read_text())
     yaml.safe_load(NIGHTLY_WORKFLOW.read_text())
     yaml.safe_load(RELEASE_WORKFLOW.read_text())
+    yaml.safe_load(RELEASE_PUBLISH_WORKFLOW.read_text())
+
+
+def test_every_uv_sync_enforces_the_lockfile() -> None:
+    # `uv sync` without `--locked` silently re-resolves on drift, defeating the
+    # committed lockfile as a supply-chain control. Every sync must pin it.
+    for workflow_path in (WORKFLOW, NIGHTLY_WORKFLOW, RELEASE_WORKFLOW):
+        data = yaml.safe_load(workflow_path.read_text())
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                body = str(step.get("run", ""))
+                if "uv sync" in body:
+                    assert "uv sync --locked" in body, (
+                        f"{workflow_path.name}: `uv sync` without `--locked`: {body!r}"
+                    )
+
+
+def test_third_party_actions_are_sha_pinned_and_checkout_drops_credentials() -> None:
+    # Mutable tags (`@v4`) let a compromised upstream tag inject code into the
+    # secret-bearing lanes; pin every `uses:` to a 40-char commit SHA. And every
+    # `actions/checkout` must set `persist-credentials: false` so the git token
+    # is not left on disk for later steps (docs.yml already does both).
+    sha_re = re.compile(r"^[0-9a-f]{40}$")
+    for workflow_path in (
+        WORKFLOW,
+        NIGHTLY_WORKFLOW,
+        RELEASE_WORKFLOW,
+        RELEASE_PUBLISH_WORKFLOW,
+    ):
+        data = yaml.safe_load(workflow_path.read_text())
+        for job in data["jobs"].values():
+            for step in job.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                uses = step.get("uses")
+                if not uses or "@" not in uses:
+                    continue
+                ref = uses.rsplit("@", 1)[1]
+                assert sha_re.fullmatch(ref), (
+                    f"{workflow_path.name}: `{uses}` is not pinned to a 40-char commit SHA"
+                )
+                if uses.startswith("actions/checkout@"):
+                    assert step.get("with", {}).get("persist-credentials") is False, (
+                        f"{workflow_path.name}: checkout step must set "
+                        "`persist-credentials: false`"
+                    )
+
+
+def test_ci_runs_pre_commit_with_cached_locked_sync() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+    assert "pre-commit" in workflow["jobs"]
+    steps = workflow["jobs"]["pre-commit"]["steps"]
+    run_bodies = [s.get("run", "") for s in steps if isinstance(s, dict)]
+    assert any("uv sync --locked --group dev" in b for b in run_bodies)
+    assert any("uv run pre-commit run --all-files" in b for b in run_bodies)
+    assert not any("uvx pre-commit" in b for b in run_bodies)
+    cache_steps = [
+        s
+        for s in steps
+        if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/cache@")
+    ]
+    assert any(
+        "~/.cache/pre-commit" in str(s.get("with", {}).get("path", "")) for s in cache_steps
+    )
+
+
+def test_pre_commit_uses_single_uv_locked_ruff() -> None:
+    config = yaml.safe_load(PRE_COMMIT_CONFIG.read_text())
+    for repo in config["repos"]:
+        assert "ruff-pre-commit" not in repo.get("repo", ""), (
+            "ruff must run via the uv-locked version, not a separately pinned ruff-pre-commit rev"
+        )
+    local_hooks = [
+        h for repo in config["repos"] if repo.get("repo") == "local" for h in repo.get("hooks", [])
+    ]
+    by_id = {h["id"]: h for h in local_hooks}
+    assert {"ruff-check", "ruff-format"} <= set(by_id)
+    assert "uv run ruff check" in by_id["ruff-check"]["entry"]
+    assert "uv run ruff format" in by_id["ruff-format"]["entry"]
+
+
+def test_ci_cancels_superseded_pull_request_runs() -> None:
+    workflow = yaml.safe_load(_workflow_text())
+
+    assert workflow["concurrency"]["group"] == "ci-${{ github.ref }}"
+    assert (
+        workflow["concurrency"]["cancel-in-progress"]
+        == "${{ github.event_name == 'pull_request' }}"
+    )
 
 
 def test_nightly_validation_has_real_latency_job() -> None:
@@ -507,7 +628,7 @@ def test_nightly_validation_has_real_latency_job() -> None:
     assert upload_steps, "latency job must upload artifacts like other nightly jobs"
     upload = upload_steps[0]
     assert upload.get("if") == "always()", "upload step must run with if: always()"
-    assert upload.get("uses") == "actions/upload-artifact@v4"
+    assert upload.get("uses", "").startswith("actions/upload-artifact@")
     with_block = upload.get("with", {})
     assert with_block.get("path") == "${{ env.VALIDATION_ARTIFACTS_DIR }}"
     assert "retention-days" in with_block
@@ -554,7 +675,7 @@ def test_live_canary_workflows_are_guarded_and_redacted() -> None:
     assert "::add-mask::" in nightly
     assert NIGHTLY_LIVE_COMMAND in nightly
     # Deepgram/ElevenLabs live probes need their SDK extras synced.
-    assert "uv sync --group dev --extra deepgram --extra elevenlabs" in nightly
+    assert "uv sync --locked --group dev --extra deepgram --extra elevenlabs" in nightly
     assert "Upload redacted live validation artifacts" in nightly
 
     assert "environment: release-validation" in release
@@ -594,7 +715,7 @@ def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
         step.get("run", "") for step in install.get("steps", []) if isinstance(step, dict)
     ]
     assert any(
-        'uv sync --extra "${{ matrix.extra }}" --group dev' in body for body in run_bodies
+        'uv sync --locked --extra "${{ matrix.extra }}" --group dev' in body for body in run_bodies
     ), "each cell must sync exactly its one extra plus the dev group"
     assert any(
         'scripts/extras_smoke.py "${{ matrix.extra }}"' in body and "--no-sync" in body
@@ -660,8 +781,8 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
     assert NIGHTLY_LIVE_COMMAND in nightly_text
     assert "--release --provider openai --surface stt --surface tts" in release_text
     assert "easycat validate latency --require-samples" in nightly_text
-    assert "actions/upload-artifact@v4" in nightly_text
-    assert "actions/upload-artifact@v4" in release_text
+    assert "actions/upload-artifact@" in nightly_text
+    assert "actions/upload-artifact@" in release_text
     assert "retention-days: 14" in nightly_text
     assert "retention-days: 30" in release_text
     assert release["jobs"]["release-validation"]["environment"] == "release-validation"
@@ -695,7 +816,7 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
         "VALIDATION_ARTIFACTS_DIR",
         "dist/**",
         "tests/test_ci_workflow.py",
-        "actions/upload-artifact@v4",
+        "actions/upload-artifact@",
     ):
         assert f"`{token}`" in section
     for phrase in (
@@ -714,3 +835,93 @@ def test_validation_tasks_v43_current_state_tracks_live_canary_ci() -> None:
         "absence of placeholder jobs",
     ):
         assert phrase in normalized_section
+
+
+# --- QP2: tag-triggered publish via PyPI Trusted Publishing (release.yml) ---
+#
+# release.yml is the only workflow that ever holds `id-token: write`, so its
+# security shape (tag-only trigger, `pypi` environment gate, minimal OIDC
+# permissions, SHA-pinned publisher, no stored PyPI token) is guarded here the
+# same "derive expectations from the live workflow" way the rest of this module
+# guards ci/nightly/release-validation.
+
+
+def _release_publish_workflow() -> dict:
+    return yaml.safe_load(RELEASE_PUBLISH_WORKFLOW.read_text())
+
+
+def test_release_publish_workflow_triggers_only_on_version_tags() -> None:
+    workflow = _release_publish_workflow()
+    # PyYAML parses the bare `on:` key as the boolean True.
+    triggers = workflow[True]
+    assert set(triggers) == {"push"}, "publish must fire on tag pushes only"
+    assert "v*" in triggers["push"]["tags"]
+
+
+def test_release_publish_workflow_default_permissions_are_read_only() -> None:
+    workflow = _release_publish_workflow()
+    assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_release_publish_workflow_job_graph_gates_the_privileged_job() -> None:
+    jobs = _release_publish_workflow()["jobs"]
+
+    # Exactly the documented three-job graph: validate -> build -> publish.
+    assert set(jobs) == {"validate", "build", "publish"}
+    # `validate` reuses the existing release gate instead of duplicating it.
+    assert jobs["validate"]["uses"] == "./.github/workflows/release-validation.yml"
+    # `build` waits on the gate and stays unprivileged (no id-token here).
+    assert jobs["build"]["needs"] == "validate"
+    assert "id-token" not in (jobs["build"].get("permissions") or {})
+    # `publish` waits on `build` (which waits on `validate`), so the privileged
+    # job runs last, only after the gate and build both pass.
+    assert jobs["publish"]["needs"] == "build"
+
+
+def test_release_publish_job_runs_in_the_pypi_environment() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # The required-reviewer approval gate lives on the `pypi` environment, so a
+    # human must approve before the OIDC token is ever minted.
+    assert publish["environment"] == "pypi"
+
+
+def test_release_publish_job_grants_only_id_token_write() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # id-token: write ONLY. Anything broader (contents: write, etc.) widens the
+    # blast radius of the single privileged job.
+    assert publish["permissions"] == {"id-token": "write"}
+
+
+def test_release_publisher_step_is_sha_pinned_not_a_mutable_tag() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    sha_re = re.compile(r"^[0-9a-f]{40}$")
+
+    publisher_steps = [
+        step
+        for step in publish["steps"]
+        if isinstance(step, dict)
+        and str(step.get("uses", "")).startswith("pypa/gh-action-pypi-publish@")
+    ]
+    assert len(publisher_steps) == 1, "expected exactly one pypi-publish step"
+    ref = publisher_steps[0]["uses"].rsplit("@", 1)[1]
+    assert sha_re.fullmatch(ref), (
+        "pypa/gh-action-pypi-publish must be pinned to a full 40-char commit "
+        f"SHA (not a mutable @vN / @release/v1 tag), got {ref!r}"
+    )
+
+
+def test_release_publish_is_tokenless_trusted_publishing() -> None:
+    publish = _release_publish_workflow()["jobs"]["publish"]
+    # No long-lived PyPI token anywhere in the privileged job: Trusted
+    # Publishing supplies the credential via OIDC. Re-dump the parsed job so
+    # this catches a token passed via env, with:, or a secrets.PYPI_* reference.
+    publish_text = yaml.safe_dump(publish)
+    assert "PYPI_" not in publish_text
+    assert "secrets.PYPI" not in publish_text
+
+    # And the publisher takes no `password:`/token input — OIDC only.
+    for step in publish["steps"]:
+        if isinstance(step, dict) and str(step.get("uses", "")).startswith(
+            "pypa/gh-action-pypi-publish@"
+        ):
+            assert "password" not in (step.get("with") or {})

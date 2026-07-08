@@ -112,8 +112,6 @@ class RemoteResponsesAPIBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        recorder.record_unit_entered(agent_cursor)
-
         self._last_user_text = turn_input.text
 
         body = self._build_request_body(turn_input)
@@ -127,7 +125,14 @@ class RemoteResponsesAPIBridge:
         interrupted = False
         response_id: str | None = None
 
-        try:
+        # ``turn_cursor`` centralizes enter → error → BaseException → clean
+        # exit.  ``httpx.HTTPStatusError`` and the ``response.failed``
+        # ``RuntimeError`` are both ``Exception`` so the cm's single ``except
+        # Exception`` arm subsumes them; the ``BaseException`` arm closes the
+        # cursor on ``AgentRunner`` timeout / barge-in cancellation.  The
+        # post-loop chain-state updates stay inside the ``with`` block so the
+        # cm's clean ``unit_exited`` still fires last.
+        with recorder.turn_cursor(agent_cursor):
             async with self._client.stream("POST", url, json=body, headers=headers) as response:
                 response.raise_for_status()
 
@@ -200,50 +205,27 @@ class RemoteResponsesAPIBridge:
                             pending_tool_calls.discard(bridge_ev.call_id)
                         yield bridge_ev
 
-        except httpx.HTTPStatusError as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            raise
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # blocks above are skipped and the still-open agent cursor
-            # would be left without a ``unit_exited`` record, breaking the
-            # recorder's strict stack invariant for the postmortem journal.
-            # Close it defensively (so a recorder error can't mask the
-            # cancellation) before re-raising; no ``record_framework_error``
-            # since a cancelled turn isn't a framework fault.
-            recorder.safe_exit_cursor(agent_cursor)
-            raise
+            # On successful (non-interrupted) completion, update chain state.
+            if not interrupted and response_id:
+                self._last_completed_response_id = response_id
+                self._response_count += 1
 
-        # On successful (non-interrupted) completion, update chain state.
-        if not interrupted and response_id:
-            self._last_completed_response_id = response_id
-            self._response_count += 1
+            # Track the interrupted response ID for per-turn metadata.
+            if interrupted and response_id:
+                self._interrupted_response_id = response_id
+            elif not interrupted:
+                self._interrupted_response_id = None
 
-        # Track the interrupted response ID for per-turn metadata.
-        if interrupted and response_id:
-            self._interrupted_response_id = response_id
-        elif not interrupted:
-            self._interrupted_response_id = None
+            # Store accumulated items for potential interruption replay.
+            self._last_accumulated_items = accumulated_items
 
-        # Store accumulated items for potential interruption replay.
-        self._last_accumulated_items = accumulated_items
+            # Clear replay state since this turn succeeded (or was interrupted
+            # but the caller will call apply_interruption separately).
+            self._replay_items = None
+            self._pending_interruption_note = None
+            self._pending_assistant_history_items = []
+            self._pending_turn_metadata = None
 
-        # Clear replay state since this turn succeeded (or was interrupted
-        # but the caller will call apply_interruption separately).
-        self._replay_items = None
-        self._pending_interruption_note = None
-        self._pending_assistant_history_items = []
-        self._pending_turn_metadata = None
-
-        recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,

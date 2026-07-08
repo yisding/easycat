@@ -215,7 +215,7 @@ async def test_stop_completes_after_slow_agent_disconnect(
             stop_result.set_result("ok")
         except TimeoutError:
             stop_result.set_result("hung")
-            await session.shutdown()
+            await session.stop(force=True)
         handler_done.set()
 
     server = await websockets.serve(handler, "127.0.0.1", port)
@@ -323,7 +323,7 @@ async def test_session_stop_then_shutdown_is_safe(
         await asyncio.wait_for(session.stop(), timeout=3.0)
         results.append("stop_ok")
 
-        await asyncio.wait_for(session.shutdown(), timeout=3.0)
+        await asyncio.wait_for(session.stop(force=True), timeout=3.0)
         results.append("shutdown_ok")
 
         handler_done.set()
@@ -373,7 +373,7 @@ async def test_session_shutdown_without_stop(
         await session.start()
         await ws.wait_closed()
         # Force-close everything
-        await asyncio.wait_for(session.shutdown(), timeout=5.0)
+        await asyncio.wait_for(session.stop(force=True), timeout=5.0)
         assert not session.is_running
         handler_done.set()
 

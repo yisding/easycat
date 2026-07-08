@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from easycat._turn_context import TurnContext
+from easycat.cancel import CancelToken
+from easycat.runtime.context import RunContext
+from easycat.stages.agent import AgentStage
+
 from ._langchain_bridge_support import (
     AgentRunner,
     AgentRunnerConfig,
@@ -150,6 +155,77 @@ class TestLangChainBridgePartialTurnOnCancel:
         assert _content_of_history_item(bridge._message_history[1]) == "a1"
         # No phantom assistant message was injected either.
         assert len(bridge._message_history) == 3
+
+
+class TestAgentStageAclosePropagation:
+    """A barge-in ``aclose()`` on the consumer side must propagate down
+    the ``AgentStage → AgentRunner → LangChainBridge`` generator chain so
+    the bridge's ``BaseException`` cleanup persists the *partial* turn
+    synchronously — before the follow-up ``apply_interruption()``.  If the
+    close is not forwarded, the inner bridge is only GC-finalized later,
+    so ``apply_interruption()`` runs first and rewrites the *prior* turn's
+    assistant message instead of this one."""
+
+    @pytest.mark.asyncio
+    async def test_consumer_aclose_propagates_to_bridge_cleanup(self):
+        class _HangingRunnable:
+            async def astream_events(
+                self, input: Any, **kwargs: Any
+            ) -> AsyncIterator[dict[str, Any]]:
+                yield {
+                    "event": "on_chat_model_start",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {},
+                }
+                yield {
+                    "event": "on_chat_model_stream",
+                    "name": "ChatOpenAI",
+                    "run_id": "m",
+                    "parent_ids": [],
+                    "data": {"chunk": _MockAIMessageChunk(content="Hello world")},
+                }
+                await asyncio.Event().wait()
+
+            async def ainvoke(self, *args: Any, **kwargs: Any) -> Any: ...
+
+        bridge = LangChainBridge(_HangingRunnable())
+        # A prior, completed turn already in history.
+        bridge._message_history = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        runner = AgentRunner(bridge, AgentRunnerConfig(timeout=None))
+        stage = AgentStage(runner, journal=InMemoryRingBuffer(capacity=1000))
+
+        ctx = RunContext(run_id="r1", session_id="s1", runtime_mode="chained_pipeline")
+        turn = TurnContext(turn_id="t1", cancel_token=CancelToken())
+
+        stream = stage.execute_streaming("q2", ctx, turn)
+        # Consume up to the first delivered text delta.
+        event = await anext(stream)
+        while getattr(event, "kind", None) != "text_delta":
+            event = await anext(stream)
+        assert getattr(event, "text", "") == "Hello world"
+
+        # Ordering guard: the partial turn is not persisted yet; the prior
+        # turn is still the tail of history.
+        assert _content_of_history_item(bridge._message_history[-1]) == "a1"
+
+        # Consumer breaks on the first post-cancel delta.  ``aclose()`` must
+        # drive the bridge cleanup synchronously; ``wait_for`` guards against
+        # a non-propagated close hanging on ``Event().wait()``.
+        await asyncio.wait_for(stream.aclose(), timeout=2.0)
+
+        # The partial turn was persisted during aclose (BaseException arm).
+        assert _content_of_history_item(bridge._message_history[-2]) == "q2"
+        assert _content_of_history_item(bridge._message_history[-1]) == "Hello world"
+
+        # apply_interruption truncates *this* turn; the prior turn is intact.
+        bridge.apply_interruption("Hello world", CancellationMode.IMMEDIATE_STOP)
+        assert _content_of_history_item(bridge._message_history[-1]) == "Hello world..."
+        assert _content_of_history_item(bridge._message_history[1]) == "a1"
 
 
 class TestLangChainBridgeCancelTokenStoreMirror:

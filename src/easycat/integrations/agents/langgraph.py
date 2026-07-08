@@ -38,7 +38,10 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
-from easycat.integrations.agents._helpers import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import (
+    aclose_quietly,
+    split_replacement_by_original_parts,
+)
 from easycat.integrations.agents._langchain_events import (
     _custom_event_text,
     translate_stream_event,
@@ -54,7 +57,7 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
-    run_interruption_journal_protocol,
+    apply_standard_interruption,
 )
 from easycat.integrations.agents.langchain import _close_top_ended_cursors
 from easycat.runtime.records import ErrorInfo
@@ -415,7 +418,7 @@ class LangGraphBridge:
         # the turn doesn't pay an extra checkpointer round-trip.
         baseline_checkpoint_id = self._last_checkpoint_id
 
-        async for bridge_event in self._drive_stream(
+        drive = self._drive_stream(
             turn_input,
             recorder,
             agent_cursor,
@@ -423,8 +426,18 @@ class LangGraphBridge:
             acc,
             open_cursors,
             last_node_by_ns,
-        ):
-            yield bridge_event
+        )
+        try:
+            async for bridge_event in drive:
+                yield bridge_event
+        finally:
+            # An early consumer ``aclose()`` (barge-in) injects
+            # ``GeneratorExit`` at the ``yield`` above; ``async for`` does not
+            # forward it into ``_drive_stream``, so its ``BaseException``
+            # cleanup (which commits the partial turn) would only run on GC.
+            # Close it explicitly so the cleanup runs synchronously before a
+            # follow-up ``apply_interruption()``.  A no-op once exhausted.
+            await aclose_quietly(drive)
 
         for cursor in reversed(list(open_cursors.values())):
             recorder.record_unit_exited(cursor.with_committable(True), reason=None)
@@ -462,8 +475,12 @@ class LangGraphBridge:
         except Exception:  # pragma: no cover — best-effort.
             logger.debug("Failed to fetch final LangGraph state", exc_info=True)
 
-        async for bridge_event in self._finalize_done(acc, agent_cursor, recorder):
-            yield bridge_event
+        finalize = self._finalize_done(acc, agent_cursor, recorder)
+        try:
+            async for bridge_event in finalize:
+                yield bridge_event
+        finally:
+            await aclose_quietly(finalize)
 
     async def _drive_stream(
         self,
@@ -708,15 +725,7 @@ class LangGraphBridge:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
-            plan,
-            mode,
-            recorder,
-            caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
-        )
+        apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
 
     def reset(self) -> None:
         self._thread_id = str(uuid.uuid4())

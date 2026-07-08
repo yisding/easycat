@@ -246,6 +246,11 @@ def _build_outbound_helpers(
             helpers.append(manager)
         except ImportError:
             logger.warning("twilio package not installed — OutboundCallManager disabled")
+    else:
+        logger.warning(
+            "OutboundCallManager enabled but twilio_account_sid / twilio_auth_token "
+            "are blank — outbound calling is disabled. Set both credentials to place calls."
+        )
 
     # Retry strategy — stateless object the caller asks
     # ``strategy.record_attempt(number, reason)`` to decide whether to

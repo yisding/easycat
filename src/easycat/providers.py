@@ -293,17 +293,6 @@ class Transport(VersionedProvider, Protocol):
         """
         ...
 
-    async def clear_audio(self) -> None:
-        """Discard queued outbound audio (e.g. during barge-in).
-
-        Transports that buffer outbound audio should drop pending data.
-        This method is optional: transports without outbound buffering may
-        omit it entirely. The Session invokes it only through
-        ``runtime.capabilities.clear_audio_if_supported()``, which skips
-        transports that don't implement it.
-        """
-        ...
-
     # Optional *playback-time* capabilities are intentionally not declared as
     # methods on this ``runtime_checkable`` protocol: only a few transports can
     # provide them, so requiring stubs everywhere would make
@@ -312,6 +301,8 @@ class Transport(VersionedProvider, Protocol):
     # structurally via :mod:`easycat.runtime.capabilities`, which treats a
     # missing hook as a strict no-op:
     #
+    # - ``clear_audio() -> None`` — discard queued outbound audio during
+    #   barge-in; transports without outbound buffering omit it entirely.
     # - ``pending_playout_ms() -> float`` — milliseconds of audio still queued
     #   for local speaker playout, so ``await_drain`` waits for real playout.
     # - ``drain_aec_reference_frames() -> list[bytes]`` — far-end (speaker)

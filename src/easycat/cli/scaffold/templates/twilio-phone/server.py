@@ -61,7 +61,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         port = int(os.getenv("TWILIO_WS_PORT", "8766"))
-        twilio_ws = await websockets.serve(handle_call, "0.0.0.0", port)
+        twilio_ws = await websockets.serve(handle_call, "0.0.0.0", port, compression=None)
         try:
             yield
         finally:

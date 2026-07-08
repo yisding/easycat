@@ -36,8 +36,8 @@ from easycat.runtime.replay import (
     ReplaySpec,
     ToolReplayPolicy,
 )
+from easycat.runtime.replay import ReplaySpec as StubReplaySpec
 from easycat.stages.base import NONDETERMINISTIC_FIELDS
-from easycat.stages.base import ReplaySpec as StubReplaySpec
 
 # ── Helpers ──────────────────────────────────────────────────────
 

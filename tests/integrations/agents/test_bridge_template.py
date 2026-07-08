@@ -117,6 +117,30 @@ class TestInvokeLifecycle:
         assert "framework_error" in names
         assert "unit_exited" in names
 
+    async def test_invoke_works_with_contract_kit_recording_recorder(self):
+        """The contract kit's ``RecordingAgentRecorder`` must satisfy the
+        ``turn_cursor`` surface ``BridgeTemplate.invoke()`` depends on, with
+        the same clean-commit / error ordering as the journal recorder."""
+        from easycat.testing import RecordingAgentRecorder
+
+        recorder = RecordingAgentRecorder()
+        bridge = _MinimalBridge()
+        kinds = [
+            ev.kind
+            async for ev in bridge.invoke(AgentTurnInput.from_text("hello world"), recorder)
+        ]
+        assert kinds == ["text_delta", "text_delta", "done"]
+        assert recorder.kinds() == ["unit_entered", "unit_exited"]
+        exited_cursor = recorder.records[-1][1][0]
+        assert exited_cursor.committable is True
+
+        recorder = RecordingAgentRecorder()
+        with pytest.raises(RuntimeError, match="framework exploded"):
+            async for _ in _FailingBridge().invoke(AgentTurnInput.from_text("hi"), recorder):
+                pass
+        assert recorder.kinds() == ["unit_entered", "framework_error", "unit_exited"]
+        assert recorder.records[-1][2]["reason"] == "error"
+
     async def test_invoke_cancellation_closes_cursor_without_framework_error(self):
         """GeneratorExit (AgentRunner timeout path) closes the cursor via
         safe_exit_cursor instead of leaving it dangling or recording a

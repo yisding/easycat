@@ -17,7 +17,6 @@ from easycat.stt.base import (
     DEFAULT_MAX_AUDIO_CHUNK_BYTES,
     DEFAULT_MAX_AUDIO_DURATION_MS,
     STTBase,
-    pcm_to_wav,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,14 +144,9 @@ class OpenAISTT(STTBase):
         latched format is preserved so the next utterance keeps the same
         first-seen format contract.
         """
-        if not self._buffer or self._audio_format is None:
+        wav_data = self._drain_buffer_to_wav()
+        if wav_data is None:
             return
-
-        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
-        # Clear in place (not a rebind) so the buffer reference held by the
-        # in-progress ``_buffer_batch_audio_or_finalize`` call stays the same
-        # object, letting the chunk that tripped the cap restart a fresh stream.
-        self._buffer.clear()
         await self._transcribe_streaming(wav_data)
 
     async def _on_end(self) -> None:
@@ -161,39 +155,17 @@ class OpenAISTT(STTBase):
     async def _transcribe_streaming(self, wav_data: bytes) -> str:
         """Submit *wav_data* with retries; returns the final transcript text.
 
-        ``max_retries`` is the total attempt count; clamp to at least one
-        so a misconfigured ``max_retries=0`` still sends a single request
-        rather than raising a causeless "no attempts" error.
+        ``max_retries`` is the total attempt count; the shared helper clamps
+        it to at least one so a misconfigured ``max_retries=0`` still sends a
+        single request rather than raising a causeless "no attempts" error.
+        Each attempt buffers its events internally and only emits on success,
+        preserving the emit-on-success-only semantics across retries.
         """
-        total_attempts = max(1, self._config.max_retries)
-        last_exc: Exception | None = None
-        for attempt in range(total_attempts):
-            try:
-                return await self._attempt_streaming_transcription(wav_data)
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                if exc.response.status_code == 429 and attempt < total_attempts - 1:
-                    await asyncio.sleep(2**attempt)
-                    continue
-                raise
-            except (httpx.TransportError, httpx.TimeoutException) as exc:
-                last_exc = exc
-                if attempt < total_attempts - 1:
-                    logger.warning(
-                        "OpenAI STT request failed (attempt %d/%d): %s",
-                        attempt + 1,
-                        total_attempts,
-                        exc,
-                    )
-                    await asyncio.sleep(2**attempt)
-                    continue
-                raise
-
-        # The loop always runs at least once (total_attempts >= 1), so reaching
-        # here means every attempt failed without re-raising; last_exc is set.
-        raise RuntimeError(
-            f"OpenAI STT: all {total_attempts} transcription attempt(s) failed"
-        ) from last_exc
+        return await self._run_with_bounded_retry(
+            lambda: self._attempt_streaming_transcription(wav_data),
+            max_retries=self._config.max_retries,
+            provider_label="OpenAI STT",
+        )
 
     def _request_form_data(self) -> dict[str, str]:
         """Multipart form fields for the streaming transcription request."""

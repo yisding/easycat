@@ -230,6 +230,32 @@ def run_interruption_journal_protocol(
             )
 
 
+def apply_standard_interruption(
+    bridge: Any,
+    delivered_text: str,
+    mode: CancellationMode,
+    recorder: AgentRecorder | None = None,
+    caused_by_signal_id: str | None = None,
+) -> None:
+    """Standard ``apply_interruption`` body shared by bridges whose only
+    per-turn interruption behavior is plan -> journal-protocol.
+
+    ``bridge`` must expose ``_plan_interruption(delivered_text, mode)``,
+    ``_serialize_framework_state()``, and ``_apply_planned_mutation(plan)``.
+    Bridges with extra per-turn state (responses_api, pydantic_ai) do not use
+    this.
+    """
+    plan = bridge._plan_interruption(delivered_text, mode)
+    run_interruption_journal_protocol(
+        plan,
+        mode,
+        recorder,
+        caused_by_signal_id,
+        serialize_state=bridge._serialize_framework_state,
+        apply_mutation=bridge._apply_planned_mutation,
+    )
+
+
 # ── Recorder types ───────────────────────────────────────────────
 
 
@@ -270,6 +296,11 @@ class AgentRecorder(Protocol):
         self, cursor: ExecutionCursor, *, commit_on_exit: bool = True
     ) -> Iterator[ExecutionCursor]:
         """Context manager wrapping enter/exit with guaranteed cleanup."""
+        ...
+
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
+        """Per-turn cursor lifecycle: enter, error/cancel cleanup, clean commit."""
         ...
 
     def record_tool_call(
@@ -342,6 +373,10 @@ class NullAgentRecorder:
     def unit(
         self, cursor: ExecutionCursor, *, commit_on_exit: bool = True
     ) -> Iterator[ExecutionCursor]:
+        yield cursor
+
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
         yield cursor
 
     def record_tool_call(

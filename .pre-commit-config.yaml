@@ -1,14 +1,34 @@
 repos:
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  # Ruff version.
-  rev: v0.15.8
+# Run ruff through the single uv-locked version rather than a separately
+# pinned ruff-pre-commit rev, so exactly one ruff exists in the repo.
+- repo: local
   hooks:
-    # Run the linter.
     - id: ruff-check
+      name: ruff check
+      entry: uv run ruff check --force-exclude
+      language: system
+      types_or: [python, pyi]
+      require_serial: true
       exclude: ^src/easycat/cli/scaffold/templates/
-    # Run the formatter.
     - id: ruff-format
+      name: ruff format
+      entry: uv run ruff format --force-exclude
+      language: system
+      types_or: [python, pyi]
+      require_serial: true
       exclude: ^src/easycat/cli/scaffold/templates/
+
+# Import Linter layering contracts ([tool.importlinter] in pyproject.toml).
+# Runs through the single uv-locked import-linter; it analyzes the whole
+# package from config, so it takes no filenames and always runs.
+- repo: local
+  hooks:
+    - id: lint-imports
+      name: import linter
+      entry: uv run lint-imports
+      language: system
+      pass_filenames: false
+      always_run: true
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
@@ -48,3 +68,9 @@ repos:
   rev: v1.7.7
   hooks:
     - id: actionlint
+
+- repo: https://github.com/woodruffw/zizmor-pre-commit
+  # Keep this pin aligned with the `uvx zizmor` CLI used by ci.yml's lint job.
+  rev: v1.26.1
+  hooks:
+    - id: zizmor

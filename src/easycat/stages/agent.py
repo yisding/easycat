@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -13,6 +12,7 @@ from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.integrations.agents._agent_runner import AgentRunner, close_stream_after_done
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -25,10 +25,11 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
-    annotate_stage_exception,
     journal_append_control_signal,
     journal_append_event,
-    stage_error_context,
+    journal_ctx,
+    live_replay_input,
+    record_stage_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -121,9 +122,7 @@ class AgentStage:
         ``ctx.journal``) and the recorder path on a single recording sink
         even when the RunContext was built without a journal.
         """
-        if ctx.journal is None and self._journal is not None:
-            return dataclasses.replace(ctx, journal=self._journal)
-        return ctx
+        return journal_ctx(ctx, self._journal)
 
     def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> JournalAgentRecorder:
         # Prefer the per-run ``ctx.journal`` so the recorder writes to the
@@ -217,95 +216,92 @@ class AgentStage:
                 {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
             ):
                 stream = bridge.invoke(turn_input, recorder, cancel_token)
-                async for event in stream:
-                    kind = getattr(event, "kind", None)
-                    text = getattr(event, "text", "")
-                    if kind == "text_delta" and text:
-                        # Record the delivered token before yielding it.  Async
-                        # generator cleanup (``aclose()``, disconnects, or
-                        # cancellation) resumes by injecting ``GeneratorExit``
-                        # at the suspended yield, so post-yield code is not a
-                        # reliable audit boundary for text already handed to
-                        # downstream TTS or text clients.
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={"type": "TEXT_DELTA", "text": text},
-                        )
-                        if not (cancel_token and cancel_token.is_cancelled):
-                            accumulated.append(text)
-                        yield event
-                        continue
-                    elif kind == "done":
-                        if text:
+                try:
+                    async for event in stream:
+                        kind = getattr(event, "kind", None)
+                        text = getattr(event, "text", "")
+                        if kind == "text_delta" and text:
+                            # Record the delivered token before yielding it.
+                            # Async generator cleanup (``aclose()``, disconnects,
+                            # or cancellation) resumes by injecting
+                            # ``GeneratorExit`` at the suspended yield, so
+                            # post-yield code is not a reliable audit boundary
+                            # for text already handed to downstream TTS or text
+                            # clients.
                             journal_append_event(
                                 ctx,
                                 stage=self.name,
                                 name="agent_delta",
                                 turn_id=turn.id,
-                                data_extra={"type": "DONE", "text": text},
+                                data_extra={"type": "TEXT_DELTA", "text": text},
                             )
-                            accumulated = [text]
-                    elif kind == "tool_started" and getattr(event, "tool_name", ""):
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={
-                                "type": "TOOL_STARTED",
-                                "tool_name": event.tool_name,
-                                "call_id": getattr(event, "call_id", ""),
-                            },
-                        )
-                    elif kind == "tool_result":
-                        journal_append_event(
-                            ctx,
-                            stage=self.name,
-                            name="agent_delta",
-                            turn_id=turn.id,
-                            data_extra={
-                                "type": "TOOL_RESULT",
-                                "call_id": getattr(event, "call_id", ""),
-                                "result": getattr(event, "result", ""),
-                            },
-                        )
-                    if kind == "done":
-                        await close_stream_after_done(stream)
+                            if not (cancel_token and cancel_token.is_cancelled):
+                                accumulated.append(text)
+                            yield event
+                            continue
+                        elif kind == "done":
+                            if text:
+                                journal_append_event(
+                                    ctx,
+                                    stage=self.name,
+                                    name="agent_delta",
+                                    turn_id=turn.id,
+                                    data_extra={"type": "DONE", "text": text},
+                                )
+                                accumulated = [text]
+                        elif kind == "tool_started" and getattr(event, "tool_name", ""):
+                            journal_append_event(
+                                ctx,
+                                stage=self.name,
+                                name="agent_delta",
+                                turn_id=turn.id,
+                                data_extra={
+                                    "type": "TOOL_STARTED",
+                                    "tool_name": event.tool_name,
+                                    "call_id": getattr(event, "call_id", ""),
+                                },
+                            )
+                        elif kind == "tool_result":
+                            journal_append_event(
+                                ctx,
+                                stage=self.name,
+                                name="agent_delta",
+                                turn_id=turn.id,
+                                data_extra={
+                                    "type": "TOOL_RESULT",
+                                    "call_id": getattr(event, "call_id", ""),
+                                    "result": getattr(event, "result", ""),
+                                },
+                            )
+                        if kind == "done":
+                            await close_stream_after_done(stream)
+                            yield event
+                            return
                         yield event
-                        return
-                    yield event
+                finally:
+                    # Forward an early consumer close (a barge-in ``aclose()``
+                    # injects ``GeneratorExit`` at a ``yield event`` above) down
+                    # into ``bridge.invoke()``.  ``async for`` does not do this
+                    # on its own, so without it the wrapped bridge is left
+                    # suspended and only GC-finalized, letting its
+                    # ``BaseException`` cleanup (which persists the partial
+                    # turn) race the next ``apply_interruption()``.  On normal
+                    # completion the stream is already drained via
+                    # ``close_stream_after_done`` so this is a no-op.
+                    await aclose_quietly(stream)
         except Exception as exc:
             errored = True
             elapsed_ms = (time.perf_counter() - started) * 1000
-            annotate_stage_exception(
+            record_stage_failure(
                 exc,
-                stage=self.name,
-                provider=type(self._provider).__name__.lower(),
-                elapsed_ms=elapsed_ms,
-                sequence=start_sequence,
-            )
-            observability.increment_counter(
-                "easycat.provider.errors.total",
-                attributes={
-                    "easycat.surface": "agent_bridge",
-                    "easycat.provider": type(self._provider).__name__.lower(),
-                    "easycat.error_type": type(exc).__name__,
-                },
-            )
-            journal_append_event(
                 ctx,
                 stage=self.name,
-                name="stage_error",
+                provider=type(self._provider).__name__.lower(),
+                surface="agent_bridge",
+                elapsed_ms=elapsed_ms,
+                sequence=start_sequence,
                 turn_id=turn.id,
                 state_before=state_before,
-                error=str(exc),
-                data_extra=stage_error_context(
-                    elapsed_ms=elapsed_ms,
-                    input_sequence=start_sequence,
-                ),
             )
             raise
         finally:
@@ -442,15 +438,7 @@ class AgentStage:
         """
         overrides = spec.overrides
         if spec.fidelity is ReplayFidelity.LIVE:
-            if "input" in overrides:
-                return overrides["input"]
-            if cassette is not None:
-                record = cassette.last_record("stage_start") or cassette.last_record()
-                if record is not None:
-                    data = record.get("data") or {}
-                    if isinstance(data, dict) and "input" in data:
-                        return data["input"]
-            return None
+            return live_replay_input(spec, cassette, source="data_input")
 
         if spec.fidelity is ReplayFidelity.SIMULATED:
             if "events" in overrides or "result" in overrides:

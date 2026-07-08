@@ -28,9 +28,8 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
-    run_interruption_journal_protocol,
+    apply_standard_interruption,
 )
-from easycat.runtime.records import ErrorInfo
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +165,13 @@ class LlamaAgentsBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        recorder.record_unit_entered(cursor)
-
         accumulated = ""
-        try:
+        # ``turn_cursor`` centralizes enter → error → BaseException →
+        # clean-exit; its BaseException arm closes the still-open cursor when a
+        # text-session interruption aclose()s the generator or the invoke task
+        # is cancelled (previously left dangling, since this bridge had no
+        # BaseException cleanup arm).
+        with recorder.turn_cursor(cursor):
             if self._mode == "remote":
                 stream = self._invoke_remote(turn_input, cancel_token)
             else:
@@ -192,14 +194,10 @@ class LlamaAgentsBridge:
                 # completion the stream is already exhausted and aclose() is
                 # a harmless no-op.
                 await stream.aclose()
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(cursor, reason="error")
-            raise
 
-        self._last_output_text = accumulated
-        self._run_count += 1
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+            self._last_output_text = accumulated
+            self._run_count += 1
+
         yield AgentBridgeEvent(
             kind="done",
             text=accumulated,
@@ -232,15 +230,7 @@ class LlamaAgentsBridge:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
-            plan,
-            mode,
-            recorder,
-            caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
-        )
+        apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
 
     def replace_last_assistant_text(self, text: str) -> None:
         self._last_output_text = text
@@ -1361,7 +1351,7 @@ def is_llama_workflow_instance(agent: Any) -> bool:
     ):
         try:
             module = __import__(module_name, fromlist=["Workflow"])
-            workflow_cls = getattr(module, "Workflow")
+            workflow_cls = module.Workflow
         except (ImportError, AttributeError):
             continue
         if isinstance(agent, workflow_cls):

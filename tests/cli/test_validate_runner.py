@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from easycat.validation.runner import (
     run_release_validation,
     run_validation_slice,
 )
+from scripts._justfile import just_recipe_commands
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,6 +34,9 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
     )[0]
     script_source = (REPO_ROOT / "scripts/validate.py").read_text(encoding="utf-8")
     runner_source = (REPO_ROOT / "src/easycat/validation/runner.py").read_text(encoding="utf-8")
+    harness_source = (REPO_ROOT / "src/easycat/validation/_lane_harness.py").read_text(
+        encoding="utf-8"
+    )
     test_source = (REPO_ROOT / "tests/cli/test_validate_runner.py").read_text(encoding="utf-8")
     quick_selector = (
         "not integration_socket and not integration_live and not integration_external "
@@ -51,17 +56,21 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
         '"socket"',
         '"stress"',
         '"contracts"',
-        'run_dir = artifacts_root / "runs" / run_id',
         "junit.xml",
         "stdout.log",
         "stderr.log",
-        "report.json",
-        "latest.json",
         "tool_exit_codes",
-        "redact_text",
         "redact_runtime_secrets",
     ):
         assert token in runner_source
+    # The shared run-id/run-dir/report-path prologue and the latest.json epilogue
+    # now live in the extracted lane harness (QS5), not inline in each lane.
+    for token in (
+        'run_dir = artifacts_root / "runs" / run_id',
+        "report.json",
+        "latest.json",
+    ):
+        assert token in harness_source
     for test_name in (
         "test_validation_runner_quick_writes_report_junit_logs_and_latest",
         "test_validation_runner_failed_pytest_still_writes_report",
@@ -94,6 +103,17 @@ def test_validation_tasks_v03_current_state_tracks_script_shim_and_slice_runner(
         "tests/cli/test_validate_runner.py",
     ):
         assert f"`{token}`" in section
+
+
+def test_justfile_test_fast_and_cov_recipes_match_quick_validation_selector() -> None:
+    recipes = just_recipe_commands(REPO_ROOT)
+    for recipe in ("test-fast", "cov"):
+        command = recipes[recipe]
+        match = re.search(r'-m "(?P<expr>[^"]+)"', command)
+        assert match is not None, f"justfile `{recipe}` recipe has no -m expression"
+        assert match.group("expr") == VALIDATION_SELECTORS["quick"], (
+            f"justfile `{recipe}` -m expression drifted from VALIDATION_SELECTORS['quick']"
+        )
 
 
 def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: Path) -> None:
@@ -232,6 +252,41 @@ def test_validation_runner_failed_pytest_still_writes_report(tmp_path: Path) -> 
     assert payload["exit_code"] == 1
     assert payload["tool_exit_codes"] == {"pytest": 5}
     assert (tmp_path / "latest.json").exists()
+
+
+def test_validation_runner_redacts_exact_runtime_secret_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "plain-runtime-token-value"
+    monkeypatch.setenv("DEEPGRAM_API_KEY", secret)
+
+    def fake_command_runner(command: list[str], *, env: dict[str, str]) -> CommandResult:
+        junit_arg = next(arg for arg in command if arg.startswith("--junitxml="))
+        Path(junit_arg.removeprefix("--junitxml=")).write_text(f"<testsuite>{secret}</testsuite>")
+        return CommandResult(
+            exit_code=1,
+            stdout=f"stdout {secret}",
+            stderr=f"stderr {secret}",
+        )
+
+    result = run_validation_slice(
+        "quick",
+        artifacts_dir=tmp_path,
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert result.exit_code == 1
+    assert secret not in (result.run_dir / "stdout.log").read_text()
+    assert secret not in (result.run_dir / "stderr.log").read_text()
+    assert secret not in (result.run_dir / "junit.xml").read_text()
+
+    report_text = result.report_path.read_text()
+    assert secret not in report_text
+    payload = json.loads(report_text)
+    assert payload["failures"]
+    assert all(secret not in failure["message"] for failure in payload["failures"])
 
 
 def test_validation_runner_creates_isolated_run_directories(tmp_path: Path) -> None:

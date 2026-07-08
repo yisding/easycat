@@ -372,6 +372,33 @@ def test_openai_agents_map_run_item_records_tool_start_and_result():
     assert [record.data["call_id"] for record in records] == ["call-1", "call-1"]
 
 
+def test_openai_agents_map_run_item_reads_call_id_from_dict_raw_item():
+    # The SDK's ToolCallOutputItem.raw_item is a FunctionCallOutput *dict*, not
+    # an attribute-bearing object, so the call_id must be read from the dict.
+    recorder = _recorder()
+    pending: dict[str, str] = {"call_abc": "get_weather"}  # seeded as if start fired
+
+    result = map_run_item(
+        SimpleNamespace(
+            type="tool_call_output_item",
+            raw_item={
+                "call_id": "call_abc",
+                "output": "ok",
+                "type": "function_call_output",
+            },
+            output="ok",
+        ),
+        recorder,
+        pending,
+    )
+
+    assert result is not None
+    assert result.kind == "tool_result"
+    assert result.call_id == "call_abc"  # real id, not ""
+    assert result.result == "ok"
+    assert pending == {}  # pending.pop matched -> empties
+
+
 def test_openai_agents_map_run_item_ignores_unknown_items():
     recorder = _recorder()
     pending: dict[str, str] = {}

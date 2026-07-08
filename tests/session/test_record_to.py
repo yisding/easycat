@@ -138,7 +138,7 @@ async def test_record_to_forwards_force_flag(tmp_path: Path) -> None:
 async def test_record_to_exports_on_shutdown(tmp_path: Path) -> None:
     session = create_text_session(agent=None, debug="full", record_to=tmp_path)
 
-    await session.shutdown()
+    await session.stop(force=True)
     assert len(_bundles(tmp_path, session.session_id)) == 1
 
 
@@ -196,7 +196,7 @@ async def test_record_to_export_failure_does_not_mask_shutdown(
     session.export_debug_bundle = _fail_export  # type: ignore[method-assign]
 
     # Should not raise — record_to export failures do not mask teardown.
-    await session.shutdown()
+    await session.stop(force=True)
 
 
 def test_record_to_keeps_session_teardown_methods_unpatched(tmp_path: Path) -> None:

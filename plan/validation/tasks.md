@@ -1418,7 +1418,7 @@ Current verified state:
 - `tests/test_ci_workflow.py` parses the nightly and release workflows and
   verifies protected non-PR gates, `live-validation` / `release-validation`
   environments, explicit secret env-var mapping, `::add-mask::` masking,
-  `actions/upload-artifact@v4` artifact upload with bounded retention, release
+  `actions/upload-artifact@` artifact upload with bounded retention, release
   `--release` live validation, and absence of placeholder jobs.
 
 Files:
@@ -1572,7 +1572,7 @@ Current verified state:
 - The workflow verifies generated reports for
   `unexpected release validation skips` and uploads both
   `VALIDATION_ARTIFACTS_DIR` and `dist/**` through
-  `actions/upload-artifact@v4` with `if: always()` and `retention-days: 30`.
+  `actions/upload-artifact@` with `if: always()` and `retention-days: 30`.
 - `src/easycat/validation/runner.py` provides the local
   `run_release_validation(...)` implementation used by
   `easycat validate release`; it records `release.build`, `release.metadata`,

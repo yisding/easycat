@@ -176,6 +176,31 @@ def test_legacy_transport_satisfies_transport_like():
     assert isinstance(StubTransport(), TransportLike)
 
 
+class _NoClearTransport:
+    """A transport with no ``clear_audio`` — outbound buffering is optional."""
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+    async def receive_audio(self) -> AsyncIterator[AudioChunk]:
+        yield AudioChunk(data=b"\x00\x00", format=PCM16_MONO_16K)
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        pass
+
+    def version_info(self) -> dict[str, str]:
+        return _STUB_VERSION
+
+
+def test_transport_without_clear_audio_satisfies_protocol():
+    # ``clear_audio`` is an optional capability discovered structurally by the
+    # Session; omitting it must not fail the runtime_checkable Transport protocol.
+    assert isinstance(_NoClearTransport(), Transport)
+
+
 class _CatalogProvider:
     pass
 

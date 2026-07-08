@@ -826,6 +826,21 @@ class EasyConfig(_AgentSessionConfig):
             self.tts = align_tts_config_to_transport(self.tts, self.transport)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
+        elif self.enable_echo_cancellation is not None:
+            if isinstance(self.echo_cancellation, EchoCancellationConfig):
+                # Fold the explicit flag into the supplied config object so
+                # ``enable_echo_cancellation`` is not silently dropped.
+                self.echo_cancellation = replace(
+                    self.echo_cancellation, enabled=self.enable_echo_cancellation
+                )
+            else:
+                # Pre-built ``EchoCanceller`` instance: the flag cannot be
+                # folded in, so warn on the conflict rather than ignore it.
+                logger.warning(
+                    "enable_echo_cancellation=%s ignored because a pre-built "
+                    "EchoCanceller instance was supplied via echo_cancellation=",
+                    self.enable_echo_cancellation,
+                )
         if self.debug in ("light", "full"):
             self._apply_debug_defaults()
         self._validate()

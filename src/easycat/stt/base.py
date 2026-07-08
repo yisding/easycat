@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import TypeVar
+
+import httpx
 
 from easycat._audio_utils import pcm_to_wav  # noqa: F401 — re-exported for backward compat
 from easycat.audio_format import AudioChunk, AudioFormat
 from easycat.events import STTEvent
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 DEFAULT_MAX_AUDIO_CHUNK_BYTES = 1 * 1024 * 1024
@@ -141,6 +146,53 @@ class STTBase:
         return current
 
     @staticmethod
+    async def _run_with_bounded_retry(
+        attempt: Callable[[], Awaitable[T]],
+        *,
+        max_retries: int,
+        provider_label: str,
+    ) -> T:
+        """Run ``attempt`` with bounded retries and exponential backoff.
+
+        ``max_retries`` is the total attempt count; it is clamped to at least
+        one so a misconfigured ``max_retries=0`` still sends a single request
+        rather than raising a causeless "no attempts" error. Only HTTP 429 is
+        retried among ``HTTPStatusError``; ``TransportError``/``TimeoutException``
+        are always retried until the attempts are exhausted. Backoff is
+        ``2**i`` seconds between attempts.
+        """
+        total_attempts = max(1, max_retries)
+        last_exc: Exception | None = None
+        for i in range(total_attempts):
+            try:
+                return await attempt()
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                if exc.response.status_code == 429 and i < total_attempts - 1:
+                    await asyncio.sleep(2**i)
+                    continue
+                raise
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                last_exc = exc
+                if i < total_attempts - 1:
+                    logger.warning(
+                        "%s request failed (attempt %d/%d): %s",
+                        provider_label,
+                        i + 1,
+                        total_attempts,
+                        exc,
+                    )
+                    await asyncio.sleep(2**i)
+                    continue
+                raise
+
+        # The loop always runs at least once (total_attempts >= 1), so reaching
+        # here means every attempt failed without re-raising; last_exc is set.
+        raise RuntimeError(
+            f"{provider_label}: all {total_attempts} transcription attempt(s) failed"
+        ) from last_exc
+
+    @staticmethod
     def _validate_positive_limit(name: str, value: int | float | None) -> None:
         if value is not None and value <= 0:
             raise ValueError(f"{name} must be > 0 when set (got {value!r})")
@@ -261,6 +313,24 @@ class STTBase:
                 provider_label,
                 exc,
             )
+
+    def _drain_buffer_to_wav(self) -> bytes | None:
+        """Wrap the buffered batch PCM into WAV bytes and clear the buffer.
+
+        Shared prologue for the batch ``finalize`` hooks. Returns ``None`` when
+        there is nothing to transcribe (empty buffer or no latched format);
+        otherwise returns the buffered PCM as a single WAV blob and clears the
+        buffer in place. Clearing in place (not a rebind) keeps the buffer
+        reference held by the in-progress ``_buffer_batch_audio_or_finalize``
+        call the same object, letting the chunk that tripped the cap restart a
+        fresh stream. The latched ``_audio_format`` is preserved so the next
+        utterance keeps the same first-seen format contract.
+        """
+        if not self._buffer or self._audio_format is None:
+            return None
+        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
+        self._buffer.clear()
+        return wav_data
 
     def _validate_audio(self, chunk: AudioChunk) -> None:
         if chunk.format.encoding != "pcm":

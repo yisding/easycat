@@ -414,17 +414,6 @@ class ElevenLabsTTS(_WSTTSBase):
         return self._mgr
 
     @staticmethod
-    def _parse_frame(frame: Any) -> dict[str, Any] | None:
-        """Parse a raw wire frame to a dict once (None for non-text/non-object)."""
-        if not isinstance(frame, str):
-            return None
-        try:
-            parsed = json.loads(frame)
-        except json.JSONDecodeError:
-            return None
-        return parsed if isinstance(parsed, dict) else None
-
-    @staticmethod
     def _route_key(parsed: Any) -> str | None:
         # ElevenLabs responses carry the context id under camelCase ``contextId``
         # (requests use snake_case ``context_id``).

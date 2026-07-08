@@ -42,8 +42,9 @@ These are *submodule* exports (``easycat.server.*``); they do NOT count against
 the top-level ``easycat.__all__`` cap. Imports here stay light: aiohttp is gated
 inside :meth:`VoiceServer.start` (via :func:`easycat._extras.require_module`)
 and ``auth.py`` pulls only ``hmac``/``dataclasses``/``typing``/``os`` plus the
-leaf ``_is_loopback_host``, so importing this package never pulls aiohttp and
-never touches the planner or observability allow-lists. :class:`WebRTCRoutes` is
+leaf ``is_loopback_host`` (from :mod:`easycat._net`), so importing this package
+never pulls aiohttp and never touches the planner or observability allow-lists.
+:class:`WebRTCRoutes` is
 exported via a LAZY :func:`__getattr__` so importing it does not eagerly pull
 ``easycat.transports.webrtc`` (and thus aiohttp's siblings) at package load.
 """

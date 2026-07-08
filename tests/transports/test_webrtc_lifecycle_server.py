@@ -1319,7 +1319,7 @@ class TestWebRTCDegradedEvents:
     ``TransportDegraded`` so they land in the journal, not just the log."""
 
     @pytest.mark.asyncio
-    async def test_negotiation_failure_emits_fatal(self, monkeypatch):
+    async def test_negotiation_failure_emits_non_fatal_and_coalesces(self, monkeypatch):
         _install_fake_webrtc_modules(monkeypatch)
 
         async def _boom(self) -> None:  # noqa: ANN001
@@ -1334,14 +1334,19 @@ class TestWebRTCDegradedEvents:
         bus.subscribe(TransportDegraded, lambda e: received.append(e))
         transport._event_bus = bus
 
-        resp = await transport._handle_offer(_FakeOfferRequest())
+        # A client looping malformed SDP must not flood the journal with one
+        # fatal event per request: the failure is recoverable, so the emit is
+        # non-fatal and subject to the 1.0s coalescing window.
+        for _ in range(3):
+            resp = await transport._handle_offer(_FakeOfferRequest())
+            assert resp.status == 400
+            for _ in range(5):
+                await asyncio.sleep(0)
 
-        assert resp.status == 400
-        for _ in range(5):
-            await asyncio.sleep(0)
         assert [e.reason for e in received] == [_DEGRADED_NEGOTIATION_FAILED]
         assert received[0].provider == "webrtc"
-        assert received[0].fatal is True
+        assert received[0].fatal is False
+        assert transport._degraded_suppressed.get((_DEGRADED_NEGOTIATION_FAILED, False), 0) == 2
 
     @pytest.mark.asyncio
     async def test_inbound_consume_error_emits_degraded(self, monkeypatch):

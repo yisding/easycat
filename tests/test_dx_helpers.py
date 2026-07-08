@@ -536,10 +536,10 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
         assert "`await session.stop()` is the preferred public teardown verb" in guide
         assert "`async with session:` is the preferred idiom" in guide
         assert "session.shutdown()" in guide
-        assert "thin alias for `stop(force=True)`" in guide
+        assert "`@deprecated` thin alias for `stop(force=True)`" in guide
         assert "Session._destroy()" in guide and "Session._close()" in guide
         assert "Session.close()" in guide and "Session.destroy()" in guide
-        assert "legacy compatibility aliases" in guide
+        assert "`@deprecated` legacy compatibility aliases" in guide
         assert "new code should call `stop()` or use `async with session:`" in guide
 
     assert "Compatibility alias for `stop(force=True)`" in chapter_15

@@ -31,29 +31,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import io
 import json
 import logging
-import re
 import socket
-import struct
 import threading
-import wave
 import webbrowser
-from collections.abc import Iterable
-from dataclasses import dataclass, field
-from ipaddress import ip_address
 from pathlib import Path
-from re import _parser as re_parser
 from typing import Any
 from urllib.parse import urlsplit
 
-from easycat.debug._audio_health import AUDIO_ANALYSIS_BYTE_CAP
+from easycat._net import is_loopback_host
 from easycat.debug._issues import build_issues as _build_issues
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
-from easycat.debug._turn_timeline import extract_turn_transcripts as _extract_turn_transcripts
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
 from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
 from easycat.debug.annotations import (
@@ -63,129 +54,84 @@ from easycat.debug.annotations import (
     save_annotation,
 )
 from easycat.debug.bundle import RunBundle
-from easycat.debugger._aec import (
-    align_tracks as _align_aec_tracks,
+
+# AEC diagnostics + VAD what-if payload builders were split into
+# ``_aec_routes.py`` (QS3). Re-exported here so the historical
+# ``from easycat.debugger.server import _helper`` sites keep resolving.
+# ``_AEC_MAX_TRACK_BYTES`` is monkeypatched by tests, so it lives physically in
+# ``_aec_routes`` (patch its real home, not this module).
+from easycat.debugger._aec_routes import (
+    _aec_diagnostics_for_turn,
+    _aec_interruption_frames,
+    _aec_track_format,
+    _limit_aec_track,
+    _vad_baseline_start_count,
+    _vad_whatif_frames,
 )
-from easycat.debugger._aec import (
-    compute_erle as _compute_erle,
-)
-from easycat.debugger._aec import (
-    detect_double_talk as _detect_double_talk,
-)
-from easycat.debugger._aec import (
-    detect_self_echo as _detect_self_echo,
-)
-from easycat.debugger._aec import (
-    frame_rms_series as _frame_rms_series,
+
+# PCM/WAV/frame coercion helpers were split into ``_audio.py`` (QS3). Re-exported
+# here so the historical ``from easycat.debugger.server import _helper`` sites
+# keep resolving. ``_AUDIO_MAX_CONVERTED_FRAME_BYTES`` is monkeypatched by tests,
+# so it lives physically in ``_audio`` (patch its real home, not this alias).
+from easycat.debugger._audio import (
+    _AUDIO_DEFAULT_FMT,
+    _AUDIO_MAX_CONVERTED_FRAME_BYTES,
+    _AUDIO_MAX_RESAMPLE_RATIO,
+    _AUDIO_MAX_SAMPLE_RATE,
+    _AUDIO_MIN_SAMPLE_RATE,
+    _AUDIO_VALID_CHANNELS,
+    _audio_metadata_int,
+    _coerce_frames_to_format,
+    _is_safe_audio_format,
+    _np_pcm_dtype,
+    _np_ratecv,
+    _np_tomono,
+    _project_converted_pcm_bytes,
+    _safe_audio_format_from_metadata,
+    _serialize_frame,
+    _wav_header,
 )
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
+
+# Record filtering / full-text search / transcript / record coercion helpers
+# were split into ``_records.py`` (QS3). Re-exported here so the historical
+# ``from easycat.debugger.server import _helper`` import sites keep resolving.
+from easycat.debugger._records import (
+    _SEARCH_MAX_QUERY_LEN,
+    _SEARCH_SCAN_LIMIT,
+    _UNSAFE_REGEX_MESSAGE,
+    _build_transcript,
+    _compile_search_regex,
+    _filter_and_paginate,
+    _filter_records,
+    _record_match_fields,
+    _record_searchable_text,
+    _record_to_dict,
+    _regex_tree_has_unsafe_backtracking,
+    _search_records,
+)
+
+# Source adaptation (DebuggerSource + bundle/session sources and ref/turn-id
+# validators) was split into ``_sources.py`` (QS3). Re-exported here so the
+# historical ``from easycat.debugger.server import _helper`` sites keep
+# resolving. ``_REPLAY_FRAME_LIMIT`` is monkeypatched by tests, so it lives
+# physically in ``_sources`` (patch its real home, not this module).
+from easycat.debugger._sources import (
+    DebuggerSource,
+    _bundle_source,
+    _run_bundle_source,
+    _safe_ref,
+    _safe_turn_id,
+    _session_source,
+    _validated_replay_kwargs,
+)
 from easycat.debugger._waveform import decode_pcm_peaks, encode_peaks_png
 from easycat.runtime.records import AEC_REFERENCE_FRAME_NAME
-
-# ``audioop`` was removed from the stdlib in Python 3.13.  Fall back to numpy
-# (optional extra) for mic-track resample/downmix; skip mismatched frames only
-# when neither helper is available.
-try:
-    import audioop as _audioop
-except ImportError:  # pragma: no cover - exercised on 3.13+
-    _audioop = None  # type: ignore[assignment]
-
-try:
-    import numpy as _np
-except (ImportError, RecursionError):  # pragma: no cover
-    _np = None  # type: ignore[assignment]
-
-
-def _np_pcm_dtype(width: int) -> Any:
-    """Return the signed little-endian numpy dtype for raw PCM samples."""
-    _dtypes = {1: "int8", 2: "<i2", 4: "<i4"}
-    spec = _dtypes.get(width)
-    if spec is None:
-        raise ValueError(f"unsupported sample width {width}")
-    return _np.dtype(spec)  # type: ignore[union-attr]
-
-
-def _np_tomono(data: bytes, width: int) -> bytes:
-    """Average stereo channels into mono using numpy (int8/16/32 PCM)."""
-    dt = _np_pcm_dtype(width)
-    arr = _np.frombuffer(data, dtype=dt)  # type: ignore[union-attr]
-    stereo = arr.reshape(-1, 2).astype(_np.int64)  # type: ignore[union-attr]
-    mono = ((stereo[:, 0] + stereo[:, 1]) >> 1).astype(dt)
-    return mono.tobytes()
-
-
-def _np_ratecv(data: bytes, width: int, nchannels: int, inrate: int, outrate: int) -> bytes:
-    """Linearly interpolate PCM from *inrate* to *outrate* using numpy."""
-    dt = _np_pcm_dtype(width)
-    arr = _np.frombuffer(data, dtype=dt).astype(_np.float64)  # type: ignore[union-attr]
-    n_frames = len(arr) // nchannels
-    if n_frames == 0:
-        return b""
-    n_out = max(1, round(n_frames * outrate / inrate))
-    out_bytes = n_out * nchannels * width
-    if out_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
-        raise ValueError("resampled audio frame exceeds debugger size limit")
-    x_in = _np.arange(n_frames)  # type: ignore[union-attr]
-    x_out = _np.linspace(0, n_frames - 1, n_out)  # type: ignore[union-attr]
-    if nchannels == 1:
-        out = _np.interp(x_out, x_in, arr)  # type: ignore[union-attr]
-    else:
-        frames = arr.reshape(n_frames, nchannels)
-        out = _np.column_stack(  # type: ignore[union-attr]
-            [_np.interp(x_out, x_in, frames[:, ch]) for ch in range(nchannels)]  # type: ignore[union-attr]
-        ).ravel()
-    info = _np.iinfo(dt)  # type: ignore[union-attr]
-    return _np.clip(out, info.min, info.max).astype(dt).tobytes()  # type: ignore[union-attr]
-
-
-def _project_converted_pcm_bytes(
-    data: bytes,
-    *,
-    width: int,
-    channels: int,
-    target_channels: int,
-    rate: int,
-    target_rate: int,
-) -> int:
-    frames = len(data) // (width * channels)
-    if frames <= 0:
-        return 0
-    output_frames = frames
-    if rate > 0 and rate != target_rate:
-        output_frames = max(1, round(frames * target_rate / rate))
-    return output_frames * target_channels * width
-
 
 logger = logging.getLogger(__name__)
 
 
-_SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
-_TURN_ID_OK = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-
-# Hard cap on frames returned in /api/replay so a 50k-record bundle can't
-# blow the response past sane sizes. The cap is generous: typical voice
-# bundles run a few thousand records, and a per-frame `data` dict is
-# small. UI surfaces `frames_truncated` + `total_frames` when this fires.
-_REPLAY_FRAME_LIMIT = 5000
-
-# Hard cap on records scanned by full-text search (``/api/records?q=`` and
-# ``easycat journal grep``) so a pathological journal can't pin the event
-# loop / CLI on a single request. Past this many records the scan stops and
-# callers see ``scan_truncated`` so the cap is visible rather than silent.
-_SEARCH_SCAN_LIMIT = 50000
-
-# Upper bound on the search query string. The debugger binds loopback-only and
-# the query comes from the developer searching their own journal (no privilege
-# boundary), but bounding the length is cheap defense-in-depth that keeps a
-# pathological user-supplied regex from compiling into a huge automaton.
-_SEARCH_MAX_QUERY_LEN = 500
-
-# Regex searches are intentionally a developer convenience, not an arbitrary
-# pattern execution surface. Reject constructs that commonly trigger
-# catastrophic backtracking in Python's backtracking ``re`` engine before the
-# pattern is run against journal-controlled text.
-_UNSAFE_REGEX_MESSAGE = "unsafe regex"
 
 # Per-tick cap on records pushed in a live ``{"type": "records"}`` WebSocket
 # batch.  A burst can advance the sequence by thousands in one poll; capping
@@ -205,901 +151,11 @@ _AUDIO_TRACK_MIC = "mic"
 _AUDIO_TRACK_REFERENCE = "reference"
 _VALID_AUDIO_TRACKS = frozenset({_AUDIO_TRACK_TTS, _AUDIO_TRACK_MIC, _AUDIO_TRACK_REFERENCE})
 
-# Accepted PCM geometry for audio concat/waveform routes.  Debug bundles are
-# treated as untrusted input, so journal-provided format metadata must be kept
-# within normal voice-audio bounds before it is used in WAV headers or passed to
-# audioop's resampler.
-_AUDIO_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
-_AUDIO_MIN_SAMPLE_RATE = 8000
-_AUDIO_MAX_SAMPLE_RATE = 192000
-_AUDIO_VALID_CHANNELS = frozenset({1, 2})
-_AUDIO_MAX_RESAMPLE_RATIO = 4
-_AUDIO_MAX_CONVERTED_FRAME_BYTES = 5 * 1024 * 1024
-
-
-def _safe_ref(ref: str) -> str:
-    """Reject anything that isn't a SHA-256 hex digest before any I/O.
-
-    Without this guard, the ``{ref}`` route matcher would happily accept
-    URL-encoded path traversal sequences and pass them straight to the
-    filesystem artifact store.
-    """
-    if not _SHA256_REF.match(ref):
-        raise ValueError(f"invalid artifact ref: {ref!r}")
-    return ref
-
-
-def _safe_turn_id(turn_id: str) -> str:
-    if not _TURN_ID_OK.match(turn_id):
-        raise ValueError(f"invalid turn_id: {turn_id!r}")
-    return turn_id
-
-
-# ── Source adaptation ────────────────────────────────────────────
-
-
-@dataclass
-class DebuggerSource:
-    """Adapts heterogeneous data sources into one interface for the UI.
-
-    ``records`` returns the latest snapshot of journal records.  Bundle
-    sources cache because bundles are immutable; live sources re-snapshot
-    every call so WebSocket polling surfaces new events.
-
-    ``artifact`` resolves a content-addressed ref to bytes.  ``manifest``
-    returns a small dict the UI shows in the header — the path field is
-    stripped to a basename to avoid leaking absolute paths into the
-    browser.
-    """
-
-    label: str
-    _records_fn: Any = field(repr=False)
-    _artifact_fn: Any = field(repr=False)
-    _manifest_fn: Any = field(repr=False)
-    _artifact_analysis_fn: Any | None = field(default=None, repr=False)
-    _bundle_fn: Any | None = field(default=None, repr=False)
-    _replay_fn: Any | None = field(default=None, repr=False)
-    _progress_fn: Any | None = field(default=None, repr=False)
-    # Bounded tail fetch used by the live WS loop: returns up to ``cap`` records
-    # with ``sequence > after_seq`` *without* materializing the whole journal.
-    # Live sources push this filter down to the journal's bounded
-    # ``read(start=..., limit=...)``; when absent, ``records_since`` falls back to
-    # slicing the (immutable, in-memory) ``records()`` list — correct for bundle
-    # and static sources where the full list is already cached.
-    _records_since_fn: Any | None = field(default=None, repr=False)
-    # On-disk bundle path used to read/write the annotation sidecar.  Set only
-    # for bundle sources and never surfaced in ``manifest()`` — the browser
-    # learns it can annotate via the ``supports_annotate`` flag, never the path.
-    _annotate_path: Path | None = field(default=None, repr=False)
-    # Monotonic "which session is selected" counter for dev-registry sources.
-    # The live WS loop reads it each tick and, when it advances, resets its
-    # follow-cursor and tells the UI to clear — so switching to a session whose
-    # journal sequence is *lower* than the prior one re-snapshots cleanly
-    # instead of stalling. ``None`` (every non-dev source) reads as a constant 0.
-    _selection_epoch_fn: Any | None = field(default=None, repr=False)
-    is_live: bool = False
-
-    def records(self) -> list[dict[str, Any]]:
-        return list(self._records_fn())
-
-    def records_since(self, after_seq: int, cap: int) -> list[dict[str, Any]]:
-        """Return up to *cap* records with ``sequence > after_seq`` (ascending).
-
-        Live sources push the bound down to the journal's
-        ``read(start=after_seq + 1, limit=cap)`` so an idle/caught-up WS tick
-        never re-reads or re-serializes the whole journal.  Sources without a
-        bounded fetch (bundles, static in-memory lists) fall back to slicing the
-        already-cached ``records()`` list — cheap because that list is immutable
-        and never re-decoded.
-        """
-        if cap <= 0:
-            return []
-        if self._records_since_fn is not None:
-            return list(self._records_since_fn(after_seq, cap))
-        out: list[dict[str, Any]] = []
-        for r in self.records():
-            seq = r.get("sequence")
-            if isinstance(seq, int) and seq > after_seq:
-                out.append(r)
-                if len(out) >= cap:
-                    break
-        return out
-
-    def progress(self) -> tuple[int, int]:
-        """Cheap ``(latest_sequence, record_count)`` without serializing.
-
-        Used by the live WebSocket loop to detect journal growth in O(1)
-        instead of re-reading and re-serializing every record each tick.
-        ``latest_sequence`` is the monotonic change-detection key; the
-        count is the value shown in the UI header.  Falls back to the
-        ``records()`` length when a source has no cheap accessor (so the
-        contract holds for every source).
-        """
-        if self._progress_fn is not None:
-            return self._progress_fn()
-        n = len(self.records())
-        return (n, n)
-
-    def selection_epoch(self) -> int:
-        """Return the dev-registry selection counter (0 for non-dev sources)."""
-        if self._selection_epoch_fn is not None:
-            return int(self._selection_epoch_fn())
-        return 0
-
-    def artifact(self, ref: str) -> bytes | None:
-        return self._artifact_fn(ref)
-
-    def artifact_for_analysis(self, ref: str) -> bytes | None:
-        if self._artifact_analysis_fn is not None:
-            return self._artifact_analysis_fn(ref)
-        return self.artifact(ref)
-
-    def manifest(self) -> dict[str, Any]:
-        return dict(self._manifest_fn())
-
-    def bundle(self) -> RunBundle | None:
-        return self._bundle_fn() if self._bundle_fn is not None else None
-
-    def replay(self, **kwargs: Any) -> Any:
-        if self._replay_fn is None:
-            raise RuntimeError("This source does not support replay.")
-        return self._replay_fn(**kwargs)
-
-
-def _serialize_frame(frame: Any) -> dict[str, Any]:
-    """Project a :class:`ReplayFrame` into JSON-safe shape for the wire.
-
-    The raw frame carries ``input_blob`` / ``output_blob`` as ``bytes``,
-    which can't go through ``json.dumps``.  We strip the bytes and expose
-    the SHA-256 refs instead — the UI fetches blobs on demand from
-    ``/api/artifact/{ref}``.  Sizes are surfaced separately so the UI can
-    show a badge without paying the round-trip.
-    """
-    return {
-        "sequence": frame.sequence,
-        "stage": frame.stage,
-        "kind": frame.kind,
-        "name": frame.name,
-        "turn_id": frame.turn_id,
-        "data": frame.data,
-        "input_ref": frame.input_ref,
-        "output_ref": frame.output_ref,
-        "input_blob_size": len(frame.input_blob) if frame.input_blob else 0,
-        "output_blob_size": len(frame.output_blob) if frame.output_blob else 0,
-        "error": frame.error,
-        "side_effecting": frame.side_effecting,
-    }
-
-
-def _validated_replay_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Type-check and normalise the optional windowing/filter keys.
-
-    Raises :class:`ValueError` on bad input so the handler maps it to a
-    400 with a structured ``BAD_REQUEST`` error_code.  Unknown stage
-    names are rejected here rather than silently ignored — a typo in a
-    UI checkbox should surface, not produce surprising frame slices.
-    """
-    from easycat.runtime.replay import _STAGE_NAMES
-
-    out: dict[str, Any] = {}
-    if "force" in kwargs:
-        value = kwargs["force"]
-        if not isinstance(value, bool):
-            raise ValueError("force must be a boolean")
-        out["force"] = value
-    if "from_sequence" in kwargs and kwargs["from_sequence"] is not None:
-        value = kwargs["from_sequence"]
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise ValueError("from_sequence must be an integer")
-        out["from_sequence"] = value
-    if "to_sequence" in kwargs and kwargs["to_sequence"] is not None:
-        value = kwargs["to_sequence"]
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise ValueError("to_sequence must be an integer")
-        out["to_sequence"] = value
-    if "stage_filter" in kwargs and kwargs["stage_filter"] is not None:
-        value = kwargs["stage_filter"]
-        if not isinstance(value, list) or not all(isinstance(s, str) for s in value):
-            raise ValueError("stage_filter must be a list of strings")
-        unknown = [s for s in value if s not in _STAGE_NAMES]
-        if unknown:
-            raise ValueError(f"unknown stage(s) in stage_filter: {sorted(unknown)}")
-        out["stage_filter"] = list(value)
-    return out
-
-
-def _run_bundle_source(
-    bundle: RunBundle, *, label: str, annotate_path: Path | None = None
-) -> DebuggerSource:
-    """Build an immutable bundle-backed source from an already loaded bundle.
-
-    ``annotate_path`` is the real on-disk bundle path used for the reviewer
-    annotation sidecar; pass ``None`` for path-less bundles (e.g. a journal
-    loaded in-memory), which disables the annotation controls.
-    """
-    cached_records = list(bundle.records())
-
-    def _replay(**kwargs: Any) -> Any:
-        from easycat.runtime.replay import (
-            ReplayFidelity,
-            ReplaySpec,
-            ToolReplayPolicy,
-        )
-
-        fidelity = ReplayFidelity(kwargs.get("fidelity", "artifact"))
-        timing = kwargs.get("timing", "fast")
-        tool_policy = ToolReplayPolicy(kwargs.get("tool_policy", "deny"))
-        validated = _validated_replay_kwargs(kwargs)
-        force = validated.get("force", False)
-        spec = ReplaySpec(
-            fidelity=fidelity,
-            timing=timing,
-            force=force,
-            tool_policy=tool_policy,
-            from_sequence=validated.get("from_sequence"),
-            to_sequence=validated.get("to_sequence"),
-            stage_filter=validated.get("stage_filter"),
-        )
-        result = bundle.replay(spec)
-        total_frames = len(result.frames)
-        truncated = total_frames > _REPLAY_FRAME_LIMIT
-        kept = result.frames[:_REPLAY_FRAME_LIMIT] if truncated else result.frames
-        return {
-            "fidelity_label": result.fidelity_label.value,
-            "frame_count": len(kept),
-            "total_frames": total_frames,
-            "frames_truncated": truncated,
-            "frames": [_serialize_frame(f) for f in kept],
-            "side_effecting": result.side_effecting,
-            "blocked_tool_calls": result.blocked_tool_calls,
-            "stubbed_tool_calls": result.stubbed_tool_calls,
-            "allowed_tool_calls": result.allowed_tool_calls,
-        }
-
-    return DebuggerSource(
-        label=label,
-        _records_fn=lambda: cached_records,
-        # Bundles are immutable, so the count is fixed.  Use it as both the
-        # change-detection key and the displayed count — the WS loop emits a
-        # single snapshot and stops (bundles are not live).
-        _progress_fn=lambda: (len(cached_records), len(cached_records)),
-        _artifact_fn=lambda ref: bundle.artifact_blobs.get(ref),
-        _manifest_fn=lambda: {
-            "source": "bundle",
-            "name": label,
-            "format_version": bundle.format_version,
-            "provider_versions": bundle.manifest.provider_versions,
-            "config_snapshot": bundle.manifest.config_snapshot,
-            "sharing_banner": bundle.sharing_banner,
-            "record_count": len(cached_records),
-            "artifact_count": len(bundle.artifact_blobs),
-            "supports_replay": True,
-            "supports_export": False,
-            # Bundles are read-only, so reviewer verdicts land in a sidecar
-            # next to the bundle rather than the journal.  The SPA shows the
-            # per-turn annotation controls only when we have a real on-disk
-            # path to write that sidecar to.
-            "supports_annotate": annotate_path is not None,
-            "is_live": False,
-            "replay_entry_points": [
-                {
-                    "sequence": cp.sequence,
-                    "stage": cp.stage,
-                    "unit_id": cp.unit_id,
-                    "checkpoint_id": cp.checkpoint_id,
-                }
-                for cp in bundle.replay_entry_points
-            ],
-        },
-        _bundle_fn=lambda: bundle,
-        _replay_fn=_replay,
-        # Real on-disk path for the annotation sidecar; kept off the manifest
-        # so it never leaks into the browser.
-        _annotate_path=annotate_path,
-        is_live=False,
-    )
-
-
-def _bundle_source(bundle_path: str | Path) -> DebuggerSource:
-    """Build an immutable bundle-backed source with cached lookups.
-
-    Bundles never change after load, so we cache the records list and
-    artifact-blob view once.  Subsequent ``records()`` calls return the
-    same list without re-decoding NDJSON, which matters when the UI
-    polls and bundles run into the tens of thousands of records.
-    """
-    return _run_bundle_source(
-        RunBundle.load(bundle_path),
-        label=Path(str(bundle_path)).name,
-        annotate_path=Path(str(bundle_path)),
-    )
-
-
-def _session_source(session: Any) -> DebuggerSource:
-    """Adapt a live ``Session`` so the UI can poll while it's running.
-
-    Reads from ``session.journal`` (a JournalView) and pulls artifact
-    bytes from ``session._artifact_store`` if one is attached.  No
-    side-effecting hooks into Session — purely observational.
-    """
-
-    def _records() -> Iterable[dict[str, Any]]:
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return []
-        return [_record_to_dict(r) for r in journal.read()]
-
-    def _records_since(after_seq: int, cap: int) -> list[dict[str, Any]]:
-        # Push the tail bound down to the journal: ``read(start=after_seq + 1,
-        # limit=cap)`` returns only records with ``sequence > after_seq`` (the
-        # backend filters/limits in SQL or on the ring buffer), so a live WS
-        # tick serializes at most ``cap`` records instead of the whole journal.
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return []
-        return [_record_to_dict(r) for r in journal.read(start=after_seq + 1, limit=cap)]
-
-    def _progress() -> tuple[int, int]:
-        # O(1) growth probe: the backend keeps ``latest_sequence`` as an
-        # in-memory counter, so this never re-reads or re-serializes the
-        # journal.  Sequence is monotonic (the WS change-detection key);
-        # we surface it as the displayed count too — it equals the record
-        # count on persistent backends, which are the ones that grow
-        # unboundedly and the only ones the WS poll needs to track.
-        journal = getattr(session, "journal", None)
-        if journal is None:
-            return (0, 0)
-        seq = getattr(journal, "latest_sequence", None)
-        if seq is None:
-            n = len(list(journal.read()))
-            return (n, n)
-        return (int(seq), int(seq))
-
-    def _artifact(ref: str) -> bytes | None:
-        store = getattr(session, "_artifact_store", None)
-        if store is None:
-            return None
-        return store.get(ref)
-
-    def _artifact_for_analysis(ref: str) -> bytes | None:
-        store = getattr(session, "_artifact_store", None)
-        if store is None:
-            return None
-        bounded = getattr(store, "get_head_tail", None)
-        if callable(bounded):
-            return bounded(ref, byte_cap=AUDIO_ANALYSIS_BYTE_CAP)
-        return store.get(ref)
-
-    def _manifest() -> dict[str, Any]:
-        return {
-            "source": "session",
-            "session_id": getattr(session, "session_id", ""),
-            "config_snapshot": _safe_session_config_snapshot(session),
-            "is_running": bool(getattr(session, "is_running", False)),
-            "turn_state": str(getattr(session, "turn_state", "")),
-            "supports_replay": False,
-            "supports_export": True,
-            # Live sessions don't carry a stable on-disk bundle to sidecar
-            # against; verdicts are recorded after capture, on a bundle.
-            "supports_annotate": False,
-            "is_live": True,
-            "replay_entry_points": [],
-        }
-
-    return DebuggerSource(
-        label=f"session-{getattr(session, 'session_id', 'unknown')}",
-        _records_fn=_records,
-        _progress_fn=_progress,
-        _records_since_fn=_records_since,
-        _artifact_fn=_artifact,
-        _manifest_fn=_manifest,
-        _artifact_analysis_fn=_artifact_for_analysis,
-        _bundle_fn=None,
-        _replay_fn=None,
-        is_live=True,
-    )
-
-
-def _safe_session_config_snapshot(session: Any) -> dict[str, Any]:
-    """Return the allowlisted config snapshot for live debugger sessions."""
-    try:
-        from easycat.runtime.safe_defaults import safe_config_snapshot
-
-        config = getattr(session, "_easycat_config", None) or getattr(session, "_config", None)
-        if config is None:
-            return {}
-        return safe_config_snapshot(config)
-    except ImportError:
-        return {}
-
-
-def _record_to_dict(record: Any) -> dict[str, Any]:
-    """Convert a JournalRecord-like object to a JSON-friendly dict."""
-    if isinstance(record, dict):
-        return record
-    out: dict[str, Any] = {}
-    for attr in (
-        "sequence",
-        "session_id",
-        "kind",
-        "name",
-        "turn_id",
-        "data",
-        "input_ref",
-        "output_ref",
-    ):
-        value = getattr(record, attr, None)
-        if hasattr(value, "value"):
-            value = value.value
-        out[attr] = value
-    timing = getattr(record, "timing", None)
-    if timing is not None:
-        out["timing"] = {k: getattr(timing, k, None) for k in ("wall_ns", "mono_ns", "cpu_ns")}
-    error = getattr(record, "error", None)
-    if error is not None:
-        out["error"] = _error_to_dict(error)
-    return out
-
-
-def _error_to_dict(error: Any) -> dict[str, Any]:
-    return {
-        "type": getattr(error, "type", None),
-        "message": getattr(error, "message", None),
-        "traceback": getattr(error, "traceback", None),
-        "notes": getattr(error, "notes", None),
-        "children": [_error_to_dict(child) for child in getattr(error, "children", ())],
-    }
-
 
 # ── Pure helpers (record filtering / rollups) ────────────────────
-
-
-def _filter_records(
-    records: list[dict[str, Any]],
-    *,
-    stage: str | None,
-    turn_id: str | None,
-    name: str | Iterable[str] | None,
-    from_seq: int | None,
-    to_seq: int | None,
-    errors_only: bool = False,
-    limit: int | None = None,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    """Filter records.  Slicing happens here for callers that want a
-    single combined operation; pagination on the HTTP API goes through
-    :func:`_filter_and_paginate` so the response can carry both the
-    page slice and the full match count.
-
-    ``name`` may be a single string (exact match) or an iterable of
-    strings (membership match).  The HTTP handler surfaces the latter
-    via repeated ``name=`` query params so the Live view can fetch only
-    the event names it renders without being capped by ``limit``.
-    """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be > 0")
-    name_set: frozenset[str] | None
-    if name is None:
-        name_set = None
-    elif isinstance(name, str):
-        name_set = frozenset({name})
-    else:
-        collected = frozenset(name)
-        name_set = collected or None
-    out = []
-    for r in records:
-        seq = r.get("sequence")
-        if isinstance(seq, bool) or not isinstance(seq, int):
-            continue
-        if from_seq is not None and seq < from_seq:
-            continue
-        if to_seq is not None and seq > to_seq:
-            continue
-        if turn_id is not None and r.get("turn_id") != turn_id:
-            continue
-        if name_set is not None and r.get("name") not in name_set:
-            continue
-        if stage is not None:
-            data = r.get("data") or {}
-            if not isinstance(data, dict):
-                continue
-            if data.get("stage") != stage and data.get("observed_stage") != stage:
-                continue
-        if errors_only and not r.get("error"):
-            continue
-        out.append(r)
-    if offset:
-        out = out[offset:]
-    if limit is not None:
-        out = out[:limit]
-    return out
-
-
-def _filter_and_paginate(
-    records: list[dict[str, Any]],
-    *,
-    stage: str | None,
-    turn_id: str | None,
-    name: str | Iterable[str] | None,
-    from_seq: int | None,
-    to_seq: int | None,
-    errors_only: bool,
-    limit: int | None,
-    offset: int,
-) -> tuple[list[dict[str, Any]], int]:
-    """Return ``(page, total)`` so the UI can render "X of N".
-
-    The previous endpoint returned ``page_size`` as ``total``, which
-    made it impossible to render a real pager and confused tooling.
-    """
-    if offset < 0:
-        raise ValueError("offset must be >= 0")
-    if limit is not None and limit <= 0:
-        raise ValueError("limit must be > 0")
-    full = _filter_records(
-        records,
-        stage=stage,
-        turn_id=turn_id,
-        name=name,
-        from_seq=from_seq,
-        to_seq=to_seq,
-        errors_only=errors_only,
-        limit=None,
-        offset=0,
-    )
-    total = len(full)
-    if offset:
-        full = full[offset:]
-    if limit is not None:
-        full = full[:limit]
-    return full, total
-
-
-def _regex_tree_has_unsafe_backtracking(
-    tokens: Any,
-    *,
-    inside_repeat: bool = False,
-    repeated_token: bool = False,
-    optional_repeats: list[int] | None = None,
-) -> bool:
-    """Return true when parsed regex tokens can cause exponential backtracking.
-
-    The journal search surface only needs small grep-style patterns. Nested
-    repeats, quantified alternations, backreferences, and assertions can all
-    make Python's ``re`` engine spend unbounded CPU on a single haystack, so
-    reject them instead of trying to sandbox individual ``search()`` calls.
-
-    A single repeat is fine, but two or more *optional* (``min == 0``) repeats
-    in the same sibling sequence -- e.g. ``a?a?...aaa`` or its grouped twin
-    ``(a?)(a?)...`` -- let the engine explore every "skip vs. match" subset and
-    blow up exponentially even though no repeat is nested inside another. The
-    ``optional_repeats`` accumulator counts those siblings; ``SUBPATTERN`` reuses
-    the parent's counter (transparent groups stay in the same sequence) while
-    branches and repeat children start a fresh count for their own scope.
-    """
-    if optional_repeats is None:
-        optional_repeats = [0]
-    for op, arg in tokens:
-        op_name = str(op)
-        if op_name in {"GROUPREF", "GROUPREF_EXISTS", "ASSERT", "ASSERT_NOT"}:
-            return True
-        if op_name == "BRANCH":
-            _none, branches = arg
-            if repeated_token:
-                return True
-            if any(
-                _regex_tree_has_unsafe_backtracking(branch, inside_repeat=inside_repeat)
-                for branch in branches
-            ):
-                return True
-            continue
-        if op_name in {"MAX_REPEAT", "MIN_REPEAT", "POSSESSIVE_REPEAT"}:
-            min_repeat, _max_repeat, child = arg
-            if inside_repeat:
-                return True
-            if min_repeat == 0:
-                optional_repeats[0] += 1
-                if optional_repeats[0] > 1:
-                    return True
-            if _regex_tree_has_unsafe_backtracking(child, inside_repeat=True, repeated_token=True):
-                return True
-            continue
-        if op_name == "SUBPATTERN":
-            child = arg[-1]
-            if _regex_tree_has_unsafe_backtracking(
-                child,
-                inside_repeat=inside_repeat,
-                repeated_token=repeated_token,
-                optional_repeats=optional_repeats,
-            ):
-                return True
-    return False
-
-
-def _compile_search_regex(query: str) -> re.Pattern[str]:
-    """Compile a bounded, grep-style regex for journal search."""
-    try:
-        parsed = re_parser.parse(query, 0)
-        if _regex_tree_has_unsafe_backtracking(parsed.data):
-            raise ValueError(_UNSAFE_REGEX_MESSAGE)
-        return re.compile(query, re.IGNORECASE)
-    except ValueError:
-        raise
-    except re.error as exc:
-        raise ValueError("invalid regex") from exc
-
-
-def _record_searchable_text(record: dict[str, Any]) -> str:
-    """Build the haystack a full-text query is matched against.
-
-    Combines the serialized ``data`` payload, the error type/message/notes,
-    and the indexed ``name``/``turn_id`` so a query like ``timeout`` or a
-    phone number embedded in a tool argument is found regardless of where it
-    lives in the record.
-    """
-    parts: list[str] = []
-    name = record.get("name")
-    if name:
-        parts.append(str(name))
-    turn_id = record.get("turn_id")
-    if turn_id:
-        parts.append(str(turn_id))
-    data = record.get("data")
-    if data is not None:
-        try:
-            parts.append(json.dumps(data, default=str))
-        except (TypeError, ValueError):
-            parts.append(str(data))
-    error = record.get("error")
-    if isinstance(error, dict):
-        for key in ("type", "message", "traceback", "notes"):
-            value = error.get(key)
-            if value:
-                parts.append(str(value))
-    return "\n".join(parts)
-
-
-def _record_match_fields(record: dict[str, Any], needle: Any, *, is_regex: bool) -> list[str]:
-    """Return the named fields of *record* whose text matches *needle*.
-
-    *needle* is a lowercased substring (when ``is_regex`` is false) or a
-    compiled :class:`re.Pattern` (when true).  Used to render match badges in
-    the SPA and to scope redaction in the CLI grep output.
-    """
-
-    def _hit(text: str) -> bool:
-        if not text:
-            return False
-        if is_regex:
-            return needle.search(text) is not None
-        return needle in text.lower()
-
-    fields: list[str] = []
-    if _hit(str(record.get("name") or "")):
-        fields.append("name")
-    if _hit(str(record.get("turn_id") or "")):
-        fields.append("turn_id")
-    data = record.get("data")
-    if data is not None:
-        try:
-            data_text = json.dumps(data, default=str)
-        except (TypeError, ValueError):
-            data_text = str(data)
-        if _hit(data_text):
-            fields.append("data")
-    error = record.get("error")
-    if isinstance(error, dict) and any(
-        _hit(str(error.get(key) or "")) for key in ("type", "message", "traceback", "notes")
-    ):
-        fields.append("error")
-    return fields
-
-
-def _search_records(
-    records: list[dict[str, Any]],
-    *,
-    query: str,
-    use_regex: bool = False,
-    errors_only: bool = False,
-) -> tuple[list[dict[str, Any]], bool]:
-    """Full-text filter *records* against *query*, returning ``(matches, truncated)``.
-
-    The haystack per record is :func:`_record_searchable_text` (serialized
-    ``data`` + error fields + ``name``/``turn_id``).  Matching is a
-    case-insensitive substring by default; when *use_regex* is true *query* is
-    compiled with :data:`re.IGNORECASE` and a bad pattern raises
-    :class:`ValueError` (mapped to a 400 / CLI error by callers).
-
-    Matched records are returned as **shallow copies** carrying a
-    ``_match_fields`` list — the cached ``source.records()`` dicts are never
-    mutated.  The scan stops after :data:`_SEARCH_SCAN_LIMIT` records and the
-    second tuple element reports whether that cap was hit.
-    """
-    if len(query) > _SEARCH_MAX_QUERY_LEN:
-        raise ValueError("search query too long")
-    needle: Any
-    if use_regex:
-        needle = _compile_search_regex(query)
-    else:
-        needle = query.lower()
-        if not needle:
-            # An empty query matches nothing rather than everything — an empty
-            # search box should not silently return the entire journal.
-            return [], False
-
-    matches: list[dict[str, Any]] = []
-    truncated = False
-    for index, record in enumerate(records):
-        if index >= _SEARCH_SCAN_LIMIT:
-            truncated = True
-            break
-        if errors_only and not record.get("error"):
-            continue
-        haystack = _record_searchable_text(record)
-        if use_regex:
-            if needle.search(haystack) is None:
-                continue
-        elif needle not in haystack.lower():
-            continue
-        fields = _record_match_fields(record, needle, is_regex=use_regex)
-        # Copy before annotating so the cached source records stay pristine.
-        copied = dict(record)
-        copied["_match_fields"] = fields
-        matches.append(copied)
-    return matches, truncated
-
-
-def _build_transcript(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pull user transcripts and agent responses out of the journal.
-
-    The UI renders this alongside the waterfall so a developer can read
-    the conversation without opening every record.  The pure projection
-    lives in :func:`easycat.debug._turn_timeline.extract_turn_transcripts`
-    so the two-source ``easycat diff`` shares one implementation; this thin
-    wrapper keeps the historical name the SPA routes call.
-    """
-    return _extract_turn_transcripts(records)
-
-
-def _audio_metadata_int(data: dict[str, Any], key: str, default: int = 0) -> int:
-    """Parse one integer PCM metadata field from untrusted journal data."""
-    try:
-        return int(data.get(key) or default)
-    except (TypeError, ValueError):
-        return default
-
-
-def _is_safe_audio_format(fmt: dict[str, int]) -> bool:
-    """Return true for bounded linear PCM geometry the debugger will process."""
-    rate = fmt.get("sample_rate", 0)
-    channels = fmt.get("channels", 0)
-    width = fmt.get("sample_width", 0)
-    return (
-        _AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE
-        and channels in _AUDIO_VALID_CHANNELS
-        and _is_supported_width(width)
-    )
-
-
-def _safe_audio_format_from_metadata(data: dict[str, Any]) -> dict[str, int]:
-    """Read a WAV/PCM format from journal metadata with bounded geometry.
-
-    The resampling/header-sensitive fields (``sample_rate`` and ``channels``)
-    are clamped to safe defaults whenever the untrusted journal value is out of
-    range, so a hostile bundle can never drive the resampler or WAV header out
-    of bounds.  ``sample_width`` is *preserved* as-is — even when it is an
-    unsupported width such as 8-bit mu-law telephony (``sample_width == 1``).
-    Rewriting it to the 16-bit default here would mask a genuinely unsupported
-    capture, so the route handlers would drop the only blobs and return 404/409
-    instead of the explicit 415 "unsupported format" response.  Preserving the
-    width lets ``_is_supported_width`` at the route layer surface that 415.
-    """
-    rate = _audio_metadata_int(data, "sample_rate", _AUDIO_DEFAULT_FMT["sample_rate"])
-    channels = _audio_metadata_int(data, "channels", _AUDIO_DEFAULT_FMT["channels"])
-    width = _audio_metadata_int(data, "sample_width", _AUDIO_DEFAULT_FMT["sample_width"])
-    if not (_AUDIO_MIN_SAMPLE_RATE <= rate <= _AUDIO_MAX_SAMPLE_RATE):
-        rate = _AUDIO_DEFAULT_FMT["sample_rate"]
-    if channels not in _AUDIO_VALID_CHANNELS:
-        channels = _AUDIO_DEFAULT_FMT["channels"]
-    if width <= 0:
-        width = _AUDIO_DEFAULT_FMT["sample_width"]
-    return {"sample_rate": rate, "channels": channels, "sample_width": width}
-
-
-def _coerce_frames_to_format(
-    frames: list[tuple[int, bytes, dict[str, Any]]],
-    fmt: dict[str, int],
-    *,
-    strict: bool,
-) -> tuple[list[bytes], int]:
-    """Reconcile *frames* to a single PCM *format*, returning ``(blobs, dropped)``.
-
-    Every frame whose ``sample_rate``/``channels``/``sample_width`` already
-    matches *fmt* passes through untouched.  For a mismatch:
-
-    - ``strict=True`` (TTS) raises :class:`ValueError` — the bot's own output
-      should never splice across formats, and the route maps this to a 409.
-    - ``strict=False`` (mic) makes a best-effort conversion with
-      :mod:`audioop` (stdlib, removed in 3.13) or :mod:`numpy` (optional
-      extra) when ``sample_width`` matches, and otherwise *skips* the blob
-      (incrementing the dropped counter) so a noisy caller capture never
-      aborts the whole turn.  When neither helper is available any mismatch
-      is skipped.
-    """
-    blobs: list[bytes] = []
-    dropped = 0
-    target_rate = fmt["sample_rate"]
-    target_channels = fmt["channels"]
-    target_width = fmt["sample_width"]
-    for _seq, blob, data in frames:
-        rate = _audio_metadata_int(data, "sample_rate")
-        channels = _audio_metadata_int(data, "channels")
-        width = _audio_metadata_int(data, "sample_width")
-        if rate == target_rate and channels == target_channels and width == target_width:
-            blobs.append(blob)
-            continue
-        if strict:
-            raise ValueError(
-                "tts_frame format mismatch: cannot stitch frames with differing "
-                "sample_rate/channels/sample_width"
-            )
-        # Non-strict (mic): convert when sample widths match and at least one
-        # audio helper (audioop/numpy) is present.  Debug bundles are untrusted,
-        # so both the source and target geometry must be within bounded voice-
-        # audio limits before we hand them to a resampler; otherwise drop the
-        # blob rather than corrupt the stream or trigger a runaway conversion.
-        source_fmt = {"sample_rate": rate, "channels": channels, "sample_width": width}
-        if (
-            (_audioop is None and _np is None)
-            or not _is_safe_audio_format(source_fmt)
-            or not _is_safe_audio_format(fmt)
-            or width != target_width
-        ):
-            dropped += 1
-            continue
-        if channels == 2 and target_channels == 1:
-            projected_target_channels = 1
-        elif channels == target_channels:
-            projected_target_channels = target_channels
-        else:
-            dropped += 1
-            continue
-        projected_bytes = _project_converted_pcm_bytes(
-            blob,
-            width=width,
-            channels=channels,
-            target_channels=projected_target_channels,
-            rate=rate,
-            target_rate=target_rate,
-        )
-        if projected_bytes > _AUDIO_MAX_CONVERTED_FRAME_BYTES:
-            raise ValueError("resampled audio frame exceeds debugger size limit")
-        try:
-            converted = blob
-            if channels == 2 and target_channels == 1:
-                if _audioop is not None:
-                    converted = _audioop.tomono(converted, width, 0.5, 0.5)
-                else:
-                    converted = _np_tomono(converted, width)
-            if rate != target_rate:
-                resample_ratio = target_rate / rate
-                if resample_ratio > _AUDIO_MAX_RESAMPLE_RATIO:
-                    dropped += 1
-                    continue
-                if _audioop is not None:
-                    converted, _ = _audioop.ratecv(
-                        converted, width, target_channels, rate, target_rate, None
-                    )
-                else:
-                    converted = _np_ratecv(converted, width, target_channels, rate, target_rate)
-        except Exception:
-            # audio helpers reject malformed PCM lengths; never abort the turn.
-            dropped += 1
-            continue
-        blobs.append(converted)
-    return blobs, dropped
+# The record filtering, full-text search, transcript, and record/error
+# coercion helpers now live in ``easycat.debugger._records`` and are
+# re-exported at the top of this module (QS3 split).
 
 
 def _record_sequence(record: dict[str, Any]) -> int | None:
@@ -1202,284 +258,6 @@ def _collect_concat_pcm(
 
 # ── AEC diagnostics ──────────────────────────────────────────────
 
-# Default decode geometry used when the journal frames carry no explicit
-# PCM format fields (debugger-internal fixtures, malformed captures).
-_AEC_DEFAULT_FMT = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
-_AEC_FRAME_MS = 20
-# Per-request cap for AEC diagnostics PCM processed per track. The debugger
-# may open untrusted bundles with hundreds of MB of artifacts, and the pure
-# Python diagnostics expand PCM into arrays/lists. Keep the analysis bounded
-# and report truncation instead of allocating unbounded joined tracks.
-_AEC_MAX_TRACK_BYTES = 8 * 1024 * 1024
-
-
-def _aec_track_format(entries: list[dict[str, Any]]) -> dict[str, int]:
-    """Read the PCM geometry from the first aligned frame (defaulted)."""
-    fmt = dict(_AEC_DEFAULT_FMT)
-    if entries:
-        data = entries[0].get("data") or {}
-        if isinstance(data, dict):
-            for key in ("sample_rate", "channels", "sample_width"):
-                value = data.get(key)
-                if isinstance(value, int) and value > 0:
-                    fmt[key] = value
-    return fmt
-
-
-def _aec_interruption_frames(
-    records: list[dict[str, Any]],
-    turn_id: str,
-    post_aec: list[dict[str, Any]],
-    *,
-    frame_ms: int,
-    fmt: dict[str, int],
-) -> list[int]:
-    """Map this turn's interruption records onto post-AEC frame indices.
-
-    Each ``assistant_interruption_notified`` (or a ``turn_state_changed``
-    transition *into* ``user_speaking`` while the bot was speaking) is placed at
-    the frame whose monotonic timestamp it most closely follows, so self-echo
-    detection can tell a true barge-in from the bot hearing itself.
-
-    ``post_aec`` must be the FULL (untruncated) track: ``total_frames`` and the
-    clamp ceiling are derived from it so a barge-in beyond the analyzed prefix
-    keeps its true frame index instead of collapsing onto the prefix tail.
-    """
-    if not post_aec:
-        return []
-    base_ns = post_aec[0]["mono_ns"]
-    frame_span_ns = max(1, frame_ms) * 1_000_000
-    bytes_per_sample = max(1, int(fmt.get("sample_width") or 2)) * max(
-        1, int(fmt.get("channels") or 1)
-    )
-    samples_per_frame = max(1, int(int(fmt.get("sample_rate") or 16000) * frame_ms / 1000))
-    bytes_per_frame = max(1, bytes_per_sample * samples_per_frame)
-    total_frames = 0
-    for entry in post_aec:
-        total_frames += max(1, (len(entry["pcm"]) + bytes_per_frame - 1) // bytes_per_frame)
-    frames: list[int] = []
-    for record in records:
-        if record.get("turn_id") != turn_id:
-            continue
-        name = record.get("name")
-        if name == "assistant_interruption_notified":
-            pass
-        elif name == "turn_state_changed":
-            data = record.get("data") or {}
-            if not (isinstance(data, dict) and data.get("to") == "user_speaking"):
-                continue
-        else:
-            continue
-        timing = record.get("timing")
-        mono_ns = timing.get("mono_ns") if isinstance(timing, dict) else None
-        if not isinstance(mono_ns, int):
-            continue
-        frame = max(0, (mono_ns - base_ns) // frame_span_ns)
-        frames.append(min(int(frame), max(0, total_frames - 1)))
-    return frames
-
-
-def _limit_aec_track(
-    entries: list[dict[str, Any]], max_bytes: int
-) -> tuple[list[dict[str, Any]], int, bool]:
-    """Return track entries whose PCM totals no more than ``max_bytes``.
-
-    Entries are shallow-copied only when their PCM blob must be clipped. This
-    avoids unbounded concatenation/decoding while preserving the existing
-    diagnostics shape for normal-sized turns.
-    """
-    total_bytes = sum(len(entry["pcm"]) for entry in entries)
-    if total_bytes <= max_bytes:
-        return entries, total_bytes, False
-    remaining = max(0, max_bytes)
-    limited: list[dict[str, Any]] = []
-    for entry in entries:
-        if remaining <= 0:
-            break
-        pcm = entry["pcm"]
-        if len(pcm) <= remaining:
-            limited.append(entry)
-            remaining -= len(pcm)
-            continue
-        clipped = dict(entry)
-        clipped["pcm"] = pcm[:remaining]
-        limited.append(clipped)
-        remaining = 0
-    return limited, total_bytes, True
-
-
-def _aec_diagnostics_for_turn(source: DebuggerSource, turn_id: str) -> dict[str, Any]:
-    """Build the AEC diagnostics payload for one turn.
-
-    Aligns mic-in / reference / post-AEC tracks on ``timing.mono_ns`` and
-    derives ERLE, double-talk bands, and self-echo hits.  Degrades gracefully:
-    a turn with no captured reference returns ``has_reference: False`` and empty
-    diagnostics rather than raising.
-    """
-    records = source.records()
-    tracks = _align_aec_tracks(records, source=source, turn_id=turn_id)
-    mic_in_all = tracks["mic_in"]
-    reference_all = tracks["reference"]
-    post_aec_all = tracks["post_aec"]
-    has_reference = bool(reference_all)
-
-    fmt = _aec_track_format(post_aec_all or mic_in_all)
-    # 8-bit mu-law (sample_width == 1) can't be linearly decoded for the energy
-    # math below; surface a clear unsupported result rather than mis-decoded
-    # garbage ERLE/self-echo numbers.
-    if not _is_supported_width(fmt["sample_width"]):
-        return {
-            "turn_id": turn_id,
-            "has_reference": has_reference,
-            "unsupported": True,
-            "reason": (
-                "unsupported audio format for AEC diagnostics: "
-                f"sample_width={fmt['sample_width']} "
-                "(8-bit/mu-law telephony audio is not decodable here)"
-            ),
-            "format": fmt,
-            "tracks": {
-                "mic_in": {"frame_count": len(mic_in_all)},
-                "reference": {"frame_count": len(reference_all)},
-                "post_aec": {"frame_count": len(post_aec_all)},
-            },
-        }
-    frame_ms = _AEC_FRAME_MS
-    mic_in, mic_total_bytes, mic_truncated = _limit_aec_track(mic_in_all, _AEC_MAX_TRACK_BYTES)
-    reference, ref_total_bytes, ref_truncated = _limit_aec_track(
-        reference_all, _AEC_MAX_TRACK_BYTES
-    )
-    post_aec, post_total_bytes, post_truncated = _limit_aec_track(
-        post_aec_all, _AEC_MAX_TRACK_BYTES
-    )
-    mic_pcm = b"".join(entry["pcm"] for entry in mic_in)
-    ref_pcm = b"".join(entry["pcm"] for entry in reference)
-    post_pcm = b"".join(entry["pcm"] for entry in post_aec)
-    diagnostics_truncated = mic_truncated or ref_truncated or post_truncated
-
-    erle = _compute_erle(
-        mic_pcm,
-        post_pcm,
-        sample_width=fmt["sample_width"],
-        channels=fmt["channels"],
-        sample_rate=fmt["sample_rate"],
-        frame_ms=frame_ms,
-    )
-    mic_rms = _frame_rms_series(
-        mic_pcm,
-        sample_width=fmt["sample_width"],
-        channels=fmt["channels"],
-        sample_rate=fmt["sample_rate"],
-        frame_ms=frame_ms,
-    )
-    ref_rms = _frame_rms_series(
-        ref_pcm,
-        sample_width=fmt["sample_width"],
-        channels=fmt["channels"],
-        sample_rate=fmt["sample_rate"],
-        frame_ms=frame_ms,
-    )
-    double_talk = _detect_double_talk(ref_rms, mic_rms)
-    # Frame interruptions against the FULL (untruncated) post-AEC track. Passing
-    # the clipped prefix would shrink ``total_frames`` and clamp a real barge-in
-    # that lands after the prefix onto the last analyzed frame, planting a
-    # phantom guard window that suppresses genuine self-echo in the prefix tail.
-    # Only ``len(pcm)`` is read here (no decode/join), so the memory bound holds.
-    interruption_frames = _aec_interruption_frames(
-        records, turn_id, post_aec_all, frame_ms=frame_ms, fmt=fmt
-    )
-    self_echo = _detect_self_echo(
-        post_pcm,
-        interruption_frames,
-        sample_width=fmt["sample_width"],
-        channels=fmt["channels"],
-        sample_rate=fmt["sample_rate"],
-        frame_ms=frame_ms,
-    )
-    return {
-        "turn_id": turn_id,
-        "has_reference": has_reference,
-        "frame_ms": frame_ms,
-        "format": fmt,
-        "erle": erle,
-        "double_talk": double_talk,
-        "self_echo": self_echo,
-        "interruption_frames": interruption_frames,
-        "diagnostics_truncated": diagnostics_truncated,
-        "max_track_bytes": _AEC_MAX_TRACK_BYTES,
-        "tracks": {
-            "mic_in": {
-                "frame_count": len(mic_in_all),
-                "analyzed_frame_count": len(mic_in),
-                "byte_count": mic_total_bytes,
-                "analyzed_byte_count": len(mic_pcm),
-                "truncated": mic_truncated,
-            },
-            "reference": {
-                "frame_count": len(reference_all),
-                "analyzed_frame_count": len(reference),
-                "byte_count": ref_total_bytes,
-                "analyzed_byte_count": len(ref_pcm),
-                "truncated": ref_truncated,
-            },
-            "post_aec": {
-                "frame_count": len(post_aec_all),
-                "analyzed_frame_count": len(post_aec),
-                "byte_count": post_total_bytes,
-                "analyzed_byte_count": len(post_pcm),
-                "truncated": post_truncated,
-            },
-        },
-    }
-
-
-def _vad_baseline_start_count(records: list[dict[str, Any]], turn_id: str) -> int:
-    """Count the ``VADStartSpeaking`` events the live VAD emitted for a turn.
-
-    Reads the recorded VAD ``stage_complete`` event descriptors so the what-if
-    delta compares against what actually happened, not a re-run of the live
-    threshold.
-    """
-    count = 0
-    for record in records:
-        if record.get("turn_id") != turn_id or record.get("name") != "stage_complete":
-            continue
-        data = record.get("data") or {}
-        if not isinstance(data, dict) or data.get("stage") != "vad":
-            continue
-        for event in data.get("events") or []:
-            if isinstance(event, dict) and event.get("type") == "VADStartSpeaking":
-                count += 1
-    return count
-
-
-def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
-    """Return the turn's raw VAD ``stage_start`` input PCM blobs, in order.
-
-    These are the pre-mono mic frames captured before the VAD provider ran, so
-    the what-if re-drives a fresh provider against the same input the live run
-    saw.
-    """
-    frames: list[tuple[int, bytes]] = []
-    for record in source.records():
-        if record.get("turn_id") != turn_id or record.get("name") != "stage_start":
-            continue
-        data = record.get("data") or {}
-        if not isinstance(data, dict) or data.get("stage") != "vad":
-            continue
-        ref = record.get("input_ref")
-        if not ref:
-            continue
-        blob = source.artifact(ref)
-        if blob is None:
-            continue
-        seq = _record_sequence(record)
-        if seq is None:
-            continue
-        frames.append((seq, blob))
-    frames.sort(key=lambda item: item[0])
-    return [blob for _seq, blob in frames]
-
 
 async def _vad_whatif_for_turn(
     source: DebuggerSource, turn_id: str, *, threshold: float
@@ -1516,51 +294,6 @@ async def _vad_whatif_for_turn(
         "whatif_starts": whatif_starts,
         "false_trigger_delta": whatif_starts - baseline,
     }
-
-
-def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size: int) -> bytes:
-    """Build a 44-byte RIFF/WAVE PCM header.
-
-    Used by both the streaming HTTP route and the in-memory helper that
-    backs the legacy ``_concatenated_wav_for_turn`` function.
-    """
-    bits_per_sample = sample_width * 8
-    byte_rate = sample_rate * channels * sample_width
-    block_align = channels * sample_width
-    return b"".join(
-        [
-            b"RIFF",
-            struct.pack("<I", 36 + data_size),
-            b"WAVE",
-            b"fmt ",
-            struct.pack(
-                "<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits_per_sample
-            ),
-            b"data",
-            struct.pack("<I", data_size),
-        ]
-    )
-
-
-def _concatenated_wav_for_turn(
-    source: DebuggerSource, turn_id: str
-) -> tuple[bytes, dict[str, Any]] | None:
-    """Backwards-compat helper that returns the entire WAV in memory.
-
-    Tests still use this directly; the HTTP route now streams via
-    :func:`_collect_tts_frames` + :func:`_wav_header` for memory safety.
-    """
-    frames, fmt = _collect_tts_frames(source, turn_id)
-    if not frames:
-        return None
-    pcm = b"".join(frames)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(fmt["channels"])
-        wf.setsampwidth(fmt["sample_width"])
-        wf.setframerate(fmt["sample_rate"])
-        wf.writeframes(pcm)
-    return buf.getvalue(), {**fmt, "frame_count": len(frames), "byte_count": len(pcm)}
 
 
 def _safe_unlink(path: Any) -> None:
@@ -1854,30 +587,19 @@ def _make_app(
 
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
-    def _hostname_is_loopback(hostname: str | None) -> bool:
-        if not hostname:
-            return False
-        normalized = hostname.strip().lower()
-        if normalized == "localhost":
-            return True
-        try:
-            return ip_address(normalized).is_loopback
-        except ValueError:
-            return False
-
     def _origin_is_safe(origin: str) -> bool:
         if not origin:
             return False
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"}:
             return False
-        return _hostname_is_loopback(parsed.hostname)
+        return is_loopback_host(parsed.hostname)
 
     def _host_is_safe(host: str) -> bool:
         if not host:
             return False
         parsed = urlsplit(f"//{host}")
-        return _hostname_is_loopback(parsed.hostname)
+        return is_loopback_host(parsed.hostname)
 
     @web.middleware
     async def _origin_guard(request: Any, handler: Any) -> Any:
@@ -3004,3 +1726,62 @@ def _ensure_aiohttp() -> None:
         import aiohttp  # noqa: F401
     except ImportError as exc:
         raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
+
+
+# ``server.py`` stays a facade over the QS3 split modules; every private moved
+# into ``_records.py`` / ``_audio.py`` / ``_sources.py`` / ``_aec_routes.py`` is
+# re-exported here so the historical ``from easycat.debugger.server import
+# _helper`` import sites (tests, ``cli/debug/grep.py``) keep resolving.
+__all__ = [
+    # Public entry points.
+    "DebuggerSource",
+    "run_app_async",
+    "serve_bundle",
+    "serve_dev_registry",
+    "serve_run_bundle",
+    "serve_session",
+    # Re-exported from ``_records`` (record filtering / search / transcript).
+    "_SEARCH_MAX_QUERY_LEN",
+    "_SEARCH_SCAN_LIMIT",
+    "_UNSAFE_REGEX_MESSAGE",
+    "_build_transcript",
+    "_compile_search_regex",
+    "_filter_and_paginate",
+    "_filter_records",
+    "_record_match_fields",
+    "_record_searchable_text",
+    "_record_to_dict",
+    "_regex_tree_has_unsafe_backtracking",
+    "_search_records",
+    # Re-exported from ``_audio`` (PCM/WAV/frame coercion).
+    "_AUDIO_DEFAULT_FMT",
+    "_AUDIO_MAX_CONVERTED_FRAME_BYTES",
+    "_AUDIO_MAX_RESAMPLE_RATIO",
+    "_AUDIO_MAX_SAMPLE_RATE",
+    "_AUDIO_MIN_SAMPLE_RATE",
+    "_AUDIO_VALID_CHANNELS",
+    "_audio_metadata_int",
+    "_coerce_frames_to_format",
+    "_is_safe_audio_format",
+    "_np_pcm_dtype",
+    "_np_ratecv",
+    "_np_tomono",
+    "_project_converted_pcm_bytes",
+    "_safe_audio_format_from_metadata",
+    "_serialize_frame",
+    "_wav_header",
+    # Re-exported from ``_sources`` (source adaptation + validators).
+    "_bundle_source",
+    "_run_bundle_source",
+    "_safe_ref",
+    "_safe_turn_id",
+    "_session_source",
+    "_validated_replay_kwargs",
+    # Re-exported from ``_aec_routes`` (AEC diagnostics + VAD what-if).
+    "_aec_diagnostics_for_turn",
+    "_aec_interruption_frames",
+    "_aec_track_format",
+    "_limit_aec_track",
+    "_vad_baseline_start_count",
+    "_vad_whatif_frames",
+]

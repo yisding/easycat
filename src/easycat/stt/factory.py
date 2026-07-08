@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any
@@ -156,6 +157,11 @@ class STTProviderConfig:
         # Fold the deprecated ``settings`` alias into ``params`` so the
         # rest of the factory only has to read ``params``.
         if self.settings is not None:
+            warnings.warn(
+                "`settings` is deprecated; pass `params=` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             merged = dict(self.settings)
             if self.params:
                 merged.update(self.params)

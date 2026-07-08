@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from easycat.audio_format import AudioChunk
+from easycat.audio_format import PCM16_MONO_8K, PCM16_MONO_16K, AudioChunk
 from easycat.events import VADStartSpeaking
 from easycat.vad import (
     SileroVAD,
@@ -229,3 +229,61 @@ async def test_silero_downmixes_stereo_to_mono(monkeypatch: pytest.MonkeyPatch):
 
     # After downmix there are exactly 512 mono samples => one 512-sample frame.
     assert seen == [512]
+
+
+@pytest.mark.asyncio
+async def test_silero_discards_stale_remainder_on_rate_change(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A mid-stream 8k<->16k switch must not garble a boundary frame.
+
+    The sub-frame remainder left over from the 8 kHz chunk is tagged with the
+    old rate; when a 16 kHz chunk arrives it must be dropped rather than
+    prepended and sliced at the new frame size (which would contaminate one
+    frame with stale 8 kHz samples while keeping the correct length).
+    """
+    try:
+        import numpy  # noqa: F401
+    except (ImportError, RecursionError):
+        pytest.skip("numpy not importable")
+
+    recorded: list[tuple[int, frozenset[float]]] = []
+
+    class _FakeOnnxModel:
+        def predict(self, samples: object, sample_rate: int) -> float:
+            assert len(samples) == vad_silero_module._SILERO_FRAME_SAMPLES_AT[sample_rate]
+            recorded.append((sample_rate, frozenset(float(s) for s in samples)))
+            return 0.1
+
+        def reset_states(self) -> None:
+            pass
+
+    def _load_onnx_model(self: SileroVAD) -> None:
+        self._model = _FakeOnnxModel()
+        self._backend = "onnx"
+        self._torch = None
+
+    monkeypatch.setattr(vad_silero_module, "_silero_backend_candidates", lambda: ("onnx",))
+    monkeypatch.setattr(SileroVAD, "_load_onnx_model", _load_onnx_model)
+
+    vad = SileroVAD()
+
+    # 356 samples at 8 kHz => one 256-sample frame consumed, 100-sample (200
+    # byte) remainder retained and tagged as 8 kHz.
+    chunk8k = AudioChunk(data=struct.pack("<356h", *([1000] * 356)), format=PCM16_MONO_8K)
+    async for _ in vad.process(chunk8k):
+        pass
+
+    # One full 512-sample frame at 16 kHz. The stale 8 kHz remainder must be
+    # dropped, not prepended, so this frame contains only 16 kHz samples.
+    chunk16k = AudioChunk(data=struct.pack("<512h", *([2000] * 512)), format=PCM16_MONO_16K)
+    async for _ in vad.process(chunk16k):
+        pass
+
+    stale = 1000 / 32768.0
+    fresh = 2000 / 32768.0
+    frames_16k = [values for rate, values in recorded if rate == 16000]
+    assert frames_16k, "expected at least one 16 kHz frame"
+    for values in frames_16k:
+        assert stale not in values
+        assert values == frozenset({fresh})

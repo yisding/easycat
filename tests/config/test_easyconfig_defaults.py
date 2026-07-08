@@ -372,6 +372,28 @@ def test_easycat_config_echo_cancellation_respects_explicit_override():
     assert config.echo_cancellation == EchoCancellationConfig(enabled=False)
 
 
+def test_easycat_config_enable_echo_cancellation_folds_into_supplied_config():
+    config = EasyConfig.browser(
+        openai_api_key="test-key",
+        enable_echo_cancellation=True,
+        echo_cancellation=EchoCancellationConfig(fallback_policy="error"),
+    )
+
+    assert config.echo_cancellation.enabled is True
+    # ``fallback_policy`` must survive the fold.
+    assert config.echo_cancellation.fallback_policy == "error"
+
+
+def test_easycat_config_enable_echo_cancellation_flag_wins_over_config_enabled():
+    config = EasyConfig.browser(
+        openai_api_key="test-key",
+        enable_echo_cancellation=False,
+        echo_cancellation=EchoCancellationConfig(enabled=True),
+    )
+
+    assert config.echo_cancellation.enabled is False
+
+
 def test_easycat_config_smart_turn_defaults_on_for_local_transport():
     config = EasyConfig(openai_api_key="test-key", transport=LocalTransportConfig())
 

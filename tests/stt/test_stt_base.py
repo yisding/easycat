@@ -68,6 +68,36 @@ def test_pcm_to_wav_contains_audio_data():
     assert wav[44:] == pcm
 
 
+# ── _drain_buffer_to_wav tests ────────────────────────────────────
+
+
+def test_drain_buffer_to_wav_returns_none_when_empty():
+    stt = STTBase()
+    stt._buffer = bytearray()
+    stt._audio_format = PCM16_MONO_16K
+    assert stt._drain_buffer_to_wav() is None
+
+
+def test_drain_buffer_to_wav_returns_none_when_no_format():
+    stt = STTBase()
+    stt._buffer = bytearray(b"\x00\x00" * 10)
+    stt._audio_format = None
+    assert stt._drain_buffer_to_wav() is None
+
+
+def test_drain_buffer_to_wav_wraps_and_clears_in_place():
+    stt = STTBase()
+    buf = bytearray(b"\x00\x00" * 10)
+    stt._buffer = buf
+    stt._audio_format = PCM16_MONO_16K
+    wav = stt._drain_buffer_to_wav()
+    assert wav is not None and wav[:4] == b"RIFF" and wav[8:12] == b"WAVE"
+    assert wav[44:] == b"\x00\x00" * 10
+    assert len(buf) == 0  # cleared
+    assert stt._buffer is buf  # same object (in-place clear, not rebind)
+    assert stt._audio_format == PCM16_MONO_16K  # latched format preserved
+
+
 # ── STTBase lifecycle tests ───────────────────────────────────────
 
 

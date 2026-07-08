@@ -34,14 +34,14 @@ for tests and scripts — it calls `stop(force=True)` on exit.
 - `stop(force=True)` — aggressive: cancels in-flight work first via the
   cooperative `CancelToken` machinery, then tears down. This is what
   `async with session:` uses on exit.
-- `session.shutdown()` — thin alias for `stop(force=True)`, kept for
-  callers that prefer the older verb.
+- `session.shutdown()` — `@deprecated` thin alias for `stop(force=True)`,
+  kept for callers that prefer the older verb.
 
 Backend teardown (SQLite/Litestream/libSQL journal backends and artifact
 stores) and the journal clean-close marker are handled internally by
-`stop()`. Legacy compatibility aliases for close/destroy still exist for
-old low-level callers after a session has stopped, but new code should
-call `stop()` or use `async with session:`.
+`stop()`. `@deprecated` legacy compatibility aliases for close/destroy
+still exist for old low-level callers after a session has stopped, but new
+code should call `stop()` or use `async with session:`.
 
 `stop()` is idempotent — calling it again after teardown is a no-op.
 

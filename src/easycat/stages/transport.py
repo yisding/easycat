@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import time
 from typing import Any
@@ -14,12 +13,13 @@ from easycat.runtime.replay import ReplayCassette, ReplayFidelity, ReplaySpec
 from easycat.stages.base import (
     ControlSignal,
     StageStateSnapshot,
-    annotate_stage_exception,
     audio_format_fields,
     journal_append_control_signal,
     journal_append_event,
+    journal_ctx,
+    live_replay_input,
     put_artifact,
-    stage_error_context,
+    record_stage_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,7 @@ class TransportStage:
 
     def _journal_ctx(self, ctx: RunContext) -> RunContext:
         """Return *ctx*, substituting the constructor journal as a fallback."""
-        if ctx.journal is None and self._journal is not None:
-            return dataclasses.replace(ctx, journal=self._journal)
-        return ctx
+        return journal_ctx(ctx, self._journal)
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> bool:
         """Send audio through the wrapped transport.
@@ -101,32 +99,16 @@ class TransportStage:
         except Exception as exc:
             result_attr = "fail"
             elapsed_ms = (time.perf_counter() - started) * 1000
-            annotate_stage_exception(
+            record_stage_failure(
                 exc,
-                stage=self.name,
-                provider=type(self._provider).__name__.lower(),
-                elapsed_ms=elapsed_ms,
-                sequence=start_sequence,
-            )
-            observability.increment_counter(
-                "easycat.provider.errors.total",
-                attributes={
-                    "easycat.surface": "tts",
-                    "easycat.provider": type(self._provider).__name__.lower(),
-                    "easycat.error_type": type(exc).__name__,
-                },
-            )
-            journal_append_event(
                 ctx,
                 stage=self.name,
-                name="stage_error",
+                provider=type(self._provider).__name__.lower(),
+                surface="tts",
+                elapsed_ms=elapsed_ms,
+                sequence=start_sequence,
                 turn_id=turn.id,
                 state_before=state_before,
-                error=str(exc),
-                data_extra=stage_error_context(
-                    elapsed_ms=elapsed_ms,
-                    input_sequence=start_sequence,
-                ),
             )
             raise
         finally:
@@ -175,15 +157,9 @@ class TransportStage:
         """
         overrides = spec.overrides
         if spec.fidelity is ReplayFidelity.LIVE:
-            if "input" in overrides:
-                return overrides["input"]
-            if cassette is not None:
-                record = cassette.last_record("stage_complete") or cassette.last_record()
-                if record is not None:
-                    blob = cassette.blob(record.get("output_ref"))
-                    if blob is not None:
-                        return blob
-            return None
+            return live_replay_input(
+                spec, cassette, record_name="stage_complete", source="output_ref"
+            )
 
         if "data" in overrides or "result" in overrides:
             return overrides.get("data", overrides.get("result"))

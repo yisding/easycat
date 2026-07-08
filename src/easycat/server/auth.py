@@ -27,8 +27,7 @@ Design notes (deliberate divergences from the plan sketch):
   into a small frozen value object and never carry the raw request through.
 
 Import weight: this module imports only ``hmac`` / ``dataclasses`` / ``typing``
-/ ``os`` and (lazily, inside :func:`enforce_bind_guard`) the leaf
-``_is_loopback_host`` from :mod:`easycat.transports.webrtc`. It pulls no
+/ ``os`` and the leaf ``is_loopback_host`` from :mod:`easycat._net`. It pulls no
 aiohttp/websockets/heavy SDK at import time, so ``import easycat.server`` stays
 light.
 """
@@ -39,6 +38,8 @@ import os
 from dataclasses import dataclass
 from hmac import compare_digest
 from typing import Literal, Protocol, runtime_checkable
+
+from easycat._net import is_loopback_host
 
 # The shipped CLI auth env var. Standardize on ``EASYCAT_SERVE_TOKEN`` (NOT
 # ``EASYCAT_SERVER_TOKEN`` — one letter apart, a silent-rename hazard).
@@ -185,15 +186,21 @@ class BearerTokenAuth:
         return _MISSING
 
     def _token_matches(self, credential: str) -> bool:
-        """Constant-time match guarded against a non-ASCII credential.
+        """Constant-time match guarded against non-ASCII on either side.
 
         ``hmac.compare_digest`` raises ``TypeError`` on a non-ASCII ``str``, so
-        guard the attacker-controlled credential: a non-ASCII credential can
-        never equal the ASCII token, and an unguarded ``TypeError`` would
-        propagate out of the (try-less) auth check in the WebRTC routes as an
-        HTTP 500 — a DoS / confusing diagnostic — instead of a clean 401.
+        guard both inputs: a non-ASCII *credential* (attacker-controlled) can
+        never equal an ASCII token, and a non-ASCII *configured token*
+        (operator misconfiguration) must deny every request rather than turn
+        each authorized-endpoint hit into an HTTP 500 — the auth checks in the
+        WebRTC routes are try-less, so an unguarded ``TypeError`` would
+        propagate as a 500 DoS / confusing diagnostic instead of a clean 401.
         """
-        return credential.isascii() and compare_digest(credential, self.token)
+        return (
+            credential.isascii()
+            and self.token.isascii()
+            and compare_digest(credential, self.token)
+        )
 
 
 def bearer_auth_from_env(
@@ -247,12 +254,7 @@ def enforce_bind_guard(
     The error wording mirrors the existing WebSocket guard so callers/tests that
     assert on the host + ``unsafe_allow_no_auth`` substrings stay green.
     """
-    # ``_is_loopback_host`` is the canonical impl that ``auth.py`` reuses; the
-    # import is function-local to avoid an import cycle (transports ->
-    # server.auth -> transports.webrtc) at module-load time.
-    from easycat.transports.webrtc import _is_loopback_host
-
-    if _is_loopback_host(host):
+    if is_loopback_host(host):
         return
     if _policy_has_token(auth):
         return

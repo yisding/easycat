@@ -207,7 +207,7 @@ async def test_ws_client_disconnect_session_shutdown(
 
         # shutdown() should complete promptly (not hang)
         session = session_holder[0]
-        await asyncio.wait_for(session.shutdown(), timeout=3.0)
+        await asyncio.wait_for(session.stop(force=True), timeout=3.0)
         assert not session.is_running
     finally:
         server.close()

@@ -142,7 +142,7 @@ def resolve_tts_input_policy(provider: object) -> TTSInputPolicy:
     equivalent policy.
     """
     try:
-        policy = getattr(provider, "input_policy")
+        policy = provider.input_policy
     except AttributeError:
         policy = None
     if policy is not None:

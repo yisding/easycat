@@ -597,9 +597,11 @@ async def test_api_replay_caps_frame_count(tmp_path, monkeypatch):
     bundle can't blow the response.  When the cap fires, ``frames``
     is truncated, ``frames_truncated`` is True, and ``total_frames``
     reports the full count."""
-    from easycat.debugger import server as server_module
+    from easycat.debugger import _sources
 
-    monkeypatch.setattr(server_module, "_REPLAY_FRAME_LIMIT", 3)
+    # ``_REPLAY_FRAME_LIMIT`` physically lives in ``_sources`` (QS3); patch the
+    # module the replay closure reads it from, not the ``server`` facade alias.
+    monkeypatch.setattr(_sources, "_REPLAY_FRAME_LIMIT", 3)
 
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)

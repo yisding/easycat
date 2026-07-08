@@ -22,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE, aclose_quietly
 from easycat.integrations.agents.base import (
     NULL_RECORDER,
     AgentBridgeEvent,
@@ -168,52 +168,60 @@ class AgentRunner:
             deadline = time.monotonic() + timeout if timeout is not None else None
             inner_iter = self._agent.invoke(bridge_input, recorder, cancel_token)
             timed_out = False
-            while True:
-                try:
-                    if deadline is not None:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            timed_out = True
-                            break
-                        event = await asyncio.wait_for(inner_iter.__anext__(), timeout=remaining)
-                    else:
-                        event = await inner_iter.__anext__()
-                except StopAsyncIteration:
-                    break
-                except TimeoutError:
-                    timed_out = True
-                    break
-                kind = getattr(event, "kind", None)
-                text = getattr(event, "text", "") or ""
-                if kind == "text_delta":
-                    accumulated += text
-                elif kind == "done":
-                    done_text = text
-                    await close_stream_after_done(inner_iter)
-                    self._history.append({"role": "user", "content": turn_input.text})
-                    final_text = done_text or accumulated
-                    if final_text:
-                        self._history.append({"role": "assistant", "content": final_text})
-                    yield event
-                    return
-                yield event
-            if timed_out:
-                # Let the inner bridge keep its own partial state; the runner
-                # never recorded this turn, so its shadow history stays in
-                # sync without a manual rollback.
-                aclose = getattr(inner_iter, "aclose", None)
-                if aclose is not None:
+            try:
+                while True:
                     try:
-                        await aclose()
-                    except Exception:
-                        pass
-                raise AgentTimeoutError(timeout or 0)
-            # Mirror the completed turn into the advisory shadow history.
-            self._history.append({"role": "user", "content": turn_input.text})
-            final_text = done_text or accumulated
-            if final_text:
-                self._history.append({"role": "assistant", "content": final_text})
-            return
+                        if deadline is not None:
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                timed_out = True
+                                break
+                            event = await asyncio.wait_for(
+                                inner_iter.__anext__(), timeout=remaining
+                            )
+                        else:
+                            event = await inner_iter.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        timed_out = True
+                        break
+                    kind = getattr(event, "kind", None)
+                    text = getattr(event, "text", "") or ""
+                    if kind == "text_delta":
+                        accumulated += text
+                    elif kind == "done":
+                        done_text = text
+                        await close_stream_after_done(inner_iter)
+                        self._history.append({"role": "user", "content": turn_input.text})
+                        final_text = done_text or accumulated
+                        if final_text:
+                            self._history.append({"role": "assistant", "content": final_text})
+                        yield event
+                        return
+                    yield event
+                if timed_out:
+                    # Let the inner bridge keep its own partial state; the runner
+                    # never recorded this turn, so its shadow history stays in
+                    # sync without a manual rollback.
+                    raise AgentTimeoutError(timeout or 0)
+                # Mirror the completed turn into the advisory shadow history.
+                self._history.append({"role": "user", "content": turn_input.text})
+                final_text = done_text or accumulated
+                if final_text:
+                    self._history.append({"role": "assistant", "content": final_text})
+                return
+            finally:
+                # A barge-in ``aclose()`` on this generator injects
+                # ``GeneratorExit`` at a ``yield event`` above; ``async for``
+                # (in AgentStage) does not forward it into ``inner_iter``, so
+                # the inner bridge would be left suspended and only
+                # GC-finalized — its ``BaseException`` cleanup (which persists
+                # the partial turn) racing the next ``apply_interruption()``.
+                # Close it explicitly so that teardown runs synchronously.  On
+                # normal completion / a handled timeout ``inner_iter`` is
+                # already drained, so this is a harmless no-op.
+                await aclose_quietly(inner_iter)
 
         cursor = ExecutionCursor(
             unit_id=f"runner-{uuid4().hex[:8]}",

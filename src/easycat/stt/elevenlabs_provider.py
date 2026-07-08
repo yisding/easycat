@@ -20,7 +20,6 @@ from easycat.stt.base import (
     DEFAULT_MAX_AUDIO_CHUNK_BYTES,
     DEFAULT_MAX_AUDIO_DURATION_MS,
     STTBase,
-    pcm_to_wav,
 )
 from easycat.stt.websocket_base import WebSocketSTTBase
 
@@ -28,8 +27,11 @@ logger = logging.getLogger(__name__)
 
 # How long to wait for ``committed_transcript`` after an end-of-turn
 # commit before we give up and promote the most recent
-# ``partial_transcript`` to a FINAL.  Mirrors OpenAIRealtimeSTT so a
-# stalled provider final does not leave the turn with zero transcript.
+# ``partial_transcript`` to a FINAL, so a stalled provider final does not
+# leave the turn with zero transcript.  Surfaced as
+# ``ElevenLabsSTTConfig.final_transcript_timeout_s`` for tuning; this
+# module constant is the field's default and remains the monkeypatch
+# seam used by the provider tests.
 _FINAL_TRANSCRIPT_TIMEOUT_S = 5.0
 
 
@@ -54,12 +56,21 @@ class ElevenLabsSTTConfig:
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_url: str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
     timeout: float = 30.0
+    # Total attempt count for the batch ``/speech-to-text`` request. Retries
+    # transient 429s and transport/timeout errors with exponential backoff.
+    # ``0`` is clamped to a single attempt.
+    max_retries: int = 3
     realtime_sample_rate: int = 16000
     # Endpointing strategy for the realtime model. ``"vad"`` (default) uses
     # Scribe v2 Realtime's *built-in* voice-activity detection to commit
     # segments automatically on detected silence — no external VAD needed.
     # ``"manual"`` defers every commit to EasyCat's turn manager.
     realtime_commit_strategy: str = "vad"  # "vad" or "manual"
+    # Bounded wait (seconds) for ElevenLabs' ``committed_transcript`` after an
+    # end-of-turn commit before promoting the most recent partial to FINAL.
+    # Defaults to ``_FINAL_TRANSCRIPT_TIMEOUT_S`` (read at construction time)
+    # so the provider tests can still monkeypatch that module constant.
+    final_transcript_timeout_s: float = field(default_factory=lambda: _FINAL_TRANSCRIPT_TIMEOUT_S)
     realtime_include_timestamps: bool = False
     # Built-in VAD tuning, applied only when ``realtime_commit_strategy``
     # is ``"vad"``. ``None`` leaves the server default in place
@@ -93,6 +104,12 @@ class ElevenLabsSTTConfig:
     event_bus: Any = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError(
+                "ElevenLabsSTTConfig.max_retries must be >= 0 "
+                f"(got {self.max_retries}); it is the total attempt count, "
+                "where 0 is clamped to a single attempt"
+            )
         STTBase._validate_positive_limit(
             "ElevenLabsSTTConfig.max_audio_chunk_bytes", self.max_audio_chunk_bytes
         )
@@ -389,7 +406,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         self._manual_commit_inflight += 1
         if wait_for_final:
             try:
-                await asyncio.wait_for(final_received.wait(), timeout=_FINAL_TRANSCRIPT_TIMEOUT_S)
+                await asyncio.wait_for(
+                    final_received.wait(), timeout=self._config.final_transcript_timeout_s
+                )
             except TimeoutError:
                 # Give up on ElevenLabs' committed transcript and promote
                 # whatever we've streamed via ``partial_transcript`` so the
@@ -400,7 +419,7 @@ class ElevenLabsSTT(WebSocketSTTBase):
                 logger.warning(
                     "Timed out after %.1fs waiting for final transcript from "
                     "ElevenLabs; promoting %d-char partial to FINAL",
-                    _FINAL_TRANSCRIPT_TIMEOUT_S,
+                    self._config.final_transcript_timeout_s,
                     len(self._partial_text),
                 )
                 if self._partial_text:
@@ -533,14 +552,9 @@ class ElevenLabsSTT(WebSocketSTTBase):
         latched format is preserved so the next utterance keeps the same
         first-seen format contract.
         """
-        if not self._buffer or self._audio_format is None:
+        wav_data = self._drain_buffer_to_wav()
+        if wav_data is None:
             return
-
-        wav_data = pcm_to_wav(bytes(self._buffer), self._audio_format)
-        # Clear in place (not a rebind) so the buffer reference held by the
-        # in-progress ``_buffer_batch_audio_or_finalize`` call stays the same
-        # object, letting the chunk that tripped the cap restart a fresh stream.
-        self._buffer.clear()
         result = await self._transcribe_batch(wav_data)
         if result:
             self._emit_event(
@@ -566,9 +580,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # disabled so the default request keeps the server default (logging on).
         params = {"enable_logging": "false"} if not self._config.enable_logging else None
 
+        # One client for all attempts: a per-attempt client would pay a fresh
+        # TCP+TLS handshake on every retry, exactly when the provider is
+        # already slow.
         client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
         owns_client = self._config.http_client is None
-        try:
+
+        async def _attempt() -> dict[str, Any]:
             response = await client.post(
                 url,
                 headers=headers,
@@ -578,6 +596,13 @@ class ElevenLabsSTT(WebSocketSTTBase):
             )
             response.raise_for_status()
             return response.json()
+
+        try:
+            return await self._run_with_bounded_retry(
+                _attempt,
+                max_retries=self._config.max_retries,
+                provider_label="ElevenLabs batch STT",
+            )
         finally:
             if owns_client:
                 await client.aclose()

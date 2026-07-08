@@ -10,7 +10,9 @@ OpenAI HTTP TTS provider) lives on
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 from easycat._provider_helpers import ProviderErrorEmitter
 from easycat.audio_format import PCM16_MONO_24K, AudioFormat
@@ -62,6 +64,17 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         are unaffected and always run the default one-shot path.
         """
         return bool(getattr(self._config, "persistent_ws", False))
+
+    @staticmethod
+    def _parse_frame(frame: Any) -> dict[str, Any] | None:
+        """Parse a raw wire frame to a dict once (None for non-text/non-object)."""
+        if not isinstance(frame, str):
+            return None
+        try:
+            parsed = json.loads(frame)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     async def _close_ws(self) -> None:
         """Close the current WebSocket connection (idempotent)."""

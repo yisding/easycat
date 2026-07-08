@@ -163,6 +163,44 @@ async def test_stats_handler_sanitizes_without_a_transport_instance(tmp_path: ob
 
 
 @pytest.mark.integration_socket
+async def test_stats_handler_enforces_record_limit_via_in_memory_counter(
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    stats_path = f"{tmp_path}/webrtc-stats.jsonl"
+    routes = _make_routes(
+        WebRTCTransportConfig(static_dir=None, stats_path=stats_path, stats_max_records=2)
+    )
+    app = await _aiohttp_app_with_routes(routes)
+    async with TestClient(TestServer(app)) as client:
+        origin = f"http://{client.host}:{client.port}"
+
+        async def _post() -> int:
+            resp = await client.post(
+                "/webrtc/stats",
+                json={"kind": "webrtc_client_stats", "schema_version": 1},
+                headers={"Origin": origin},
+            )
+            return resp.status
+
+        assert await _post() == 200
+        assert await _post() == 200
+        over_limit = await client.post(
+            "/webrtc/stats",
+            json={"kind": "webrtc_client_stats", "schema_version": 1},
+            headers={"Origin": origin},
+        )
+        assert over_limit.status == 429
+        assert "record limit exceeded" in await over_limit.text()
+
+    lines = Path(stats_path).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+
+
+@pytest.mark.integration_socket
 async def test_cors_preflight_handler_runs_without_a_transport_instance() -> None:
     from aiohttp.test_utils import TestClient, TestServer
 

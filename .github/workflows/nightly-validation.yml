@@ -23,16 +23,20 @@ jobs:
       # tests/_hypothesis_profiles.py is never selected by any workflow.
       HYPOTHESIS_PROFILE: ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: mkdir -p "$VALIDATION_ARTIFACTS_DIR"
       - run: uv run --python 3.12 pytest -q --junitxml="$VALIDATION_ARTIFACTS_DIR/junit.xml" --junit-prefix "nightly-full-local" -m "not integration_socket and not integration_live and not integration_external and not stress and not flaky"
       - name: Upload full local validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-full-local-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -45,15 +49,19 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate quick --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-quick" --show-output
       - name: Upload quick validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-quick-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -66,15 +74,19 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate socket --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-socket" --show-output
       - name: Upload socket validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-socket-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -87,15 +99,19 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - run: uv run --python 3.12 easycat validate stress --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --junit-prefix "nightly-stress" --show-output
       - name: Upload stress validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-stress-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -106,11 +122,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       # The stale-`review_by` check already runs at collection time via
       # tests/conftest.py -> validate_flaky_marker, so a past date fails this
       # step. pipefail propagates that error; `|| [ "$?" -eq 5 ]` tolerates
@@ -121,7 +141,7 @@ jobs:
           uv run --python 3.12 pytest --collect-only -q -m flaky | tee flaky-quarantine.txt || [ "$?" -eq 5 ]
       - name: Upload flaky quarantine report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: flaky-quarantine-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: flaky-quarantine.txt
@@ -149,7 +169,9 @@ jobs:
     outputs:
       extras: ${{ steps.plan.outputs.extras }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          persist-credentials: false
       - id: plan
         run: python3 scripts/extras_matrix.py | tee -a "$GITHUB_OUTPUT"
 
@@ -163,15 +185,23 @@ jobs:
       matrix:
         extra: ${{ fromJSON(needs.extras-plan.outputs.extras) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --extra "${{ matrix.extra }}" --group dev --python 3.12
+      # matrix.extra comes from scripts/extras_matrix.py (pyproject optional
+      # deps), not user input, so the interpolation is safe here.
+      - run: uv sync --locked --extra "${{ matrix.extra }}" --group dev --python 3.12 # zizmor: ignore[template-injection]
       # --no-sync everywhere below: a bare `uv run` would re-sync the
       # environment to dev defaults and silently remove the extra under test.
       - name: Import-smoke the synced extra
-        run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}"
+        # matrix.extra is derived from pyproject (scripts/extras_matrix.py), not
+        # attacker-controllable input.
+        run: uv run --no-sync --python 3.12 python scripts/extras_smoke.py "${{ matrix.extra }}" # zizmor: ignore[template-injection]
       # The unused requires_extra pytest marker was dropped (it marked zero
       # tests). Extras coverage relies on the import smoke above plus the
       # offline contract tests below, whose importorskip gates now run for
@@ -192,9 +222,13 @@ jobs:
       ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
       CARTESIA_API_KEY: ${{ secrets.CARTESIA_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
       - name: Mask live provider secrets
         shell: bash
@@ -206,7 +240,7 @@ jobs:
           done
       # Deepgram/ElevenLabs live probes need their SDK extras installed;
       # OpenAI and Cartesia adapters run on core dependencies alone.
-      - run: uv sync --group dev --extra deepgram --extra elevenlabs --python 3.12
+      - run: uv sync --locked --group dev --extra deepgram --extra elevenlabs --python 3.12
       # Non-strict: a provider whose secret is absent records an expected skip
       # instead of failing the canary run.
       #
@@ -217,7 +251,7 @@ jobs:
         run: uv run --no-sync --python 3.12 easycat validate live --provider openai --provider deepgram --provider elevenlabs --provider cartesia --surface stt --surface tts --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload redacted live validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-live-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}
@@ -232,11 +266,15 @@ jobs:
     env:
       VALIDATION_ARTIFACTS_DIR: .easycat/validation/nightly/${{ github.job }}-py3.12-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
         with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
           python-version: "3.12"
-      - run: uv sync --group dev --python 3.12
+      - run: uv sync --locked --group dev --python 3.12
       - name: Run latency validation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -248,7 +286,7 @@ jobs:
           uv run --python 3.12 easycat validate latency --require-samples --artifacts-dir "$VALIDATION_ARTIFACTS_DIR" --show-output
       - name: Upload latency validation artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: nightly-validation-report-latency-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.VALIDATION_ARTIFACTS_DIR }}

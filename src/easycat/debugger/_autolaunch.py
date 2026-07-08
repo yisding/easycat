@@ -22,19 +22,13 @@ import os
 import sys
 from typing import TYPE_CHECKING
 
+from easycat._env import is_truthy
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 
 if TYPE_CHECKING:
     from easycat.session._session import Session
 
 logger = logging.getLogger("easycat.debugger")
-
-
-def _is_truthy(value: str | None) -> bool:
-    """Interpret an env-var string as a boolean opt-in flag."""
-    if value is None:
-        return False
-    return value.strip().lower() not in ("", "0", "false", "no", "off")
 
 
 def _autolaunch_opted_in(config_opt_in: bool) -> bool:
@@ -48,7 +42,7 @@ def _autolaunch_opted_in(config_opt_in: bool) -> bool:
     """
     if config_opt_in:
         return True
-    return _is_truthy(os.getenv("EASYCAT_DEBUGGER_AUTOLAUNCH"))
+    return is_truthy(os.getenv("EASYCAT_DEBUGGER_AUTOLAUNCH"))
 
 
 def _interactive_context() -> bool:
@@ -58,7 +52,7 @@ def _interactive_context() -> bool:
     server, a CI runner, or a piped process should never have a browser tab
     opened for it.
     """
-    if _is_truthy(os.getenv("CI")):
+    if is_truthy(os.getenv("CI")):
         return False
     try:
         return bool(sys.stderr.isatty())

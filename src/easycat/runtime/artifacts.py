@@ -73,14 +73,18 @@ def _sha256(payload: bytes) -> str:
 class InMemoryArtifactStore:
     """Bounded in-memory artifact store.
 
-    When ``max_bytes`` is exceeded, the oldest entries are evicted.
+    When ``max_bytes`` is reached, new artifacts are refused (returning an
+    empty ref) rather than evicted. The ring buffer already frees bytes by
+    calling :meth:`delete` when a record's refs go orphan, so the cap is a
+    pure safety ceiling — evicting still-referenced blobs would leave
+    bundles/replay with dangling refs, so we refuse instead.
     """
 
     def __init__(self, *, max_bytes: int = 50 * 1024 * 1024) -> None:
         self._max_bytes = max_bytes
         self._store: dict[str, bytes] = {}
-        self._order: list[str] = []  # insertion order for eviction
         self._current_bytes = 0
+        self._cap_warned = False
         self._lock = threading.Lock()
 
     def put(
@@ -100,9 +104,16 @@ class InMemoryArtifactStore:
                     self._max_bytes,
                 )
                 return ""
-            self._evict_if_needed(len(payload))
+            if self._current_bytes + len(payload) > self._max_bytes:
+                if not self._cap_warned:
+                    self._cap_warned = True
+                    logger.warning(
+                        "InMemoryArtifactStore reached max_bytes %d; refusing new "
+                        "artifacts (raise max_bytes or lower capture volume)",
+                        self._max_bytes,
+                    )
+                return ""
             self._store[ref] = payload
-            self._order.append(ref)
             self._current_bytes += len(payload)
         return ref
 
@@ -128,24 +139,12 @@ class InMemoryArtifactStore:
             data = self._store.pop(ref, None)
             if data is not None:
                 self._current_bytes -= len(data)
-                try:
-                    self._order.remove(ref)
-                except ValueError:
-                    pass
 
     def close(self) -> None:
         with self._lock:
             self._store.clear()
-            self._order.clear()
             self._current_bytes = 0
-
-    def _evict_if_needed(self, incoming_bytes: int) -> None:
-        """Evict oldest entries until there is room. Caller holds lock."""
-        while self._order and self._current_bytes + incoming_bytes > self._max_bytes:
-            oldest_ref = self._order.pop(0)
-            data = self._store.pop(oldest_ref, None)
-            if data is not None:
-                self._current_bytes -= len(data)
+            self._cap_warned = False
 
 
 class SnapshotArtifactStore:

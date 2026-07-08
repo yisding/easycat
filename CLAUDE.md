@@ -120,15 +120,15 @@ page when moving modules; this file keeps only the orientation map below.
 
 Reader-facing reference: [docs/reference/session-lifecycle.md](docs/reference/session-lifecycle.md).
 
-- `await session.stop()` is the preferred public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` remains as a thin alias for `stop(force=True)`
-- Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the `Session._destroy()` / `Session._close()` primitives. `Session.close()` and `Session.destroy()` remain legacy compatibility aliases for old low-level callers after a session has stopped; new code should call `stop()` or use `async with session:`
+- `await session.stop()` is the preferred public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` is a `@deprecated` thin alias for `stop(force=True)`
+- Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the `Session._destroy()` / `Session._close()` primitives. `Session.close()` and `Session.destroy()` are `@deprecated` legacy compatibility aliases for old low-level callers after a session has stopped; new code should call `stop()` or use `async with session:`
 - After a clean `stop()`, `session.journal.read()` and `session.export_debug_bundle(...)` must still work through the preserved read-only postmortem view
 
 ## Style
 
 - Python ≥3.11, typing-first
 - 4-space indent, 99-char line limit (ruff)
-- Ruff rules: E, F, I, W, UP
+- Ruff rules: E, F, I, W, UP, C901, PLR0912, PLR0915, ASYNC, B, RUF006
 - Commit format: `<scope>: <imperative summary>` (e.g., `stt: normalize partial transcript events`)
 
 ## Testing

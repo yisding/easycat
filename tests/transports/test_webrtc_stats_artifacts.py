@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -63,6 +64,93 @@ class TestWebRTCStatsArtifact:
         assert payload["inbound_audio"] == {"jitter_ms": 3.25, "packets_received": 42}
         assert "candidate-secret" not in line
         assert "192.168.1.20" not in line
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_enforces_record_limit_via_in_memory_counter(
+        self, tmp_path, monkeypatch
+    ):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=2)
+        )
+        transport._web = _FakeWeb
+
+        # The append must run off the event loop via ``asyncio.to_thread`` and the
+        # record-count quota must be served from an in-memory counter without
+        # re-reading the whole JSONL artifact on every request.
+        to_thread_calls = 0
+        real_to_thread = webrtc_mod.asyncio.to_thread
+
+        async def _counting_to_thread(func, *args, **kwargs):
+            nonlocal to_thread_calls
+            to_thread_calls += 1
+            return await real_to_thread(func, *args, **kwargs)
+
+        monkeypatch.setattr(webrtc_mod.asyncio, "to_thread", _counting_to_thread)
+
+        def _post():
+            return transport._handle_stats(
+                _FakeSameOriginJsonRequest({"kind": "webrtc_client_stats", "schema_version": 1})
+            )
+
+        assert (await _post()).status == 200
+        assert (await _post()).status == 200
+        over_limit = await _post()
+
+        assert over_limit.status == 429
+        assert "record limit exceeded" in over_limit.text
+        assert to_thread_calls == 2
+        lines = stats_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_quota_check_is_atomic_under_concurrency(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=2)
+        )
+        transport._web = _FakeWeb
+
+        # The append is offloaded via ``asyncio.to_thread``, so each handler
+        # yields the loop between the quota check and the counter update.
+        # Without the per-server write lock every concurrent post observes the
+        # same pre-write counters and appends, blowing past ``stats_max_records``.
+        responses = await asyncio.gather(
+            *(
+                transport._handle_stats(
+                    _FakeSameOriginJsonRequest(
+                        {"kind": "webrtc_client_stats", "schema_version": 1}
+                    )
+                )
+                for _ in range(6)
+            )
+        )
+
+        assert sorted(response.status for response in responses) == [200, 200, 429, 429, 429, 429]
+        lines = stats_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_record_cap_resets_after_external_rotation(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=1)
+        )
+        transport._web = _FakeWeb
+
+        def _post():
+            return transport._handle_stats(
+                _FakeSameOriginJsonRequest({"kind": "webrtc_client_stats", "schema_version": 1})
+            )
+
+        assert (await _post()).status == 200
+        assert (await _post()).status == 429
+
+        # An operator rotating the artifact must not brick /stats with 429s
+        # until process restart: the cached in-memory count resets with it.
+        stats_path.unlink()
+        assert (await _post()).status == 200
+        assert len(stats_path.read_text(encoding="utf-8").splitlines()) == 1
 
     @pytest.mark.asyncio
     async def test_stats_endpoint_rejects_non_object_payload(self, tmp_path):

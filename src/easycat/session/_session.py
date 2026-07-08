@@ -18,6 +18,8 @@ from re import sub
 from typing import Any, TypeVar
 from uuid import uuid4
 
+from typing_extensions import deprecated
+
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._health_check import PeriodicHealthChecker
@@ -904,8 +906,6 @@ class Session:
         if event is None:
             event = asyncio.Event()
             self._closed_event = event
-            if self._closed:
-                event.set()
         await event.wait()
 
     def _mark_closed(self) -> None:
@@ -1205,6 +1205,10 @@ class Session:
         self._session_log_token = None
         reset_session(token)
 
+    @deprecated(
+        "Session.shutdown() is deprecated; use await session.stop(force=True) "
+        "or 'async with session:'."
+    )
     async def shutdown(self) -> None:
         """Force-cancel in-flight work, then release backend resources.
 
@@ -1214,6 +1218,9 @@ class Session:
         """
         await self.stop(force=True)
 
+    @deprecated(
+        "Session.close() is deprecated; use await session.stop() or 'async with session:'."
+    )
     def close(self) -> None:
         """Finalize the session journal without tearing down backends.
 
@@ -1221,7 +1228,7 @@ class Session:
         Prefer :meth:`stop` or ``async with session:`` for normal teardown.
         Only valid after the session has stopped. Safe to call multiple times.
         """
-        if self._is_running:
+        if self._is_running or self._stopping:
             raise RuntimeError(
                 "Session.close() is a low-level compatibility alias and cannot stop "
                 "a running session; call await session.stop() instead"
@@ -1244,6 +1251,9 @@ class Session:
         self._journal = state.journal
         self._artifact_store = state.artifact_store
 
+    @deprecated(
+        "Session.destroy() is deprecated; use await session.stop() or 'async with session:'."
+    )
     def destroy(self) -> None:
         """Release live debug backends while keeping post-stop inspection working.
 
@@ -1251,7 +1261,7 @@ class Session:
         Prefer :meth:`stop` or ``async with session:`` for normal teardown.
         Only valid after the session has stopped. Safe to call multiple times.
         """
-        if self._is_running:
+        if self._is_running or self._stopping:
             raise RuntimeError(
                 "Session.destroy() is a low-level compatibility alias and cannot stop "
                 "a running session; call await session.stop() instead"
@@ -1452,9 +1462,9 @@ class Session:
         """Attach the session EventBus to provider configs that support it."""
         attached = False
         cfg = getattr(provider, "_config", None)
-        if cfg is not None and hasattr(cfg, "event_bus") and getattr(cfg, "event_bus") is None:
+        if cfg is not None and hasattr(cfg, "event_bus") and cfg.event_bus is None:
             try:
-                setattr(cfg, "event_bus", self.event_bus)
+                cfg.event_bus = self.event_bus
                 attached = True
             except Exception:
                 logger.warning(
@@ -1462,10 +1472,10 @@ class Session:
                     provider,
                     exc_info=True,
                 )
-        has_unset_bus = hasattr(provider, "_event_bus") and getattr(provider, "_event_bus") is None
+        has_unset_bus = hasattr(provider, "_event_bus") and provider._event_bus is None
         if not attached and has_unset_bus:
             try:
-                setattr(provider, "_event_bus", self.event_bus)
+                provider._event_bus = self.event_bus
             except Exception:
                 logger.warning(
                     "Failed to attach session EventBus to %r; provider-scoped events may be muted",

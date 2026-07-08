@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import struct
 
+from easycat.transports import twilio_media
 from easycat.transports.twilio_media import (
     _mulaw_decode_sample,
     _mulaw_encode_sample,
@@ -62,3 +63,26 @@ class TestMulawRoundtrip:
         assert mulaw == b""
         pcm = mulaw_to_pcm16(b"", target_rate=8000)
         assert pcm == b""
+
+
+class TestMulawTableParity:
+    """Pin the table-driven codec byte-for-byte against the reference formulas."""
+
+    def test_decode_matches_reference_for_all_bytes(self) -> None:
+        """Every mulaw byte decodes to the reference per-sample value."""
+        decoded = mulaw_to_pcm16(bytes(range(256)), target_rate=8000)
+        assert struct.unpack("<256h", decoded) == tuple(
+            _mulaw_decode_sample(i) for i in range(256)
+        )
+
+    def test_codec_is_table_driven(self) -> None:
+        """The hot path uses precomputed lookup tables (not per-sample loops)."""
+        assert len(twilio_media._MULAW_DECODE_LUT) == 256
+        assert len(twilio_media._MULAW_ENCODE_LUT) == 65536
+
+    def test_encode_matches_reference_for_all_int16(self) -> None:
+        """Every int16 PCM sample encodes to the reference mulaw byte."""
+        samples = range(-32768, 32768)
+        pcm = struct.pack(f"<{len(samples)}h", *samples)
+        encoded = pcm16_to_mulaw(pcm, source_rate=8000)
+        assert encoded == bytes(_mulaw_encode_sample(s) for s in samples)

@@ -6,7 +6,7 @@ pytest.importorskip("aiohttp")
 
 from easycat import create_text_session
 from easycat.debug.bundle import RunBundle
-from easycat.debugger import server as _server
+from easycat.debugger import _audio
 from easycat.debugger.server import (
     DebuggerSource,
     _bundle_source,
@@ -606,9 +606,9 @@ def test_collect_audio_frames_drops_untrusted_resample_metadata(monkeypatch):
     def fail_ratecv(*_args, **_kwargs):
         raise AssertionError("untrusted metadata reached numpy resampler")
 
-    monkeypatch.setattr(_server, "_audioop", None)
-    monkeypatch.setattr(_server, "_np", object())
-    monkeypatch.setattr(_server, "_np_ratecv", fail_ratecv)
+    monkeypatch.setattr(_audio, "_audioop", None)
+    monkeypatch.setattr(_audio, "_np", object())
+    monkeypatch.setattr(_audio, "_np_ratecv", fail_ratecv)
 
     blobs, fmt = _collect_audio_frames(source, "t1", track="mic")
 
@@ -650,12 +650,12 @@ def test_collect_audio_frames_skips_malformed_sequence_values():
 
 def test_np_ratecv_rejects_oversized_resampled_output(monkeypatch):
     """The numpy fallback bounds output bytes before allocating interpolation arrays."""
-    if _server._np is None:
+    if _audio._np is None:
         pytest.skip("numpy fallback is unavailable")
-    monkeypatch.setattr(_server, "_AUDIO_MAX_CONVERTED_FRAME_BYTES", 4)
+    monkeypatch.setattr(_audio, "_AUDIO_MAX_CONVERTED_FRAME_BYTES", 4)
 
     with pytest.raises(ValueError, match="exceeds debugger size limit"):
-        _server._np_ratecv(b"\x00\x00\x00\x00", 2, 1, 1_000, 2_000)
+        _audio._np_ratecv(b"\x00\x00\x00\x00", 2, 1, 1_000, 2_000)
 
 
 def test_coerce_frames_to_format_rejects_oversized_audioop_resample(monkeypatch):
@@ -665,9 +665,9 @@ def test_coerce_frames_to_format_rejects_oversized_audioop_resample(monkeypatch)
         def ratecv(self, *_args, **_kwargs):
             raise AssertionError("audioop.ratecv should not receive oversized input")
 
-    monkeypatch.setattr(_server, "_AUDIO_MAX_CONVERTED_FRAME_BYTES", 4)
-    monkeypatch.setattr(_server, "_audioop", FailingAudioop())
-    monkeypatch.setattr(_server, "_np", None)
+    monkeypatch.setattr(_audio, "_AUDIO_MAX_CONVERTED_FRAME_BYTES", 4)
+    monkeypatch.setattr(_audio, "_audioop", FailingAudioop())
+    monkeypatch.setattr(_audio, "_np", None)
 
     fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
     frames = [
@@ -842,7 +842,7 @@ def test_coerce_frames_to_format_strict_raises_on_mismatch():
 
 def test_coerce_frames_to_format_lenient_resamples_with_audioop():
     """Lenient (mic) path resamples a differing rate when audioop is present."""
-    if _server._audioop is None:  # pragma: no cover - 3.13+ path
+    if _audio._audioop is None:  # pragma: no cover - 3.13+ path
         pytest.skip("audioop unavailable on this interpreter")
     fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
     frames = [
@@ -871,8 +871,8 @@ def test_coerce_frames_to_format_lenient_drops_unsafe_resample_ratio():
 
 def test_coerce_frames_to_format_lenient_skips_when_no_helper(monkeypatch):
     """When no audio helper is available, a format mismatch is skipped, not raised."""
-    monkeypatch.setattr(_server, "_audioop", None)
-    monkeypatch.setattr(_server, "_np", None)
+    monkeypatch.setattr(_audio, "_audioop", None)
+    monkeypatch.setattr(_audio, "_np", None)
     fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
     frames = [
         (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
@@ -885,9 +885,9 @@ def test_coerce_frames_to_format_lenient_skips_when_no_helper(monkeypatch):
 
 def test_coerce_frames_to_format_lenient_resamples_with_numpy(monkeypatch):
     """Lenient (mic) path resamples a differing rate via numpy when audioop is absent."""
-    if _server._np is None:  # pragma: no cover
+    if _audio._np is None:  # pragma: no cover
         pytest.skip("numpy unavailable")
-    monkeypatch.setattr(_server, "_audioop", None)
+    monkeypatch.setattr(_audio, "_audioop", None)
     fmt = {"sample_rate": 16000, "channels": 1, "sample_width": 2}
     frames = [
         (1, b"\x00" * 320, {"sample_rate": 16000, "channels": 1, "sample_width": 2}),
@@ -908,24 +908,24 @@ def test_np_pcm_dtype_uses_little_endian_specs(monkeypatch):
             requested.append(spec)
             return f"dtype:{spec}"
 
-    monkeypatch.setattr(_server, "_np", FakeNumpy())
+    monkeypatch.setattr(_audio, "_np", FakeNumpy())
 
-    assert _server._np_pcm_dtype(1) == "dtype:int8"
-    assert _server._np_pcm_dtype(2) == "dtype:<i2"
-    assert _server._np_pcm_dtype(4) == "dtype:<i4"
+    assert _audio._np_pcm_dtype(1) == "dtype:int8"
+    assert _audio._np_pcm_dtype(2) == "dtype:<i2"
+    assert _audio._np_pcm_dtype(4) == "dtype:<i4"
     assert requested == ["int8", "<i2", "<i4"]
 
 
 def test_np_tomono_uses_wide_sum_for_int32_peak_values():
     """The numpy fallback must not overflow before averaging int32 stereo samples."""
-    if _server._np is None:  # pragma: no cover
+    if _audio._np is None:  # pragma: no cover
         pytest.skip("numpy unavailable")
     import struct
 
     peak = 2_147_483_647
     data = struct.pack("<ii", peak, peak)
 
-    mono = _server._np_tomono(data, 4)
+    mono = _audio._np_tomono(data, 4)
 
     assert struct.unpack("<i", mono) == (peak,)
 

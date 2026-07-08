@@ -27,10 +27,11 @@ from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
 from easycat._audio_utils import resample_chunk
+from easycat._net import normalize_auth_token
 from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.session_manager import SessionManager
-from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,18 +96,6 @@ def websocket_session_server_config_from_env(
     )
 
 
-def _normalize_auth_token(token: str | None) -> str | None:
-    """Treat blank or whitespace-only tokens as no token at all.
-
-    An empty string is not a usable secret: ``Authorization: Bearer `` would
-    otherwise pass ``compare_digest("", "")``. Normalizing blank tokens to
-    ``None`` keeps the public-bind guard and request authorization in sync.
-    """
-    if token is None or not token.strip():
-        return None
-    return token
-
-
 def _plain_response(status: HTTPStatus, body: str) -> Response:
     payload = body.encode()
     return Response(
@@ -163,7 +152,7 @@ async def serve_websocket_sessions(
     # A blank/whitespace token normalizes to ``None`` first so a misconfigured
     # empty secret cannot arm a policy that would accept an empty bearer
     # credential (``compare_digest("", "")``).
-    auth_token = _normalize_auth_token(settings.auth_token)
+    auth_token = normalize_auth_token(settings.auth_token)
     auth_policy = (
         BearerTokenAuth(token=auth_token, allow_query_token=allow_query_token)
         if auth_token is not None
@@ -494,18 +483,7 @@ class WebSocketTransport(ServerTransportBase):
             logger.debug("Unknown control message type: %s", msg_type)
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "websocket",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("websocket", "websockets")
 
 
 class WebSocketConnectionTransport(AudioQueueMixin):
@@ -564,6 +542,7 @@ class WebSocketConnectionTransport(AudioQueueMixin):
         except Exception:
             logger.debug("Error closing WebSocket connection", exc_info=True)
         self._enqueue_sentinel()
+        await self._drain_emit_tasks()
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
         if not self._connected:
@@ -649,15 +628,4 @@ class WebSocketConnectionTransport(AudioQueueMixin):
                 )
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "websocket-connection",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("websocket-connection", "websockets")

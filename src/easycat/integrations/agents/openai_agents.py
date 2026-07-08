@@ -6,11 +6,12 @@ and records execution state to the journal via :class:`AgentRecorder`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -31,18 +32,51 @@ from easycat.integrations.agents.base import (
     FrameworkStateSnapshot,
     InterruptionPlan,
     UnitKind,
-    run_interruption_journal_protocol,
+    apply_standard_interruption,
 )
 from easycat.runtime.records import ErrorInfo
 
-try:
+# Optional dependency: under type-checking mypy sees the real ``Runner`` type,
+# while at runtime it may be absent.  This keeps the gated type-check stable
+# regardless of whether openai-agents is installed in the check env (the
+# ``except`` branch is not analysed, so ``Runner = None`` never conflicts with
+# the imported type).
+if TYPE_CHECKING:
     from agents import Runner
-except ImportError:
-    Runner = None
+else:
+    try:
+        from agents import Runner
+    except ImportError:
+        Runner = None
 
 logger = logging.getLogger(__name__)
 
 _OPENAI_AGENTS_WARMUP_TIMEOUT_SECONDS = 2.0
+
+
+def _drop_dangling_function_calls(history: list[Any]) -> list[Any]:
+    """Remove ``function_call`` items whose output never arrived.
+
+    A hard-cancelled run (barge-in ``aclose()``) can snapshot
+    ``to_input_list()`` mid-tool-call; the Responses API rejects an input
+    list containing a ``function_call`` with no matching
+    ``function_call_output``, so replaying such a snapshot would fail every
+    later turn. Non-dict items and everything else pass through unchanged.
+    """
+    output_ids = {
+        item.get("call_id")
+        for item in history
+        if isinstance(item, dict) and item.get("type") == "function_call_output"
+    }
+    return [
+        item
+        for item in history
+        if not (
+            isinstance(item, dict)
+            and item.get("type") == "function_call"
+            and item.get("call_id") not in output_ids
+        )
+    ]
 
 
 def _resolve_model_id(candidate: Any) -> str | None:
@@ -163,6 +197,16 @@ class OpenAIAgentsBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
+        # NOTE: this bridge deliberately does NOT wrap the turn in
+        # ``recorder.turn_cursor(...)`` (the canonical enter → error →
+        # BaseException → clean-exit ordering used by the other bridges).  Its
+        # clean/cancelled cursor close lives inside the ``finally`` below so the
+        # SDK-state snapshot (``to_input_list`` / ``last_response_id``) runs on
+        # every path, and a handoff exit ENTERS a second cursor -- neither fits
+        # a single-cursor context manager.  The arms below still follow
+        # ``turn_cursor``'s semantics: setup/stream ``Exception`` →
+        # framework_error + unit_exited(reason="error"); non-handoff clean/cancel
+        # exit → committed exit(reason=None).
         recorder.record_unit_entered(agent_cursor)
 
         saved_mcp_servers = getattr(self._agent, "mcp_servers", None)
@@ -181,28 +225,44 @@ class OpenAIAgentsBridge:
 
         accumulated = ""
         pending_tool_calls: dict[str, str] = {}
-        interrupted = False
+        run_cancelled = False
         cursor_exited = False
 
         try:
             async for event in result.stream_events():
                 if cancel_token and cancel_token.is_cancelled:
-                    if not interrupted:
-                        interrupted = True
+                    if not run_cancelled:
+                        run_cancelled = True
+                        # ``Runner.run_streamed`` drives the agent loop in a
+                        # background task; abandoning ``stream_events()`` does
+                        # not stop it -- on GC-finalize the SDK awaits the run
+                        # to completion, firing post-cancel tool side-effects,
+                        # billing tokens, and snapshotting ``to_input_list()``/
+                        # ``last_response_id`` from a still-mutating run.
+                        # Explicitly cancel: ``after_turn`` drains in-flight
+                        # tools, ``immediate`` stops now.  Keep consuming
+                        # ``stream_events()`` afterwards so the cancellation
+                        # settles, as the SDK requires.
+                        result.cancel(mode="after_turn" if pending_tool_calls else "immediate")
                     if pending_tool_calls:
                         if event.type == "run_item_stream_event":
                             bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                             if bridge_ev is not None:
                                 yield bridge_ev
-                                if not pending_tool_calls:
-                                    break
                         elif event.type == "raw_response_event":
                             bridge_ev = extract_tool_delta(event.data)
                             if bridge_ev is not None:
                                 yield bridge_ev
                         continue
                     else:
-                        break
+                        # No tools in flight (or the last pending tool just
+                        # drained): the cancel set ``is_complete``, so drain to
+                        # the natural end of the stream rather than abandoning
+                        # the generator -- ``after_turn`` keeps emitting events
+                        # while the SDK saves session state, and snapshotting
+                        # ``to_input_list()``/``last_response_id`` before that
+                        # settles would capture a still-mutating run.
+                        continue
 
                 if event.type == "raw_response_event":
                     delta = extract_text_delta(event.data)
@@ -217,6 +277,22 @@ class OpenAIAgentsBridge:
                     bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                     if bridge_ev is not None:
                         yield bridge_ev
+        except (GeneratorExit, asyncio.CancelledError):
+            # An external ``aclose()`` of this generator (a text-session
+            # barge-in closes ``invoke()``) or a hard task cancel tears the
+            # turn down without the cooperative ``cancel_token``.  Neither is
+            # an ``Exception``, so the arm below is skipped and the ``finally``
+            # would snapshot a still-running background run.  Explicitly cancel
+            # it (mirroring the Llama bridge); a cancelled turn is not a
+            # framework fault, so do not record a framework error.  Guard the
+            # cancel itself: an SDK error here would supersede the in-flight
+            # ``GeneratorExit`` and turn a clean close into
+            # ``RuntimeError("async generator ignored GeneratorExit")``.
+            try:
+                result.cancel(mode="immediate")
+            except Exception:
+                logger.debug("RunResultStreaming.cancel() raised during close", exc_info=True)
+            raise
         except Exception as exc:
             recorder.record_framework_error(ErrorInfo.from_exception(exc))
             recorder.record_unit_exited(agent_cursor, reason="error")
@@ -234,9 +310,16 @@ class OpenAIAgentsBridge:
             if hasattr(self._agent, "mcp_servers"):
                 self._agent.mcp_servers = saved_mcp_servers
             try:
-                self._message_history = result.to_input_list()
+                history = result.to_input_list()
             except Exception:
                 pass
+            else:
+                # A hard ``aclose()`` cancel can snapshot before the run
+                # settles, capturing a ``function_call`` item whose
+                # ``function_call_output`` never arrived; replaying that
+                # history is rejected by the Responses API. Drop the
+                # unmatched calls rather than poisoning every later turn.
+                self._message_history = _drop_dangling_function_calls(history)
             if self._use_previous_response_id:
                 self._previous_response_id = getattr(result, "last_response_id", None)
             if not cursor_exited:
@@ -291,16 +374,7 @@ class OpenAIAgentsBridge:
         recorder: AgentRecorder | None = None,
         caused_by_signal_id: str | None = None,
     ) -> None:
-        # Step 1: plan the mutation.
-        plan = self._plan_interruption(delivered_text, mode)
-        run_interruption_journal_protocol(
-            plan,
-            mode,
-            recorder,
-            caused_by_signal_id,
-            serialize_state=self._serialize_framework_state,
-            apply_mutation=self._apply_planned_mutation,
-        )
+        apply_standard_interruption(self, delivered_text, mode, recorder, caused_by_signal_id)
 
     def _serialize_framework_state(self) -> bytes:
         """Serialize message history for artifact storage."""

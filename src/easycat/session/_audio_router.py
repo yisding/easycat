@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
+from easycat._env import is_truthy
 from easycat._log_context import bind_turn
 from easycat.audio_format import AudioChunk
 from easycat.events import (
@@ -82,7 +83,7 @@ def _aec_reference_env_override() -> bool | None:
     raw = os.getenv("EASYCAT_CAPTURE_AEC_REFERENCE")
     if raw is None:
         return None
-    return raw.strip().lower() not in ("", "0", "false", "no", "off")
+    return is_truthy(raw)
 
 
 class _PipelineTornDown(Exception):
@@ -426,7 +427,7 @@ class AudioRouter:
                 # (e.g. interleaved synthesis or hold audio), which could
                 # leave BOT_SPEAKING early and truncate the replayed tail.
                 try:
-                    setattr(chunk, "_easycat_replay_chunk", True)
+                    chunk._easycat_replay_chunk = True  # type: ignore[attr-defined]
                 except Exception:
                     logger.debug("Failed to tag replay chunk", exc_info=True)
                 await self._outbound_queue.put(chunk)
@@ -826,9 +827,9 @@ class AudioRouter:
         """Attach session/turn ownership so buffered transports can report later delivery."""
         try:
             session_id, _ = self._correlation_ids()
-            setattr(chunk, "_easycat_session_id", session_id)
-            setattr(chunk, "_easycat_turn_id", turn.id if turn is not None else None)
-            setattr(chunk, "_easycat_turn_ref", turn)
+            chunk._easycat_session_id = session_id  # type: ignore[attr-defined]
+            chunk._easycat_turn_id = turn.id if turn is not None else None  # type: ignore[attr-defined]
+            chunk._easycat_turn_ref = turn  # type: ignore[attr-defined]
         except Exception:
             logger.debug("Failed to stamp outbound audio chunk metadata", exc_info=True)
 

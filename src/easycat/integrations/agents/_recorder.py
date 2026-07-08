@@ -133,6 +133,30 @@ class JournalAgentRecorder:
             final = cursor.with_committable(True) if commit_on_exit else cursor
             self.record_unit_exited(final, reason=None)
 
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
+        """Per-turn cursor lifecycle: enter, error/cancel cleanup, clean commit.
+
+        Centralizes the enter → error → BaseException → clean-exit ordering that
+        the shipped bridges used to hand-roll: a plain ``Exception`` records a
+        framework error plus an ``error`` unit-exit, a ``BaseException``
+        (CancelledError / GeneratorExit from an AgentRunner timeout or barge-in
+        ``aclose``) defensively closes the cursor via ``safe_exit_cursor``, and a
+        clean exit commits the cursor.
+        """
+        self.record_unit_entered(cursor)
+        try:
+            yield cursor
+        except Exception as exc:
+            self.record_framework_error(ErrorInfo.from_exception(exc))
+            self.record_unit_exited(cursor, reason="error")
+            raise
+        except BaseException:
+            self.safe_exit_cursor(cursor)
+            raise
+        else:
+            self.record_unit_exited(cursor.with_committable(True), reason=None)
+
     # ── Tool calls ───────────────────────────────────────────────
 
     def record_tool_call(

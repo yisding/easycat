@@ -126,11 +126,15 @@ class _ServerHarness:
         self.web = _FakeAiohttpWeb()
         self.media_server = _FakeMediaServer()
         self.media_handler: Any = None
+        self.serve_kwargs: dict[str, Any] = {}
         self._started = asyncio.Event()
         self._shutdown = asyncio.Event()
 
-        async def _fake_serve_ws(handler: Any, host: str, port: int) -> _FakeMediaServer:
+        async def _fake_serve_ws(
+            handler: Any, host: str, port: int, **kwargs: Any
+        ) -> _FakeMediaServer:
             self.media_handler = handler
+            self.serve_kwargs = kwargs
             return self.media_server
 
         def _fake_shutdown_event() -> asyncio.Event:
@@ -468,7 +472,7 @@ def test_media_listener_closed_when_http_startup_fails(
 
     monkeypatch.setattr(web.TCPSite, "start", _boom)
 
-    async def _fake_serve_ws(handler: Any, host: str, port: int) -> _FakeMediaServer:
+    async def _fake_serve_ws(handler: Any, host: str, port: int, **_: Any) -> _FakeMediaServer:
         return media_server
 
     monkeypatch.setattr(server_module, "require_module", lambda *a, **k: web)
@@ -481,6 +485,23 @@ def test_media_listener_closed_when_http_startup_fails(
 
     assert media_server.closed is True
     assert web.runner_cleaned is True
+
+
+def test_media_listener_disables_permessage_deflate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Twilio media listener passes ``compression=None`` to ``websockets.serve``.
+
+    permessage-deflate must stay off for the raw μ-law media stream; the listener
+    otherwise inherits the library default and fragments/buffers the audio frames.
+    """
+    harness = _ServerHarness(monkeypatch)
+    config = TwilioVoiceServerConfig(stream_url="wss://example/media", twilio_auth_token="tok")
+
+    async def body(_h: _ServerHarness) -> None:
+        pass
+
+    asyncio.run(harness.run(lambda t: EasyConfig.phone(transport=t), config, body))
+
+    assert harness.serve_kwargs.get("compression", "MISSING") is None
 
 
 # ── session('twilio') still raises ────────────────────────────────────

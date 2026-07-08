@@ -263,28 +263,19 @@ def test_validation_tasks_v62_current_state_tracks_low_cardinality_metrics() -> 
             "easycat.journal.append.latency",
             "easycat.journal.degraded",
         ),
+        # easycat.provider.errors.total moved from each stage wrapper into the
+        # shared record_stage_failure() helper in stages/base.py (dedup #9); the
+        # stages still emit it via that helper.
+        "src/easycat/stages/base.py": ("easycat.provider.errors.total",),
         "src/easycat/stages/transport.py": (
             "easycat.stage.latency",
             "easycat.audio.bytes.total",
             "easycat.audio.frames.total",
-            "easycat.provider.errors.total",
         ),
-        "src/easycat/stages/stt.py": (
-            "easycat.stage.latency",
-            "easycat.provider.errors.total",
-        ),
-        "src/easycat/stages/vad.py": (
-            "easycat.stage.latency",
-            "easycat.provider.errors.total",
-        ),
-        "src/easycat/stages/agent.py": (
-            "easycat.stage.latency",
-            "easycat.provider.errors.total",
-        ),
-        "src/easycat/stages/tts.py": (
-            "easycat.stage.latency",
-            "easycat.provider.errors.total",
-        ),
+        "src/easycat/stages/stt.py": ("easycat.stage.latency",),
+        "src/easycat/stages/vad.py": ("easycat.stage.latency",),
+        "src/easycat/stages/agent.py": ("easycat.stage.latency",),
+        "src/easycat/stages/tts.py": ("easycat.stage.latency",),
         "src/easycat/session/_journal_sink.py": ("easycat.interruption.total",),
     }
     reserved_metrics = (

@@ -8,22 +8,24 @@ surface.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
+from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.runtime.context import RunContext
 from easycat.runtime.nondeterministic import NONDETERMINISTIC_FIELDS  # noqa: F401  (re-export)
 from easycat.runtime.records import JournalRecordKind
 
 if TYPE_CHECKING:
-    # Annotation-only imports.  At runtime ``ReplaySpec`` resolves via
-    # ``__getattr__`` below so we stay clear of the import cycle with
-    # ``runtime.replay``.  ``ReplayCassette`` is only referenced in the
-    # ``Stage.replay`` signature, so the lazy ``TYPE_CHECKING`` import is
-    # sufficient and keeps the module load order independent of
-    # ``runtime.replay``.
+    # Annotation-only imports.  ``ReplaySpec`` and ``ReplayCassette`` appear
+    # only in ``Stage.replay``'s signature, which stays a string thanks to
+    # ``from __future__ import annotations`` and is never evaluated at
+    # runtime.  Importing them under ``TYPE_CHECKING`` keeps module load
+    # order independent of ``runtime.replay`` (which imports from here).
     from easycat.runtime.replay import ReplayCassette, ReplaySpec
+
 
 # ── Control signals ──────────────────────────────────────────────
 
@@ -159,21 +161,6 @@ class Stage(Protocol):
 # Extended in ``runtime.replay`` as ``REPLAY_IGNORE_FIELDS``.
 
 
-# ── Lazy re-export: ReplaySpec lives in runtime.replay ──────────
-# ``runtime.replay`` imports from this package, so a top-level
-# ``from easycat.runtime.replay import ReplaySpec`` would deadlock
-# during initial module load.  We defer the lookup to attribute
-# access time instead.
-
-
-def __getattr__(name: str) -> Any:  # pragma: no cover - trivial forwarder
-    if name == "ReplaySpec":
-        from easycat.runtime.replay import ReplaySpec
-
-        return ReplaySpec
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 # ── Shared capture helpers ───────────────────────────────────────
 
 
@@ -193,6 +180,20 @@ def put_artifact(
         return None
     ref = ctx.artifact_store.put(payload, artifact_class=artifact_class)
     return ref or None
+
+
+def journal_ctx(ctx: RunContext, fallback_journal: Any) -> RunContext:
+    """Return *ctx*, substituting *fallback_journal* when ctx has no journal.
+
+    Recording normally flows through ``ctx.journal``; when the RunContext
+    was built without one but the stage was handed a journal directly
+    (direct construction), we record into that fallback so recording is
+    never silently dead.  Every stage wrapper delegates its thin
+    ``_journal_ctx`` to this shared helper.
+    """
+    if ctx.journal is None and fallback_journal is not None:
+        return dataclasses.replace(ctx, journal=fallback_journal)
+    return ctx
 
 
 def annotate_stage_exception(
@@ -285,6 +286,93 @@ def journal_append_event(
         output_ref=output_ref,
         tags=tags,
     )
+
+
+def record_stage_failure(
+    exc: BaseException,
+    ctx: RunContext,
+    *,
+    stage: str,
+    provider: str,
+    surface: str,
+    elapsed_ms: float,
+    sequence: int | None,
+    turn_id: str | None = None,
+    state_before: StageStateSnapshot | None = None,
+) -> None:
+    """Record the shared provider-failure trio for a raising stage.
+
+    Runs the three uniform side effects every stage repeats in its
+    ``except Exception`` arm: PEP 678 exception annotation, the
+    ``easycat.provider.errors.total`` counter, and a ``stage_error``
+    journal event.  ``provider`` and ``surface`` are passed explicitly
+    because they vary per stage and are not derivable from each other —
+    ``AudioStage`` in particular threads the in-flight component
+    (echo canceller vs. noise reducer) so a failure is attributed to the
+    provider that actually raised.  The caller keeps its
+    ``result_attr = "fail"`` bookkeeping and the ``raise`` at the call
+    site.
+    """
+    annotate_stage_exception(
+        exc,
+        stage=stage,
+        provider=provider,
+        elapsed_ms=elapsed_ms,
+        sequence=sequence,
+    )
+    observability.increment_counter(
+        "easycat.provider.errors.total",
+        attributes={
+            "easycat.surface": surface,
+            "easycat.provider": provider,
+            "easycat.error_type": type(exc).__name__,
+        },
+    )
+    journal_append_event(
+        ctx,
+        stage=stage,
+        name="stage_error",
+        turn_id=turn_id,
+        state_before=state_before,
+        error=str(exc),
+        data_extra=stage_error_context(
+            elapsed_ms=elapsed_ms,
+            input_sequence=sequence,
+        ),
+    )
+
+
+def live_replay_input(
+    spec: ReplaySpec,
+    cassette: ReplayCassette | None,
+    *,
+    record_name: str = "stage_start",
+    source: Literal["input_ref", "output_ref", "data_input"] = "input_ref",
+) -> Any:
+    """Resolve a stage's LIVE-fidelity replay input.
+
+    Shared prologue for every stage's ``replay`` LIVE branch: an explicit
+    ``spec.overrides["input"]`` wins, otherwise the cassette's last
+    ``record_name`` record (falling back to its last record) supplies the
+    captured input.  ``source`` selects the extraction — the blob behind
+    the record's ``input_ref`` / ``output_ref`` artifact ref, or the
+    inline ``data["input"]`` string.
+    """
+    overrides = spec.overrides
+    if "input" in overrides:
+        return overrides["input"]
+    if cassette is not None:
+        record = cassette.last_record(record_name) or cassette.last_record()
+        if record is not None:
+            if source == "data_input":
+                data = record.get("data") or {}
+                if isinstance(data, dict) and "input" in data:
+                    return data["input"]
+            else:
+                blob = cassette.blob(record.get(source))
+                if blob is not None:
+                    return blob
+    return None
 
 
 def audio_format_fields(audio: Any) -> dict[str, Any]:

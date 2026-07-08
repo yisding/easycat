@@ -32,7 +32,7 @@ from easycat.events import (
     PlaybackMarkAck,
 )
 from easycat.telephony.dtmf import parse_twilio_dtmf_message
-from easycat.transports._base import AudioQueueMixin, ServerTransportBase
+from easycat.transports._base import AudioQueueMixin, ServerTransportBase, make_version_info
 
 logger = logging.getLogger(__name__)
 
@@ -422,69 +422,58 @@ async def _emit_parsed_twilio_dtmf(
         await event_bus.emit(event)
 
 
-class TwilioTransport(ServerTransportBase):
-    """Transport for Twilio Media Streams bidirectional WebSocket.
+class _TwilioProtocolMixin:
+    """Shared Twilio Media Streams inbound routing + handlers.
 
-    Implements the ``Transport`` protocol from :mod:`easycat.providers`.
+    Both :class:`TwilioTransport` (a :class:`ServerTransportBase` that accepts
+    and rejects extra connections) and :class:`TwilioConnectionTransport` (a
+    :class:`AudioQueueMixin` wrapping one injected connection) speak the exact
+    same Media Streams wire protocol. This mixin owns the single copy of the
+    inbound routing (``_handle_message``) and its handlers
+    (``_handle_start``/``_handle_media``/``_handle_dtmf``), the
+    once-only ``CallEnded`` emitter, the shared read-only accessors, and the
+    reconnect-race-guarded finally cleanup (``_finalize_after_receive``).
 
-    Twilio message types handled:
-      - ``connected`` — initial connection acknowledgement
-      - ``start``     — stream metadata (streamSid, callSid, tracks, etc.)
-      - ``media``     — base64-encoded mulaw 8 kHz audio
-      - ``stop``      — stream ended
-      - ``mark``      — playback mark acknowledgement
-      - ``dtmf``      — DTMF digit pressed by caller
+    Two hooks capture the only real divergence:
 
-    DTMF digits are emitted into the provided ``EventBus`` so downstream
-    consumers can handle them.  Audio is converted from mulaw 8 kHz to the internal PCM16
-    format (default 16 kHz) on ingest, and back on egress.
+    * ``_current_ws()`` — the active :class:`ServerConnection` (or ``None``).
+    * ``_reset_connection_state()`` — per-class ownership reset run inside the
+      guarded finally (server nulls ``self._ws``; connection clears
+      ``self._connected``).
+
+    The outbound send/mark/clear encoders stay per-class because their
+    ``ConnectionClosed`` error-path resets model genuinely different lifecycles.
     """
 
-    _transport_name = "Twilio"
-    # Telephony policy: leave EasyCat-side echo cancellation off by default.
-    # Twilio's PSTN/SIP path handles line echo upstream, and the 8 kHz mulaw
-    # mono stream has no reliable local reference signal for software AEC.
-    # Declared explicitly so the choice is intentional, not a getattr fallback.
-    default_echo_cancellation_enabled = False
-    # Captured audio is inbound-only: ``_accepted_twilio_media`` drops every
-    # ``outbound``/``outbound_track`` frame at ingest before it reaches STT, so
-    # transcripts derived from this transport are safely the callee's speech.
-    # Session wiring stamps this label onto STTFinal/STTPartial events that the
-    # STT provider leaves unlabeled, letting telephony classifiers (e.g. the
-    # outbound voicemail-pickup guard) trust the inbound track in production.
-    inbound_stt_track = "inbound"
-    # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
-    # so send_audio only performs the final companding step.
-    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
+    # Base-provided members this mixin relies on (declared for readers/type
+    # checkers; supplied by ServerTransportBase / AudioQueueMixin at runtime).
+    _emit_degraded: Any
+    _enqueue_chunk: Any
+    _enqueue_sentinel: Any
+    _client_connected: Any
+    _diagnostics: _TwilioStreamDiagnostics
+    _event_bus: EventBus | None
+    _config: TwilioTransportConfig
+    _audio_format: AudioFormat
+    _stream_sid: str | None
+    _call_sid: str | None
+    _call_identity: Any | None
+    _identity_sink: Any
+    _answered_at: float | None
+    _call_ended_emitted: bool
+    _mark_counter: int
 
-    def __init__(
-        self,
-        config: TwilioTransportConfig | None = None,
-        event_bus: EventBus | None = None,
-    ) -> None:
-        self._config = config or TwilioTransportConfig()
-        super().__init__(
-            host=self._config.host,
-            port=self._config.port,
-            max_pending_chunks=self._config.max_pending_chunks,
-        )
-        self._audio_format = self._config.audio_format
-        self._event_bus = event_bus
+    # ── Per-class hooks ───────────────────────────────────────────
 
-        self._stream_sid: str | None = None
-        self._call_sid: str | None = None
-        self._call_identity: Any | None = None
-        # Optional sink populated by Session wiring so the caller ID
-        # extracted from the ``<Stream>`` customParameters flows through
-        # to ``session.call_identity`` without the app doing plumbing.
-        self._identity_sink: Any = None
-        self._answered_at: float | None = None
-        self._call_ended_emitted = False
-        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
+    def _current_ws(self) -> ServerConnection | None:
+        """Return the active Twilio WebSocket connection (or ``None``)."""
+        raise NotImplementedError
 
-        self._mark_counter = 0
+    def _reset_connection_state(self) -> None:
+        """Reset per-class ownership state inside the guarded finally."""
+        raise NotImplementedError
 
-    # ── Transport protocol ────────────────────────────────────────
+    # ── Read-only accessors ───────────────────────────────────────
 
     @property
     def call_identity(self) -> Any | None:
@@ -506,133 +495,36 @@ class TwilioTransport(ServerTransportBase):
         """
         self._identity_sink = sink
 
-    async def disconnect(self) -> None:
-        """Disconnect Twilio and stop the server."""
-        await super().disconnect()
-        self._stream_sid = None
-        self._call_sid = None
-        self._call_identity = None
-        self._call_ended_emitted = False
-        self._diagnostics.reset()
+    @property
+    def stream_sid(self) -> str | None:
+        return self._stream_sid
 
-    async def send_audio(self, chunk: AudioChunk) -> bool:
-        """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
-        ws = self._ws
-        if ws is None or self._stream_sid is None:
-            return False
+    @property
+    def call_sid(self) -> str | None:
+        return self._call_sid
 
-        mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
-        payload = base64.b64encode(mulaw_data).decode("ascii")
+    # ── Inbound routing ───────────────────────────────────────────
 
-        message = json.dumps(
-            {
-                "event": "media",
-                "streamSid": self._stream_sid,
-                "media": {"payload": payload},
-            }
-        )
-        try:
-            await ws.send(message)
-            return True
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot send audio: Twilio disconnected")
-            # Mirror the connection-variant / WebSocket transports: clear
-            # the live-client state so ``has_client``/``is_connected``/
-            # ``wait_for_client`` stop reporting a peer once the socket drops.
-            # The ``_handle_connection`` finally also performs this cleanup, so
-            # this is belt-and-suspenders for symmetry across socket transports.
-            self._ws = None
-            self._stream_sid = None
-            self._client_connected.clear()
-            return False
+    async def _finalize_after_receive(self, ws: ServerConnection) -> None:
+        """Run the reconnect-race-guarded finally cleanup for a receive driver.
 
-    # ── Mark support ──────────────────────────────────────────────
-
-    async def send_mark(self, name: str | None = None) -> str:
-        """Send a ``mark`` message so Twilio acknowledges playback position.
-
-        Returns the mark name used (auto-generated if not provided).
+        Only tears down when this handler still owns the active connection
+        (``_current_ws() is ws``) or when the slot has already been cleared by a
+        send-path error and no newer client has claimed it
+        (``_current_ws() is None``). A newer client owning the slot is left
+        untouched — the prerequisite #19 reconnect-race guard, kept in the
+        single shared copy.
         """
-        ws = self._ws
-        if ws is None or self._stream_sid is None:
-            logger.debug("Cannot send mark: no active Twilio stream")
-            raise RuntimeError("Cannot send Twilio mark without an active stream")
-
-        if name is None:
-            self._mark_counter += 1
-            name = f"mark_{self._mark_counter}"
-
-        message = json.dumps(
-            {
-                "event": "mark",
-                "streamSid": self._stream_sid,
-                "mark": {"name": name},
-            }
-        )
-        try:
-            await ws.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot send mark: Twilio disconnected")
-            self._ws = None
-            self._stream_sid = None
-            self._client_connected.clear()
-            raise RuntimeError("Cannot send Twilio mark: Twilio disconnected") from None
-        return name
-
-    async def send_playback_mark(self, name: str | None = None) -> str:
-        """Compatibility wrapper for generic playback-mark capability."""
-        return await self.send_mark(name=name)
-
-    async def clear_audio(self) -> None:
-        """Send a ``clear`` message to discard queued outbound audio on Twilio's side."""
-        ws = self._ws
-        if ws is None or self._stream_sid is None:
-            return
-
-        message = json.dumps(
-            {
-                "event": "clear",
-                "streamSid": self._stream_sid,
-            }
-        )
-        try:
-            await ws.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug("Cannot clear audio: Twilio disconnected")
-
-    # ── Twilio WebSocket handler ──────────────────────────────────
-
-    async def _handle_connection(self, ws: ServerConnection) -> None:
-        """Handle the Twilio Media Streams WebSocket connection."""
-        if self._ws is not None:
-            logger.warning("Rejecting additional Twilio connection")
-            await ws.close(4000, "Only one stream at a time")
-            return
-
-        self._ws = ws
-        self._client_connected.set()
-        logger.info("Twilio Media Streams connected")
-
-        try:
-            async for raw in ws:
-                if isinstance(raw, bytes):
-                    try:
-                        raw = raw.decode("utf-8")
-                    except UnicodeDecodeError:
-                        logger.warning("Ignoring non-UTF-8 Twilio message")
-                        continue
-                await self._handle_message(raw)
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("Twilio Media Streams disconnected")
-        finally:
+        if self._current_ws() is ws or self._current_ws() is None:
             await self._emit_call_ended_once()
-            self._ws = None
+            self._reset_connection_state()
             self._client_connected.clear()
             self._stream_sid = None
             self._call_sid = None
             self._answered_at = None
             self._diagnostics.reset()
             self._enqueue_sentinel()
+        # else: a newer client owns the connection -> leave it alone.
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
@@ -728,8 +620,9 @@ class TwilioTransport(ServerTransportBase):
             return
         if not _twilio_stream_token_valid(start, self._config):
             logger.warning("Rejecting Twilio stream start with missing or invalid stream token")
-            if self._ws is not None:
-                await self._ws.close(4003, "Missing or invalid stream token")
+            ws = self._current_ws()
+            if ws is not None:
+                await ws.close(4003, "Missing or invalid stream token")
             return
         self._stream_sid = msg.get("streamSid") or start.get("streamSid")
         self._call_sid = start.get("callSid")
@@ -805,29 +698,212 @@ class TwilioTransport(ServerTransportBase):
             self._diagnostics.observe_sequence(msg)
             await _emit_parsed_twilio_dtmf(msg, self._event_bus)
 
-    # ── Properties ────────────────────────────────────────────────
 
-    @property
-    def stream_sid(self) -> str | None:
-        return self._stream_sid
+class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
+    """Transport for Twilio Media Streams bidirectional WebSocket.
 
-    @property
-    def call_sid(self) -> str | None:
-        return self._call_sid
+    Implements the ``Transport`` protocol from :mod:`easycat.providers`.
+
+    Twilio message types handled:
+      - ``connected`` — initial connection acknowledgement
+      - ``start``     — stream metadata (streamSid, callSid, tracks, etc.)
+      - ``media``     — base64-encoded mulaw 8 kHz audio
+      - ``stop``      — stream ended
+      - ``mark``      — playback mark acknowledgement
+      - ``dtmf``      — DTMF digit pressed by caller
+
+    DTMF digits are emitted into the provided ``EventBus`` so downstream
+    consumers can handle them.  Audio is converted from mulaw 8 kHz to the internal PCM16
+    format (default 16 kHz) on ingest, and back on egress.
+    """
+
+    _transport_name = "Twilio"
+    # Telephony policy: leave EasyCat-side echo cancellation off by default.
+    # Twilio's PSTN/SIP path handles line echo upstream, and the 8 kHz mulaw
+    # mono stream has no reliable local reference signal for software AEC.
+    # Declared explicitly so the choice is intentional, not a getattr fallback.
+    default_echo_cancellation_enabled = False
+    # Captured audio is inbound-only: ``_accepted_twilio_media`` drops every
+    # ``outbound``/``outbound_track`` frame at ingest before it reaches STT, so
+    # transcripts derived from this transport are safely the callee's speech.
+    # Session wiring stamps this label onto STTFinal/STTPartial events that the
+    # STT provider leaves unlabeled, letting telephony classifiers (e.g. the
+    # outbound voicemail-pickup guard) trust the inbound track in production.
+    inbound_stt_track = "inbound"
+    # Outbound Twilio media must be 8 kHz mulaw. Ask TTS for 8 kHz PCM16
+    # so send_audio only performs the final companding step.
+    preferred_tts_output_format: ClassVar[AudioFormat] = TWILIO_PREFERRED_TTS_OUTPUT_FORMAT
+
+    def __init__(
+        self,
+        config: TwilioTransportConfig | None = None,
+        event_bus: EventBus | None = None,
+    ) -> None:
+        self._config = config or TwilioTransportConfig()
+        super().__init__(
+            host=self._config.host,
+            port=self._config.port,
+            max_pending_chunks=self._config.max_pending_chunks,
+        )
+        self._audio_format = self._config.audio_format
+        self._event_bus = event_bus
+
+        self._stream_sid: str | None = None
+        self._call_sid: str | None = None
+        self._call_identity: Any | None = None
+        # Optional sink populated by Session wiring so the caller ID
+        # extracted from the ``<Stream>`` customParameters flows through
+        # to ``session.call_identity`` without the app doing plumbing.
+        self._identity_sink: Any = None
+        self._answered_at: float | None = None
+        self._call_ended_emitted = False
+        self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
+
+        self._mark_counter = 0
+
+    # ── Transport protocol ────────────────────────────────────────
+
+    def _current_ws(self) -> ServerConnection | None:
+        return self._ws
+
+    def _reset_connection_state(self) -> None:
+        self._ws = None
+
+    async def disconnect(self) -> None:
+        """Disconnect Twilio and stop the server."""
+        await super().disconnect()
+        self._stream_sid = None
+        self._call_sid = None
+        self._call_identity = None
+        self._call_ended_emitted = False
+        self._diagnostics.reset()
+
+    async def send_audio(self, chunk: AudioChunk) -> bool:
+        """Convert a PCM16 chunk to mulaw 8 kHz and send to Twilio."""
+        ws = self._ws
+        if ws is None or self._stream_sid is None:
+            return False
+
+        mulaw_data = pcm16_to_mulaw(chunk.data, chunk.format.sample_rate)
+        payload = base64.b64encode(mulaw_data).decode("ascii")
+
+        message = json.dumps(
+            {
+                "event": "media",
+                "streamSid": self._stream_sid,
+                "media": {"payload": payload},
+            }
+        )
+        try:
+            await ws.send(message)
+            return True
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send audio: Twilio disconnected")
+            # Emit the dead call's ``CallEnded`` BEFORE releasing the slot:
+            # once ``self._ws`` is cleared a replacement connection can claim
+            # it, and the old receive handler's reconnect-race-guarded finally
+            # (``_finalize_after_receive``) then skips its emit — a later
+            # ``start`` would overwrite the old call ids and observers would
+            # never see the previous call end. The once-only flag makes the
+            # finally's emit a no-op afterwards.
+            await self._emit_call_ended_once()
+            # Mirror the connection-variant / WebSocket transports: clear
+            # the live-client state so ``has_client``/``is_connected``/
+            # ``wait_for_client`` stop reporting a peer once the socket drops.
+            # The ``_handle_connection`` finally also performs this cleanup, so
+            # this is belt-and-suspenders for symmetry across socket transports.
+            self._ws = None
+            self._stream_sid = None
+            self._client_connected.clear()
+            return False
+
+    # ── Mark support ──────────────────────────────────────────────
+
+    async def send_mark(self, name: str | None = None) -> str:
+        """Send a ``mark`` message so Twilio acknowledges playback position.
+
+        Returns the mark name used (auto-generated if not provided).
+        """
+        ws = self._ws
+        if ws is None or self._stream_sid is None:
+            logger.debug("Cannot send mark: no active Twilio stream")
+            raise RuntimeError("Cannot send Twilio mark without an active stream")
+
+        if name is None:
+            self._mark_counter += 1
+            name = f"mark_{self._mark_counter}"
+
+        message = json.dumps(
+            {
+                "event": "mark",
+                "streamSid": self._stream_sid,
+                "mark": {"name": name},
+            }
+        )
+        try:
+            await ws.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot send mark: Twilio disconnected")
+            # Same ordering as ``send_audio``: emit the dead call's
+            # ``CallEnded`` before releasing the slot to a replacement
+            # connection (see the reconnect-race note there).
+            await self._emit_call_ended_once()
+            self._ws = None
+            self._stream_sid = None
+            self._client_connected.clear()
+            raise RuntimeError("Cannot send Twilio mark: Twilio disconnected") from None
+        return name
+
+    async def send_playback_mark(self, name: str | None = None) -> str:
+        """Compatibility wrapper for generic playback-mark capability."""
+        return await self.send_mark(name=name)
+
+    async def clear_audio(self) -> None:
+        """Send a ``clear`` message to discard queued outbound audio on Twilio's side."""
+        ws = self._ws
+        if ws is None or self._stream_sid is None:
+            return
+
+        message = json.dumps(
+            {
+                "event": "clear",
+                "streamSid": self._stream_sid,
+            }
+        )
+        try:
+            await ws.send(message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.debug("Cannot clear audio: Twilio disconnected")
+
+    # ── Twilio WebSocket handler ──────────────────────────────────
+
+    async def _handle_connection(self, ws: ServerConnection) -> None:
+        """Handle the Twilio Media Streams WebSocket connection."""
+        if self._ws is not None:
+            logger.warning("Rejecting additional Twilio connection")
+            await ws.close(4000, "Only one stream at a time")
+            return
+
+        self._ws = ws
+        self._client_connected.set()
+        logger.info("Twilio Media Streams connected")
+
+        try:
+            async for raw in ws:
+                if isinstance(raw, bytes):
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        logger.warning("Ignoring non-UTF-8 Twilio message")
+                        continue
+                await self._handle_message(raw)
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("Twilio Media Streams disconnected")
+        finally:
+            await self._finalize_after_receive(ws)
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "twilio",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("twilio", "websockets")
 
 
 # ── Audio conversion helpers ──────────────────────────────────────
@@ -854,21 +930,19 @@ _MULAW_CLIP = 32635
 
 def _mulaw_decode(mulaw_data: bytes) -> bytes:
     """Decode G.711 mu-law bytes into PCM16 little-endian bytes."""
-    out = bytearray(len(mulaw_data) * 2)
-    for i, value in enumerate(mulaw_data):
-        sample = _mulaw_decode_sample(value)
-        out[i * 2 : i * 2 + 2] = sample.to_bytes(2, "little", signed=True)
-    return bytes(out)
+    if not mulaw_data:
+        return b""
+    return struct.pack(f"<{len(mulaw_data)}h", *map(_MULAW_DECODE_LUT.__getitem__, mulaw_data))
 
 
 def _mulaw_encode(pcm_data: bytes) -> bytes:
     """Encode PCM16 little-endian bytes into G.711 mu-law bytes."""
     if len(pcm_data) % 2 != 0:
         pcm_data = pcm_data[:-1]
-    out = bytearray(len(pcm_data) // 2)
-    for i, (sample,) in enumerate(struct.iter_unpack("<h", pcm_data)):
-        out[i] = _mulaw_encode_sample(sample)
-    return bytes(out)
+    if not pcm_data:
+        return b""
+    count = len(pcm_data) // 2
+    return bytes(map(_MULAW_ENCODE_LUT.__getitem__, struct.unpack(f"<{count}H", pcm_data)))
 
 
 def _mulaw_decode_sample(value: int) -> int:
@@ -905,7 +979,16 @@ def _mulaw_encode_sample(sample: int) -> int:
     return (~(sign | (exponent << 4) | mantissa)) & 0xFF
 
 
-class TwilioConnectionTransport(AudioQueueMixin):
+# Table-driven G.711 codec. The tables are precomputed from the reference
+# per-sample formulas above, so table-driven output is byte-identical to the
+# per-sample loops while avoiding per-sample Python work on the hot audio path.
+_MULAW_DECODE_LUT: tuple[int, ...] = tuple(_mulaw_decode_sample(i) for i in range(256))
+_MULAW_ENCODE_LUT: bytes = bytes(
+    _mulaw_encode_sample(s if s < 32768 else s - 65536) for s in range(65536)
+)
+
+
+class TwilioConnectionTransport(_TwilioProtocolMixin, AudioQueueMixin):
     """Twilio Media Streams transport for one accepted WebSocket connection."""
 
     # Telephony policy: see ``TwilioTransport.default_echo_cancellation_enabled``.
@@ -941,18 +1024,11 @@ class TwilioConnectionTransport(AudioQueueMixin):
         self._init_audio_queue(self._config.max_pending_chunks)
         self._diagnostics = _TwilioStreamDiagnostics(self._emit_degraded)
 
-    @property
-    def call_identity(self) -> Any | None:
-        """Latest :class:`CallIdentity` parsed from the Twilio start event."""
-        return self._call_identity
+    def _current_ws(self) -> ServerConnection | None:
+        return self._ws
 
-    @property
-    def transport_kind(self) -> str:
-        return "telephony"
-
-    def bind_identity_sink(self, sink: Any) -> None:
-        """Register a callback that receives every identity update."""
-        self._identity_sink = sink
+    def _reset_connection_state(self) -> None:
+        self._connected = False
 
     async def connect(self) -> None:
         if self._connected:
@@ -1046,8 +1122,9 @@ class TwilioConnectionTransport(AudioQueueMixin):
         return await self.send_mark(name=name)
 
     async def _receive_loop(self) -> None:
+        ws = self._ws
         try:
-            async for raw in self._ws:
+            async for raw in ws:
                 if isinstance(raw, bytes):
                     try:
                         raw = raw.decode("utf-8")
@@ -1058,164 +1135,10 @@ class TwilioConnectionTransport(AudioQueueMixin):
         except websockets.exceptions.ConnectionClosed:
             logger.info("Twilio Media Streams disconnected")
         finally:
-            await self._emit_call_ended_once()
-            self._connected = False
-            self._client_connected.clear()
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
-
-    async def _handle_message(self, raw: str) -> None:
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Ignoring invalid JSON from Twilio")
-            return
-        if not isinstance(msg, dict):
-            logger.warning("Ignoring non-object JSON from Twilio")
-            return
-
-        event = msg.get("event", "")
-        if event == "start":
-            await self._handle_start(msg)
-        elif event == "media":
-            await self._handle_media(msg)
-        elif event == "stop":
-            if not _is_active_twilio_stream_event(
-                msg,
-                active_stream_sid=self._stream_sid,
-                event_name="stop",
-            ):
-                return
-            self._diagnostics.observe_sequence(msg)
-            await self._emit_call_ended_once()
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
-        elif event == "mark":
-            if not _is_active_twilio_stream_event(
-                msg,
-                active_stream_sid=self._stream_sid,
-                event_name="mark",
-            ):
-                return
-            self._diagnostics.observe_sequence(msg)
-            mark = msg.get("mark", {})
-            if not isinstance(mark, dict):
-                logger.debug("Ignoring Twilio mark with non-object payload")
-                return
-            mark_name = mark.get("name", "")
-            if mark_name and self._event_bus is not None:
-                await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
-        elif event == "dtmf":
-            await self._handle_dtmf(msg)
-
-    async def _handle_start(self, msg: dict[str, Any]) -> None:
-        start = msg.get("start", {})
-        if not isinstance(start, dict):
-            logger.debug("Ignoring Twilio start with non-object payload")
-            return
-        if not _twilio_stream_token_valid(start, self._config):
-            logger.warning(
-                "Rejecting Twilio connection stream start with missing or invalid stream token"
-            )
-            await self._ws.close(4003, "Missing or invalid stream token")
-            return
-        self._stream_sid = msg.get("streamSid") or start.get("streamSid")
-        self._call_sid = start.get("callSid")
-        self._answered_at = time.monotonic()
-        self._call_ended_emitted = False
-        self._diagnostics.start(msg)
-        identity, caller, called = _parse_twilio_start_identity(
-            start,
-            self._call_sid,
-            excluded_parameter_names={self._config.stream_token_parameter},
-        )
-        self._call_identity = identity
-        if self._identity_sink is not None:
-            try:
-                self._identity_sink(identity)
-            except Exception:
-                logger.debug("Identity sink raised on start", exc_info=True)
-
-        if self._event_bus is not None and self._call_sid:
-            await self._event_bus.emit(CallAnswered(call_sid=self._call_sid, answered_by="human"))
-
-        logger.info(
-            "Twilio connection stream started: streamSid=%s callSid=%s from=%s to=%s",
-            self._stream_sid,
-            self._call_sid,
-            caller,
-            called,
-        )
-
-    async def _handle_media(self, msg: dict[str, Any]) -> None:
-        media = _accepted_twilio_media(msg, active_stream_sid=self._stream_sid)
-        if media is None:
-            return
-        self._diagnostics.observe_sequence(msg)
-        payload = media.get("payload", "")
-        if not payload:
-            return
-        try:
-            mulaw_data = base64.b64decode(payload)
-        except Exception:
-            logger.warning("Ignoring Twilio media frame with invalid base64 payload")
-            return
-        self._diagnostics.observe_media_timestamp(
-            media,
-            stream_sid=self._stream_sid,
-            mulaw_data=mulaw_data,
-        )
-        pcm_data = mulaw_to_pcm16(mulaw_data, self._audio_format.sample_rate)
-        chunk = AudioChunk(data=pcm_data, format=self._audio_format)
-        self._enqueue_chunk(chunk, context="Twilio")
-
-    async def _emit_call_ended_once(self) -> None:
-        if self._call_ended_emitted:
-            return
-        self._call_ended_emitted = True
-        await _emit_twilio_call_ended(
-            self._event_bus,
-            call_sid=self._call_sid,
-            answered_at=self._answered_at,
-            call_identity=self._call_identity,
-        )
-
-    async def _handle_dtmf(self, msg: dict[str, Any]) -> None:
-        if _is_active_twilio_stream_event(
-            msg,
-            active_stream_sid=self._stream_sid,
-            event_name="dtmf",
-        ):
-            self._diagnostics.observe_sequence(msg)
-            await _emit_parsed_twilio_dtmf(msg, self._event_bus)
-
-    @property
-    def stream_sid(self) -> str | None:
-        return self._stream_sid
-
-    @property
-    def call_sid(self) -> str | None:
-        return self._call_sid
+            await self._finalize_after_receive(ws)
 
     def version_info(self) -> dict[str, str]:
-        try:
-            from importlib.metadata import version
-
-            ws_ver = version("websockets")
-        except Exception:
-            ws_ver = "unknown"
-        return {
-            "provider": "twilio-connection",
-            "model": "unknown",
-            "api_version": "unknown",
-            "sdk_version": ws_ver,
-        }
+        return make_version_info("twilio-connection", "websockets")
 
 
 # ── TwiML helpers ─────────────────────────────────────────────────

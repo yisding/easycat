@@ -19,7 +19,10 @@ from uuid import uuid4
 
 from easycat.cancel import CancelToken
 from easycat.integrations.agents._context import normalize_context_messages
-from easycat.integrations.agents._helpers import split_replacement_by_original_parts
+from easycat.integrations.agents._helpers import (
+    aclose_quietly,
+    split_replacement_by_original_parts,
+)
 from easycat.integrations.agents._pydantic_ai_events import translate_event
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -180,11 +183,19 @@ class PydanticAIBridge:
         cancel_token: CancelToken | None = None,
     ) -> AsyncIterator[AgentBridgeEvent]:
         if self._mode == "graph":
-            async for event in self._invoke_graph(turn_input, recorder, cancel_token):
-                yield event
+            stream = self._invoke_graph(turn_input, recorder, cancel_token)
         else:
-            async for event in self._invoke_agent(turn_input, recorder, cancel_token):
+            stream = self._invoke_agent(turn_input, recorder, cancel_token)
+        try:
+            async for event in stream:
                 yield event
+        finally:
+            # ``async for`` does not forward an early consumer ``aclose()``
+            # (barge-in ``GeneratorExit``) into the delegated generator; close
+            # it explicitly so ``turn_cursor``'s BaseException arm and the
+            # mcp_servers restore run synchronously — before a follow-up
+            # ``apply_interruption()`` — instead of at GC time.
+            await aclose_quietly(stream)
 
     def snapshot_state(self) -> FrameworkStateSnapshot:
         if self._mode == "graph":
@@ -401,55 +412,46 @@ class PydanticAIBridge:
             entered_at=time.monotonic_ns(),
             committable=False,
         )
-        recorder.record_unit_entered(agent_cursor)
-
         accumulated = ""
         raw_output: Any = None
         done_emitted = False
 
-        saved_mcp_servers = _UNSET
-        try:
-            if self._mcp_servers is not None and hasattr(agent, "mcp_servers"):
-                saved_mcp_servers = getattr(agent, "mcp_servers", None)
-                agent.mcp_servers = list(self._mcp_servers)
-            if hasattr(agent, "iter"):
-                async for ev in self._stream_via_iter(
-                    turn_input, recorder, cancel_token, history_key
-                ):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    elif ev.kind == "done":
-                        done_emitted = True
-                    yield ev
-                raw_output = self._last_output
-            else:
-                async for ev in self._stream_via_run_stream(turn_input, cancel_token, history_key):
-                    if ev.kind == "text_delta":
-                        accumulated += ev.text
-                    yield ev
-                raw_output = self._last_output
-        except Exception as exc:
-            recorder.record_framework_error(ErrorInfo.from_exception(exc))
-            recorder.record_unit_exited(agent_cursor, reason="error")
-            raise
-        except BaseException:
-            # The default ``AgentRunner`` enforces its timeout by
-            # cancelling the pending ``__anext__()`` (and then calling
-            # ``aclose()``), injecting ``asyncio.CancelledError`` /
-            # ``GeneratorExit`` here.  Neither is an ``Exception`` so the
-            # block above is skipped and the still-open agent cursor would
-            # be left without a ``unit_exited`` record, breaking the
-            # recorder's strict stack invariant for the postmortem journal.
-            # Close it defensively (so a recorder error can't mask the
-            # cancellation) before re-raising; no ``record_framework_error``
-            # since a cancelled turn isn't a framework fault.
-            recorder.safe_exit_cursor(agent_cursor)
-            raise
-        finally:
-            if saved_mcp_servers is not _UNSET:
-                agent.mcp_servers = saved_mcp_servers
+        # ``turn_cursor`` centralizes enter → error → BaseException → clean
+        # exit; the inner bare ``try/finally`` restores the agent's mcp_servers
+        # on every path (including cancellation) before the cm records the exit.
+        with recorder.turn_cursor(agent_cursor):
+            saved_mcp_servers = _UNSET
+            inner = None
+            try:
+                if self._mcp_servers is not None and hasattr(agent, "mcp_servers"):
+                    saved_mcp_servers = getattr(agent, "mcp_servers", None)
+                    agent.mcp_servers = list(self._mcp_servers)
+                if hasattr(agent, "iter"):
+                    inner = self._stream_via_iter(turn_input, recorder, cancel_token, history_key)
+                    async for ev in inner:
+                        if ev.kind == "text_delta":
+                            accumulated += ev.text
+                        elif ev.kind == "done":
+                            done_emitted = True
+                        yield ev
+                    raw_output = self._last_output
+                else:
+                    inner = self._stream_via_run_stream(turn_input, cancel_token, history_key)
+                    async for ev in inner:
+                        if ev.kind == "text_delta":
+                            accumulated += ev.text
+                        yield ev
+                    raw_output = self._last_output
+            finally:
+                # Close the delegated stream first: ``_stream_via_iter`` holds
+                # the ``agent.iter()`` context open, and ``async for`` does not
+                # forward a barge-in ``GeneratorExit`` into it — without this
+                # its teardown would only run at GC time.
+                if inner is not None:
+                    await aclose_quietly(inner)
+                if saved_mcp_servers is not _UNSET:
+                    agent.mcp_servers = saved_mcp_servers
 
-        recorder.record_unit_exited(agent_cursor.with_committable(True), reason=None)
         if not done_emitted:
             yield AgentBridgeEvent(
                 kind="done",
@@ -914,7 +916,7 @@ def _graph_item_output(item: Any) -> Any:
     if not _is_graph_end_item(item):
         return _UNSET
     if hasattr(item, "value"):
-        return getattr(item, "value")
+        return item.value
     return getattr(item, "_value", None)
 
 

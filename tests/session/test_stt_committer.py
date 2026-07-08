@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import TypeVar
 
@@ -335,6 +336,27 @@ async def test_cancel_invokes_on_speech_detection_reset_and_clears_state() -> No
     assert committer.is_active is False
     assert stt.end_stream_calls == 1
     assert all(f.done() for f in turn.pending_stt_segment_futures)
+
+
+@pytest.mark.asyncio
+async def test_cancel_logs_when_end_stream_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _RaisingEndStreamSTT(_RecordingSTT):
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            raise RuntimeError("boom")
+
+    committer, stt, _emitted, _no_turn, _tm = _make_committer(stt=_RaisingEndStreamSTT())
+    committer.mark_active()
+    turn = _new_turn()
+
+    with caplog.at_level(logging.DEBUG, logger="easycat.session._stt_committer"):
+        await committer.cancel(turn)  # must not raise
+
+    assert stt.end_stream_calls == 1
+    assert committer.is_active is False
+    assert "STT end_stream during cancel raised" in caplog.text
 
 
 @pytest.mark.asyncio

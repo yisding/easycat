@@ -782,14 +782,15 @@ class TestArtifactBlobsRoundTrip:
         assert cassette.blob(_SHA_A) == blob
 
 
-# ── Back-compat: stages.base.ReplaySpec forwards ─────────────────
+# ── ReplaySpec re-export: package-level only, not stages.base ─────
 
 
 class TestReplaySpecForward:
-    def test_stages_base_forwards(self):
-        from easycat.stages.base import ReplaySpec as StageSpec
+    def test_stages_base_no_longer_forwards_replayspec(self):
+        import easycat.stages.base as stages_base
 
-        assert StageSpec is ReplaySpec
+        with pytest.raises(AttributeError):
+            stages_base.ReplaySpec
 
     def test_stages_package_forwards(self):
         from easycat.stages import ReplaySpec as PkgSpec

@@ -115,7 +115,9 @@ def test_validate_latency_cli_rejects_smoke_and_sweep_together(cli: CliRunner) -
     result = cli.invoke(app, ["validate", "latency", "--smoke", "--sweep"])
 
     assert result.exit_code == 2
-    assert "choose only one of --smoke or --sweep" in result.stdout
+    # Usage errors route to stderr like every other command (not stdout).
+    assert "choose only one of --smoke or --sweep" in result.stderr
+    assert "choose only one of --smoke or --sweep" not in result.stdout
 
 
 def test_validate_latency_cli_rejects_smoke_and_sweep_json_envelope(
@@ -126,6 +128,8 @@ def test_validate_latency_cli_rejects_smoke_and_sweep_json_envelope(
     assert result.exit_code == 2
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == 1
+    # ``command`` is the constant "validate latency" on the usage-error path,
+    # matching the success path (never "validate latency <mode>").
     assert payload["command"] == "validate latency"
     assert payload["status"] == "error"
     assert payload["exit_code"] == 2
@@ -171,5 +175,10 @@ def test_validate_latency_cli_json_uses_standard_envelope(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["command"] == "validate latency sweep"
+    # ``command`` is a constant; ``mode`` is carried as a separate field
+    # (previously the mode was interpolated into ``command`` as
+    # "validate latency sweep", which broke command-based dispatch).
+    assert payload["command"] == "validate latency"
+    assert "sweep" not in payload["command"]
+    assert payload["mode"] == "sweep"
     assert payload["validation"]["latency"]["mode"] == "sweep"

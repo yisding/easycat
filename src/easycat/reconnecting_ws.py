@@ -130,6 +130,11 @@ class ReconnectingWebSocket:
         self._on_give_up = on_give_up
         self._ws: ClientConnection | None = None
         self._closed = False
+        # Set when recv_iter ends because the reconnect budget was exhausted or a
+        # reconnect ultimately failed (terminal mid-stream death), as opposed to a
+        # deliberate close() or a clean end-of-stream. Lets STT/TTS receive loops
+        # surface an Error instead of a silent empty transcript.
+        self._died_abnormally = False
         self._connect_lock = asyncio.Lock()
         # Set while a live socket is available, cleared during a reconnect
         # window. ``send()``/``recv()`` await this (with a timeout) so a
@@ -149,6 +154,10 @@ class ReconnectingWebSocket:
     @property
     def is_connected(self) -> bool:
         return self._ws is not None and self._ws.close_code is None
+
+    @property
+    def died_abnormally(self) -> bool:
+        return self._died_abnormally
 
     async def connect(self) -> None:
         """Establish the WebSocket connection."""
@@ -342,6 +351,7 @@ class ReconnectingWebSocket:
                 "ending recv_iter",
                 close_code,
             )
+            self._died_abnormally = True
             self._ws = None
             return False
 
@@ -358,6 +368,7 @@ class ReconnectingWebSocket:
             # so a later send()/recv() fast-fails in ``_await_connected``
             # instead of waiting out the full reconnect timeout.
             logger.error("Reconnection failed; ending recv_iter")
+            self._died_abnormally = True
             self._ws = None
             return False
         return True

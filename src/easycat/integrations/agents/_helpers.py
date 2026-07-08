@@ -8,13 +8,31 @@ text.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Sequence
+from typing import Any
 
 # Shared constant used by bridges when recording an end-of-turn
 # interruption in message history.
 INTERRUPTION_NOTE = (
     "[The user interrupted the assistant's response and may not have heard all of it.]"
 )
+
+
+async def aclose_quietly(agen: Any) -> None:
+    """Close an async generator/iterator, swallowing teardown errors.
+
+    ``async for`` does not forward an early consumer ``aclose()``
+    (barge-in ``GeneratorExit``) into a delegated sub-generator, so a
+    bridge that yields from ``self._drive_stream(...)`` must close it
+    explicitly to run its ``BaseException`` cleanup synchronously — before
+    a follow-up ``apply_interruption()``.  A no-op once the generator is
+    already exhausted/closed.
+    """
+    aclose = getattr(agen, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(Exception):
+            await aclose()
 
 
 def split_replacement_by_original_parts(

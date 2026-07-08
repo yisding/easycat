@@ -31,6 +31,54 @@ class _RecordingBus:
         self.events.append(event)
 
 
+class _FakeAbnormalWS:
+    """Fake wrapper whose recv_iter ends after a terminal mid-stream death."""
+
+    def __init__(self, died_abnormally: bool) -> None:
+        self.died_abnormally = died_abnormally
+
+    async def recv_iter(self):
+        # Terminal death mid-utterance: yield nothing then end cleanly (the
+        # reconnect budget was exhausted inside ReconnectingWebSocket).
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_emits_error_on_abnormal_death():
+    """A terminal WS death surfaces an Error before the sentinel, not silence."""
+    from easycat.events import Error, ErrorStage
+
+    probe = _Probe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _FakeAbnormalWS(died_abnormally=True)  # type: ignore[assignment]
+
+    await probe._receive_loop()
+    await asyncio.gather(*list(probe._emit_tasks))
+
+    errors = [e for e in bus.events if isinstance(e, Error)]
+    assert errors, "expected an Error event on abnormal WS death"
+    assert errors[0].stage is ErrorStage.STT
+    # The None sentinel is still queued last so events() terminates cleanly.
+    assert probe._event_queue.get_nowait() is None
+
+
+@pytest.mark.asyncio
+async def test_receive_loop_no_error_on_clean_end():
+    """A graceful end-of-stream must not emit a spurious Error."""
+    probe = _Probe()
+    bus = _RecordingBus()
+    probe._provider_event_bus = bus
+    probe._ws = _FakeAbnormalWS(died_abnormally=False)  # type: ignore[assignment]
+
+    await probe._receive_loop()
+    await asyncio.gather(*list(probe._emit_tasks))
+
+    assert bus.events == []
+    assert probe._event_queue.get_nowait() is None
+
+
 @pytest.mark.asyncio
 async def test_connect_websocket_defaults_to_present_on_reconnect(monkeypatch):
     """Query-param providers get a present on_reconnect so recv_iter reconnects."""

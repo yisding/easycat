@@ -221,7 +221,12 @@ async def serve_twilio_voice_app(
         )
         return web.Response(text=xml, content_type="application/xml")
 
-    media_server = await websockets.serve(handle_twilio_connection, config.host, config.media_port)
+    media_server = await websockets.serve(
+        handle_twilio_connection,
+        config.host,
+        config.media_port,
+        compression=None,
+    )
 
     # Start the TwiML HTTP listener; the helper closes the already-bound media
     # listener if its own setup fails (e.g. http_port in use) so the port is not

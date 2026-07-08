@@ -598,7 +598,7 @@ async def test_api_audio_reference_track_404_without_reference_frames(tmp_path):
 
 
 def test_aec_diagnostics_truncates_oversized_tracks(monkeypatch):
-    from easycat.debugger import server as debugger_server
+    from easycat.debugger import _aec_routes as debugger_server
 
     cap = 640  # one 20ms frame at 16 kHz, int16 mono
     monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)
@@ -643,7 +643,7 @@ def test_aec_diagnostics_late_interruption_not_clamped_into_prefix(monkeypatch):
     analyzed frame, planting a phantom guard window that suppressed the genuine
     self-echo spike in the analyzed tail (truncated diagnostics under-reported).
     """
-    from easycat.debugger import server as debugger_server
+    from easycat.debugger import _aec_routes as debugger_server
 
     cap = 5 * 640  # five 20ms frames at 16 kHz, int16 mono
     monkeypatch.setattr(debugger_server, "_AEC_MAX_TRACK_BYTES", cap)

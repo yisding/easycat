@@ -15,9 +15,10 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import (
+from easycat.cli.debug.bundles import _format_size
+from easycat.cli.debug.follow import (
+    _follow_with_retry,
     _format_follow_line,
-    _format_size,
     _redact_follow_record,
     _stream_follow,
 )
@@ -493,6 +494,50 @@ async def test_stream_follow_json_redacts_record_payloads(
     assert payload["error"]["message"] == "Authorization: [REDACTED_SECRET]"
 
 
+@pytest.mark.asyncio
+async def test_follow_with_retry_resumes_past_yielded_sequence(capsys) -> None:
+    # A mid-stream OperationalError (the live writer holds the file lock) must
+    # resume from ``last_yielded + 1`` on retry, not from the original
+    # ``from_sequence`` — otherwise ``--from-sequence 0`` re-emits printed
+    # records and the default silently skips records written during the outage.
+    class _FlakyFollowView:
+        def __init__(self) -> None:
+            self._attempt = 0
+            self.seen_from: list[int | None] = []
+
+        async def follow(self, *, from_sequence: int | None, poll_interval: float):  # noqa: ANN201
+            del poll_interval
+            self.seen_from.append(from_sequence)
+            self._attempt += 1
+            if self._attempt == 1:
+                yield {"sequence": 1, "name": "TurnStarted"}
+                yield {"sequence": 2, "name": "STTFinal"}
+                raise sqlite3.OperationalError("database is locked")
+            yield {"sequence": 3, "name": "AgentFinal"}
+            yield {"sequence": 4, "name": "TTSAudio"}
+
+    view = _FlakyFollowView()
+    await _follow_with_retry(
+        view,
+        from_sequence=0,
+        errors_only=False,
+        turn_id=None,
+        json_output=True,
+    )
+
+    # First attempt honours the caller's ``from_sequence``; the retry resumes
+    # from the highest sequence already streamed plus one (not the original 0).
+    assert view.seen_from == [0, 3]
+    printed = [
+        json.loads(line)["sequence"]
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    # Every record appears exactly once — no duplicate and no gap across the
+    # retry boundary.
+    assert printed == [1, 2, 3, 4]
+
+
 def test_journal_follow_on_zip_bundle_exits_2(cli: CliRunner, tmp_path: Path) -> None:
     # ZIP bundles are immutable and cannot grow, so live tail refuses them
     # with guidance toward bundles show / journal grep.
@@ -900,6 +945,21 @@ def test_diff_turn_filter_restricts_output(cli: CliRunner, tmp_path: Path) -> No
     payload = json.loads(result.stdout)
     assert len(payload["turns"]) == 1
     assert payload["turns"][0]["index"] == 1
+
+
+def test_diff_non_integer_turn_exits_2(cli: CliRunner, tmp_path: Path) -> None:
+    """A non-integer ``--turn`` is a usage error (exit 2), not a silent empty diff."""
+    bundle_a = tmp_path / "before.zip"
+    bundle_b = tmp_path / "after.zip"
+    export_debug_bundle(_FakeSession(records=_milestone_records("t1", 1_000_000_000)), bundle_a)
+    export_debug_bundle(_FakeSession(records=_milestone_records("u1", 1_000_000_000)), bundle_b)
+
+    result = cli.invoke(app, ["diff", str(bundle_a), str(bundle_b), "--turn", "abc", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "diff"
+    assert payload["status"] == "error"
 
 
 def test_diff_missing_bundle_exits_5(cli: CliRunner, tmp_path: Path) -> None:
@@ -1556,6 +1616,27 @@ def test_bundles_export_refuses_existing_output_json_envelope(
     assert (output / "old.txt").exists()
 
 
+def test_bundles_export_force_refuses_ancestor_of_cwd(
+    cli: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # --force must never rmtree an ancestor of the working dir. `-o ..`
+    # resolves above cwd; refuse it instead of deleting the parent tree.
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    bundle = work / "demo.zip"
+    _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
+    sentinel = tmp_path / "keep.txt"
+    sentinel.write_text("do not delete")
+
+    result = cli.invoke(app, ["bundles", "export", str(bundle), "--output", "..", "--force"])
+
+    assert result.exit_code == 1
+    assert "Refusing to export" in _unwrapped(result.stderr)
+    assert sentinel.read_text() == "do not delete"
+    assert work.is_dir()
+
+
 def test_bundles_export_rejects_unknown_target(cli: CliRunner, tmp_path: Path) -> None:
     bundle = tmp_path / "demo.zip"
     _make_bundle(bundle, [{"sequence": 1, "name": "TurnStarted", "session_id": "sess-xyz"}])
@@ -2108,7 +2189,7 @@ def test_promote_stub_omits_sensitive_expected_text(cli: CliRunner, tmp_path: Pa
 
 
 def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:
-    from easycat.cli.debug.bundles import _promote_test_stub
+    from easycat.cli.debug.promote import _promote_test_stub
 
     malicious_turn_id = (
         "x(easycat_bundle):\n    __import__('os').system('touch /tmp/pwned')\n    #"

@@ -71,6 +71,29 @@ class RecordingAgentRecorder:
         finally:
             self.record_unit_exited(cursor)
 
+    @contextmanager
+    def turn_cursor(self, cursor: ExecutionCursor) -> Iterator[ExecutionCursor]:
+        """Per-turn cursor lifecycle, mirroring ``JournalAgentRecorder``.
+
+        Bridges built on :meth:`AgentRecorder.turn_cursor` (``BridgeTemplate``
+        and the shipped bridges) must be drivable with this recorder, so the
+        enter → ``Exception`` (framework_error + error exit) →
+        ``BaseException`` (safe exit) → clean commit ordering matches the
+        journal-backed recorder record-for-record.
+        """
+        self.record_unit_entered(cursor)
+        try:
+            yield cursor
+        except Exception as exc:
+            self.record_framework_error(ErrorInfo.from_exception(exc))
+            self.record_unit_exited(cursor, reason="error")
+            raise
+        except BaseException:
+            self.safe_exit_cursor(cursor)
+            raise
+        else:
+            self.record_unit_exited(cursor.with_committable(True), reason=None)
+
     def record_tool_call(
         self,
         phase: str,

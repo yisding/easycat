@@ -26,6 +26,8 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
+from easycat._net import is_loopback_host, normalize_auth_token
+
 if TYPE_CHECKING:
     from easycat.config import EasyConfig
     from easycat.session import Session
@@ -721,16 +723,13 @@ class VoiceApp:
         structured escape hatch is ``unsafe_allow_no_auth=True``.
 
         Blank or whitespace-only tokens are normalized to ``None`` (via the
-        shared :func:`~easycat.transports.websocket._normalize_auth_token`) so a
+        shared :func:`~easycat._net.normalize_auth_token`) so a
         ``"   "`` value cannot satisfy this guard as truthy while the downstream
         WebSocket authorizer treats it as no token at all — keeping the bind
         guard and request authorization in sync across both transports.
         """
-        from easycat.transports.webrtc import _is_loopback_host
-        from easycat.transports.websocket import _normalize_auth_token
-
-        resolved = _normalize_auth_token(token or os.environ.get(_SERVE_TOKEN_ENV))
-        if resolved is None and not _is_loopback_host(host) and not unsafe_allow_no_auth:
+        resolved = normalize_auth_token(token or os.environ.get(_SERVE_TOKEN_ENV))
+        if resolved is None and not is_loopback_host(host) and not unsafe_allow_no_auth:
             raise ValueError(
                 f"Refusing to bind {host!r} without a token. Pass serve_token= "
                 f"(or set {_SERVE_TOKEN_ENV}) when serving beyond loopback, or pass "
