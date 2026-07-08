@@ -125,7 +125,7 @@ jobs:
       pages: write
       id-token: write
     steps:
-      # actions/configure-pages v5
+      # actions/configure-pages v6
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
         with:
           enablement: true
