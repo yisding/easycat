@@ -58,6 +58,8 @@ def test_validation_runner_quick_writes_report_junit_logs_and_latest(tmp_path: P
     assert len(commands) == 1
     command = commands[0]
     assert command[:4] == ["uv", "run", "pytest", "-q"]
+    # The quick slice is the only parallel lane (xdist-safe by design).
+    assert command[4:8] == ["-n", "auto", "--dist", "loadscope"]
     assert command[-2:] == [
         "-m",
         (
@@ -460,11 +462,15 @@ def test_validation_runner_can_use_installed_wheel_pytest_command(
         started_at=datetime(2026, 5, 22, 12, 0, tzinfo=UTC),
     )
 
-    assert commands[0][:6] == [
+    assert commands[0][:10] == [
         "/tmp/venv/bin/python",
         "-m",
         "pytest",
         "-q",
+        "-n",
+        "auto",
+        "--dist",
+        "loadscope",
         "/repo/tests",
         "/repo/smoke",
     ]

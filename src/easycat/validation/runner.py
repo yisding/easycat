@@ -70,11 +70,22 @@ VALIDATION_SELECTORS = {
     "contracts": "contract and not integration_live and not flaky",
 }
 
+# Per-slice pytest arguments beyond the shared -q/junit/marker shape. The
+# quick slice is xdist-safe by design (`just test-fast` runs the same marker
+# expression with the same flags); `loadscope` keeps each module's tests on
+# one worker so event-loop/socket/port state never crosses workers. The
+# socket, stress, and contracts lanes stay serial: socket binds localhost
+# ports and stress measures timing-sensitive saturation signals.
+VALIDATION_SLICE_PYTEST_ARGS: dict[str, tuple[str, ...]] = {
+    "quick": ("-n", "auto", "--dist", "loadscope"),
+}
+
 DEFAULT_RELEASE_EXTRAS = ("openai", "openai-agents")
 DEFAULT_RELEASE_PROVIDERS = ("openai",)
 DEFAULT_RELEASE_SURFACES = ("stt", "tts")
 RELEASE_SLICES = ("quick", "stress", "contracts")
-RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "hypothesis")
+# pytest-xdist is required because the quick slice runs with -n auto.
+RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "pytest-xdist", "hypothesis")
 _RELEASE_IMPORT_SMOKE = """
 import os
 import pathlib
@@ -161,6 +172,7 @@ def run_validation_slice(
     command = [
         *_pytest_command_prefix(),
         "-q",
+        *VALIDATION_SLICE_PYTEST_ARGS.get(slice_name, ()),
         *_validation_test_paths(),
         f"--junitxml={junit_path}",
         "-m",

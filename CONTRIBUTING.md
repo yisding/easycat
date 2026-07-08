@@ -108,8 +108,8 @@ surface before the broader validation lane:
 | Teaching ladder chapters or generated blocks | `just guard-teaching` | Chapter prerequisites, generated auto blocks, diagram alignment, and learner route hints |
 | Examples chooser or command matrix | `just guard-examples` | Example README matrix, support files, setup/install/env guidance, script smoke checks, and docs-route hints |
 | Scaffold templates or template catalog | `just guard-templates` | Generated README sections, line budgets, init happy paths, overwrite safety, schema rejection paths, catalog text, catalog JSON, next-step commands, generated project smoke, and generated project secret/artifact hygiene |
-| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, docs-route hints, and plan current-state evidence |
-| Validation workflow, validation reference, or validate CLI behavior | `just guard-validation` | The `docs/validation.md` workflow, validation reference route hints, validation plan current state, validate CLI reports, JSON envelopes, latency options, and error handling |
+| Contributor and validation guidance | `just guard-contributing` | `justfile` parity, agent guide command, source-layout, and architecture hints, validation lanes, and docs-route hints |
+| Validation workflow, validation reference, or validate CLI behavior | `just guard-validation` | The `docs/validation.md` workflow, validation reference route hints, validate CLI reports, JSON envelopes, latency options, and error handling |
 | Provider protocols, cassettes, contract matrix, or bridge event grammar | `just guard-contracts` | Provider contract docs-route hints, contributor provider guidance, offline contract suite, cassette redaction/replay, schema fingerprints, bridge contracts, and provider wiring matrix |
 | Operator deployment, observability, or journal durability docs | `just guard-ops` | Docker deployment guide, operator docs-route hints, journal CLI entry points, debugger UI docs, OpenTelemetry facade docs, debug bundle CLI behavior, and SQLite journal durability |
 | Markdown links in maintained docs | `just guard-markdown` | Local links, anchors, and docs-route Markdown targets |
@@ -124,12 +124,13 @@ contracts, packaging, live canaries, or stress behavior.
 
 ## Parallel runs and xdist safety
 
-`just test-fast` and `just cov` use `pytest -n auto --dist loadscope`.
-`loadscope` keeps every test in a module on the **same** worker, which matters
-for async event-loop tests and any socket/port-binding tests. If you add tests
-that bind a **fixed** port (rather than port `0`), keep them in one module and
-prefer marking them `integration_socket`. `just test` (serial) is the source of
-truth; parallel runs are an opt-in speedup. Always run coverage as
+`just test-fast`, `just cov`, and the `quick` validation lane use
+`pytest -n auto --dist loadscope`. `loadscope` keeps every test in a module on
+the **same** worker, which matters for async event-loop tests and any
+socket/port-binding tests. If you add tests that bind a **fixed** port (rather
+than port `0`), keep them in one module and prefer marking them
+`integration_socket` — the socket, stress, and contracts lanes stay serial.
+`just test` (serial) is the source of truth. Always run coverage as
 `pytest --cov` — never `coverage run -m pytest -n auto`, which reports 0% under
 xdist.
 

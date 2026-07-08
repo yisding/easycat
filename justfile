@@ -63,7 +63,7 @@ mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages sr
 typecheck:
     uv run mypy --follow-imports=silent {{ mypy_gated_paths }}
 
-# Advisory whole-repo mypy report (mirrors the non-blocking CI step).
+# Advisory whole-repo mypy report (local-only; CI gates on `just typecheck`).
 typecheck-all:
     uv run mypy src/easycat
 
