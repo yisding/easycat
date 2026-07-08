@@ -7,7 +7,8 @@ from easycat.stt.deepgram_provider import DeepgramSTT, DeepgramSTTConfig
 from easycat.stt.elevenlabs_provider import ElevenLabsSTT, ElevenLabsSTTConfig
 from easycat.stt.openai_provider import OpenAISTT, OpenAISTTConfig
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from easycat.transports._base import AudioQueueMixin, _sdk_version, make_version_info
+from easycat._provider_helpers import get_package_version
+from easycat.transports._base import AudioQueueMixin, make_version_info
 from easycat.transports.local import LocalTransport
 from easycat.transports.twilio_media import TwilioConnectionTransport, TwilioTransport
 from easycat.transports.webrtc import WebRTCTransport
@@ -143,7 +144,7 @@ class TestVersionInfoHelpers:
     """Unit coverage for the shared ``_base`` version helpers."""
 
     def test_sdk_version_unknown_for_missing_package(self):
-        assert _sdk_version("definitely-not-a-real-pkg") == "unknown"
+        assert get_package_version("definitely-not-a-real-pkg") == "unknown"
 
     def test_make_version_info_shape_and_api_version(self):
         info = make_version_info("x", "definitely-not-a-real-pkg", api_version="h3")

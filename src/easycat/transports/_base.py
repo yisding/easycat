@@ -19,6 +19,7 @@ import websockets
 from websockets.asyncio.server import Server, ServerConnection
 
 from easycat.audio_format import AudioChunk, AudioFormat
+from easycat._provider_helpers import get_package_version
 from easycat.events import EventBus, TransportDegraded
 from easycat.transports._browser_events import BrowserEventForwarder
 
@@ -79,16 +80,6 @@ def _enqueue_inbound_chunk(
         )
 
 
-def _sdk_version(package: str) -> str:
-    """Best-effort installed version of *package*, or ``"unknown"``."""
-    try:
-        from importlib.metadata import version
-
-        return version(package)
-    except Exception:
-        return "unknown"
-
-
 def make_version_info(
     provider: str, sdk_package: str, *, api_version: str = "unknown"
 ) -> dict[str, str]:
@@ -97,7 +88,7 @@ def make_version_info(
         "provider": provider,
         "model": "unknown",
         "api_version": api_version,
-        "sdk_version": _sdk_version(sdk_package),
+        "sdk_version": get_package_version(sdk_package),
     }
 
 
