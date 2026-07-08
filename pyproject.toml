@@ -54,14 +54,7 @@ easycat = "easycat.debug._pytest_plugin"
 [project.optional-dependencies]
 openai-agents = ["openai-agents>=0.6.2"]
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
-# The transitive prerelease pins (slim/graph/evals) are listed explicitly
-# because uv only honors prerelease specifiers on direct requirements.
-pydantic-ai-v2-beta = [
-    "pydantic-ai==2.0.0b7",
-    "pydantic-ai-slim==2.0.0b7",
-    "pydantic-graph==2.0.0b7",
-    "pydantic-evals==2.0.0b7",
-]
+pydantic-ai-v2 = ["pydantic-ai>=2.0.0,<3.0.0"]
 langchain = ["langchain-core>=1.3.3"]
 langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.6"]
 llama-agents = ["llama-index-workflows>=2.22.1,<3.0.0", "llama-agents-client>=0.3.0,<1.0.0"]
@@ -114,7 +107,7 @@ quickstart = [
 ]
 # ``all`` is the union of every extra EXCEPT three deliberate exclusions:
 #   - ten-vad: non-permissive license (binaries not vendored)
-#   - pydantic-ai / pydantic-ai-v2-beta: mutually exclusive; see
+#   - pydantic-ai / pydantic-ai-v2: mutually exclusive; see
 #     [tool.uv].conflicts below
 # tests/test_dependency_policy.py enforces this union invariant.
 all = [
@@ -211,7 +204,7 @@ source-exclude = [
 conflicts = [
     [
         { extra = "pydantic-ai" },
-        { extra = "pydantic-ai-v2-beta" },
+        { extra = "pydantic-ai-v2" },
     ],
 ]
 

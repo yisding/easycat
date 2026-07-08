@@ -329,15 +329,15 @@ def test_readme_webrtc_browser_fast_path_runs_doctor_preflight() -> None:
     assert "uv run --env-file .env python examples/webrtc_server.py" in section
 
 
-def test_readme_pydantic_ai_v2_beta_pin_matches_pyproject() -> None:
+def test_readme_pydantic_ai_v2_requirement_matches_pyproject() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]
-    pins = [dep for dep in deps if dep.startswith("pydantic-ai==")]
-    assert len(pins) == 1
+    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2"]
+    specs = [dep for dep in deps if dep.startswith("pydantic-ai>=")]
+    assert len(specs) == 1
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "`pydantic-ai-v2-beta` extra pins" in readme
-    assert pins[0] in readme
+    assert "`pydantic-ai-v2` extra installs" in readme
+    assert specs[0] in readme
 
 
 def test_readme_intro_tracks_public_agent_bridge_surface() -> None:

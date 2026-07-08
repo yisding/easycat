@@ -136,7 +136,7 @@ frameworks, and debugging/audio-processing features:
 - FastAPI + Twilio SDK (Twilio Media Streams / outbound calls): `uv sync --extra telephony --group dev`
 - OpenAI Agents SDK: `uv sync --extra openai-agents --group dev`
 - PydanticAI stable v1: `uv sync --extra pydantic-ai --group dev`
-- PydanticAI v2 beta pin: `uv sync --extra pydantic-ai-v2-beta --group dev`
+- PydanticAI stable v2: `uv sync --extra pydantic-ai-v2 --group dev`
 - LangChain core: `uv sync --extra langchain --group dev`
 - LangGraph: `uv sync --extra langgraph --group dev`
 - LlamaAgents / LlamaIndex workflows: `uv sync --extra llama-agents --group dev`
@@ -676,8 +676,8 @@ session = create_session(config)
 ```
 
 The `pydantic-ai` extra targets stable PydanticAI v1. The
-`pydantic-ai-v2-beta` extra pins `pydantic-ai==2.0.0b7` exactly for local
-verification and apps that want to opt into the prerelease before it is stable.
+`pydantic-ai-v2` extra installs `pydantic-ai>=2.0.0,<3.0.0` for apps that
+have moved to the stable v2 release.
 
 ### Workflows (recommended for multi-step voice apps)
 

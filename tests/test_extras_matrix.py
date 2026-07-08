@@ -89,11 +89,11 @@ def test_smoke_covers_cartesia_marker_extra_via_adapters() -> None:
     assert any("cartesia_tts" in target for target in targets)
 
 
-def test_smoke_aliases_pydantic_ai_v2_beta_to_the_v1_bridge_row() -> None:
+def test_smoke_aliases_pydantic_ai_v2_to_the_v1_bridge_row() -> None:
     extras_smoke = _load_script("extras_smoke")
 
-    assert extras_smoke.MATRIX_EXTRA_ALIASES == {"pydantic-ai-v2-beta": "pydantic-ai"}
-    assert extras_smoke.adapter_targets("pydantic-ai-v2-beta") == (
+    assert extras_smoke.MATRIX_EXTRA_ALIASES == {"pydantic-ai-v2": "pydantic-ai"}
+    assert extras_smoke.adapter_targets("pydantic-ai-v2") == (
         extras_smoke.adapter_targets("pydantic-ai")
     )
     assert extras_smoke.adapter_targets("pydantic-ai") == [
