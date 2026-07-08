@@ -591,10 +591,16 @@ class _OutboundAudioSource:
         self._pts = 0
         self._start: float | None = None
         self._event_bus: EventBus | None = None
-        # Fire-and-forget bus.emit tasks (TransportAudioDelivered), tracked so
-        # they are not GC'd mid-flight.  Observability must never block the RTP
-        # pacing hot path, so emission is scheduled, not awaited (mirrors
-        # LocalTransport / AudioQueueMixin._emit_tasks).
+        # Deferred bus.emit work (TransportAudioDelivered).  Observability must
+        # never block the RTP pacing hot path, so ``_recv`` enqueues events and
+        # a single worker task drains them FIFO — off-loop like the previous
+        # per-chunk fire-and-forget tasks, but delivery-ordered (a subscriber
+        # that suspends mid-handler can no longer observe chunk N+1 before
+        # chunk N) and one task instead of ~50/sec.  The worker is tracked in
+        # ``_emit_tasks`` so it is not GC'd mid-flight and ``aclose`` drains it
+        # (mirrors LocalTransport / AudioQueueMixin._emit_tasks).
+        self._emit_queue: deque[TransportAudioDelivered] = deque()
+        self._emit_worker: asyncio.Task[None] | None = None
         self._emit_tasks: set[asyncio.Task[None]] = set()
         # Cache the av.AudioFrame class to avoid per-frame import overhead.
         self._AudioFrame: type | None = None
@@ -773,19 +779,29 @@ class _OutboundAudioSource:
         if self._event_bus is not None:
             for delivered_chunk, session_id, turn_id, turn_ref in delivered_chunks:
                 if delivered_chunk.data:
-                    task = asyncio.create_task(
-                        self._event_bus.emit(
-                            TransportAudioDelivered(
-                                chunk=delivered_chunk,
-                                session_id=session_id,
-                                turn_id=turn_id,
-                                turn_ref=turn_ref,
-                            )
+                    self._emit_queue.append(
+                        TransportAudioDelivered(
+                            chunk=delivered_chunk,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                            turn_ref=turn_ref,
                         )
                     )
-                    self._emit_tasks.add(task)
-                    task.add_done_callback(self._emit_tasks.discard)
+            if self._emit_queue and (self._emit_worker is None or self._emit_worker.done()):
+                worker = asyncio.create_task(self._drain_emit_queue())
+                self._emit_worker = worker
+                self._emit_tasks.add(worker)
+                worker.add_done_callback(self._emit_tasks.discard)
         return frame
+
+    async def _drain_emit_queue(self) -> None:
+        """Emit queued ``TransportAudioDelivered`` events in delivery order."""
+        while self._emit_queue:
+            event = self._emit_queue.popleft()
+            try:
+                await self._event_bus.emit(event)
+            except Exception:
+                logger.exception("TransportAudioDelivered emit failed")
 
     def drain_aec_reference_frames(self) -> list[bytes]:
         """Return all pending AEC far-end reference frames, draining the queue.

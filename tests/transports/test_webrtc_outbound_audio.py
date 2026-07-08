@@ -200,6 +200,41 @@ class TestOutboundAudioAecReference:
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
+    async def test_delivery_emits_preserve_chunk_order_with_suspending_handler(self):
+        """Off-path emission must stay FIFO: a subscriber that suspends
+        mid-handler must never observe chunk N+1 before chunk N (the single
+        drain worker guarantees this; per-chunk fire-and-forget tasks did
+        not)."""
+        source = _OutboundAudioSource()
+        _disable_pacing(source)
+        bus = EventBus()
+        delivered: list[bytes] = []
+
+        async def _handler(e):
+            # Suspend twice so interleaved per-event tasks would reorder.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            delivered.append(e.chunk.data)
+
+        bus.subscribe(TransportAudioDelivered, _handler)
+        source._event_bus = bus
+
+        frame_bytes = 960 * 2
+        chunk_a = bytes([0x01]) * frame_bytes
+        chunk_b = bytes([0x02]) * frame_bytes
+        chunk_c = bytes([0x03]) * frame_bytes
+        for data in (chunk_a, chunk_b, chunk_c):
+            source.enqueue(data, original_chunk=AudioChunk(data=data, format=PCM16_MONO_16K))
+        while True:
+            await source._recv()
+            if source._queue.empty() and not source._pending:
+                break
+
+        await source.aclose()
+        assert delivered == [chunk_a, chunk_b, chunk_c]
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_WEBRTC_DEPS, reason="aiortc/aiohttp not installed")
     async def test_aclose_drains_scheduled_emit_tasks(self):
         """Teardown must drain the source's off-RTP-path emit tasks so in-flight
         TransportAudioDelivered events are awaited, not cancelled-and-lost at
