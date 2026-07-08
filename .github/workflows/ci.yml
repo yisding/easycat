@@ -57,12 +57,11 @@ jobs:
           python-version: "3.12"
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b  # v3.1.0
       - run: uv sync --locked --group dev --python 3.12
-      # Gate: the clean core must stay green. The gated path list lives in
-      # the justfile (`mypy_gated_paths`) so local `just typecheck` and CI
-      # grade exactly the same packages. The advisory whole-repo pass is
-      # local-only (`just typecheck-all`) — a continue-on-error CI step that
-      # nobody gates on is spent compute.
-      - name: mypy (gate, clean core)
+      # Gate: the whole package at zero errors (vendored vad/_funasr_runtime
+      # excluded, stricter checks layered on the core packages — see the
+      # [[tool.mypy.overrides]] tables in pyproject.toml). `just typecheck`
+      # keeps local runs and CI grading the exact same surface.
+      - name: mypy (gate, whole repo)
         run: just typecheck
 
   test:

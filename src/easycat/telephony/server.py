@@ -214,6 +214,7 @@ async def serve_twilio_voice_app(
                 signature=request.headers.get("X-Twilio-Signature"),
             ):
                 return web.Response(status=403, text="Twilio signature validation failed")
+        assert config.stream_url is not None
         xml = twiml_connect_stream(
             config.stream_url,
             parameters=twilio_stream_parameters_from_form(form_items),

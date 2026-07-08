@@ -26,7 +26,7 @@ from easycat.events import (
     VoicemailDetected,
 )
 from easycat.telephony._install import TELEPHONY_INSTALL_HINT
-from easycat.telephony.voicemail import TWILIO_AMD_MAP
+from easycat.telephony.voicemail import TWILIO_AMD_MAP, VoicemailResult
 
 if TYPE_CHECKING:
     from easycat.telephony.compliance import DNCStore
@@ -91,7 +91,7 @@ def _parse_int(value: Any) -> int | None:
     return parsed
 
 
-def _voicemail_detected_event(result: str, call_sid: str) -> VoicemailDetected:
+def _voicemail_detected_event(result: VoicemailResult, call_sid: str) -> VoicemailDetected:
     """Build the AMD classification event correlated to a Twilio call SID."""
     return VoicemailDetected(result=result, call_sid=call_sid)
 

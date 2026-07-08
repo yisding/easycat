@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 LATENCY_TEST_FILE = "tests/e2e/test_plan_7_latency_benchmark.py"
 LATENCY_SMOKE_TEST = "test_single_full_stack_latency_probe"
@@ -919,13 +919,13 @@ def _latency_environment_metadata() -> dict[str, Any]:
 def _float_or_none(value: object) -> float | None:
     if value is None:
         return None
-    return float(value)
+    return float(cast(float, value))
 
 
 def _int_or_none(value: object) -> int | None:
     if value is None:
         return None
-    return int(value)
+    return int(cast(int, value))
 
 
 def _bool_or_none(value: object) -> bool | None:

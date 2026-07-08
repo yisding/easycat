@@ -244,7 +244,7 @@ def _record_metric(
             _GAUGES[name] = instrument
         # Compatibility for test fakes or alternate metric APIs. Real OTel
         # observable gauges read values from the registered callback above.
-        if hasattr(instrument, "observe"):
+        if instrument is not None and hasattr(instrument, "observe"):
             instrument.observe(value, attributes=safe_attributes)
         return
 

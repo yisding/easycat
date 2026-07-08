@@ -132,7 +132,7 @@ def list_bundles(
     data_dir = str(path) if path is not None else None
     bundle_paths = discover_bundles_with_status(data_dir=data_dir)
 
-    entries: list[dict[str, object]] = []
+    entries: list[dict[str, Any]] = []
     for bundle_path, status in bundle_paths:
         stat = bundle_path.stat()
         entries.append(
@@ -212,7 +212,7 @@ def _show_bundle_summary(bundle_path: Path, *, json_output: bool, issues: bool =
     # Reviewer verdicts live in a sidecar next to the bundle, never inside
     # the (read-only) journal; a missing/corrupt sidecar loads as empty.
     annotations = load_annotations(bundle_path)
-    summary = _summarise_bundle(bundle, annotations=annotations)
+    summary: dict[str, Any] = _summarise_bundle(bundle, annotations=annotations)
 
     if json_output:
         emit_json(

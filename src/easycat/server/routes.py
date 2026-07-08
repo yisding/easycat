@@ -21,6 +21,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from easycat.server.health import ServerState
     from easycat.server.voice_server import VoiceServer
 
 # Enumerated route TEMPLATES (never resolved/raw paths). ``/ws`` is a logical
@@ -279,7 +280,7 @@ def metrics_middleware(server: VoiceServer) -> Any:
                 template = _matched_route_template(request)
                 if template is not None:
                     duration_s = time.perf_counter() - start
-                    state = "draining" if server._gate.is_draining else "serving"
+                    state: ServerState = "draining" if server._gate.is_draining else "serving"
                     # In-process snapshot for ``GET /metrics`` (stable without an
                     # OTel SDK) alongside the registered OTel emission.
                     server._requests_total += 1

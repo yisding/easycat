@@ -32,7 +32,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 from typing import Any
@@ -72,13 +72,13 @@ class ProviderCatalog:
     Defaults to ``"model"`` when absent.
     """
 
-    providers: dict[str, tuple[type, type]]
+    providers: dict[str, tuple[Callable[..., Any], type]]
     env_vars: dict[str, str]
     extras: dict[str, str]
     api_domains: dict[str, tuple[str, ...]]
     kind: str
     entry_point_group: str | None = None
-    config_to_provider: dict[type, type] = field(init=False)
+    config_to_provider: dict[type, Callable[..., Any]] = field(init=False)
     _discovered: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
@@ -206,7 +206,7 @@ class ProviderCatalog:
         self.discover()
         return type(value) in self.config_to_provider
 
-    def provider_for_config(self, config_type: type) -> type:
+    def provider_for_config(self, config_type: type) -> Callable[..., Any]:
         """Look up the provider class implementing ``config_type``."""
         self.discover()
         provider_cls = self.config_to_provider.get(config_type)
@@ -262,8 +262,8 @@ class ProviderCatalog:
         """
         from easycat.errors import EASYCAT_E203
 
-        provider, _, model = spec.partition("/")
-        model = model.strip() or None
+        provider, _, model_token = spec.partition("/")
+        model = model_token.strip() or None
         provider = self.validate_name(provider)
 
         env_var = self.env_vars[provider]

@@ -17,7 +17,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import InitVar, dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from easycat.echo_cancellation import EchoCancellationConfig
 from easycat.errors import EASYCAT_E203
@@ -823,7 +823,7 @@ class EasyConfig(_AgentSessionConfig):
         if is_tts_config(self.tts) and self.auto_align_tts_output_to_transport:
             from ._tts_alignment import align_tts_config_to_transport
 
-            self.tts = align_tts_config_to_transport(self.tts, self.transport)
+            self.tts = align_tts_config_to_transport(cast(TTSConfig, self.tts), self.transport)
         if self.echo_cancellation is None:
             self.echo_cancellation = self._default_echo_cancellation_for_transport()
         elif self.enable_echo_cancellation is not None:
@@ -883,7 +883,11 @@ class EasyConfig(_AgentSessionConfig):
             raise ValueError("STT configuration is required.")
         if self.tts is None:
             raise ValueError("TTS configuration is required.")
-        for cfg, kind in ((self.stt, "STT"), (self.tts, "TTS")):
+        provider_configs: tuple[tuple[Any, Literal["STT", "TTS"]], ...] = (
+            (self.stt, "STT"),
+            (self.tts, "TTS"),
+        )
+        for cfg, kind in provider_configs:
             if hasattr(cfg, "api_key") and not cfg.api_key:
                 # Keep the per-provider display-name ValueError here —
                 # there is no (cfg, kind) -> env-var helper today, and the

@@ -37,6 +37,8 @@ from easycat.events import (
 
 logger = logging.getLogger(__name__)
 
+ScreeningPlatform = Literal["ios", "android", "carrier", "third_party"]
+
 # Default timeout (seconds) for agent-generated screening response.
 AGENT_RESPONSE_TIMEOUT_S = 3.0
 
@@ -577,7 +579,8 @@ class CallScreeningDetector:
 
         self._state = ScreeningState.WAITING
         self._call_answered = False
-        self._pending_screening: tuple[str, str] | None = None  # (call_sid, platform)
+        # (call_sid, platform)
+        self._pending_screening: tuple[str, ScreeningPlatform] | None = None
         self._accumulated_text = ""
         self._screening_turns = 0
         self._started = False
@@ -722,7 +725,7 @@ class CallScreeningDetector:
             # is in a state that can process the screening event.
             self._pending_screening = (self._call_sid, platform)
 
-    async def _emit_screening(self, call_sid: str, platform: str) -> None:
+    async def _emit_screening(self, call_sid: str, platform: ScreeningPlatform) -> None:
         """Emit CallScreening and optional response events."""
         await self._event_bus.emit(CallScreening(call_sid=call_sid, platform=platform))
 

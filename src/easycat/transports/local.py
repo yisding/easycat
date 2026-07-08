@@ -12,7 +12,7 @@ import logging
 import queue as thread_queue
 from dataclasses import dataclass, field
 from functools import partial
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from easycat._extras import require_module
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk, AudioFormat
@@ -120,8 +120,8 @@ class LocalTransport(AudioQueueMixin):
         # each utterance re-primes.
         self._primed: bool = False
 
-        self._input_stream: object | None = None
-        self._output_stream: object | None = None
+        self._input_stream: Any = None
+        self._output_stream: Any = None
 
         # Samples per frame for the configured frame duration.
         self._frame_samples = (
@@ -159,14 +159,12 @@ class LocalTransport(AudioQueueMixin):
         frame_size = self._frame_samples
 
         # --- Input stream (mic) ---
-        def _input_callback(
-            indata: object, frames: int, time_info: object, status: object
-        ) -> None:
-            arr = indata  # type: ignore[assignment]
+        def _input_callback(indata: Any, frames: int, time_info: object, status: object) -> None:
+            arr = indata
             if hasattr(arr, "copy"):
-                arr = arr.copy()  # type: ignore[union-attr]
+                arr = arr.copy()
             # Convert float32 [-1, 1] to int16
-            pcm = (arr * 32767).astype(np.int16).tobytes()  # type: ignore[union-attr]
+            pcm = (arr * 32767).astype(np.int16).tobytes()
             chunk = AudioChunk(data=pcm, format=self._audio_format)
             # ``_enqueue_chunk`` is sync-safe and emits the canonical
             # ``inbound_queue_full`` TransportDegraded event on overflow, so
@@ -195,7 +193,7 @@ class LocalTransport(AudioQueueMixin):
             device=self._config.input_device,
             callback=_input_callback,
         )
-        self._input_stream.start()  # type: ignore[union-attr]
+        self._input_stream.start()
 
         # --- Output stream (speaker) ---
         self._output_stream = sd.OutputStream(
@@ -206,7 +204,7 @@ class LocalTransport(AudioQueueMixin):
             device=self._config.output_device,
             callback=partial(self._output_callback, np),
         )
-        self._output_stream.start()  # type: ignore[union-attr]
+        self._output_stream.start()
         self._connected = True
 
     def _push_aec_reference(self, frame: bytes) -> None:
@@ -231,7 +229,7 @@ class LocalTransport(AudioQueueMixin):
                 pass
 
     def _output_callback(
-        self, np: object, outdata: object, frames: int, time_info: object, status: object
+        self, np: Any, outdata: Any, frames: int, time_info: object, status: object
     ) -> None:
         """Speaker callback: drain one queued frame per call behind a pre-roll.
 
@@ -250,7 +248,7 @@ class LocalTransport(AudioQueueMixin):
         # ``clear_audio()`` / ``connect()`` so each utterance buffers anew.
         if not self._primed:
             if self._out_queue.qsize() < _OUTPUT_PREROLL_FRAMES:
-                outdata[:] = 0  # type: ignore[index]
+                outdata[:] = 0
                 if self._aec_reference_enabled:
                     self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
                 return
@@ -262,16 +260,16 @@ class LocalTransport(AudioQueueMixin):
             queued = None
 
         if queued is None:
-            outdata[:] = 0  # type: ignore[index]
+            outdata[:] = 0
             if self._aec_reference_enabled:
                 self._push_aec_reference(bytes(frame_bytes))  # silence keeps far/near 1:1
             return
 
         pcm = queued.chunk.data
-        arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)  # type: ignore[union-attr]
+        arr = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
         arr /= 32767.0
         # Pad / trim to fit outdata
-        out_flat = outdata.reshape(-1)  # type: ignore[union-attr]
+        out_flat = outdata.reshape(-1)
         n = min(len(arr), len(out_flat))
         out_flat[:n] = arr[:n]
         if n < len(out_flat):
@@ -318,8 +316,8 @@ class LocalTransport(AudioQueueMixin):
         for stream in (self._input_stream, self._output_stream):
             if stream is not None:
                 try:
-                    stream.stop()  # type: ignore[union-attr]
-                    stream.close()  # type: ignore[union-attr]
+                    stream.stop()
+                    stream.close()
                 except Exception:
                     logger.debug("Error closing audio stream", exc_info=True)
 

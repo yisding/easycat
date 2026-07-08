@@ -53,18 +53,11 @@ fmt:
 fmt-check:
     uv run ruff format --check .
 
-# Packages the blocking mypy gate covers (must stay at zero errors).
-# Keep in sync with the `[[tool.mypy.overrides]]` module list in
-# pyproject.toml; CI runs `just typecheck` so this is the single source
-# of truth for the gated paths.
-mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py src/easycat/debugger/_aec_routes.py"
-
-# Authoritative type gate: the clean core CI gates on (must stay green).
+# Authoritative type gate: the whole package must stay at zero errors
+# (vendored vad/_funasr_runtime is excluded via a pyproject mypy override;
+# the core packages additionally run stricter checks — see the
+# [[tool.mypy.overrides]] tables).
 typecheck:
-    uv run mypy --follow-imports=silent {{ mypy_gated_paths }}
-
-# Advisory whole-repo mypy report (local-only; CI gates on `just typecheck`).
-typecheck-all:
     uv run mypy src/easycat
 
 # Fast local-only type feedback via Astral ty (beta; not a CI gate).

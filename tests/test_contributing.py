@@ -408,6 +408,6 @@ def test_contributing_pr_expectations_point_to_raw_command_fallbacks() -> None:
     assert "If `just` is not installed" in section
     assert "[the development loop](#the-development-loop)" in section
     assert "matching raw command" in section
-    for recipe in ("check", "typecheck", "typecheck-all", "typecheck-fast", "cov"):
+    for recipe in ("check", "typecheck", "typecheck-fast", "cov"):
         assert f"`just {recipe}`" in section
         assert rows[recipe], f"CONTRIBUTING.md missing raw command for just {recipe}"

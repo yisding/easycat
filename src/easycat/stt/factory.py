@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
-from typing import Any
+from typing import Any, cast
 
 from easycat._provider_catalog import ProviderCatalog
 from easycat.events import EventBus
@@ -36,7 +36,7 @@ STTConfigType = (
     | type[CartesiaSTTConfig]
 )
 
-_PROVIDER_TO_CONFIG: dict[str, tuple[type[STTBase], STTConfigType]] = {
+_PROVIDER_TO_CONFIG: dict[str, tuple[Callable[..., STTBase], STTConfigType]] = {
     "openai": (OpenAISTT, OpenAISTTConfig),
     "openai-realtime": (OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig),
     "deepgram": (DeepgramSTT, DeepgramSTTConfig),
@@ -88,7 +88,7 @@ _CATALOG = ProviderCatalog(
     kind="STT",
     entry_point_group=STT_PROVIDER_ENTRY_POINT_GROUP,
 )
-_CONFIG_TO_PROVIDER: dict[STTConfigType, type[STTBase]] = _CATALOG.config_to_provider
+_CONFIG_TO_PROVIDER: dict[STTConfigType, Callable[..., STTBase]] = _CATALOG.config_to_provider
 
 
 def register_stt_provider(
@@ -213,12 +213,12 @@ def create_stt_provider_from_config(config: STTConfig, event_bus: EventBus) -> S
     # isinstance tuple — so any future event-bus-aware provider is included
     # automatically.
     has_event_bus_field = any(f.name == "event_bus" for f in fields(config))
-    if has_event_bus_field and config.event_bus is None:
-        provider_config = replace(config, event_bus=event_bus)
+    if has_event_bus_field and cast(Any, config).event_bus is None:
+        provider_config = replace(cast(Any, config), event_bus=event_bus)
     return provider_cls(provider_config)
 
 
-def _provider_for_config(config_type: STTConfigType) -> type[STTBase]:
+def _provider_for_config(config_type: STTConfigType) -> Callable[..., STTBase]:
     return _CATALOG.provider_for_config(config_type)
 
 

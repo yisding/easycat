@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, NoReturn, TextIO
+from typing import IO, Annotated, NoReturn, cast
 
 import typer
 from rich.markup import escape
@@ -247,7 +247,7 @@ def _streamable_log_path(path: Path, *, allowed_dir: Path) -> bool:
     return resolved_path.is_relative_to(resolved_dir)
 
 
-def _write_log_once(target: TextIO, path: Path, *, streamed_paths: set[Path]) -> None:
+def _write_log_once(target: IO[str], path: Path, *, streamed_paths: set[Path]) -> None:
     key = _path_key(path)
     if key in streamed_paths:
         return
@@ -259,7 +259,7 @@ def _path_key(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
-def _write_log(target: TextIO, text: str) -> None:
+def _write_log(target: IO[str], text: str) -> None:
     if not text:
         return
     target.write(text)
@@ -713,12 +713,12 @@ def report_command(
             f"git: {git.get('branch', '')} {git.get('sha', '')} dirty={git.get('dirty')}"
         )
 
-    for check in payload.get("checks", []):
+    for check in cast("list[object]", payload.get("checks", [])):
         if isinstance(check, dict):
             _print_literal(f"- {check.get('name', 'unknown')}: {check.get('status', 'unknown')}")
 
-    skips = payload.get("skips") or []
-    failures = payload.get("failures") or []
+    skips = cast("list[object]", payload.get("skips") or [])
+    failures = cast("list[object]", payload.get("failures") or [])
     for skip in skips:
         if isinstance(skip, dict):
             _print_literal(
@@ -785,7 +785,7 @@ def _report_exit_code(
     if raw_exit_code is None:
         return 0
     try:
-        return int(raw_exit_code)
+        return int(cast("int | str", raw_exit_code))
     except (TypeError, ValueError):
         _report_load_error(
             path,

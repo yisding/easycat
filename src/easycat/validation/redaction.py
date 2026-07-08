@@ -130,7 +130,7 @@ def redact_value(value: Any, key: str | None = None) -> Any:
     normalized_key = str(key).lower() if key is not None else None
     if normalized_key == "command":
         return redact_command(value)
-    if normalized_key in UNSAFE_TEXT_FIELDS and _has_value(value):
+    if normalized_key is not None and normalized_key in UNSAFE_TEXT_FIELDS and _has_value(value):
         return UNSAFE_TEXT_FIELDS[normalized_key]
     if _is_secret_value_key(normalized_key) and not isinstance(value, bool | type(None)):
         return REDACTED_SECRET

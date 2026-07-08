@@ -407,9 +407,8 @@ markers = [
 
 [tool.mypy]
 python_version = "3.11"
-# Lenient-start: the default pass is informational and never fails on
-# missing optional-dependency stubs (numpy / onnxruntime / openai-agents /
-# livekit etc. are not installed in the lint env).
+# Never fail on missing optional-dependency stubs (numpy / onnxruntime /
+# openai-agents / livekit etc. are not installed in the lint env).
 ignore_missing_imports = true
 namespace_packages = true
 explicit_package_bases = true
@@ -421,19 +420,22 @@ mypy_path = "src"
 exclude = [
     "src/easycat/cli/scaffold/templates/",
 ]
-# Keep the default whole-repo pass quiet and non-pedantic so it is a
-# pleasant "informational" signal; the gated core lives in the override
-# below and is ratcheted package-by-package.
+# The whole-repo pass is the CI gate (`just typecheck`); the strict-core
+# override below layers check_untyped_defs/warn_unused_ignores on top and
+# is ratcheted package-by-package.
 warn_unused_ignores = false
 warn_redundant_casts = true
 
-# --- GATED core: every module listed here is clean (0 errors) under the
-# --- stricter settings below and is graded by `just typecheck` / CI.
-# --- The path list lives in the justfile (`mypy_gated_paths`); keep the
-# --- two in sync when ratcheting. Remaining ratchet candidates (advisory
-# --- whole-repo pass: ~72 errors across optional providers / config /
-# --- cli / debugger today):
-# ---   easycat.config.* / easycat.cli.* / provider subpackages
+# Vendored FunASR VAD runtime: numeric code adapted from upstream FunASR.
+# Hand-annotating vendored code is churn without value; keep it out of the
+# whole-repo error count.
+[[tool.mypy.overrides]]
+module = ["easycat.vad._funasr_runtime.*"]
+ignore_errors = true
+
+# --- Strict core: every module listed here is additionally clean under
+# --- check_untyped_defs / warn_unused_ignores. The whole-repo pass gates CI
+# --- (`just typecheck`); grow this list as packages are ratcheted stricter.
 # --- NOTE: deliberately NOT enabling warn_return_any here - it surfaces
 # --- a no-any-return error in debug/bundle.py:205 and would turn the
 # --- gate RED. Add it (and fix the return) in a later ratchet.

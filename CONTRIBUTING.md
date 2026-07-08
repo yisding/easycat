@@ -48,8 +48,7 @@ you can copy out of the `justfile`. Install it with `uv tool install rust-just`,
 | Lint auto-fix | `just lint-fix` | `uv run ruff check --fix .` |
 | Format | `just fmt` | `uv run ruff format .` |
 | Format check | `just fmt-check` | `uv run ruff format --check .` |
-| Type gate (mypy, clean core) | `just typecheck` | `uv run mypy --follow-imports=silent src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py src/easycat/debugger/_aec_routes.py` |
-| Type report (mypy, whole repo) | `just typecheck-all` | `uv run mypy src/easycat` |
+| Type gate (mypy, whole repo) | `just typecheck` | `uv run mypy src/easycat` |
 | Fast types (ty, advisory) | `just typecheck-fast` | `uvx ty check src/easycat` |
 | Coverage | `just cov` | `uv run pytest -n auto --dist loadscope --cov --cov-report=term-missing -m "not integration_socket and not integration_live and not integration_external and not contract and not slow and not stress and not flaky"` |
 | Validate (quick) | `just validate-quick` | `uv run easycat validate quick` |
@@ -81,9 +80,9 @@ in the `justfile`, then re-run the script.
 | Guard maintained Markdown links, anchors, and docs-route Markdown targets | `just guard-markdown` | `uv run pytest tests/test_markdown_links.py tests/docs/test_route_registry.py::test_cli_docs_routes_resolve_locally tests/cli/test_app.py::test_docs_route_paths_resolve_to_local_sources` |
 <!-- END auto:guard-commands -->
 
-> `mypy` ships in the `dev` group, so `just typecheck` / `just typecheck-all`
-> work right after `uv sync --group dev`. `just typecheck-fast` runs Astral
-> `ty` on demand via `uvx` (no install needed; it's advisory, not a gate).
+> `mypy` ships in the `dev` group, so `just typecheck` works right after
+> `uv sync --group dev`. `just typecheck-fast` runs Astral `ty` on demand
+> via `uvx` (no install needed; it's advisory, not a gate).
 > `just cov` is plain `pytest --cov` and has no type-checker dependency.
 
 If local tests emit dependency warnings right after a lockfile or Dependabot
@@ -339,10 +338,10 @@ use the matching raw command from
 
 - `just check` is green (format + lint + tests).
 - New code is typed (Python `>=3.11`, typing-first). `mypy` is the
-  authoritative type checker: `just typecheck` gates the clean core
-  (`easycat.debug`, `easycat.runtime`, `easycat.stages`, `easycat.session`,
-  and `easycat.integrations`) and must stay green, while `just typecheck-all`
-  is the advisory whole-repo report we ratchet down over time.
+  authoritative type checker: `just typecheck` gates the whole package at
+  zero errors (vendored `vad/_funasr_runtime` excluded), with stricter
+  checks layered on the core packages (`easycat.debug`, `easycat.runtime`,
+  `easycat.stages`, `easycat.session`, and `easycat.integrations`).
   `just typecheck-fast` (Astral `ty`) is faster local feedback but advisory
   only (beta).
 - **Patch coverage**: cover the lines your PR changes (`just cov` locally).

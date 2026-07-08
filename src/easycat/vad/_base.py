@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterator
 from numbers import Real
-from typing import Literal, TypeAlias, cast
+from typing import Literal, TypeAlias
 
 from easycat.events import Event, VADStartSpeaking, VADStopSpeaking
 
@@ -19,7 +19,7 @@ def _validate_vad_backend(backend: str) -> VADBackend:
     if backend not in _VALID_VAD_BACKENDS:
         allowed = ", ".join(_VALID_VAD_BACKENDS)
         raise ValueError(f"Unknown VAD backend '{backend}'. Expected one of: {allowed}.")
-    return cast(VADBackend, backend)
+    return backend
 
 
 def _validate_vad_sensitivity(sensitivity: float) -> None:
