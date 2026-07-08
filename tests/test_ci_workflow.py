@@ -737,7 +737,7 @@ def test_nightly_extras_matrix_install_tests_every_optional_extra() -> None:
     for phrase in (
         "cartesia is an empty marker extra",
         "funasr-vad uses EasyCat's bundled model plus in-tree runtime",
-        "pydantic-ai and pydantic-ai-v2-beta are mutually exclusive",
+        "pydantic-ai and pydantic-ai-v2 are mutually exclusive",
         "ten-vad is deliberately excluded",
     ):
         assert phrase in text, f"nightly workflow must document the known cell: {phrase!r}"

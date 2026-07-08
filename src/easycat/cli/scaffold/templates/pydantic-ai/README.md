@@ -74,7 +74,7 @@ uv run pytest
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
   `uv add "pydantic-ai[groq]<2"` for stable v1, or
-  `uv add "pydantic-ai[groq]==2.0.0b7"` to opt into the v2 beta.
+  `uv add "pydantic-ai[groq]>=2.0.0,<3.0.0"` for the stable v2 release.
 - **Need multiple agents?** Scaffold the workflow template:
   `uv run easycat init my-workflow --template pydantic-ai-workflow`.
   It shows a two-specialist `on_user_turn(...)` workflow that EasyCat
