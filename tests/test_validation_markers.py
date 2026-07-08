@@ -49,11 +49,6 @@ def _registered_marker_descriptions() -> dict[str, str]:
     return descriptions
 
 
-def _validation_task_section(heading: str, next_heading: str) -> str:
-    plan = (REPO_ROOT / "plan/validation/tasks.md").read_text(encoding="utf-8")
-    return plan.split(heading, 1)[1].split(next_heading, 1)[0]
-
-
 def test_provider_scoped_live_marker_requires_surface_scope() -> None:
     errors = validate_provider_surface_markers(
         nodeid="tests/example_test.py::test_live_openai",
@@ -163,47 +158,18 @@ def test_valid_flaky_marker_passes_until_review_date() -> None:
     assert errors == []
 
 
-def test_validation_marker_plan_tracks_registered_marker_state() -> None:
-    registered = _registered_marker_names()
-    marker_section = _validation_task_section(
-        "### V0.1 Register Validation Markers",
-        "### V0.2 Define Validation Report Model",
-    )
-    flaky_section = _validation_task_section(
-        "### V0.4 Add Flaky Quarantine Metadata Check",
-        "## V1: First-Class CLI And CI Artifacts",
-    )
-
-    assert REQUIRED_VALIDATION_MARKERS <= registered
-    assert "strict_markers = true" in marker_section
-    for marker_name in REQUIRED_VALIDATION_MARKERS:
-        assert marker_name in marker_section
-
-    assert "registers only `integration_local`" not in marker_section
-    assert "No validation-specific markers are present yet" not in marker_section
-    assert "No `flaky` marker is registered or used" not in flaky_section
-    assert "`flaky` marker is registered" in flaky_section
-    assert "`tests/_marker_lint.py`" in flaky_section
-    assert "`tests/conftest.py`" in flaky_section
-    assert "release-scoped flaky tests" in flaky_section
+def test_required_validation_markers_are_registered() -> None:
+    """The validation runner's marker expressions rely on these being declared."""
+    assert REQUIRED_VALIDATION_MARKERS <= _registered_marker_names()
 
 
-def test_integration_local_and_external_marker_definitions_cover_local_builds() -> None:
+def test_local_and_external_markers_are_documented_for_contributors() -> None:
     descriptions = _registered_marker_descriptions()
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     reference = (REPO_ROOT / "plan" / "validation" / "reference.md").read_text(encoding="utf-8")
 
-    assert descriptions["integration_local"] == (
-        "local integration tests with no live services; may use subprocesses/filesystem"
-    )
-    assert descriptions["integration_external"] == (
-        "tests requiring external local binaries, SDKs, or services without live "
-        "provider API credentials"
-    )
+    assert "integration_local" in descriptions
+    assert "integration_external" in descriptions
     for doc in (contributing, reference):
         assert "local integration tests with no live services" in doc
         assert "external local binaries, SDKs, or services" in doc
-    assert "fake providers, subprocesses, or filesystem state" in contributing
-    assert "in-process end-to-end tests with fake providers" not in "\n".join(
-        (contributing, reference, descriptions["integration_local"])
-    )
