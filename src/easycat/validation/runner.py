@@ -57,6 +57,7 @@ from easycat.validation.report import (
     ValidationCheck,
     ValidationFailure,
     ValidationSkip,
+    ValidationStatus,
     redact_runtime_secrets,
 )
 
@@ -70,11 +71,22 @@ VALIDATION_SELECTORS = {
     "contracts": "contract and not integration_live and not flaky",
 }
 
+# Per-slice pytest arguments beyond the shared -q/junit/marker shape. The
+# quick slice is xdist-safe by design (`just test-fast` runs the same marker
+# expression with the same flags); `loadscope` keeps each module's tests on
+# one worker so event-loop/socket/port state never crosses workers. The
+# socket, stress, and contracts lanes stay serial: socket binds localhost
+# ports and stress measures timing-sensitive saturation signals.
+VALIDATION_SLICE_PYTEST_ARGS: dict[str, tuple[str, ...]] = {
+    "quick": ("-n", "auto", "--dist", "loadscope"),
+}
+
 DEFAULT_RELEASE_EXTRAS = ("openai", "openai-agents")
 DEFAULT_RELEASE_PROVIDERS = ("openai",)
 DEFAULT_RELEASE_SURFACES = ("stt", "tts")
 RELEASE_SLICES = ("quick", "stress", "contracts")
-RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "hypothesis")
+# pytest-xdist is required because the quick slice runs with -n auto.
+RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "pytest-xdist", "hypothesis")
 _RELEASE_IMPORT_SMOKE = """
 import os
 import pathlib
@@ -161,6 +173,7 @@ def run_validation_slice(
     command = [
         *_pytest_command_prefix(),
         "-q",
+        *VALIDATION_SLICE_PYTEST_ARGS.get(slice_name, ()),
         *_validation_test_paths(),
         f"--junitxml={junit_path}",
         "-m",
@@ -201,7 +214,7 @@ def run_validation_slice(
         reliability_budget_failure = _reliability_budget_failure(reliability_samples)
     if reliability_failure is not None or reliability_budget_failure is not None:
         exit_code = 1
-    status = "pass" if exit_code == 0 else "fail"
+    status: ValidationStatus = "pass" if exit_code == 0 else "fail"
 
     check_artifacts: dict[str, ArtifactRef] = {
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
@@ -424,7 +437,7 @@ def run_latency_validation(
         or baseline_regression_failure is not None
     ):
         exit_code = 1
-    status = "pass" if exit_code == 0 else "fail"
+    status: ValidationStatus = "pass" if exit_code == 0 else "fail"
     check_artifacts: dict[str, ArtifactRef] = {
         "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
         "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
@@ -656,6 +669,7 @@ def run_live_validation(
             stdout_log.append(command_result.stdout)
             stderr_log.append(command_result.stderr)
             tool_exit_codes[f"pytest.{spec.provider}.{spec.surface}"] = command_result.exit_code
+            check_status: ValidationStatus
             if command_result.exit_code == 0:
                 check_status = "pass"
                 state: ProviderCheckState | str = ProviderCheckState.PASSED
@@ -721,7 +735,7 @@ def run_live_validation(
     duration_s = time.perf_counter() - started_monotonic
     finished_at = datetime.now(UTC)
     exit_code = 1 if failures else 0
-    status = "fail" if failures else "pass"
+    status: ValidationStatus = "fail" if failures else "pass"
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
@@ -821,7 +835,7 @@ def run_release_validation(
         result = command_runner(command, env=env, cwd=cwd)
         duration_s = time.perf_counter() - started
         tool_exit_codes[name] = result.exit_code
-        status = "pass" if result.exit_code == 0 else "fail"
+        status: ValidationStatus = "pass" if result.exit_code == 0 else "fail"
         details = {"cwd": str(cwd)} if cwd is not None else {}
         checks.append(
             ValidationCheck(
@@ -1083,7 +1097,7 @@ def run_release_validation(
     finished_at = datetime.now(UTC)
     duration_s = time.perf_counter() - started_monotonic
     exit_code = 1 if failures else 0
-    status = "fail" if failures else "pass"
+    status: ValidationStatus = "fail" if failures else "pass"
 
     stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
     stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
@@ -1529,11 +1543,11 @@ def _temporary_environ(overrides: Mapping[str, str]) -> Iterator[None]:
             os.environ[name] = value
         yield
     finally:
-        for name, value in previous.items():
-            if value is None:
+        for name, previous_value in previous.items():
+            if previous_value is None:
                 os.environ.pop(name, None)
             else:
-                os.environ[name] = value
+                os.environ[name] = previous_value
 
 
 def _run_subprocess(

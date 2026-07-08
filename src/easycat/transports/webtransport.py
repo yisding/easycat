@@ -890,7 +890,7 @@ def _get_protocol_class() -> type:
     if _PROTOCOL_CLASS_CACHE is not None:
         return _PROTOCOL_CLASS_CACHE
 
-    aioquic_proto = require_module(
+    aioquic_proto: Any = require_module(
         "aioquic.asyncio.protocol", extra="webtransport", purpose="WebTransport transport"
     )
     h3_conn = require_module(
@@ -915,7 +915,7 @@ def _get_protocol_class() -> type:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
-            self._h3 = None
+            self._h3: Any = None
             # NOTE: do *not* name this ``self._wt_transport`` — the aioquic
             # ``QuicConnectionProtocol`` base class already owns that attribute
             # for the asyncio ``DatagramTransport`` (assigned in

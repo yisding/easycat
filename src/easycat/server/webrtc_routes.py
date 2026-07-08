@@ -58,7 +58,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from easycat.server._webrtc_handlers import WebRTCSignalingHandlers
 from easycat.transports.webrtc import (
@@ -387,9 +387,9 @@ class WebRTCRoutes:
 
         built = self._config_factory(transport)
         if hasattr(built, "start") and hasattr(built, "stop"):
-            session = built
+            session = cast("Session", built)
         else:
-            session = create_session(built)
+            session = create_session(cast("EasyConfig", built))
         if self._runtime_feedback:
             from easycat.helpers import attach_runtime_feedback
 

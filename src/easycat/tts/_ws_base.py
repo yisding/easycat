@@ -45,6 +45,8 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
     _error_stage = ErrorStage.TTS
     # Human-readable label used in log lines (e.g. ``"Cartesia"``).
     _provider_log_label: str = "TTS"
+    # Provider config, set by subclasses (see class docstring).
+    _config: Any
 
     def __init__(self, output_format: AudioFormat = PCM16_MONO_24K) -> None:
         super().__init__(output_format=output_format)

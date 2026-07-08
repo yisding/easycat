@@ -172,11 +172,11 @@ def _normalize_short_code_for_tts(code: str) -> str:
 
     normalized_chars: list[str] = []
     for ch in normalized:
-        spoken = _SINGLE_CHAR_CODE_SPEECH.get(ch)
-        if spoken is None:
+        char_spoken = _SINGLE_CHAR_CODE_SPEECH.get(ch)
+        if char_spoken is None:
             normalized_chars.append(ch)
             continue
-        normalized_chars.append(f" {spoken} ")
+        normalized_chars.append(f" {char_spoken} ")
 
     normalized = "".join(normalized_chars)
     normalized = _WS_RE.sub(" ", normalized).strip()

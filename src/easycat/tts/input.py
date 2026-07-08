@@ -134,7 +134,7 @@ def coerce_tts_input(payload: TTSInput | str) -> TTSInput:
     return TTSInput(text=payload, format="plain")
 
 
-def resolve_tts_input_policy(provider: object) -> TTSInputPolicy:
+def resolve_tts_input_policy(provider: Any) -> TTSInputPolicy:
     """Return a provider's typed input policy, with legacy SSML fallback.
 
     Providers that expose ``input_policy`` must return :class:`TTSInputPolicy`.

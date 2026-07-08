@@ -442,10 +442,10 @@ class SessionAudioBroadcaster:
             turn_id=event.turn_id,
             timestamp=event.timestamp,
         )
-        frame = self._prepare_frame(frame)
-        if frame is None:
+        prepared = self._prepare_frame(frame)
+        if prepared is None:
             return
-        self._broadcast(frame)
+        self._broadcast(prepared)
 
     def _prepare_frame(self, frame: SupervisorAudioFrame) -> SupervisorAudioFrame | None:
         if self._consent_hook is not None:

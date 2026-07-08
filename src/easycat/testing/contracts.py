@@ -115,6 +115,7 @@ class ContractSuite:
                 pytrace=False,
             )
         if isinstance(factory, staticmethod | classmethod):
+            assert cls.provider_factory is not None
             return cls.provider_factory()
         return factory()
 

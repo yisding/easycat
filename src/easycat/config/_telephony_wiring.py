@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.telephony.call_state import OutboundCallStateMachine
     from easycat.telephony.compliance import DNCStore
+    from easycat.telephony.outbound import OutboundCallManager
     from easycat.telephony.screening import CallScreeningDetector
 
     from .easy import OutboundCallConfig, TelephonyConfig
@@ -116,7 +117,7 @@ def _build_outbound_helpers(
         VoicemailPolicyHandler,
     )
 
-    OutboundCallManager = _factory.OutboundCallManager
+    outbound_call_manager_cls: type[OutboundCallManager] = _factory.OutboundCallManager
 
     helpers = result.helpers
 
@@ -232,7 +233,7 @@ def _build_outbound_helpers(
     manager: OutboundCallManager | None = None
     if oc.twilio_account_sid and oc.twilio_auth_token:
         try:
-            manager = OutboundCallManager(
+            manager = outbound_call_manager_cls(
                 event_bus,
                 from_number=oc.from_number,
                 enable_realtime_transcription=oc.enable_realtime_transcription,

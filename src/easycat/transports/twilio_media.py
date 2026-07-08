@@ -141,7 +141,7 @@ def _parse_twilio_start_identity(
     excluded_parameter_names: set[str] | None = None,
 ) -> tuple[Any, str, str]:
     """Build a CallIdentity from Twilio ``start.customParameters``."""
-    from easycat.session._types import CallIdentity
+    from easycat.session._types import CallDirection, CallIdentity
 
     params: dict[str, str] = {}
     raw_params = start.get("customParameters") or {}
@@ -158,6 +158,7 @@ def _parse_twilio_start_identity(
         params.pop("Direction", "") or params.pop("direction", "")
     )
     direction_token = direction_raw.strip().lower()
+    direction: CallDirection
     if direction_token.startswith("outbound"):
         direction = "outbound"
     elif direction_token.startswith("inbound") or not direction_token:

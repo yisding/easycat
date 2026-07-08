@@ -51,8 +51,10 @@ def _zero_crossing_freq(samples: Sequence[int], sample_rate: int) -> float:
     return crossings * sample_rate / (2 * n)
 
 
+VoicemailResult = Literal["human", "machine", "unknown"]
+
 # Twilio AnsweredBy values -> EasyCat result mapping
-TWILIO_AMD_MAP: dict[str, str] = {
+TWILIO_AMD_MAP: dict[str, VoicemailResult] = {
     "human": "human",
     "machine_start": "machine",
     "machine_end_beep": "machine",
@@ -80,7 +82,7 @@ def parse_twilio_amd_webhook(params: dict[str, Any]) -> VoicemailDetected | None
     if not isinstance(answered_by, str) or not answered_by:
         return None
 
-    result = TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
+    result: VoicemailResult = TWILIO_AMD_MAP.get(answered_by.lower(), "unknown")
     call_sid = params.get("CallSid", "")
     return VoicemailDetected(result=result, call_sid=call_sid if isinstance(call_sid, str) else "")
 
@@ -768,8 +770,8 @@ class STTAMDFusionClassifier:
         self._prefer_stt = prefer_stt
         self._stt_timeout_s = stt_timeout_s
 
-        self._amd_result: str | None = None
-        self._stt_result: str | None = None
+        self._amd_result: VoicemailResult | None = None
+        self._stt_result: VoicemailResult | None = None
         self._call_sid: str = ""
         self._emitted = False
         self._started = False
@@ -894,7 +896,7 @@ class STTAMDFusionClassifier:
             # STT classified before AMD arrived — emit immediately.
             await self._emit(self._stt_result)
 
-    async def _emit(self, result: str) -> None:
+    async def _emit(self, result: VoicemailResult) -> None:
         if self._emitted:
             return
         self._emitted = True

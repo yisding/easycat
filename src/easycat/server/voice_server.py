@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from easycat.config import EasyConfig
+    from easycat.server.health import ServerState
     from easycat.session import Session
     from easycat.voice_app import VoiceApp
 
@@ -1002,7 +1003,7 @@ class VoiceServer:
     # the registered names/labels). Emission lives in the real lifecycle paths so
     # the same-PR registration is genuine, not test-only.
 
-    def _server_state(self) -> str:
+    def _server_state(self) -> ServerState:
         """Return the ``ServerState`` Literal for the current draining flag."""
         return "draining" if self._gate.is_draining else "serving"
 

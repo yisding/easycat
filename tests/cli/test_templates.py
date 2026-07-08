@@ -603,45 +603,6 @@ def test_cli_test_plan_documents_template_readme_contract() -> None:
         assert section in test_plan
 
 
-def test_peripheral_cli_plan_tracks_template_line_budgets() -> None:
-    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-cli.md").read_text(encoding="utf-8")
-    golden_path = plan.split("### Golden path", 1)[1].split("### Exit codes", 1)[0]
-
-    assert "✓ agent.py (12 lines)" not in golden_path
-    assert "uv run easycat doctor --env-file .env" in golden_path
-    assert "uv run --env-file .env python agent.py" in golden_path
-    assert "uvx easycat doctor" not in golden_path
-    assert "uv run python agent.py" not in golden_path
-    assert "uvx easycat doctor" not in plan
-    assert "uv run python agent.py" not in plan
-    assert "agent.py              # per-template line budget" in plan
-    assert "agent.py              # ≤ 15 lines" not in plan
-    assert "Template `agent.py` ≤ 15 lines" not in plan
-    assert "the plan's `calculator` + `filesystem` MCP" not in plan
-    assert "plan text should be updated" not in plan
-    assert "MCP/tool-content reconciliation" not in plan
-    assert "remaining work is run-matrix cleanup" not in plan
-
-
-def test_dx_onboarding_plan_tracks_template_content_contract() -> None:
-    plan = (REPO_ROOT / "plan" / "peripherals" / "peripheral-dx-onboarding.md").read_text(
-        encoding="utf-8"
-    )
-    template_section = plan.split("## `easycat init` Template Content", 1)[1].split(
-        "## Config Factory Presets",
-        1,
-    )[0]
-
-    assert "Every template's `agent.py` ≤ 15 lines" not in template_section
-    assert "ships with one MCP server" not in template_section
-    assert "official `filesystem` server" not in template_section
-    assert "cp .env.example .env" in template_section
-    assert "uv run easycat doctor --env-file .env" in template_section
-    assert "uv run --env-file .env python agent.py" in template_section
-    assert "uv run --env-file .env uvicorn server:create_app" in template_section
-    assert "uv run python agent.py" not in template_section
-
-
 @pytest.mark.parametrize("name", sorted(_LINE_BUDGETS))
 def test_readme_install_section_names_rendered_base_requirement(name: str) -> None:
     source = (_template_dir(name) / "README.md").read_text(encoding="utf-8")

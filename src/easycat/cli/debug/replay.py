@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import typer
 from rich.markup import escape
@@ -38,7 +38,7 @@ def _render_replay_summary(
     json_output: bool,
 ) -> None:
     stages = sorted({frame.stage for frame in result.frames if frame.stage})
-    summary = {
+    summary: dict[str, Any] = {
         "path": str(bundle_path),
         "fidelity_requested": spec.fidelity.value,
         "fidelity_effective": result.fidelity_label.value,

@@ -53,18 +53,11 @@ fmt:
 fmt-check:
     uv run ruff format --check .
 
-# Packages the blocking mypy gate covers (must stay at zero errors).
-# Keep in sync with the `[[tool.mypy.overrides]]` module list in
-# pyproject.toml; CI runs `just typecheck` so this is the single source
-# of truth for the gated paths.
-mypy_gated_paths := "src/easycat/debug src/easycat/runtime src/easycat/stages src/easycat/session src/easycat/integrations src/easycat/validation/_lane_harness.py src/easycat/debugger/_records.py src/easycat/debugger/_sources.py src/easycat/debugger/_aec_routes.py"
-
-# Authoritative type gate: the clean core CI gates on (must stay green).
+# Authoritative type gate: the whole package must stay at zero errors
+# (vendored vad/_funasr_runtime is excluded via a pyproject mypy override;
+# the core packages additionally run stricter checks — see the
+# [[tool.mypy.overrides]] tables).
 typecheck:
-    uv run mypy --follow-imports=silent {{ mypy_gated_paths }}
-
-# Advisory whole-repo mypy report (mirrors the non-blocking CI step).
-typecheck-all:
     uv run mypy src/easycat
 
 # Fast local-only type feedback via Astral ty (beta; not a CI gate).
@@ -95,11 +88,11 @@ guard-templates:
 
 # Guard contributor guidance, agent guide contracts, validation state, and route hints.
 guard-contributing:
-    uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/test_validation_plan.py tests/install/test_agent_guides.py
+    uv run pytest tests/test_contributing.py tests/docs/test_route_contracts.py::test_contributing_docs_route_matches_validation_lane_commands tests/test_regen_guard_commands.py tests/install/test_agent_guides.py
 
 # Guard validation workflow docs, validation reference docs, and validate CLI behavior.
 guard-validation:
-    uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/test_validation_plan.py tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
+    uv run pytest tests/docs/test_route_contracts.py::test_validation_docs_route_matches_validation_workflow_commands tests/docs/test_command_hints.py::test_validation_workflow_command_hints_are_locally_valid tests/docs/test_route_contracts.py::test_validation_reference_docs_route_matches_json_commands tests/cli/test_validate_report_model.py tests/cli/test_validate_live.py tests/cli/test_validate_runner.py tests/cli/test_validate_cli.py tests/cli/test_validate_report_cli.py tests/cli/test_latency_selectors_artifacts.py tests/cli/test_latency_reliability_failures.py tests/cli/test_latency_runner.py tests/cli/test_latency_cli.py tests/cli/test_latency_baseline_budgets.py
 
 # Guard provider contract docs, offline contract suite, contract kit, and provider wiring matrix.
 guard-contracts:

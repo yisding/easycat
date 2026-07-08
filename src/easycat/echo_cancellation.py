@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, TypeAlias
 
 from easycat._extras import require_module
 from easycat.audio_format import AudioChunk
@@ -42,7 +42,7 @@ def _validate_aec_fallback_policy(policy: str) -> EchoCancellationFallbackPolicy
         raise ValueError(
             f"Unknown echo cancellation fallback_policy '{policy}'. Expected one of: {allowed}."
         )
-    return cast(EchoCancellationFallbackPolicy, policy)
+    return policy
 
 
 def _frame_samples_for_rate(sample_rate: int) -> int:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
 from typing import Any
 
@@ -31,7 +31,7 @@ TTSConfigType = (
 # Registry of known provider names to their config/class pairs. Named to
 # mirror ``easycat.stt.factory._PROVIDER_TO_CONFIG`` so the two factories
 # stay symmetric.
-_PROVIDER_TO_CONFIG: dict[str, tuple[type[TTSProvider], TTSConfigType]] = {
+_PROVIDER_TO_CONFIG: dict[str, tuple[Callable[..., TTSProvider], TTSConfigType]] = {
     "openai": (OpenAITTS, OpenAITTSConfig),
     "deepgram": (DeepgramTTS, DeepgramTTSConfig),
     "elevenlabs": (ElevenLabsTTS, ElevenLabsTTSConfig),
@@ -82,7 +82,7 @@ _CATALOG = ProviderCatalog(
     kind="TTS",
     entry_point_group=TTS_PROVIDER_ENTRY_POINT_GROUP,
 )
-_CONFIG_TO_PROVIDER: dict[TTSConfigType, type[TTSProvider]] = _CATALOG.config_to_provider
+_CONFIG_TO_PROVIDER: dict[TTSConfigType, Callable[..., TTSProvider]] = _CATALOG.config_to_provider
 
 
 def register_tts_provider(
@@ -209,7 +209,7 @@ def create_tts_provider_from_config(config: TTSConfig, event_bus: EventBus) -> T
     return provider_cls(provider_config)
 
 
-def _provider_for_config(config_type: TTSConfigType) -> type[TTSProvider]:
+def _provider_for_config(config_type: TTSConfigType) -> Callable[..., TTSProvider]:
     return _CATALOG.provider_for_config(config_type)
 
 

@@ -45,6 +45,10 @@ class STTBase:
     ``_on_end`` to add provider-specific behaviour.
     """
 
+    # Batch-buffering state, set by subclasses that use ``_drain_buffer_to_wav``.
+    _buffer: bytearray
+    _audio_format: AudioFormat | None
+
     def __init__(self, *, expected_sample_rate: int | None = None) -> None:
         # ``expected_sample_rate`` controls the strict-rate contract enforced
         # by ``_validate_audio``. When set, ``send_audio`` rejects any chunk

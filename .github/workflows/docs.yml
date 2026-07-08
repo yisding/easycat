@@ -37,8 +37,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # actions/setup-python v5.6.0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      # actions/setup-python v6.3.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
       - name: Install docs dependencies
@@ -125,8 +125,8 @@ jobs:
       pages: write
       id-token: write
     steps:
-      # actions/configure-pages v5
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      # actions/configure-pages v6
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
         with:
           enablement: true
 

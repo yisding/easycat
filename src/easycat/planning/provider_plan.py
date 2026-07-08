@@ -33,7 +33,7 @@ import importlib.util
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from easycat.planning.transport_registry import (
     AGENT_BACKENDS,
@@ -548,7 +548,7 @@ def _select_from_profile(
     return selected
 
 
-def _is_voice_profile(config: Any) -> bool:
+def _is_voice_profile(config: Any) -> TypeGuard[VoiceProfile]:
     """Whether ``config`` is a manifest :class:`VoiceProfile`."""
     from easycat.project.schema import VoiceProfile
 

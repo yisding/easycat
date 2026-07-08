@@ -37,7 +37,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from hmac import compare_digest
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from easycat._net import is_loopback_host
 
@@ -96,7 +96,7 @@ def from_aiohttp_request(request: object) -> _Request:
     return _Request(authorization_header=auth, query_token=token)
 
 
-def from_websocket(headers: object, path: str) -> _Request:
+def from_websocket(headers: Any, path: str) -> _Request:
     """Adapt a raw-websocket request (``Headers`` + handshake ``path``).
 
     Used by the WebSocket ``process_request`` hook, which receives a
