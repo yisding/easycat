@@ -799,6 +799,14 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             return True
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send audio: Twilio disconnected")
+            # Emit the dead call's ``CallEnded`` BEFORE releasing the slot:
+            # once ``self._ws`` is cleared a replacement connection can claim
+            # it, and the old receive handler's reconnect-race-guarded finally
+            # (``_finalize_after_receive``) then skips its emit — a later
+            # ``start`` would overwrite the old call ids and observers would
+            # never see the previous call end. The once-only flag makes the
+            # finally's emit a no-op afterwards.
+            await self._emit_call_ended_once()
             # Mirror the connection-variant / WebSocket transports: clear
             # the live-client state so ``has_client``/``is_connected``/
             # ``wait_for_client`` stop reporting a peer once the socket drops.
@@ -836,6 +844,10 @@ class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):
             await ws.send(message)
         except websockets.exceptions.ConnectionClosed:
             logger.debug("Cannot send mark: Twilio disconnected")
+            # Same ordering as ``send_audio``: emit the dead call's
+            # ``CallEnded`` before releasing the slot to a replacement
+            # connection (see the reconnect-race note there).
+            await self._emit_call_ended_once()
             self._ws = None
             self._stream_sid = None
             self._client_connected.clear()

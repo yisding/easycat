@@ -487,11 +487,13 @@ class TestTwilioStreamLifecycleRaces:
         # Establish an active stream so ``send_audio`` actually attempts a send.
         await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
 
-        # ``send_audio`` notices the closed socket and clears the slot, letting a
+        # ``send_audio`` notices the closed socket, emits the dead call's
+        # ``CallEnded`` while it still owns the slot, then clears it, letting a
         # replacement connection be accepted before the stale ``finally`` runs.
         old_ws.fail_sends = True
         assert await transport.send_audio(make_chunk()) is False
         assert transport._ws is None
+        assert ended == ["CALL1"]
 
         new_task = asyncio.create_task(transport._handle_connection(new_ws))  # type: ignore[arg-type]
         await asyncio.wait_for(new_ws.entered.wait(), timeout=1.0)
@@ -504,11 +506,12 @@ class TestTwilioStreamLifecycleRaces:
         await transport._drain_emit_tasks()
 
         # The replacement must survive: the stale finally must not null ``_ws``,
-        # wipe the new stream, emit a spurious CallEnded, or poison the queue.
+        # wipe the new stream, emit a spurious CallEnded for the replacement
+        # call, or poison the queue.
         assert transport._ws is new_ws
         assert transport.stream_sid == "STREAM2"
         assert transport.call_sid == "CALL2"
-        assert ended == []
+        assert ended == ["CALL1"]
         assert transport._in_queue.empty()
 
         new_ws.release.set()
