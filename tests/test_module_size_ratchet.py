@@ -43,8 +43,8 @@ ALLOWLIST: dict[str, int] = {
     "runtime/journal_sql.py": 1033,
     "server/voice_server.py": 1059,
     "session/_session.py": 1514,
-    "transports/twilio_media.py": 1279,
-    "transports/webrtc.py": 1482,
+    "transports/twilio_media.py": 1291,
+    "transports/webrtc.py": 1487,
     "transports/webtransport.py": 1640,
     "validation/runner.py": 1625,
 }

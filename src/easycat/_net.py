@@ -33,6 +33,13 @@ def is_loopback_host(host: str | None) -> bool:
     if normalized == "localhost":
         return True
     try:
-        return ip_address(normalized).is_loopback
+        addr = ip_address(normalized)
     except ValueError:
         return False
+    # ``IPv6Address.is_loopback`` only unwraps IPv4-mapped addresses
+    # (``::ffff:127.0.0.1``) on Python 3.13+; unwrap explicitly so the
+    # answer is the same on every supported interpreter.
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        return mapped.is_loopback
+    return addr.is_loopback
