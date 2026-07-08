@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 conflicts = [[
     { package = "easycat", extra = "pydantic-ai" },
-    { package = "easycat", extra = "pydantic-ai-v2-beta" },
+    { package = "easycat", extra = "pydantic-ai-v2" },
 ]]
 
 [[package]]
@@ -65,7 +65,7 @@ dependencies = [
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/78/8ea7308cac6934de8c74a14f3d5f65d1c89287426688be79538d0e5c013d/aiohttp-3.14.1.tar.gz", hash = "sha256:307f2cff90a764d329e77040603fa032db89c5c24fdad50c4c15334cba744035", size = 7955794, upload-time = "2026-06-07T21:09:35.529Z" }
@@ -247,7 +247,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -297,7 +297,7 @@ version = "4.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
 wheels = [
@@ -537,7 +537,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -742,7 +742,7 @@ name = "click"
 version = "8.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9b/98/518d8e5081007684232226f475082b30087d0f585e8457db087298259f49/click-8.4.1.tar.gz", hash = "sha256:918b5633eddf6b41c32d4f454bf0de810065c74e3f7dbf8ee5452f8be88d3e96", size = 353007, upload-time = "2026-05-22T04:08:37.769Z" }
 wheels = [
@@ -960,7 +960,7 @@ wheels = [
 
 [package.optional-dependencies]
 toml = [
-    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "tomli", marker = "python_full_version <= '3.11' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 
 [[package]]
@@ -968,7 +968,7 @@ name = "cryptography"
 version = "48.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/12/45/870e7f4bef50e5f53b9f51d4428aee5290eedf58ba443f16b1ebb7ab8e66/cryptography-48.0.1.tar.gz", hash = "sha256:266f4ee051abb2f725b74ef8072b521ce1feacf685a3364fa6a6b45548db791a", size = 832989, upload-time = "2026-06-09T22:32:31.8Z" }
 wheels = [
@@ -1052,7 +1052,7 @@ version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/49/85/12f0a49a7c4ffb70572b6c2ef13c90c88fd190debda93b23f026b25f9634/deprecated-1.3.1.tar.gz", hash = "sha256:b1b50e0ff0c1fddaa5708a2c6b0a6588bb09b892825ab2b214ac9ea9d92a5223", size = 2932523, upload-time = "2025-10-30T08:19:02.757Z" }
 wheels = [
@@ -1182,11 +1182,8 @@ openai-agents = [
 pydantic-ai = [
     { name = "pydantic-ai", version = "1.107.0", source = { registry = "https://pypi.org/simple" } },
 ]
-pydantic-ai-v2-beta = [
-    { name = "pydantic-ai", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
-    { name = "pydantic-ai-slim", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
-    { name = "pydantic-evals", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
-    { name = "pydantic-graph", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
+pydantic-ai-v2 = [
+    { name = "pydantic-ai", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
 ]
 quickstart = [
     { name = "livekit" },
@@ -1296,10 +1293,7 @@ requires-dist = [
     { name = "phonenumberslite", marker = "extra == 'all'", specifier = ">=9.0.32" },
     { name = "phonenumberslite", marker = "extra == 'telephony'", specifier = ">=9.0.32" },
     { name = "pydantic-ai", marker = "extra == 'pydantic-ai'", specifier = ">=1.99.0,<2.0.0" },
-    { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
-    { name = "pydantic-ai-slim", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
-    { name = "pydantic-evals", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
-    { name = "pydantic-graph", marker = "extra == 'pydantic-ai-v2-beta'", specifier = "==2.0.0b7" },
+    { name = "pydantic-ai", marker = "extra == 'pydantic-ai-v2'", specifier = ">=2.0.0,<3.0.0" },
     { name = "pyrnnoise", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'quickstart'", specifier = ">=0.3.0" },
     { name = "pyrnnoise", marker = "extra == 'rnnoise'", specifier = ">=0.3.0" },
@@ -1322,7 +1316,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'telephony'", specifier = ">=0.29.0" },
     { name = "websockets", specifier = ">=15.0.1,<17" },
 ]
-provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2-beta", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
+provides-extras = ["openai-agents", "pydantic-ai", "pydantic-ai-v2", "langchain", "langgraph", "llama-agents", "openai", "deepgram", "elevenlabs", "cartesia", "telephony", "aec", "local", "rnnoise", "ten-vad", "silero-vad", "funasr-vad", "smart-turn", "debugger", "webrtc", "webtransport", "quickstart", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1472,7 +1466,7 @@ version = "3.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "platformdirs" },
-    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "pydantic", extra = ["email"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -1490,8 +1484,8 @@ client = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "opentelemetry-api", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "starlette" },
 ]
 server = [
@@ -1700,15 +1694,15 @@ wheels = [
 
 [[package]]
 name = "genai-prices"
-version = "0.0.66"
+version = "0.0.70"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx2" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/7c/c50fc8d18b283e9b56ff625d45dbe9577c676e1d16636c1011967182d813/genai_prices-0.0.66.tar.gz", hash = "sha256:f087dfe56da28a4c3933dcf846cf2b7111ba733cef674c0cbc66de80212bcd6b", size = 71130, upload-time = "2026-06-09T21:51:14.561Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/7c/e8bdd653fb9b292a920b6568b3949176b8de98ad2f84fede2ce44bf318d9/genai_prices-0.0.70.tar.gz", hash = "sha256:62d495aa867bb360ea359866b01d89932365417ba3bd013e0ba7c1d884e09ef9", size = 81827, upload-time = "2026-07-07T18:11:03.667Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/87/1a36166f91906e47f430f6d4150ec6bfc0001032a363e49fc389021c0609/genai_prices-0.0.66-py3-none-any.whl", hash = "sha256:86b83f107c1cf04bb449a120cd8d4439ceb6843660d9128cde560eb511686d7b", size = 73745, upload-time = "2026-06-09T21:51:13.523Z" },
+    { url = "https://files.pythonhosted.org/packages/34/09/02ec13cb9108862a514cf05ea10ff7f18e523698606ed2976e2cbfa484fa/genai_prices-0.0.70-py3-none-any.whl", hash = "sha256:c7cb9da4944860329450b086dad402f17237b7552165fd3b61b24e291d1ddb88", size = 84312, upload-time = "2026-07-07T18:11:02.373Z" },
 ]
 
 [[package]]
@@ -1766,7 +1760,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "distro" },
-    { name = "google-auth", extra = ["requests"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "google-auth", extra = ["requests"], marker = "extra == 'extra-7-easycat-pydantic-ai' or extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "requests" },
@@ -2173,7 +2167,7 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "zipp", marker = "(python_full_version < '3.13' and extra == 'extra-7-easycat-pydantic-ai-v2-beta') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "zipp", marker = "(python_full_version < '3.13' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -2474,8 +2468,8 @@ name = "keyring"
 version = "25.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
-    { name = "importlib-metadata", version = "9.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai-v2-beta') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "importlib-metadata", version = "8.7.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "importlib-metadata", version = "9.0.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.12' and extra == 'extra-7-easycat-pydantic-ai-v2') or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "jaraco-classes" },
     { name = "jaraco-context" },
     { name = "jaraco-functools" },
@@ -2603,7 +2597,7 @@ dependencies = [
     { name = "langchain-protocol" },
     { name = "langsmith" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "tenacity" },
@@ -2692,9 +2686,9 @@ version = "0.8.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
-    { name = "orjson", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "orjson", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "requests-toolbelt" },
@@ -2713,8 +2707,8 @@ name = "libcst"
 version = "1.8.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyyaml", marker = "python_full_version != '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
-    { name = "pyyaml-ft", marker = "python_full_version == '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "pyyaml", marker = "python_full_version != '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
+    { name = "pyyaml-ft", marker = "python_full_version == '3.13.*' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/cd/337df968b38d94c5aabd3e1b10630f047a2b345f6e1d4456bd9fe7417537/libcst-1.8.6.tar.gz", hash = "sha256:f729c37c9317126da9475bdd06a7208eb52fcbd180a6341648b45a56b4ba708b", size = 891354, upload-time = "2025-11-03T22:33:30.621Z" }
 wheels = [
@@ -2919,11 +2913,11 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "executing" },
     { name = "opentelemetry-exporter-otlp-proto-http", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-exporter-otlp-proto-http", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "opentelemetry-instrumentation", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "opentelemetry-sdk", version = "1.39.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
     { name = "protobuf" },
     { name = "rich" },
     { name = "typing-extensions" },
@@ -2936,7 +2930,7 @@ wheels = [
 [package.optional-dependencies]
 httpx = [
     { name = "opentelemetry-instrumentation-httpx", version = "0.60b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "opentelemetry-instrumentation-httpx", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-instrumentation-httpx", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 
 [[package]]
@@ -3050,7 +3044,7 @@ dependencies = [
     { name = "kiwisolver" },
     { name = "numpy" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
     { name = "pillow" },
     { name = "pyparsing" },
     { name = "python-dateutil" },
@@ -3117,12 +3111,12 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "sse-starlette" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/27/3c/347cf965d313f5d41764e7d46bea6ffe7d9ef13b983cc429b0340962a082/mcp-1.27.2.tar.gz", hash = "sha256:8e02db104096d1c25b28e64bde29a5c32b31bc241710213e12fd4d84985bdfef", size = 621116, upload-time = "2026-05-29T17:16:04.039Z" }
 wheels = [
@@ -3318,7 +3312,7 @@ version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ast-serialize" },
-    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
@@ -3480,7 +3474,7 @@ dependencies = [
     { name = "flatbuffers" },
     { name = "numpy" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
     { name = "protobuf" },
 ]
 wheels = [
@@ -3590,7 +3584,7 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b4/1c/125e1c936c0873796771b7f04f6c93b9f1bf5d424cea90fda94a99f61da8/opentelemetry_api-1.42.1.tar.gz", hash = "sha256:56c63bea9f77b62856be8c47600474acad853b2924b99b1687c4cb6297166716", size = 72296, upload-time = "2026-05-21T16:32:49.335Z" }
 wheels = [
@@ -3626,7 +3620,7 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/9c/216acfeaedadf2e1937f4373929b20f73197c5c4a2546d4f584b7fa63813/opentelemetry_exporter_otlp_proto_common-1.42.1.tar.gz", hash = "sha256:04f1f01fb597c4249dfcd7f8b861c902c2102369d376d9d346ff38de4469a2ee", size = 21433, upload-time = "2026-05-21T16:32:55.526Z" }
 wheels = [
@@ -3668,13 +3662,13 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "googleapis-common-protos", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-exporter-otlp-proto-common", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-proto", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-sdk", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "requests", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/77/32/826bfa1d80ecea24f47808de03cd4a0d13c17ecc07712f45123f0f61e4ac/opentelemetry_exporter_otlp_proto_http-1.42.1.tar.gz", hash = "sha256:bf142a21035d7571ac3a09cb2e5639f49886f243972883cfe777ed3bf02b734d", size = 25406, upload-time = "2026-05-21T16:32:56.807Z" }
 wheels = [
@@ -3713,10 +3707,10 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/da/6d/4de72d97ff54db1ed270c7a59c9b904b917c0ac7af429c086c388b824ddb/opentelemetry_instrumentation-0.63b1.tar.gz", hash = "sha256:32368d6ae52c8de20aa790a6ad86b10a76f09956092337ae37d675773990e541", size = 41081, upload-time = "2026-05-21T16:36:14.206Z" }
 wheels = [
@@ -3756,11 +3750,11 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-instrumentation", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-util-http", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/02/27/c2b4335bca030e893acbe5ff2b4f434868773bf94508be7e6bf5af981b24/opentelemetry_instrumentation_httpx-0.63b1.tar.gz", hash = "sha256:f41ec82f25c3abcdada621052db3e5fd648e3b43d55eec4b9c0c5d3ecb7b4ff4", size = 23557, upload-time = "2026-05-21T16:36:34.583Z" }
 wheels = [
@@ -3796,7 +3790,7 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "protobuf", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "protobuf", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b4/55/63eac3e1089b768ba014091fdd2ae8a9a440c821ef5e2b786909c94c8836/opentelemetry_proto-1.42.1.tar.gz", hash = "sha256:c6a51e6b4f05ae63565f3a113217f3d2bfaec68f78c02d7a6c85f9010d1cfca6", size = 45839, upload-time = "2026-05-21T16:33:03.937Z" }
 wheels = [
@@ -3834,9 +3828,9 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "opentelemetry-semantic-conventions", version = "0.63b1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/40/f7/b390bd9bfd703bf98a68fea1f27786c6872331fd617164a54b8a59bdc008/opentelemetry_sdk-1.42.1.tar.gz", hash = "sha256:8c834e8f8c9ba4171d4ec843d0cb8a67e4c7394d3f9e9297e582cbd9456ddbf7", size = 239262, upload-time = "2026-05-21T16:33:04.641Z" }
 wheels = [
@@ -3873,8 +3867,8 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
-    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
+    { name = "typing-extensions", marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/93/99/4d7dd6df64795951413ce6e815f8cf1eb191daf7196ae86574589643d5f3/opentelemetry_semantic_conventions-0.63b1.tar.gz", hash = "sha256:3daf963611334b365e98a57438183eb012d3bfb40b2d931a9af613476b8701a9", size = 148340, upload-time = "2026-05-21T16:33:05.455Z" }
 wheels = [
@@ -4438,7 +4432,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-ai"
-version = "2.0.0b7"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -4447,11 +4441,11 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 dependencies = [
-    { name = "pydantic-ai-slim", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" }, extra = ["anthropic", "cli", "evals", "google", "logfire", "mcp", "openai", "retries", "web"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "pydantic-ai-slim", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, extra = ["anthropic", "cli", "evals", "google", "logfire", "mcp", "openai", "retries", "web"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/32/3bb0969d97f81af6f5d3936cd368b6fef61c911a4624df46476960cca6a1/pydantic_ai-2.0.0b7.tar.gz", hash = "sha256:45885a0d6100798aa25786163694657bc8afa44bfc8894658b7a9c01eaf0c95b", size = 17800, upload-time = "2026-06-10T15:05:34.319Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/fa/357b0627b7e9a1266f58b6ab89ed557a3af0d6b0231e0f60c9ea94103979/pydantic_ai-2.6.0.tar.gz", hash = "sha256:8d484dfe2dad82c5dcb2ec3b7bcaa6c044053fa1be4aab24373113a7cef46b1b", size = 18520, upload-time = "2026-07-08T01:34:53.773Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/64/14/19636ba7a56c29f22b3e4586c1741c43e9cccfe7c23a4901cce6f77b7ba2/pydantic_ai-2.0.0b7-py3-none-any.whl", hash = "sha256:6810f985cb2696c9c52ae6eb27a41e0575352313f66448d50c41b85cbe10b3d7", size = 7580, upload-time = "2026-06-10T15:05:26.178Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/ad/97fd7f7d9b9991edee60effdb7d225a0e5addeb9a19f9798e36131479676/pydantic_ai-2.6.0-py3-none-any.whl", hash = "sha256:abc780d5bc374f9bc6b29876cddec2844da933b46ff354b9e8623bf9255287d5", size = 7714, upload-time = "2026-07-08T01:34:45.429Z" },
 ]
 
 [[package]]
@@ -4551,7 +4545,7 @@ xai = [
 
 [[package]]
 name = "pydantic-ai-slim"
-version = "2.0.0b7"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -4565,12 +4559,12 @@ dependencies = [
     { name = "httpx" },
     { name = "opentelemetry-api", version = "1.42.1", source = { registry = "https://pypi.org/simple" } },
     { name = "pydantic" },
-    { name = "pydantic-graph", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
+    { name = "pydantic-graph", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/86/a9/cc475293c8dfe6a34f4c910f092b4d68891eb4dc9ae4b9398a04729e667c/pydantic_ai_slim-2.0.0b7.tar.gz", hash = "sha256:682f314a97263115ec22036b1ce8ce2f77e6f678d140a97f2861420f06fd0ffa", size = 723605, upload-time = "2026-06-10T15:05:36.309Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/ed/ead2f430f20e001408e1b91fa910cacf4a39271470d55093c1e01ac9ff4c/pydantic_ai_slim-2.6.0.tar.gz", hash = "sha256:d6b6a473eaf58d0b54cfd71e94e9ee27aa149a1f7899be6ee880f1dcfddd958f", size = 780428, upload-time = "2026-07-08T01:34:56.021Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/08/40f82556458899ac335c7f30520f97748eef3f8b3689a2334c108574161f/pydantic_ai_slim-2.0.0b7-py3-none-any.whl", hash = "sha256:021605bab38fd3e8a3cab1a0c4438aaf2c8b8401503f349e71054b6514fafcc0", size = 893886, upload-time = "2026-06-10T15:05:29.264Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/5b/9c135d22d641e7cda457e86f065a246232ed02b529a5ea66b2e62d3e4ed6/pydantic_ai_slim-2.6.0-py3-none-any.whl", hash = "sha256:133764bd45a72db1bad38a2eaf136c73b0b51130e50a95bf328fe03be0197dbe", size = 956698, upload-time = "2026-07-08T01:34:48.298Z" },
 ]
 
 [package.optional-dependencies]
@@ -4585,16 +4579,16 @@ cli = [
     { name = "rich" },
 ]
 evals = [
-    { name = "pydantic-evals", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
+    { name = "pydantic-evals", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
 ]
 google = [
     { name = "google-genai" },
 ]
 logfire = [
-    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "logfire", extra = ["httpx"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 mcp = [
-    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta'" },
+    { name = "fastmcp-slim", extra = ["client"], marker = "extra == 'extra-7-easycat-pydantic-ai-v2'" },
 ]
 openai = [
     { name = "openai" },
@@ -4736,7 +4730,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-evals"
-version = "2.0.0b7"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -4748,13 +4742,13 @@ dependencies = [
     { name = "anyio" },
     { name = "logfire-api" },
     { name = "pydantic" },
-    { name = "pydantic-ai-slim", version = "2.0.0b7", source = { registry = "https://pypi.org/simple" } },
+    { name = "pydantic-ai-slim", version = "2.6.0", source = { registry = "https://pypi.org/simple" } },
     { name = "pyyaml" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a8/b6/157ba8c60cf28276743bb1a3189618ba01cde9fde262fe682a4acc117021/pydantic_evals-2.0.0b7.tar.gz", hash = "sha256:0f6c8f4ffdc6a12368fd3d2b98e51c02ce2ba290c65135f45fd1144ed63aff17", size = 75454, upload-time = "2026-06-10T15:05:37.807Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/ed/a66707bc63379cd49fe4622d0f062a335b8b8dd1711c8513a8bf5fa67232/pydantic_evals-2.6.0.tar.gz", hash = "sha256:343e3d334b4df98eda85b7a527d84a7bb2a8a39467d7f6eab910ad54beaeb583", size = 85013, upload-time = "2026-07-08T01:34:57.613Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/11/8bae97c1edfc3247781ace86143a3c58fd6c8db3b631b0e44381923808cb/pydantic_evals-2.0.0b7-py3-none-any.whl", hash = "sha256:94415bb087e6154d71d0d47b8c3f79aecbc4a9b53383f930e43d5e52bd8d6611", size = 89989, upload-time = "2026-06-10T15:05:30.972Z" },
+    { url = "https://files.pythonhosted.org/packages/98/08/e1654e2a68fa79d6c1ddf78028a92eebbb6a6cfc57992d8e3021c9374b30/pydantic_evals-2.6.0-py3-none-any.whl", hash = "sha256:15f2dd7b17543f383f4f2c44b4f1bb41705a9a9e3697b82db976de8e433a56a4", size = 100350, upload-time = "2026-07-08T01:34:50.327Z" },
 ]
 
 [[package]]
@@ -4780,7 +4774,7 @@ wheels = [
 
 [[package]]
 name = "pydantic-graph"
-version = "2.0.0b7"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -4794,9 +4788,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/23/cd/a2cb40cb223b726cdd529fc259204fb171ef01b2ccdbf07d70e7134ed081/pydantic_graph-2.0.0b7.tar.gz", hash = "sha256:68204d702f7bac618e76da42dfb3d1a2bde84c01a3f1e9131ca9f7c6715169a8", size = 43056, upload-time = "2026-06-10T15:05:38.818Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f1/36/ffa7fd44e7ec25ac00e82392ea0466a0a2f366ae492e5d534baa1113ef57/pydantic_graph-2.6.0.tar.gz", hash = "sha256:208e85a8c4e3767c535ab0971c77d659880652b8c116d2e7c07bca1ac8b9d097", size = 43902, upload-time = "2026-07-08T01:34:58.566Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/dd/aaddb1ef4c20c5e92f3c011e5597d078ed8c0138e6f3ae61405c66796ff7/pydantic_graph-2.0.0b7-py3-none-any.whl", hash = "sha256:5ff776825bd58328e780e14e6ff22722b23485f76bc9a252d76032b5011d0797", size = 50795, upload-time = "2026-06-10T15:05:32.337Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/47/944a2d9b46160a8c34ff74e59dd4b586113dfcae445fd08b4fa4b6d80db0/pydantic_graph-2.6.0-py3-none-any.whl", hash = "sha256:28b06ca1d96f896b1e606760edf04b7db321c035eadeb0e9fbcccebddfe125eb", size = 51646, upload-time = "2026-07-08T01:34:51.67Z" },
 ]
 
 [[package]]
@@ -4907,7 +4901,7 @@ version = "26.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1a/51/27a5ad5f939d08f690a326ef9582cda7140555180db71695f6fb747d6a36/pyopenssl-26.2.0.tar.gz", hash = "sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387", size = 182195, upload-time = "2026-05-04T23:06:09.72Z" }
 wheels = [
@@ -4955,10 +4949,10 @@ name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "iniconfig" },
     { name = "packaging", version = "25.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
     { name = "pluggy" },
     { name = "pygments" },
 ]
@@ -4973,7 +4967,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
@@ -5179,7 +5173,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
@@ -5647,7 +5641,7 @@ version = "7.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "wrapt", version = "1.17.3", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai'" },
-    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2-beta' or extra != 'extra-7-easycat-pydantic-ai'" },
+    { name = "wrapt", version = "2.2.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-7-easycat-pydantic-ai-v2' or extra != 'extra-7-easycat-pydantic-ai'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c5/65/3ada667d32675399001bf022ad3d9f3989b57101351ebc71d6fbe2384634/smart_open-7.6.1.tar.gz", hash = "sha256:4347996e7ba21db7cd1e059632e0b30395407e4f6c660d2ddffc8f2a9ae5f990", size = 54754, upload-time = "2026-05-09T06:23:37.06Z" }
 wheels = [
@@ -5728,7 +5722,7 @@ version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/e3/7c1dc7381d9f8ab7d854328ebfa884e62cb3f3d8549ddfd37c7814f42afa/starlette-1.3.1.tar.gz", hash = "sha256:05d0213193f2fbaae60e2ecb593b4add4262ad4e46536b54abe36f11a71724e0", size = 2703240, upload-time = "2026-06-12T09:23:11.602Z" }
 wheels = [
@@ -5929,7 +5923,7 @@ name = "tqdm"
 version = "4.68.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/85/05/0d5260f1f1ca784f4a4a0def9cbe6affe587f5b4025328d446c3d67765f4/tqdm-4.68.2.tar.gz", hash = "sha256:89c230e8dbc67c7615c142487111222f878c77427ea09549960f62389e258add", size = 171923, upload-time = "2026-06-09T13:26:42.539Z" }
 wheels = [
@@ -5966,7 +5960,7 @@ version = "0.26.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2-beta')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-7-easycat-pydantic-ai' and extra == 'extra-7-easycat-pydantic-ai-v2')" },
     { name = "rich" },
     { name = "shellingham" },
 ]

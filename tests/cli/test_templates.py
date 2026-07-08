@@ -855,15 +855,15 @@ def test_pydantic_ai_readme_points_to_workflow_template() -> None:
     assert "uv run easycat init my-workflow --template pydantic-ai-workflow" in readme
 
 
-def test_pydantic_ai_template_beta_pin_matches_project_extra() -> None:
+def test_pydantic_ai_template_v2_requirement_matches_project_extra() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2-beta"]
-    pins = [dep for dep in deps if dep.startswith("pydantic-ai==")]
-    assert len(pins) == 1
+    deps = pyproject["project"]["optional-dependencies"]["pydantic-ai-v2"]
+    specs = [dep for dep in deps if dep.startswith("pydantic-ai>=")]
+    assert len(specs) == 1
 
-    _, version = pins[0].split("==", 1)
+    constraint = specs[0].removeprefix("pydantic-ai")
     readme = (_template_dir("pydantic-ai") / "README.md").read_text(encoding="utf-8")
-    assert f"=={version}" in readme
+    assert f"pydantic-ai[groq]{constraint}" in readme
 
 
 def test_openai_agents_deepgram_swap_mentions_extra_key_and_sync() -> None:

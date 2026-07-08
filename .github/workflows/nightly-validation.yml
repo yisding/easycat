@@ -140,7 +140,7 @@ jobs:
   #   core dependency); its cell still proves the Cartesia adapters import.
   # - funasr-vad uses EasyCat's bundled model plus in-tree runtime
   #   dependencies; its cell catches stale upstream SDK reintroductions.
-  # - pydantic-ai and pydantic-ai-v2-beta are mutually exclusive pins; they
+  # - pydantic-ai and pydantic-ai-v2 are mutually exclusive pins; they
   #   never co-install because each cell syncs exactly one extra into a fresh
   #   environment (uv sync is exact and removes anything not requested).
   # - ten-vad is deliberately excluded: its non-permissive license is an
