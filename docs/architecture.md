@@ -122,9 +122,9 @@ captured mic signal.
   `debugger/_aec_routes.py` (AEC diagnostics routes over `debugger/_aec.py`).
 - `cli/` — Typer command surface for `init`, `doctor`, `docs`, `bundles`,
   `inspect`, `replay`, and `validate`. The `bundles`/`journal` command
-  implementations live one-per-file under `cli/debug/` (`follow.py`,
-  `grep.py`, `diff.py`, `export.py`, `promote.py`, `latency.py`,
-  `replay.py`, with `cli/debug/bundles.py` as the Typer app assembly).
+  implementations live one-per-file under `cli/debug/` (follow, grep,
+  diff, export, promote, latency, replay), with `cli/debug/bundles.py`
+  as the Typer app assembly.
 - `server/` — `VoiceServer` plus the shared signaling surface:
   `server/auth.py` owns the unified `AuthPolicy` / `BearerTokenAuth` layer,
   and `server/_webrtc_handlers.py` holds `WebRTCSignalingHandlers`, the

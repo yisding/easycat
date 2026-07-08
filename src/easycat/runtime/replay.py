@@ -2,7 +2,9 @@
 
 This module is the single source of truth for replay fidelity, tool
 policy, and orchestration primitives.  ``stages.base.ReplaySpec`` used
-to be a separate stub; it now re-exports from here so every stage and
+to be a separate stub; the class now lives here, re-exported at the
+package level as ``easycat.stages.ReplaySpec`` (the ``stages.base``
+module itself deliberately no longer forwards it) so every stage and
 bundle sees the same type.
 
 The exported surface is:
