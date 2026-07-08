@@ -508,7 +508,12 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     assert inspect.iscoroutinefunction(Session.__aexit__)
     assert inspect.iscoroutinefunction(Session.wait_closed)
     assert inspect.iscoroutinefunction(Session.stop)
-    assert inspect.iscoroutinefunction(Session.shutdown)
+    # ``shutdown`` is wrapped by ``typing_extensions.deprecated``; before
+    # Python 3.12 the wrapper can only carry the legacy ``_is_coroutine``
+    # marker (inspect.markcoroutinefunction is 3.12+), which
+    # ``inspect.iscoroutinefunction`` does not honor -- unwrap to check the
+    # underlying alias is genuinely async on every supported version.
+    assert inspect.iscoroutinefunction(inspect.unwrap(Session.shutdown))
     assert stop_signature.parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
     assert stop_signature.parameters["force"].default is False
     assert callable(Session.close)

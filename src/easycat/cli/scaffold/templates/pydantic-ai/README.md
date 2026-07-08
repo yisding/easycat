@@ -73,8 +73,11 @@ uv run pytest
 - **Swap the model:** change `"openai:gpt-4.1-mini"` to another model string
   PydanticAI supports, then add the matching API key and provider extra if
   that provider is not part of the default PydanticAI install. For example:
-  `uv add "pydantic-ai[groq]<2"` for stable v1, or
-  `uv add "pydantic-ai[groq]==2.0.0b7"` to opt into the v2 beta.
+  `uv add "pydantic-ai[groq]<2"` for stable v1. To move to the stable v2
+  release instead, first switch `pydantic-ai` to `pydantic-ai-v2` inside the
+  `easycat[...]` extras in `pyproject.toml` (the v1 extra pins
+  `pydantic-ai<2`, so the two conflict), then
+  `uv add "pydantic-ai[groq]>=2.0.0,<3.0.0"`.
 - **Need multiple agents?** Scaffold the workflow template:
   `uv run easycat init my-workflow --template pydantic-ai-workflow`.
   It shows a two-specialist `on_user_turn(...)` workflow that EasyCat
