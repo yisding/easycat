@@ -158,9 +158,14 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
 
     async def _receive_loop(self) -> None:
         assert self._ws is not None
+        # Capture the socket this loop consumes: ``self._ws`` can be rebound
+        # (restart/reconnect) or nulled while a late-finishing loop unwinds,
+        # and the abnormal-death check below must inspect THIS socket, not
+        # whatever currently occupies the attribute.
+        ws = self._ws
         queue = self._event_queue
         try:
-            async for raw_message in self._ws.recv_iter():
+            async for raw_message in ws.recv_iter():
                 if isinstance(raw_message, bytes):
                     await self._handle_ws_bytes_message(raw_message)
                     continue
@@ -177,8 +182,7 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
             logger.exception("Error in %s receive loop", self._provider_log_label)
         finally:
             self._on_receive_loop_end()
-            ws = self._ws
-            if ws is not None and ws.died_abnormally:
+            if ws.died_abnormally:
                 self._emit_provider_error(
                     ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
                 )
