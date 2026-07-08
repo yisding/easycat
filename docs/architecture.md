@@ -102,15 +102,39 @@ captured mic signal.
   events, spans, and metrics. `JournalView` provides query access. The
   journal is the single source of truth for all observability.
 - `validation/` — Validation report models, redaction, and runner helpers
-  behind the `easycat validate` lanes.
+  behind the `easycat validate` lanes. `validation/_lane_harness.py` holds
+  `LaneHarness`, the shared start/finish bookkeeping (run-id allocation,
+  report directory, atomic report writes, `latest.json`) every lane runs
+  through.
 - `stages/` — Pipeline stages wrapping providers with a uniform `execute` /
   `snapshot_state` / `handle_upstream` surface and optional journal
   recording. `Stage` protocol defined in `stages/base.py`.
 - `debug/` — `RunBundle` for serializing/loading complete session
-  recordings. `load_bundle()` for test fixtures.
+  recordings. `load_bundle()` for test fixtures. `debug/_serialize.py` is
+  the canonical record/config → JSON-safe-dict walk shared by the bundle
+  exporter and the debugger (one serializer, so live views and exported
+  bundles cannot drift).
 - `debugger/` — aiohttp debugger UI for live journals and exported bundles.
+  `debugger/server.py` keeps route registration and the HTTP surface; the
+  leaf modules it grew out of are `debugger/_records.py` (record
+  filtering/search), `debugger/_audio.py` (PCM/WAV coercion),
+  `debugger/_sources.py` (`DebuggerSource` and journal/bundle sources), and
+  `debugger/_aec_routes.py` (AEC diagnostics routes over `debugger/_aec.py`).
 - `cli/` — Typer command surface for `init`, `doctor`, `docs`, `bundles`,
-  `inspect`, `replay`, and `validate`.
+  `inspect`, `replay`, and `validate`. The `bundles`/`journal` command
+  implementations live one-per-file under `cli/debug/` (`follow.py`,
+  `grep.py`, `diff.py`, `export.py`, `promote.py`, `latency.py`,
+  `replay.py`, with `cli/debug/bundles.py` as the Typer app assembly).
+- `server/` — `VoiceServer` plus the shared signaling surface:
+  `server/auth.py` owns the unified `AuthPolicy` / `BearerTokenAuth` layer,
+  and `server/_webrtc_handlers.py` holds `WebRTCSignalingHandlers`, the
+  single copy of the stateless WebRTC config/stats/health/root/CORS
+  handlers that both the singleton `transports/webrtc.py` transport and the
+  multi-session `server/webrtc_routes.py` delegate to.
+- `_net.py` / `_env.py` (package root) — leaf helpers with zero
+  intra-package imports: loopback-host + auth-token normalization shared by
+  transports, CLI serve, server auth, and the debugger origin guard
+  (`_net.py`), and env-var flag parsing (`_env.py`).
 - `smart_turn.py` — Optional ONNX-based endpoint detection that classifies
   whether a user has finished speaking, enabling faster turn transitions
   without waiting for silence timeout.
