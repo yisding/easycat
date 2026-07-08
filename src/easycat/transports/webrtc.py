@@ -196,6 +196,11 @@ class WebRTCStatsState:
 
     request_times: deque[float] = field(default_factory=deque)
     record_count: int | None = None
+    # Serializes quota check + append + counter update in ``handle_stats``:
+    # the append is offloaded to a thread, and that await would otherwise let
+    # concurrent posts observe the same pre-write counters and exceed the
+    # configured record / byte / rate quotas.
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _audio_frame_pcm16_bytes(frame: Any) -> tuple[bytes, int, int]:

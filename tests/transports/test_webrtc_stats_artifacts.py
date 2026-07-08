@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -99,6 +100,33 @@ class TestWebRTCStatsArtifact:
         assert over_limit.status == 429
         assert "record limit exceeded" in over_limit.text
         assert to_thread_calls == 2
+        lines = stats_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+    @pytest.mark.asyncio
+    async def test_stats_endpoint_quota_check_is_atomic_under_concurrency(self, tmp_path):
+        stats_path = tmp_path / "webrtc-stats.jsonl"
+        transport = WebRTCTransport(
+            WebRTCTransportConfig(stats_path=str(stats_path), stats_max_records=2)
+        )
+        transport._web = _FakeWeb
+
+        # The append is offloaded via ``asyncio.to_thread``, so each handler
+        # yields the loop between the quota check and the counter update.
+        # Without the per-server write lock every concurrent post observes the
+        # same pre-write counters and appends, blowing past ``stats_max_records``.
+        responses = await asyncio.gather(
+            *(
+                transport._handle_stats(
+                    _FakeSameOriginJsonRequest(
+                        {"kind": "webrtc_client_stats", "schema_version": 1}
+                    )
+                )
+                for _ in range(6)
+            )
+        )
+
+        assert sorted(response.status for response in responses) == [200, 200, 429, 429, 429, 429]
         lines = stats_path.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 2
 

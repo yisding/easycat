@@ -277,11 +277,16 @@ class WebRTCSignalingHandlers:
             if not self.stats_write_permitted(request):
                 return self.stats_forbidden_response(request)
             stats_path = Path(self._config.stats_path)
-            quota_error = self.stats_quota_error(stats_path, snapshot)
-            if quota_error is not None:
-                return self.stats_quota_response(request, quota_error)
-            await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
-            self.record_stats_write()
+            # Hold the per-server lock across check + append + counter update:
+            # ``to_thread`` yields the loop, and without the lock concurrent
+            # posts all observe the same pre-write counters / file size and
+            # append together, exceeding the configured quotas.
+            async with self._stats.write_lock:
+                quota_error = self.stats_quota_error(stats_path, snapshot)
+                if quota_error is not None:
+                    return self.stats_quota_response(request, quota_error)
+                await asyncio.to_thread(_append_webrtc_stats_record, stats_path, snapshot)
+                self.record_stats_write()
 
         return web.Response(
             content_type="application/json",
