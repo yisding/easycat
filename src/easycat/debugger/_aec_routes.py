@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from easycat.debug._pcm import is_supported_width as _is_supported_width
+from easycat.debugger._aec import _record_sequence
 from easycat.debugger._aec import align_tracks as _align_aec_tracks
 from easycat.debugger._aec import compute_erle as _compute_erle
 from easycat.debugger._aec import detect_double_talk as _detect_double_talk
@@ -280,8 +281,6 @@ def _vad_whatif_frames(source: DebuggerSource, turn_id: str) -> list[bytes]:
     the what-if re-drives a fresh provider against the same input the live run
     saw.
     """
-    from easycat.debugger.server import _record_sequence
-
     frames: list[tuple[int, bytes]] = []
     for record in source.records():
         if record.get("turn_id") != turn_id or record.get("name") != "stage_start":

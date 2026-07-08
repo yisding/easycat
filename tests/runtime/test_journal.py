@@ -476,7 +476,7 @@ class TestReadonlySqliteFollow:
     async def test_followed_records_format_with_follow_line(self, tmp_path):
         # Acceptance: a followed record renders through the CLI formatter and a
         # tts_frame yields the per-turn milestone landmark + audio bar.
-        from easycat.cli.debug.bundles import _format_follow_line, _record_to_follow_dict
+        from easycat.cli.debug.follow import _format_follow_line, _record_to_follow_dict
         from easycat.runtime import SqliteJournal
         from easycat.runtime.journal_views import ReadonlySqliteJournal
 

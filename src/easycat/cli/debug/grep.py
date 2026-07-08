@@ -122,7 +122,7 @@ def journal_grep(
     search box agree on what matches.  Every matched field is redacted before
     it is printed, so the output is safe to paste into a bug report.
     """
-    from easycat.debugger.server import _SEARCH_SCAN_LIMIT, _search_records
+    from easycat.debugger._records import _SEARCH_SCAN_LIMIT, _search_records
 
     if limit <= 0:
         emit_command_error(

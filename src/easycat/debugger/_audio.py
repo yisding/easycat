@@ -16,9 +16,7 @@ bare (``aiohttp``-only) debugger install still imports this module.
 
 from __future__ import annotations
 
-import io
 import struct
-import wave
 from typing import Any
 
 from easycat.debug._pcm import is_supported_width as _is_supported_width
@@ -276,7 +274,6 @@ def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size
     """Build a 44-byte RIFF/WAVE PCM header.
 
     Used by both the streaming HTTP route and the in-memory helper that
-    backs the legacy ``_concatenated_wav_for_turn`` function.
     """
     bits_per_sample = sample_width * 8
     byte_rate = sample_rate * channels * sample_width
@@ -296,27 +293,6 @@ def _wav_header(*, sample_rate: int, channels: int, sample_width: int, data_size
     )
 
 
-def _concatenated_wav_for_turn(source: Any, turn_id: str) -> tuple[bytes, dict[str, Any]] | None:
-    """Backwards-compat helper that returns the entire WAV in memory.
-
-    Tests still use this directly; the HTTP route now streams via
-    ``_collect_tts_frames`` + :func:`_wav_header` for memory safety.
-    """
-    from easycat.debugger.server import _collect_tts_frames
-
-    frames, fmt = _collect_tts_frames(source, turn_id)
-    if not frames:
-        return None
-    pcm = b"".join(frames)
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(fmt["channels"])
-        wf.setsampwidth(fmt["sample_width"])
-        wf.setframerate(fmt["sample_rate"])
-        wf.writeframes(pcm)
-    return buf.getvalue(), {**fmt, "frame_count": len(frames), "byte_count": len(pcm)}
-
-
 __all__ = [
     "_AUDIO_DEFAULT_FMT",
     "_AUDIO_MAX_CONVERTED_FRAME_BYTES",
@@ -326,7 +302,6 @@ __all__ = [
     "_AUDIO_VALID_CHANNELS",
     "_audio_metadata_int",
     "_coerce_frames_to_format",
-    "_concatenated_wav_for_turn",
     "_is_safe_audio_format",
     "_np_pcm_dtype",
     "_np_ratecv",

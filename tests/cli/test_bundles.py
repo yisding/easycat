@@ -15,10 +15,10 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import app
-from easycat.cli.debug.bundles import (
+from easycat.cli.debug.bundles import _format_size
+from easycat.cli.debug.follow import (
     _follow_with_retry,
     _format_follow_line,
-    _format_size,
     _redact_follow_record,
     _stream_follow,
 )
@@ -2189,7 +2189,7 @@ def test_promote_stub_omits_sensitive_expected_text(cli: CliRunner, tmp_path: Pa
 
 
 def test_promote_stub_sanitizes_turn_id_for_python_function_name() -> None:
-    from easycat.cli.debug.bundles import _promote_test_stub
+    from easycat.cli.debug.promote import _promote_test_stub
 
     malicious_turn_id = (
         "x(easycat_bundle):\n    __import__('os').system('touch /tmp/pwned')\n    #"

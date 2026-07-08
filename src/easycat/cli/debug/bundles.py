@@ -62,17 +62,10 @@ from easycat.cli.debug._common import (
 )
 from easycat.cli.debug.diff import diff_command
 from easycat.cli.debug.export import export_bundle
-from easycat.cli.debug.follow import (
-    _follow_with_retry,
-    _format_follow_line,
-    _record_to_follow_dict,
-    _redact_follow_record,
-    _stream_follow,
-    follow_journal,
-)
+from easycat.cli.debug.follow import follow_journal
 from easycat.cli.debug.grep import journal_grep
 from easycat.cli.debug.latency import latency_command
-from easycat.cli.debug.promote import _promote_test_stub, promote_turn
+from easycat.cli.debug.promote import promote_turn
 from easycat.cli.debug.replay import replay_bundle
 from easycat.debug._issues import build_issues
 from easycat.debug.annotations import load_annotations
@@ -530,12 +523,6 @@ bundles_app.command(name="export", help="Write a redacted context pack for a cod
 
 
 __all__: list[str] = [
-    "_follow_with_retry",
-    "_format_follow_line",
-    "_promote_test_stub",
-    "_record_to_follow_dict",
-    "_redact_follow_record",
-    "_stream_follow",
     "bundles_app",
     "diff_command",
     "export_bundle",
