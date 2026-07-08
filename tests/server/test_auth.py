@@ -126,6 +126,25 @@ def test_bearer_non_ascii_query_credential_is_invalid_not_typeerror() -> None:
     assert result.reason == "invalid"
 
 
+def test_bearer_non_ascii_configured_token_is_invalid_not_typeerror() -> None:
+    # The guard must be two-sided: a non-ASCII *configured* token (operator
+    # misconfiguration) would otherwise make compare_digest raise TypeError on
+    # every request carrying an ASCII credential — a 500 on each authorized
+    # endpoint instead of a clean deny.
+    auth = BearerTokenAuth(token="café-secret")
+    result = auth.authorize(
+        from_aiohttp_request(_AiohttpReq({"Authorization": "Bearer sekrit"}, {}))
+    )
+    assert result.allowed is False
+    assert result.reason == "invalid"
+    # Even a byte-identical credential is denied rather than risking the
+    # TypeError; a non-ASCII token is not a usable secret for this policy.
+    result = auth.authorize(
+        from_aiohttp_request(_AiohttpReq({"Authorization": "Bearer café-secret"}, {}))
+    )
+    assert result.allowed is False
+
+
 # ── BearerTokenAuth: a blank token never authorizes ──────────────────
 
 
