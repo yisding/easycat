@@ -34,8 +34,10 @@ jobs:
       # pyproject.toml): provider-family independence + the webrtc forbidden edge.
       - run: uv run lint-imports
       # Static analysis of the workflows themselves: SHA-pinned actions,
-      # persist-credentials, template-injection, etc.
-      - run: uvx zizmor .github/workflows
+      # persist-credentials, template-injection, etc. Pinned so a new zizmor
+      # release cannot change or fail this job without a repo change; keep in
+      # sync with the zizmor-pre-commit rev in .pre-commit-config.yaml.
+      - run: uvx zizmor==1.26.1 .github/workflows
 
   pre-commit:
     runs-on: ubuntu-latest
