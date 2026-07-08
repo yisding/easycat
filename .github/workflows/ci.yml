@@ -61,7 +61,7 @@ jobs:
       # excluded, stricter checks layered on the core packages — see the
       # [[tool.mypy.overrides]] tables in pyproject.toml). `just typecheck`
       # keeps local runs and CI grading the exact same surface.
-      - name: mypy (gate, whole repo)
+      - name: mypy (gate, whole package)
         run: just typecheck
 
   test:
