@@ -57,7 +57,7 @@ pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.0.0,<3.0.0"]
 langchain = ["langchain-core>=1.3.3"]
 langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.7"]
-llama-agents = ["llama-index-workflows>=2.22.1,<3.0.0", "llama-agents-client>=0.3.0,<1.0.0"]
+llama-agents = ["llama-index-workflows>=2.22.1,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
 openai = ["openai>=1.0.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
 # provider WebSocket/HTTP APIs via the core ``websockets`` / ``httpx``
@@ -121,7 +121,7 @@ all = [
     "langchain-core>=1.3.3",
     "langgraph>=1.2.7",
     "llama-index-workflows>=2.22.1,<3.0.0",
-    "llama-agents-client>=0.3.0,<1.0.0",
+    "llama-agents-client>=0.3.11,<1.0.0",
     "phonenumberslite>=9.0.33",
     "python-multipart>=0.0.29",
     "sounddevice>=0.4.6",
