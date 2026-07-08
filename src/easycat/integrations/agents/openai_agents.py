@@ -224,17 +224,19 @@ class OpenAIAgentsBridge:
                             bridge_ev = map_run_item(event.item, recorder, pending_tool_calls)
                             if bridge_ev is not None:
                                 yield bridge_ev
-                                if not pending_tool_calls:
-                                    break
                         elif event.type == "raw_response_event":
                             bridge_ev = extract_tool_delta(event.data)
                             if bridge_ev is not None:
                                 yield bridge_ev
                         continue
                     else:
-                        # No tools in flight: an ``immediate`` cancel set
-                        # ``is_complete``, so drain to the natural end of the
-                        # stream rather than abandoning the generator.
+                        # No tools in flight (or the last pending tool just
+                        # drained): the cancel set ``is_complete``, so drain to
+                        # the natural end of the stream rather than abandoning
+                        # the generator -- ``after_turn`` keeps emitting events
+                        # while the SDK saves session state, and snapshotting
+                        # ``to_input_list()``/``last_response_id`` before that
+                        # settles would capture a still-mutating run.
                         continue
 
                 if event.type == "raw_response_event":

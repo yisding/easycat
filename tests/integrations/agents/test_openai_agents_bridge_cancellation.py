@@ -136,6 +136,7 @@ async def test_barge_in_with_pending_tool_cancels_after_turn(monkeypatch):
         {"role": "user", "content": "look it up"},
         {"role": "assistant", "content": "checking"},
     ]
+    settling: list[str] = []
     result = _CancellableRunResult(
         last_agent=agent,
         settled_input=settled,
@@ -143,6 +144,8 @@ async def test_barge_in_with_pending_tool_cancels_after_turn(monkeypatch):
             _tool_call_event("lookup", "call-1"),  # populates pending_tool_calls
             _barge_in(token),  # user cuts in while the tool is in flight
             _tool_output_event("call-1", "ok"),  # in-flight tool drains
+            _text_event("post-cancel"),  # SDK settles the turn after the tool
+            lambda: settling.append("stream-drained"),  # only reached if fully drained
         ],
     )
     monkeypatch.setattr(openai_agents_module, "Runner", _FakeRunner(result))
@@ -164,6 +167,11 @@ async def test_barge_in_with_pending_tool_cancels_after_turn(monkeypatch):
     # The in-flight tool still drained through to the consumer.
     assert "tool_started" in kinds
     assert "tool_result" in kinds
+    # ``after_turn`` requires consuming ``stream_events()`` to completion so
+    # the SDK can settle session state: the stream was fully drained, and the
+    # post-cancel text delta was swallowed rather than surfaced.
+    assert settling == ["stream-drained"]
+    assert "text_delta" not in kinds
 
 
 @pytest.mark.asyncio
