@@ -580,28 +580,32 @@ class ElevenLabsSTT(WebSocketSTTBase):
         # disabled so the default request keeps the server default (logging on).
         params = {"enable_logging": "false"} if not self._config.enable_logging else None
 
-        async def _attempt() -> dict[str, Any]:
-            client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
-            owns_client = self._config.http_client is None
-            try:
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    params=params,
-                    files={"file": ("audio.wav", wav_data, "audio/wav")},
-                    data=data,
-                )
-                response.raise_for_status()
-                return response.json()
-            finally:
-                if owns_client:
-                    await client.aclose()
+        # One client for all attempts: a per-attempt client would pay a fresh
+        # TCP+TLS handshake on every retry, exactly when the provider is
+        # already slow.
+        client = self._config.http_client or httpx.AsyncClient(timeout=self._config.timeout)
+        owns_client = self._config.http_client is None
 
-        return await self._run_with_bounded_retry(
-            _attempt,
-            max_retries=self._config.max_retries,
-            provider_label="ElevenLabs batch STT",
-        )
+        async def _attempt() -> dict[str, Any]:
+            response = await client.post(
+                url,
+                headers=headers,
+                params=params,
+                files={"file": ("audio.wav", wav_data, "audio/wav")},
+                data=data,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            return await self._run_with_bounded_retry(
+                _attempt,
+                max_retries=self._config.max_retries,
+                provider_label="ElevenLabs batch STT",
+            )
+        finally:
+            if owns_client:
+                await client.aclose()
 
     def version_info(self) -> dict[str, str]:
         # Report the transport library the active mode actually uses:
