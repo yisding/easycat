@@ -64,9 +64,9 @@ def test_all_extra_includes_funasr_runtime_frontend_dependency() -> None:
 def test_all_extra_is_union_of_non_conflicting_extras() -> None:
     """``all`` must be the union of every extra except three deliberate exclusions."""
     extras = _pyproject()["project"]["optional-dependencies"]
-    # ten-vad: non-permissive license. pydantic-ai / pydantic-ai-v2-beta:
+    # ten-vad: non-permissive license. pydantic-ai / pydantic-ai-v2:
     # mutually exclusive via [tool.uv].conflicts.
-    excluded = {"ten-vad", "pydantic-ai", "pydantic-ai-v2-beta"}
+    excluded = {"ten-vad", "pydantic-ai", "pydantic-ai-v2"}
 
     # Stale-exclusion guard (mirrors scripts/extras_matrix.py contract).
     assert excluded <= set(extras), "exclusion set names an extra pyproject no longer declares"
