@@ -22,7 +22,7 @@ from typing import Any
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
-from easycat.integrations.agents._helpers import INTERRUPTION_NOTE
+from easycat.integrations.agents._helpers import INTERRUPTION_NOTE, aclose_quietly
 from easycat.integrations.agents.base import (
     NULL_RECORDER,
     AgentBridgeEvent,
@@ -221,10 +221,7 @@ class AgentRunner:
                 # Close it explicitly so that teardown runs synchronously.  On
                 # normal completion / a handled timeout ``inner_iter`` is
                 # already drained, so this is a harmless no-op.
-                aclose = getattr(inner_iter, "aclose", None)
-                if aclose is not None:
-                    with contextlib.suppress(Exception):
-                        await aclose()
+                await aclose_quietly(inner_iter)
 
         cursor = ExecutionCursor(
             unit_id=f"runner-{uuid4().hex[:8]}",

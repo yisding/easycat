@@ -80,6 +80,7 @@ from typing import Any, ClassVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -227,10 +228,18 @@ class BridgeTemplate:
         with recorder.turn_cursor(cursor):
             self._last_output = None
             self.on_turn_start(turn_input, recorder)
-            async for ev in self.stream_events(turn_input, recorder, cancel_token):
-                if ev.kind == "text_delta":
-                    accumulated += ev.text
-                yield ev
+            stream = self.stream_events(turn_input, recorder, cancel_token)
+            try:
+                async for ev in stream:
+                    if ev.kind == "text_delta":
+                        accumulated += ev.text
+                    yield ev
+            finally:
+                # ``async for`` does not forward an early consumer
+                # ``aclose()`` (barge-in ``GeneratorExit``) into the delegated
+                # author generator; close it explicitly so its cleanup runs
+                # synchronously before a follow-up ``apply_interruption()``.
+                await aclose_quietly(stream)
 
         yield AgentBridgeEvent(
             kind="done",

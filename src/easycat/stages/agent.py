@@ -12,6 +12,7 @@ from easycat import _observability as observability
 from easycat._turn_context import TurnContext
 from easycat.integrations.agents._agent_runner import AgentRunner, close_stream_after_done
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
@@ -287,12 +288,7 @@ class AgentStage:
                     # turn) race the next ``apply_interruption()``.  On normal
                     # completion the stream is already drained via
                     # ``close_stream_after_done`` so this is a no-op.
-                    aclose = getattr(stream, "aclose", None)
-                    if aclose is not None:
-                        try:
-                            await aclose()
-                        except Exception:
-                            pass
+                    await aclose_quietly(stream)
         except Exception as exc:
             errored = True
             elapsed_ms = (time.perf_counter() - started) * 1000
