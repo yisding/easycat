@@ -13,13 +13,22 @@ updates:
     # compromised/yanked version does not land the day it ships.
     cooldown:
       default-days: 7
-    # Roll every in-range bump from this ecosystem into ONE PR per run instead
-    # of one PR per package, so a weekly refresh is a single review and a single
-    # CI run rather than a scattered stack.
+    # Group this ecosystem's weekly bumps instead of opening one PR per package.
+    # Split by risk: safe minor/patch upgrades land together in one easy-to-merge
+    # PR, while potentially breaking majors are isolated in their own reviewable
+    # PR so a risky major never blocks the safe batch.
     groups:
-      uv:
+      uv-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      uv-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
   # Keep the SHA-pinned GitHub Actions current. Dependabot bumps the pin and
   # rewrites the trailing `# vX.Y.Z` comment, so pins never silently rot.
   - package-ecosystem: "github-actions"
@@ -29,9 +38,17 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      github-actions:
+      github-actions-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      github-actions-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
   # Docs toolchain (requirements-docs.txt, hash-pinned). Best-effort: if the
   # first PR cannot regenerate `--require-hashes` cleanly, drop this block.
   - package-ecosystem: "pip"
@@ -41,9 +58,17 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      pip:
+      pip-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      pip-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
     # The pip ecosystem also parses pyproject.toml, where the `pydantic-ai`
     # extra is deliberately capped at the v1 line (`pydantic-ai-v2` covers 2.x).
     # Left alone, pip re-proposes widening that cap to <3.0.0 (see closed #397)
