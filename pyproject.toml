@@ -36,7 +36,7 @@ dependencies = [
     "rich>=15.0.0",
     "sentencesplit>=0.1.0",
     "typing-extensions>=4.6",
-    "typer>=0.16",
+    "typer>=0.26.8",
     "websockets>=15.0.1,<17",
 ]
 
@@ -52,13 +52,13 @@ Repository = "https://github.com/yisding/easycat"
 easycat = "easycat.debug._pytest_plugin"
 
 [project.optional-dependencies]
-openai-agents = ["openai-agents>=0.6.2"]
+openai-agents = ["openai-agents>=0.17.7"]
 pydantic-ai = ["pydantic-ai>=1.99.0,<2.0.0"]
 pydantic-ai-v2 = ["pydantic-ai>=2.0.0,<3.0.0"]
 langchain = ["langchain-core>=1.3.3"]
 langgraph = ["langchain-core>=1.3.3", "langgraph>=1.2.7"]
-llama-agents = ["llama-index-workflows>=2.22.1,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
-openai = ["openai>=1.0.0"]
+llama-agents = ["llama-index-workflows>=2.22.2,<3.0.0", "llama-agents-client>=0.3.11,<1.0.0"]
+openai = ["openai>=2.44.0"]
 # Deepgram, ElevenLabs, and Cartesia STT/TTS talk directly to their
 # provider WebSocket/HTTP APIs via the core ``websockets`` / ``httpx``
 # dependencies — no vendor SDK install is required. These marker extras
@@ -70,13 +70,13 @@ elevenlabs = []
 cartesia = []
 telephony = [
     "aiohttp>=3.14.0",
-    "fastapi>=0.138.0",
+    "fastapi>=0.139.0",
     "phonenumberslite>=9.0.33",
     "python-multipart>=0.0.29",
     "twilio>=9.0.0",
     "uvicorn>=0.29.0",
 ]
-aec = ["livekit>=1.0.0"]
+aec = ["livekit>=1.1.13"]
 local = ["sounddevice>=0.4.6", "numpy>=1.24.0"]
 rnnoise = ["pyrnnoise>=0.3.0", "requests>=2.33.0"]
 # TEN VAD has a non-permissive license, so we do not vendor its
@@ -97,13 +97,13 @@ webrtc = ["aiortc>=1.9.0", "aiohttp>=3.14.0"]
 webtransport = ["aioquic>=1.3.0,<2"]
 quickstart = [
     "sounddevice>=0.4.6",
-    "openai>=1.0.0",
-    "openai-agents>=0.6.2",
+    "openai>=2.44.0",
+    "openai-agents>=0.17.7",
     "pyrnnoise>=0.3.0",
     "requests>=2.33.0",
     "numpy>=1.24.0",
     "onnxruntime>=1.27.0",
-    "livekit>=1.0.0",
+    "livekit>=1.1.13",
 ]
 # ``all`` is the union of every extra EXCEPT three deliberate exclusions:
 #   - ten-vad: non-permissive license (binaries not vendored)
@@ -113,14 +113,14 @@ quickstart = [
 all = [
     "aioquic>=1.3.0,<2",
     "aiortc>=1.9.0",
-    "livekit>=1.0.0",
+    "livekit>=1.1.13",
     "aiohttp>=3.14.0",
-    "fastapi>=0.138.0",
-    "openai>=1.0.0",
-    "openai-agents>=0.6.2",
+    "fastapi>=0.139.0",
+    "openai>=2.44.0",
+    "openai-agents>=0.17.7",
     "langchain-core>=1.3.3",
     "langgraph>=1.2.7",
-    "llama-index-workflows>=2.22.1,<3.0.0",
+    "llama-index-workflows>=2.22.2,<3.0.0",
     "llama-agents-client>=0.3.11,<1.0.0",
     "phonenumberslite>=9.0.33",
     "python-multipart>=0.0.29",
@@ -211,12 +211,12 @@ conflicts = [
 [dependency-groups]
 dev = [
     "diff-cover>=10.3.0",
-    "hypothesis>=6.100",
+    "hypothesis>=6.155.7",
     "import-linter>=2",
     "mutmut>=3.2.3",
     "mypy>=1.18",
     "pre-commit>=4.6.0",
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.0",
     "pytest-cov>=6.0",
     "pytest-timeout>=2.4.0",
