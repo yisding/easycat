@@ -12,9 +12,10 @@ import hashlib
 import json
 import tempfile
 import zipfile
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from easycat.debug._serialize import record_to_dict, safe_config_snapshot_from_session
 from easycat.debug.bundle import (
@@ -29,6 +30,31 @@ from easycat.debug.bundle import (
 )
 
 
+@runtime_checkable
+class _JournalReader(Protocol):
+    def read(self, start: int = 0, limit: int | None = None) -> Iterable[object]: ...
+
+
+@runtime_checkable
+class _MemoryArtifactStore(Protocol):
+    @property
+    def _store(self) -> Mapping[str, bytes | str]: ...
+
+
+@runtime_checkable
+class _FilesystemArtifactStore(Protocol):
+    @property
+    def _dir(self) -> Path: ...
+
+
+class _SessionCapture(Protocol):
+    @property
+    def _journal(self) -> _JournalReader | None: ...
+
+    @property
+    def _artifact_store(self) -> object | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _CapturedSessionBundle:
     manifest: Manifest
@@ -37,7 +63,7 @@ class _CapturedSessionBundle:
 
 
 def export_debug_bundle(
-    session: Any,
+    session: _SessionCapture,
     path: str | Path,
     *,
     inline_artifacts: bool = False,
@@ -59,11 +85,17 @@ def export_debug_bundle(
     )
 
 
-def _resolve_journal(session: Any) -> Any:
-    return getattr(session, "_journal", None) or getattr(session, "journal", None)
+def _resolve_journal(session: _SessionCapture) -> _JournalReader | None:
+    if session._journal is not None:
+        return session._journal
+    public_journal = getattr(session, "journal", None)
+    return public_journal if isinstance(public_journal, _JournalReader) else None
 
 
-def _require_debug_capture(session: Any, journal: Any) -> None:
+def _require_debug_capture(
+    session: _SessionCapture,
+    journal: _JournalReader | None,
+) -> None:
     debug_mode = getattr(session, "_debug", None) or getattr(session, "debug", None)
     if debug_mode is None:
         debug_mode = "off" if journal is None else "light"
@@ -71,7 +103,10 @@ def _require_debug_capture(session: Any, journal: Any) -> None:
         raise DebugCaptureDisabledError("Debug capture is disabled (debug='off')")
 
 
-def _capture_session_bundle(session: Any, journal: Any) -> _CapturedSessionBundle:
+def _capture_session_bundle(
+    session: _SessionCapture,
+    journal: _JournalReader | None,
+) -> _CapturedSessionBundle:
     artifacts = _collect_artifacts(session)
     _validate_artifacts(artifacts)
     manifest = Manifest(
@@ -87,23 +122,23 @@ def _capture_session_bundle(session: Any, journal: Any) -> _CapturedSessionBundl
     )
 
 
-def _serialize_journal(journal: Any) -> bytes:
-    if journal is None or not hasattr(journal, "read"):
+def _serialize_journal(journal: _JournalReader | None) -> bytes:
+    if journal is None:
         return b""
     lines = [json.dumps(record_to_dict(record), default=str) for record in journal.read()]
     return "\n".join(lines).encode("utf-8")
 
 
-def _collect_artifacts(session: Any) -> dict[str, bytes]:
-    artifact_store = getattr(session, "_artifact_store", None)
+def _collect_artifacts(session: _SessionCapture) -> dict[str, bytes]:
+    artifact_store = session._artifact_store
     if artifact_store is None:
         return {}
-    if hasattr(artifact_store, "_store"):
+    if isinstance(artifact_store, _MemoryArtifactStore):
         return {
             ref: data if isinstance(data, bytes) else data.encode()
             for ref, data in artifact_store._store.items()
         }
-    if not hasattr(artifact_store, "_dir"):
+    if not isinstance(artifact_store, _FilesystemArtifactStore):
         return {}
 
     artifact_dir = artifact_store._dir
@@ -249,7 +284,7 @@ def _manifest_to_dict(manifest: Manifest) -> dict[str, Any]:
     return d
 
 
-def _collect_provider_versions(session: Any) -> dict[str, Any]:
+def _collect_provider_versions(session: object) -> dict[str, Any]:
     versions: dict[str, Any] = {}
     for attr in ("stt", "tts", "transport", "vad", "noise_reducer", "echo_canceller"):
         provider = getattr(session, attr, None)
