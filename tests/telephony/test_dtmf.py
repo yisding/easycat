@@ -12,10 +12,21 @@ from easycat.telephony.dtmf import (
     DTMFAggregator,
     DTMFAggregatorConfig,
     emit_twilio_dtmf,
+    is_valid_dtmf_output,
     parse_twilio_dtmf_message,
 )
 
 # ── Task 6.1: Twilio Media Streams DTMF parsing ──────────────────
+
+
+class TestDtmfOutputPolicy:
+    @pytest.mark.parametrize("value", ["0", "123*#", "ABCD", "1w2W3"])
+    def test_accepts_supported_twiml_digits(self, value: str) -> None:
+        assert is_valid_dtmf_output(value) is True
+
+    @pytest.mark.parametrize("value", [None, 1, "", "abcd", "1 2", "1;2"])
+    def test_rejects_non_strings_empty_values_and_invalid_characters(self, value: object) -> None:
+        assert is_valid_dtmf_output(value) is False
 
 
 class TestParseTwilioDtmfMessage:
