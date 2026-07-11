@@ -210,9 +210,13 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     assert "SessionJournalSink" in plan
     assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
     registered_records = {spec.event_type: spec.name for spec in _SIMPLE_EVENT_RECORDS}
-    assert registered_records[ToolCallStarted] == "tool_call_started"
-    assert registered_records[ToolCallDelta] == "tool_call_delta"
-    assert registered_records[ToolCallResult] == "tool_call_result"
+    tool_call_events = (ToolCallStarted, ToolCallDelta, ToolCallResult)
+    assert {registered_records[event_type] for event_type in tool_call_events} == {
+        "tool_call_started",
+        "tool_call_delta",
+        "tool_call_result",
+    }
+    assert all(registered_records[event_type] in plan for event_type in tool_call_events)
     assert "tool name and call id" in plan
     assert "tool name and args" not in plan
     assert "session/_session.py" not in plan
@@ -222,10 +226,18 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     # SessionAction lifecycle events are now journaled in the same declarative
     # registry as tool calls; the plan must document this instead of
     # claiming a journaling gap.
-    assert registered_records[SessionActionRequested] == "session_action_requested"
-    assert registered_records[SessionActionStarted] == "session_action_started"
-    assert registered_records[SessionActionCompleted] == "session_action_completed"
-    assert registered_records[SessionActionFailed] == "session_action_failed"
+    session_action_events = (
+        SessionActionRequested,
+        SessionActionStarted,
+        SessionActionCompleted,
+        SessionActionFailed,
+    )
+    assert {registered_records[event_type] for event_type in session_action_events} == {
+        "session_action_requested",
+        "session_action_started",
+        "session_action_completed",
+        "session_action_failed",
+    }
+    assert all(registered_records[event_type] in plan for event_type in session_action_events)
     assert "*not* currently journaled" not in plan
     assert "`SessionAction` flows are journaled too" in plan
-    assert "session_action_requested" in plan
