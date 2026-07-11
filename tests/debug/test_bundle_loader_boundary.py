@@ -7,8 +7,9 @@ import zipfile
 
 import pytest
 
+import easycat.debug._bundle_loader as bundle_loader
 import easycat.debug.bundle as bundle_facade
-from easycat.debug._bundle_loader import LoadedBundle, _ArtifactAccumulator
+from easycat.debug._bundle_loader import LoadedBundle, _ArtifactAccumulator, _read_zip_member
 from easycat.debug._bundle_models import (
     _ARTIFACT_SIZE_CAP,
     FORMAT_VERSION,
@@ -55,6 +56,64 @@ def test_artifact_accumulator_rejects_declared_size_before_allocation() -> None:
 
     assert exc_info.value.reason_code == "SIZE_EXCEEDED"
     assert artifacts.total_size == 0
+
+
+def test_zip_member_limit_rejects_declared_size_before_reading() -> None:
+    info = zipfile.ZipInfo("journal.ndjson")
+    info.file_size = _ARTIFACT_SIZE_CAP + 1
+
+    class _Archive:
+        def getinfo(self, _name: str) -> zipfile.ZipInfo:
+            return info
+
+        def read(self, _member: zipfile.ZipInfo) -> bytes:
+            raise AssertionError("oversized member must not be read")
+
+    with pytest.raises(BundleValidationError) as exc_info:
+        _read_zip_member(
+            _Archive(),  # type: ignore[arg-type]
+            "journal.ndjson",
+            missing_reason_code="MISSING_JOURNAL",
+            size_limit=_ARTIFACT_SIZE_CAP,
+        )
+
+    assert exc_info.value.reason_code == "SIZE_EXCEEDED"
+
+
+def test_loader_caps_manifest_and_journal_members(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "bounded-members.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
+        archive.writestr("journal.ndjson", "")
+
+    observed_limits: dict[str, int | None] = {}
+    real_read = bundle_loader._read_zip_member
+
+    def _record_limit(
+        archive: zipfile.ZipFile,
+        member: str | zipfile.ZipInfo,
+        *,
+        missing_reason_code: str,
+        size_limit: int | None = None,
+    ) -> bytes:
+        name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+        observed_limits[name] = size_limit
+        return real_read(
+            archive,
+            member,
+            missing_reason_code=missing_reason_code,
+            size_limit=size_limit,
+        )
+
+    monkeypatch.setattr(bundle_loader, "_read_zip_member", _record_limit)
+
+    bundle_facade.RunBundle.load(path)
+
+    assert observed_limits["manifest.json"] == _ARTIFACT_SIZE_CAP
+    assert observed_limits["journal.ndjson"] == _ARTIFACT_SIZE_CAP
 
 
 def test_journal_scalar_records_do_not_break_bundle_loading(tmp_path) -> None:

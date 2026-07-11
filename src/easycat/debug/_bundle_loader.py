@@ -72,20 +72,35 @@ def _read_zip_member(
     member: str | zipfile.ZipInfo,
     *,
     missing_reason_code: str,
+    size_limit: int | None = None,
 ) -> bytes:
-    name = member.filename if isinstance(member, zipfile.ZipInfo) else member
     try:
-        return archive.read(member)
+        info = archive.getinfo(member) if isinstance(member, str) else member
     except KeyError as exc:
         raise BundleValidationError(
-            f"Bundle is missing {name}",
+            f"Bundle is missing {member}",
             reason_code=missing_reason_code,
         ) from exc
+
+    name = info.filename
+    if size_limit is not None and (info.file_size < 0 or info.file_size > size_limit):
+        raise BundleValidationError(
+            f"Bundle member {name!r} exceeds {size_limit} byte cap",
+            reason_code="SIZE_EXCEEDED",
+        )
+    try:
+        data = archive.read(info)
     except zipfile.BadZipFile as exc:
         raise BundleValidationError(
             f"Invalid bundle member {name!r}: {exc}",
             reason_code="BAD_ZIP",
         ) from exc
+    if size_limit is not None and len(data) > size_limit:
+        raise BundleValidationError(
+            f"Bundle member {name!r} exceeds {size_limit} byte cap",
+            reason_code="SIZE_EXCEEDED",
+        )
+    return data
 
 
 def _manifest_object(raw: dict[str, Any], field_name: str) -> dict[str, Any]:
@@ -103,6 +118,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
         archive,
         "manifest.json",
         missing_reason_code="MISSING_MANIFEST",
+        size_limit=_ARTIFACT_SIZE_CAP,
     )
     try:
         raw = json.loads(encoded)
@@ -303,6 +319,7 @@ def load_bundle(path: str | Path) -> LoadedBundle:
             archive,
             "journal.ndjson",
             missing_reason_code="MISSING_JOURNAL",
+            size_limit=_ARTIFACT_SIZE_CAP,
         )
         artifacts = _ArtifactAccumulator()
         _read_file_artifacts(archive, artifacts)
