@@ -216,17 +216,20 @@ def sanitize_attributes(
     sanitized: dict[str, Any] = {}
     for key, value in attributes.items():
         normalized = str(key)
-        if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        # Allow-list membership bypasses only the substring guard below.
-        if normalized in allowed_keys:
-            sanitized[normalized] = _safe_attribute_value(value)
-            continue
-        low = normalized.lower()
-        if any(substring in low for substring in _FORBIDDEN_SUBSTRINGS):
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        raise ValueError(f"unsupported observability attribute: {normalized}")
+        _validate_attribute_key(normalized, allowed_keys)
+        sanitized[normalized] = _safe_attribute_value(value)
     return sanitized
+
+
+def _validate_attribute_key(normalized: str, allowed_keys: frozenset[str]) -> None:
+    if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
+        raise ValueError(f"forbidden observability attribute: {normalized}")
+    # Allow-list membership bypasses only the substring guard below.
+    if normalized in allowed_keys:
+        return
+    if any(substring in normalized.lower() for substring in _FORBIDDEN_SUBSTRINGS):
+        raise ValueError(f"forbidden observability attribute: {normalized}")
+    raise ValueError(f"unsupported observability attribute: {normalized}")
 
 
 def _validate_attribute_keys(
@@ -238,15 +241,7 @@ def _validate_attribute_keys(
     if not attributes:
         return
     for key in attributes:
-        normalized = str(key)
-        if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        if normalized in allowed_keys:
-            continue
-        low = normalized.lower()
-        if any(substring in low for substring in _FORBIDDEN_SUBSTRINGS):
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        raise ValueError(f"unsupported observability attribute: {normalized}")
+        _validate_attribute_key(str(key), allowed_keys)
 
 
 def _record_metric(
