@@ -159,11 +159,17 @@ class MultiContextWSManager:
 
     # ── public surface ────────────────────────────────────────────
 
+    async def connect(self) -> None:
+        """Establish the shared socket without opening an utterance context."""
+        if self._closed:
+            raise RuntimeError("MultiContextWSManager is closed")
+        await self._ensure_socket()
+
     async def open_context(self) -> _Context:
         """Register a fresh context, lazily connecting the socket on first use."""
         if self._closed:
             raise RuntimeError("MultiContextWSManager is closed")
-        await self._ensure_socket()
+        await self.connect()
         ctx = _Context(
             context_id=str(uuid4()),
             queue=asyncio.Queue(maxsize=self._adapter.context_queue_maxsize),

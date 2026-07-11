@@ -74,6 +74,9 @@ class ElevenLabsTTSConfig:
     # "off" disables it. Note: "on" requires an Enterprise plan for
     # ``eleven_flash_v2_5``.
     apply_text_normalization: str = "auto"
+    # Disable the server's chunk schedule for the complete clauses/sentences
+    # EasyCat sends, avoiding an unnecessary text-buffer wait before synthesis.
+    auto_mode: bool = True
     stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.WEBSOCKET
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
@@ -85,15 +88,16 @@ class ElevenLabsTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
-    # Opt-in persistent multi-context socket (WEBSOCKET mode only). Default
-    # ``False`` preserves the current one-shot ``/stream-input`` path
-    # byte-for-byte. When ``True`` one ``/multi-stream-input`` socket is reused
+    # Persistent multi-context socket (WEBSOCKET mode only). ``None`` selects
+    # the low-latency default for WebSocket mode and disables persistence for
+    # HTTP mode. Set ``False`` to retain the legacy one-shot ``/stream-input``
+    # path. When enabled, one ``/multi-stream-input`` socket is reused
     # across turns, each utterance scoped by a fresh context_id, with
     # context-scoped barge-in (``close_context``). Socket warmth between turns
     # relies on WebSocket-level ping/pong; after a very long idle gap exceeding
     # the per-context ``inactivity_timeout`` the socket may be closed
     # server-side and is transparently reconnected on the next utterance.
-    persistent_ws: bool = False
+    persistent_ws: bool | None = None
     # Surfaced as the ``inactivity_timeout`` query param of
     # ``/multi-stream-input`` (seconds): the per-context server-side idle
     # timeout. Only used when ``persistent_ws=True``.
@@ -102,6 +106,8 @@ class ElevenLabsTTSConfig:
     context_queue_maxsize: int = 256
 
     def __post_init__(self) -> None:
+        if self.persistent_ws is None:
+            self.persistent_ws = self.stream_mode == ElevenLabsStreamMode.WEBSOCKET
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
             supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
             raise ValueError(
@@ -366,6 +372,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"/stream-input?model_id={self._config.model_id}"
             f"&output_format={self._config.output_format}"
             f"&apply_text_normalization={self._config.apply_text_normalization}"
+            f"&auto_mode={str(self._config.auto_mode).lower()}"
         )
         self._ws = self._make_ws(ws_url, self._replay_request)
         await self._ws.connect()
@@ -381,6 +388,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"&output_format={self._config.output_format}"
             f"&apply_text_normalization={self._config.apply_text_normalization}"
             f"&inactivity_timeout={self._config.inactivity_timeout}"
+            f"&auto_mode={str(self._config.auto_mode).lower()}"
         )
 
     def _build_multi_ws(self, on_reconnect) -> ReconnectingWebSocket:
@@ -412,6 +420,15 @@ class ElevenLabsTTS(_WSTTSBase):
             )
             self._mgr = MultiContextWSManager(adapter)
         return self._mgr
+
+    async def warmup(self) -> None:
+        """Best-effort preconnect so the first WebSocket utterance is warm."""
+        if not self._persistent_enabled():
+            return
+        try:
+            await self._get_mgr().connect()
+        except Exception as exc:
+            logger.debug("ElevenLabs TTS warmup skipped: %s", exc)
 
     @staticmethod
     def _route_key(parsed: Any) -> str | None:
@@ -479,7 +496,13 @@ class ElevenLabsTTS(_WSTTSBase):
                 raise
         finally:
             if ctx is not None:
-                mgr.finish_context(ctx)
+                if ctx.cancelled:
+                    mgr.finish_context(ctx)
+                else:
+                    # ElevenLabs recommends closing completed contexts
+                    # promptly; otherwise rapid turns can leave up to the
+                    # inactivity timeout's worth of server-side contexts open.
+                    await mgr.cancel_context(ctx)
             self._end_synthesis()
 
     async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:

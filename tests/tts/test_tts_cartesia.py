@@ -183,6 +183,22 @@ class TestCartesiaPersistent:
         assert all(len(c) >= 32 for c in sent_ctx)
         await provider.close()
 
+    async def test_warmup_connects_before_first_synthesis(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_ws", factory):
+            await provider.warmup()
+            assert factory.call_count == 1
+            assert provider._mgr is not None and provider._mgr._contexts == {}
+
+            async for _ in provider.synthesize("first"):
+                pass
+
+        assert factory.call_count == 1
+        await provider.close()
+
     async def test_synthesize_yields_audio(self):
         provider = self._make_provider()
         fake = FakePersistentWS()
@@ -295,7 +311,7 @@ class TestCartesiaPersistentEquivalence:
         audio_chunks = [_pcm16_bytes(241), _pcm16_bytes(239)]  # odd splits
 
         # Default one-shot path.
-        default_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
+        default_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", persistent_ws=False))
         default_msgs = [_chunk_msg(c) for c in audio_chunks] + [_done_msg()]
         default_ws = FakeReconnectingWS(messages=default_msgs)
         with patch.object(default_provider, "_create_ws", return_value=default_ws):
@@ -356,6 +372,7 @@ class TestCartesiaTTSConfig:
         assert config.output_format == PCM16_MONO_24K
         assert config.add_timestamps is True
         assert config.base_url.startswith("wss://api.cartesia.ai")
+        assert config.persistent_ws is True
 
     def test_rejects_unsupported_encoding(self):
         with pytest.raises(ValueError, match="Unsupported Cartesia encoding"):
@@ -393,6 +410,7 @@ class TestCartesiaTTSConfig:
 
 class TestCartesiaTTS:
     def _make_provider(self, **kwargs) -> CartesiaTTS:
+        kwargs.setdefault("persistent_ws", False)
         return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", **kwargs))
 
     async def test_synthesize_yields_audio_events(self):
@@ -478,7 +496,7 @@ class TestCartesiaTTS:
         errors: list[Error] = []
         bus.subscribe(Error, lambda e: errors.append(e))
 
-        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", event_bus=bus))
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", event_bus=bus, persistent_ws=False))
         fake_ws = FakeReconnectingWS(messages=[_error_msg()])
 
         with patch.object(provider, "_create_ws", return_value=fake_ws):

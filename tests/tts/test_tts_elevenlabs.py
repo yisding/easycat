@@ -130,6 +130,8 @@ class TestElevenLabsTTSConfig:
         assert config.similarity_boost == 0.75
         assert config.output_format == "pcm_24000"
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
+        assert config.auto_mode is True
 
     def test_websocket_mode(self):
         config = ElevenLabsTTSConfig(
@@ -137,6 +139,7 @@ class TestElevenLabsTTSConfig:
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
         )
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
 
     def test_custom_values(self):
         config = ElevenLabsTTSConfig(
@@ -163,6 +166,7 @@ class TestElevenLabsTTSConfig:
             ElevenLabsTTSConfig(api_key="key", stream_mode=ElevenLabsStreamMode.HTTP)
         )
         assert http.version_info()["sdk_version"] == get_package_version("httpx")
+        assert http._config.persistent_ws is False
 
 
 class TestElevenLabsTTSValidation:
@@ -313,6 +317,7 @@ class TestElevenLabsTTSHTTP:
 
 class TestElevenLabsTTSWebSocket:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
+        kwargs.setdefault("persistent_ws", False)
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
@@ -368,6 +373,7 @@ class TestElevenLabsTTSWebSocket:
 
         url = mock_ctor.call_args.kwargs["url"]
         assert "apply_text_normalization=on" in url
+        assert "auto_mode=true" in url
 
     async def test_synthesize_ws_sends_init_text_and_eos(self):
         provider = self._make_provider()
@@ -650,6 +656,7 @@ class TestElevenLabsPersistent:
         url = provider._multi_stream_url()
         assert "/multi-stream-input?" in url
         assert "inactivity_timeout=25" in url
+        assert "auto_mode=true" in url
 
     def test_persistent_rejects_out_of_range_inactivity_timeout(self):
         with pytest.raises(ValueError, match=r"inactivity_timeout must be in \[1, 180\]"):
@@ -765,6 +772,26 @@ class TestElevenLabsPersistent:
         }
         # Two distinct contexts across the two utterances.
         assert len(ctx_ids) == 2
+        close_frames = [
+            json.loads(s) for s in fake.sent if json.loads(s).get("close_context") is True
+        ]
+        assert len(close_frames) == 2
+        await provider.close()
+
+    async def test_warmup_connects_before_first_synthesis(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_multi_ws", factory):
+            await provider.warmup()
+            assert factory.call_count == 1
+            assert provider._mgr is not None and provider._mgr._contexts == {}
+
+            async for _ in provider.synthesize("first"):
+                pass
+
+        assert factory.call_count == 1
         await provider.close()
 
     async def test_synthesize_yields_audio(self):
@@ -828,7 +855,7 @@ class TestElevenLabsTTSGeneral:
         assert not provider.is_active
 
     async def test_stop_closes_websocket(self):
-        """A graceful stop closes the synthesis WS (default mode).
+        """A graceful stop closes the synthesis WS in legacy one-shot mode.
 
         Matches Cartesia/Deepgram ``stop()`` so a graceful stop between turns
         does not leave the socket lingering until the next cancel()/close().
@@ -836,6 +863,7 @@ class TestElevenLabsTTSGeneral:
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
         )
         provider = ElevenLabsTTS(config)
         provider._active = True

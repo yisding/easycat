@@ -157,6 +157,15 @@ frameworks, and debugging/audio-processing features:
   use EasyCat's core WebSocket/HTTP stack — their extras are install markers and
   add no vendor SDK).
 
+Cartesia TTS and ElevenLabs TTS in WebSocket mode keep one context-multiplexed
+socket per voice session by default. With the default `warmup=True`, EasyCat
+connects that socket during session startup so the first reply does not pay a
+TCP/TLS handshake. Set `persistent_ws=False` on the provider config to retain
+the legacy one-socket-per-utterance behavior; ElevenLabs HTTP mode disables
+WebSocket persistence automatically. ElevenLabs WebSocket mode also defaults
+to `auto_mode=True` so complete clauses begin synthesis without waiting on the
+server's chunk schedule.
+
 ## CLI
 
 The commands below use the installed CLI form. From this repository, prefix

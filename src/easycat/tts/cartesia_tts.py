@@ -70,17 +70,18 @@ class CartesiaTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
-    # Opt-in persistent multi-context socket. Default ``False`` preserves the
-    # current one-shot-per-synthesize behavior byte-for-byte (no manager is
-    # created). When ``True`` one WebSocket is reused across turns, each
-    # utterance scoped by a fresh context_id, and barge-in cancels just the
-    # context (falling back to a full socket close) rather than tearing the
-    # socket down. Accepted tradeoff: a mid-stream reconnect replays the
-    # context from the top (audible repetition). Socket warmth between turns
-    # relies on WebSocket-level ping/pong; after a very long idle gap the socket
-    # may be closed server-side and is transparently reconnected on the next
-    # utterance.
-    persistent_ws: bool = False
+    # Persistent multi-context socket. Cartesia recommends one preconnected
+    # WebSocket per voice session to avoid TCP/TLS setup on every turn, so the
+    # low-latency path is the default. Set ``False`` to retain the legacy
+    # one-shot-per-synthesize behavior. When ``True`` one WebSocket is reused
+    # across turns, each utterance scoped by a fresh context_id, and barge-in
+    # cancels just the context (falling back to a full socket close) rather than
+    # tearing the socket down. Accepted tradeoff: a mid-stream reconnect
+    # replays the context from the top (audible repetition). Socket warmth
+    # between turns relies on WebSocket-level ping/pong; after a very long idle
+    # gap the socket may be closed server-side and is transparently reconnected
+    # on the next utterance.
+    persistent_ws: bool = True
     # Bounded per-context queue for the persistent demux reader.
     context_queue_maxsize: int = 256
 
@@ -102,11 +103,9 @@ class CartesiaTTSConfig:
 class CartesiaTTS(_WSTTSBase):
     """TTS provider using Cartesia's Sonic WebSocket API.
 
-    One WebSocket connection is opened per :meth:`synthesize` call. The
-    synthesis request is sent as a single JSON frame and audio chunks
-    arrive as base64-encoded ``chunk`` messages on the same socket. A
-    ``done`` message (or ``done: true`` on the final chunk) terminates
-    the loop.
+    By default one multi-context WebSocket is reused across turns. Set
+    :attr:`CartesiaTTSConfig.persistent_ws` to ``False`` for the legacy
+    one-socket-per-utterance path.
     """
 
     _provider_error_name = "cartesia"
@@ -169,6 +168,15 @@ class CartesiaTTS(_WSTTSBase):
             )
             self._mgr = MultiContextWSManager(adapter)
         return self._mgr
+
+    async def warmup(self) -> None:
+        """Best-effort preconnect so the first utterance avoids socket setup."""
+        if not self._persistent_enabled():
+            return
+        try:
+            await self._get_mgr().connect()
+        except Exception as exc:
+            logger.debug("Cartesia TTS warmup skipped: %s", exc)
 
     @staticmethod
     def _route_key(parsed: Any) -> str | None:
