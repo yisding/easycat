@@ -99,6 +99,41 @@ async def test_invoke_records_history():
 
 
 @pytest.mark.asyncio
+async def test_prepare_response_defers_history_until_invoke_prepared():
+    runner = AgentRunner(EchoAgent())
+
+    prepared = await runner.prepare_response(AgentTurnInput.from_text("hello"))
+
+    assert prepared.response == "Echo: hello"
+    assert runner.history == []
+
+    events = [event async for event in runner.invoke_prepared(prepared, _recorder())]
+    assert [event.kind for event in events] == ["text_delta", "done"]
+    assert runner.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Echo: hello"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_discarded_prepared_response_never_mutates_history():
+    runner = AgentRunner(EchoAgent())
+
+    await runner.prepare_response(AgentTurnInput.from_text("discard me"))
+
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_preemptive_generation_can_be_disabled():
+    runner = AgentRunner(EchoAgent(), AgentRunnerConfig(preemptive_generation=False))
+
+    assert not runner.supports_preemptive_generation
+    with pytest.raises(RuntimeError, match="does not support"):
+        await runner.prepare_response(AgentTurnInput.from_text("hello"))
+
+
+@pytest.mark.asyncio
 async def test_invoke_multi_turn_history():
     runner = AgentRunner(UpperAgent())
     await _drain(runner, "first")

@@ -29,6 +29,7 @@ from easycat.events import (
     Event,
     STTEvent,
     STTEventType,
+    STTFinal,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -218,6 +219,9 @@ async def test_turn_runner_constructed_with_session() -> None:
     handlers = session.event_bus._handlers.get(TurnStarted, [])
     bound_names = [getattr(h, "__qualname__", "") for h in handlers]
     assert any("TurnRunner.on_turn_started" in name for name in bound_names)
+    stt_handlers = session.event_bus._handlers.get(STTFinal, [])
+    stt_bound_names = [getattr(h, "__qualname__", "") for h in stt_handlers]
+    assert any("TurnRunner.on_stt_final" in name for name in stt_bound_names)
 
 
 @pytest.mark.asyncio
@@ -339,6 +343,84 @@ async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
 
     assert len(finals) == 1
     assert finals[0].text == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_stt_final_prepares_simple_agent_before_endpoint_confirmation() -> None:
+    class BlockingSimpleAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            self.started.set()
+            await self.release.wait()
+            return f"Reply to {text}."
+
+    agent = BlockingSimpleAgent()
+    runner_agent = AgentRunner(agent)
+    session = Session(_config(agent=runner_agent))
+    turn = TurnContext("turn-preemptive", CancelToken())
+    session._turn = turn
+    turn.append_stt_segment("hello")
+
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+    assert runner_agent.history == []
+
+    agent.release.set()
+    task = session._turn_runner._preemptive_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=1)
+    await session._turn_runner.handle_end_of_speech(turn=turn)
+
+    assert agent.calls == ["hello"]
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Reply to hello."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_later_stt_final_cancels_and_replaces_preemptive_generation() -> None:
+    class RestartableSimpleAgent:
+        def __init__(self) -> None:
+            self.first_started = asyncio.Event()
+            self.first_cancelled = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                self.first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.first_cancelled.set()
+                    raise
+            return f"Reply to {text}."
+
+    agent = RestartableSimpleAgent()
+    runner_agent = AgentRunner(agent)
+    session = Session(_config(agent=runner_agent))
+    turn = TurnContext("turn-restart", CancelToken())
+    session._turn = turn
+    turn.append_stt_segment("hello")
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_started.wait(), timeout=1)
+
+    turn.append_stt_segment("again")
+    await session._turn_runner.on_stt_final(STTFinal(text="again", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_cancelled.wait(), timeout=1)
+    await session._turn_runner.handle_end_of_speech(turn=turn)
+
+    assert agent.calls == ["hello", "hello again"]
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello again"},
+        {"role": "assistant", "content": "Reply to hello again."},
+    ]
 
 
 @pytest.mark.asyncio
