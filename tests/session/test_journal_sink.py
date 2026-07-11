@@ -14,9 +14,46 @@ from easycat.events import (
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.artifacts import InMemoryArtifactStore
 from easycat.runtime.records import JournalRecordKind
-from easycat.session._journal_sink import SessionJournalSink
+from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS, SessionJournalSink
 from easycat.session._session import Session
 from easycat.session._types import SessionConfig
+
+
+def test_simple_event_record_registry_is_complete() -> None:
+    expected_names = {
+        "AgentDelta": "agent_delta",
+        "AgentFinal": "agent_final",
+        "AgentRequestStarted": "agent_request_started",
+        "BotStartedSpeaking": "bot_started_speaking",
+        "BotStoppedSpeaking": "bot_stopped_speaking",
+        "Error": "error",
+        "PlaybackMarkAck": "playback_mark_ack",
+        "ReconnectAttempt": "ws_reconnect_attempt",
+        "ReconnectFailure": "ws_reconnect_failure",
+        "ReconnectSuccess": "ws_reconnect_success",
+        "STTFinal": "stt_final",
+        "STTPartial": "stt_partial",
+        "SessionActionCompleted": "session_action_completed",
+        "SessionActionFailed": "session_action_failed",
+        "SessionActionRequested": "session_action_requested",
+        "SessionActionStarted": "session_action_started",
+        "SupervisorListenerAttached": "supervisor_listener_attached",
+        "SupervisorListenerDetached": "supervisor_listener_detached",
+        "ToolCallDelta": "tool_call_delta",
+        "ToolCallResult": "tool_call_result",
+        "ToolCallStarted": "tool_call_started",
+        "TurnEnded": "turn_ended",
+        "TurnStarted": "turn_started",
+        "VADStartSpeaking": "vad_start_speaking",
+        "VADStopSpeaking": "vad_stop_speaking",
+    }
+
+    assert {
+        spec.event_type.__name__: spec.name for spec in _SIMPLE_EVENT_RECORDS
+    } == expected_names
+    assert len(_SIMPLE_EVENT_RECORDS) == len(expected_names)
+    assert len({spec.name for spec in _SIMPLE_EVENT_RECORDS}) == len(_SIMPLE_EVENT_RECORDS)
+    assert all(spec.kind == JournalRecordKind.EVENT for spec in _SIMPLE_EVENT_RECORDS)
 
 
 @pytest.mark.asyncio
@@ -218,6 +255,36 @@ async def test_journal_sink_records_error_runtime_context() -> None:
     assert record.error.notes == (
         "stage=agent\nturn_id=t1\nelapsed_ms=12.346\nsequence=42\nrecord_key=cp_42"
     )
+
+
+@pytest.mark.asyncio
+async def test_journal_sink_preserves_zero_error_context_and_omits_empty_ids() -> None:
+    bus = EventBus()
+    journal = InMemoryRingBuffer()
+    sink = SessionJournalSink(
+        event_bus=bus,
+        journal=journal,
+        artifact_store=None,
+        session_id="session-a",
+        current_turn_id=lambda turn_id=None: turn_id,
+    )
+    sink.subscribe()
+
+    await bus.emit(
+        Error(
+            exception=RuntimeError("failed immediately"),
+            stage=ErrorStage.STT,
+            provider="",
+            code="",
+            elapsed_ms=0.0,
+            sequence=0,
+            record_key="",
+        )
+    )
+
+    [record] = journal.read()
+    assert record.data == {"stage": "stt", "elapsed_ms": 0.0, "sequence": 0}
+    assert record.error is not None
 
 
 @pytest.mark.asyncio
