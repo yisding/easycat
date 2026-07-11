@@ -461,7 +461,10 @@ class ElevenLabsTTS(_WSTTSBase):
                 events.append(self._make_audio_event(audio_bytes, self._source_format))
         if data.get("alignment"):
             events.append(self._make_markers_event([data["alignment"]]))
-        return events, bool(data.get("isFinal"))
+        # The one-shot endpoint uses camelCase ``isFinal`` while the
+        # multi-context endpoint documents snake_case ``is_final``. Decode
+        # both here because this helper is intentionally shared by both paths.
+        return events, bool(data.get("isFinal") or data.get("is_final"))
 
     async def _synthesize_ws_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
         """Synthesize over the shared persistent multi-stream-input socket.

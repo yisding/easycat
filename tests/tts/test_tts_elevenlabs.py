@@ -614,12 +614,12 @@ class FakePersistentWS:
             raise RuntimeError("send failed")
         self.sent.append(message)
         msg = json.loads(message)
-        # Respond to the EOS frame (empty text) with audio + isFinal for ctx.
+        # The multi-context endpoint uses snake_case ``is_final``.
         if msg.get("text") == "" and "context_id" in msg:
             ctx_id = msg["context_id"]
             audio = base64.b64encode(_pcm16_bytes(120)).decode()
             await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
-            await self._queue.put(json.dumps({"isFinal": True, "contextId": ctx_id}))
+            await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
 
     async def recv_iter(self):
         while True:
