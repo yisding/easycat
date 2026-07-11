@@ -13,44 +13,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import statistics
 import time
 
+from _deepgram_socket import QueueDeepgramSocket
+
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
-
-
-class _BenchmarkSocket:
-    def __init__(self, *, connect_delay_s: float) -> None:
-        self._connect_delay_s = connect_delay_s
-        self._connected = False
-        self._closed = False
-        self._queue: asyncio.Queue[bytes | str | None] = asyncio.Queue()
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected and not self._closed
-
-    async def connect(self) -> None:
-        await asyncio.sleep(self._connect_delay_s)
-        self._connected = True
-
-    async def send(self, frame: str) -> None:
-        if json.loads(frame)["type"] == "Flush":
-            await self._queue.put(b"\x00\x00" * 240)
-            await self._queue.put(json.dumps({"type": "Flushed"}))
-
-    async def recv_iter(self):
-        while True:
-            frame = await self._queue.get()
-            if frame is None:
-                return
-            yield frame
-
-    async def close(self) -> None:
-        self._closed = True
-        self._connected = False
-        await self._queue.put(None)
 
 
 async def _first_audio_ms(provider: DeepgramTTS) -> float:
@@ -66,12 +34,12 @@ async def _first_audio_ms(provider: DeepgramTTS) -> float:
 
 async def _run(samples: int, connect_delay_ms: float) -> tuple[list[float], list[float]]:
     one_shot = DeepgramTTS(DeepgramTTSConfig(api_key="benchmark", persistent_ws=False))
-    one_shot._create_ws = lambda: _BenchmarkSocket(  # type: ignore[method-assign]
+    one_shot._create_ws = lambda: QueueDeepgramSocket(  # type: ignore[method-assign]
         connect_delay_s=connect_delay_ms / 1000.0
     )
 
     persistent = DeepgramTTS(DeepgramTTSConfig(api_key="benchmark"))
-    socket = _BenchmarkSocket(connect_delay_s=connect_delay_ms / 1000.0)
+    socket = QueueDeepgramSocket(connect_delay_s=connect_delay_ms / 1000.0)
     persistent._create_ws = lambda: socket  # type: ignore[method-assign]
     await persistent.warmup()
 

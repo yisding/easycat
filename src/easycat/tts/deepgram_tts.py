@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -36,6 +38,10 @@ class DeepgramTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
+    # Maximum time to preserve a persistent socket while waiting for Deepgram
+    # to acknowledge Clear. A missing boundary leaves the stream ambiguous, so
+    # timeout recovery closes it before the next synthesis cycle.
+    clear_timeout_s: float = 1.0
     # Aura's streaming API supports repeated sequential Speak/Flush cycles on
     # one connection. Keep it warm by default so DNS/TLS/WebSocket setup stays
     # off the reply path. Set False for the legacy one-socket-per-utterance
@@ -57,12 +63,16 @@ class DeepgramTTS(_WSTTSBase):
 
     _provider_error_name = "deepgram"
     _provider_log_label = "Deepgram"
+    _flush_limit = 20
+    _flush_window_s = 60.0
 
     def __init__(self, config: DeepgramTTSConfig) -> None:
         super().__init__(output_format=config.output_format)
         self._config = config
         self._stream_lock = asyncio.Lock()
         self._synthesis_owner: asyncio.Task[Any] | None = None
+        self._clear_ack: asyncio.Event | None = None
+        self._flush_times: deque[float] = deque()
         # Text of the in-flight utterance, replayed by the on_reconnect hook
         # so a mid-stream drop restarts the utterance from the top instead of
         # aborting it. Known tradeoff: Deepgram synthesis is one-shot per
@@ -104,12 +114,28 @@ class DeepgramTTS(_WSTTSBase):
         """Return a live socket, connecting or reconnecting when necessary."""
         ws = self._ws
         if ws is None:
+            self._flush_times.clear()
             ws = self._create_ws()
             self._ws = ws
             await ws.connect()
         elif not ws.is_connected:
             await ws.connect()
         return ws
+
+    async def _ensure_flush_capacity(self) -> ReconnectingWebSocket:
+        """Rotate the socket before it would exceed Deepgram's Flush limit."""
+        now = time.monotonic()
+        cutoff = now - self._flush_window_s
+        while self._flush_times and self._flush_times[0] <= cutoff:
+            self._flush_times.popleft()
+        if self._config.persistent_ws and len(self._flush_times) >= self._flush_limit:
+            await self._close_ws()
+        return await self._ensure_ws()
+
+    def _record_flush(self) -> None:
+        """Record a Flush sent on the current physical connection."""
+        if self._config.persistent_ws:
+            self._flush_times.append(time.monotonic())
 
     async def warmup(self) -> None:
         """Best-effort connect the persistent socket before the first reply."""
@@ -138,12 +164,16 @@ class DeepgramTTS(_WSTTSBase):
         text = self._pending_text
         if ws is None or text is None or self._cancelled:
             return
+        # A reconnect creates a new physical connection and therefore a new
+        # provider-side Flush window. Count the replayed Flush on that socket.
+        self._flush_times.clear()
         # The replayed stream restarts from the top and is sample-aligned in
         # its own right, so drop any sub-sample byte held from before the drop
         # to avoid shifting every replayed sample by one byte.
         self._reset_audio_alignment()
         await ws.send(json.dumps({"type": "Speak", "text": text}))
         await ws.send(json.dumps({"type": "Flush"}))
+        self._record_flush()
 
     def _handle_control(self, message: str) -> str | None:
         """Handle one Deepgram control frame and return its type."""
@@ -189,6 +219,8 @@ class DeepgramTTS(_WSTTSBase):
         """Run one serialized Speak/Flush cycle."""
         self._start_synthesis()
         self._synthesis_owner = asyncio.current_task()
+        clear_ack = asyncio.Event()
+        self._clear_ack = clear_ack
         cycle_completed = False
         if not self._config.persistent_ws:
             self._ws = self._create_ws()
@@ -199,13 +231,14 @@ class DeepgramTTS(_WSTTSBase):
         self._pending_text = None
 
         try:
-            ws = await self._ensure_ws()
+            ws = await self._ensure_flush_capacity()
 
             # Send the text payload
             await ws.send(json.dumps({"type": "Speak", "text": text}))
 
             # Send flush to signal end of text input
             await ws.send(json.dumps({"type": "Flush"}))
+            self._record_flush()
 
             # Request is now live on a connected stream: arm replay so a
             # *mid-stream* reconnect re-sends these frames and restarts the
@@ -224,6 +257,7 @@ class DeepgramTTS(_WSTTSBase):
                         "Error",
                     }:
                         cycle_completed = True
+                        clear_ack.set()
                         break
                     continue
 
@@ -247,6 +281,8 @@ class DeepgramTTS(_WSTTSBase):
             if not self._config.persistent_ws or not cycle_completed:
                 await self._close_ws()
             self._pending_text = None
+            if self._clear_ack is clear_ack:
+                self._clear_ack = None
             self._synthesis_owner = None
             self._end_synthesis()
 
@@ -267,6 +303,8 @@ class DeepgramTTS(_WSTTSBase):
         await super().cancel()
         ws = self._ws
         if self._config.persistent_ws and was_active and ws is not None:
+            owner = self._synthesis_owner
+            clear_ack = self._clear_ack
             try:
                 await ws.send(json.dumps({"type": "Clear"}))
             except Exception:
@@ -276,8 +314,16 @@ class DeepgramTTS(_WSTTSBase):
                 # synthesis owner drains Cleared. A direct caller may invoke
                 # cancel() inside the async-for body, where that same task
                 # cannot concurrently drain; close immediately in that shape.
-                if asyncio.current_task() is self._synthesis_owner:
+                if asyncio.current_task() is owner or clear_ack is None:
                     await self._close_ws()
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            clear_ack.wait(), timeout=self._config.clear_timeout_s
+                        )
+                    except TimeoutError:
+                        logger.debug("Deepgram Clear acknowledgement timed out; closing socket")
+                        await self._close_ws()
                 return
         await self._close_ws()
 

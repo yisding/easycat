@@ -12,6 +12,7 @@ import pytest
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.events import Error, ErrorStage, EventBus, TTSEventType
 from easycat.tts.deepgram_tts import DeepgramTTS, DeepgramTTSConfig
+from perf._deepgram_socket import QueueDeepgramSocket
 from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
 
@@ -58,72 +59,13 @@ class FakeReconnectingWS:
         self._closed = True
 
 
-class FakePersistentWS:
-    """Queue-backed Deepgram socket supporting repeated Speak/Flush cycles."""
-
-    def __init__(
-        self,
-        *,
-        fail_connect: bool = False,
-        hold_first_flush: bool = False,
-    ) -> None:
-        self._queue: asyncio.Queue[bytes | str | None] = asyncio.Queue()
-        self._pending_text: str | None = None
-        self._fail_connect = fail_connect
-        self._hold_first_flush = hold_first_flush
-        self._connected = False
-        self._closed = False
-        self.connect_calls = 0
-        self.sent: list[dict[str, str]] = []
-
-    @property
-    def is_connected(self) -> bool:
-        return self._connected and not self._closed
-
-    async def connect(self) -> None:
-        self.connect_calls += 1
-        if self._fail_connect:
-            raise RuntimeError("connect boom")
-        self._connected = True
-
-    async def send(self, message: str | bytes) -> None:
-        assert isinstance(message, str)
-        frame = json.loads(message)
-        self.sent.append(frame)
-        if frame["type"] == "Speak":
-            self._pending_text = frame["text"]
-        elif frame["type"] == "Flush":
-            assert self._pending_text is not None
-            await self._queue.put(_pcm16_bytes(120))
-            if self._hold_first_flush:
-                self._hold_first_flush = False
-            else:
-                await self._queue.put(json.dumps({"type": "Flushed"}))
-            self._pending_text = None
-        elif frame["type"] == "Clear":
-            self._pending_text = None
-            await self._queue.put(json.dumps({"type": "Cleared"}))
-
-    async def recv_iter(self):
-        while True:
-            message = await self._queue.get()
-            if message is None:
-                return
-            yield message
-
-    async def close(self) -> None:
-        self._closed = True
-        self._connected = False
-        await self._queue.put(None)
-
-
 class TestDeepgramPersistent:
     def _make_provider(self) -> DeepgramTTS:
         return DeepgramTTS(DeepgramTTSConfig(api_key="test-key"))
 
     async def test_warmup_and_two_syntheses_reuse_one_connection(self):
         provider = self._make_provider()
-        fake = FakePersistentWS()
+        fake = QueueDeepgramSocket(audio=_pcm16_bytes(120))
         factory = MagicMock(return_value=fake)
 
         with patch.object(provider, "_create_ws", factory):
@@ -146,8 +88,8 @@ class TestDeepgramPersistent:
 
     async def test_warmup_failure_retries_with_fresh_socket(self):
         provider = self._make_provider()
-        failed = FakePersistentWS(fail_connect=True)
-        working = FakePersistentWS()
+        failed = QueueDeepgramSocket(fail_connect=True)
+        working = QueueDeepgramSocket(audio=_pcm16_bytes(120))
         factory = MagicMock(side_effect=[failed, working])
 
         with patch.object(provider, "_create_ws", factory):
@@ -162,7 +104,7 @@ class TestDeepgramPersistent:
 
     async def test_cancel_uses_clear_and_keeps_socket_for_next_turn(self):
         provider = self._make_provider()
-        fake = FakePersistentWS(hold_first_flush=True)
+        fake = QueueDeepgramSocket(audio=_pcm16_bytes(120), hold_first_flush=True)
         first_audio = asyncio.Event()
         cancelled_events = []
 
@@ -175,6 +117,7 @@ class TestDeepgramPersistent:
             synthesis_task = asyncio.create_task(_consume_cancelled_turn())
             await first_audio.wait()
             await provider.cancel()
+            assert synthesis_task.done()
             await synthesis_task
             next_events = [event async for event in provider.synthesize("next turn")]
 
@@ -187,7 +130,7 @@ class TestDeepgramPersistent:
 
     async def test_stop_keeps_idle_persistent_socket_open(self):
         provider = self._make_provider()
-        fake = FakePersistentWS()
+        fake = QueueDeepgramSocket()
 
         with patch.object(provider, "_create_ws", return_value=fake):
             await provider.warmup()
@@ -197,19 +140,9 @@ class TestDeepgramPersistent:
         assert not fake._closed
         await provider.close()
 
-    async def test_cancel_does_not_wait_for_clear_ack(self):
-        provider = self._make_provider()
-
-        class NoClearAckWS(FakePersistentWS):
-            async def send(self, message: str | bytes) -> None:
-                assert isinstance(message, str)
-                frame = json.loads(message)
-                if frame["type"] == "Clear":
-                    self.sent.append(frame)
-                    return
-                await super().send(message)
-
-        fake = NoClearAckWS(hold_first_flush=True)
+    async def test_cancel_times_out_and_closes_without_clear_ack(self):
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="test-key", clear_timeout_s=0.01))
+        fake = QueueDeepgramSocket(acknowledge_clear=False, hold_first_flush=True)
         first_audio = asyncio.Event()
 
         async def _consume() -> None:
@@ -219,13 +152,50 @@ class TestDeepgramPersistent:
         with patch.object(provider, "_create_ws", return_value=fake):
             synthesis_task = asyncio.create_task(_consume())
             await first_audio.wait()
-            await asyncio.wait_for(provider.cancel(), timeout=0.05)
-            synthesis_task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await synthesis_task
+            await asyncio.wait_for(provider.cancel(), timeout=0.1)
+            await synthesis_task
 
         assert fake._closed
         assert provider._ws is None
+
+    async def test_rotates_before_exceeding_flush_window_limit(self):
+        provider = self._make_provider()
+        first = QueueDeepgramSocket()
+        second = QueueDeepgramSocket()
+        factory = MagicMock(side_effect=[first, second])
+
+        with patch.object(provider, "_create_ws", factory):
+            for index in range(21):
+                events = [event async for event in provider.synthesize(str(index))]
+                assert events
+
+        assert [frame["type"] for frame in first.sent].count("Flush") == 20
+        assert [frame["type"] for frame in second.sent].count("Flush") == 1
+        assert first._closed
+        assert not second._closed
+        await provider.close()
+
+    async def test_reuses_socket_after_flush_window_expires(self):
+        provider = self._make_provider()
+        fake = QueueDeepgramSocket()
+        now = 0.0
+
+        with (
+            patch.object(provider, "_create_ws", return_value=fake) as factory,
+            patch(
+                "easycat.tts.deepgram_tts.time.monotonic",
+                side_effect=lambda: now,
+            ),
+        ):
+            for index in range(20):
+                assert [event async for event in provider.synthesize(str(index))]
+            now = 61.0
+            assert [event async for event in provider.synthesize("after window")]
+
+        assert factory.call_count == 1
+        assert [frame["type"] for frame in fake.sent].count("Flush") == 21
+        assert not fake._closed
+        await provider.close()
 
 
 class TestDeepgramTTSConfig:
@@ -236,6 +206,7 @@ class TestDeepgramTTSConfig:
         assert config.sample_rate == 24000
         assert config.output_format == PCM16_MONO_24K
         assert config.persistent_ws is True
+        assert config.clear_timeout_s == 1.0
 
     def test_custom_values(self):
         config = DeepgramTTSConfig(

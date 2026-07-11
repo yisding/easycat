@@ -20,6 +20,7 @@ from easycat.tts.elevenlabs_tts import (
     ElevenLabsTTSConfig,
 )
 from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from perf._deepgram_socket import QueueDeepgramSocket
 
 
 def _pcm16_bytes(n_samples: int = 480) -> bytes:
@@ -137,7 +138,7 @@ class TestDeepgramCancellation:
         """Cancel Deepgram TTS after receiving 3 audio chunks."""
         provider = DeepgramTTS(DeepgramTTSConfig(api_key="test"))
         many_chunks = [_pcm16_bytes() for _ in range(20)]
-        fake_ws = FakeWS(messages=many_chunks)
+        fake_ws = QueueDeepgramSocket(many_chunks, auto_flush=False, acknowledge_clear=False)
 
         with patch.object(provider, "_create_ws", return_value=fake_ws):
             events = []
@@ -155,7 +156,9 @@ class TestDeepgramCancellation:
     async def test_cancel_without_clear_ack_closes_websocket(self):
         """A missing Cleared boundary must discard the potentially dirty socket."""
         provider = DeepgramTTS(DeepgramTTSConfig(api_key="test"))
-        fake_ws = FakeWS(messages=[_pcm16_bytes()] * 10)
+        fake_ws = QueueDeepgramSocket(
+            [_pcm16_bytes()] * 10, auto_flush=False, acknowledge_clear=False
+        )
 
         with patch.object(provider, "_create_ws", return_value=fake_ws):
             async for event in provider.synthesize(LONG_TEXT):
@@ -170,7 +173,9 @@ class TestDeepgramCancellation:
     async def test_cancel_on_first_chunk(self):
         """Cancel on the first audio chunk."""
         provider = DeepgramTTS(DeepgramTTSConfig(api_key="test"))
-        fake_ws = FakeWS(messages=[_pcm16_bytes()] * 5)
+        fake_ws = QueueDeepgramSocket(
+            [_pcm16_bytes()] * 5, auto_flush=False, acknowledge_clear=False
+        )
 
         with patch.object(provider, "_create_ws", return_value=fake_ws):
             events = []
