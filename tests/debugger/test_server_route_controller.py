@@ -12,19 +12,45 @@ from easycat.debugger.server import _DebuggerRoutes, _empty_dev_source, _make_ap
 
 
 def test_make_app_registers_controller_routes_and_shutdown_hook() -> None:
+    """The base app exposes exactly the non-development HTTP contract."""
     app = _make_app(_empty_dev_source())
 
     registered = {(route.method, route.resource.canonical) for route in app.router.routes()}
+    get_paths = {
+        "/",
+        "/api/aec/{turn}",
+        "/api/annotations",
+        "/api/artifact/{ref}",
+        "/api/audio/concat/{turn}",
+        "/api/audio/waveform/{turn}",
+        "/api/health",
+        "/api/issues",
+        "/api/manifest",
+        "/api/records",
+        "/api/refresh",
+        "/api/timeline",
+        "/api/transcript",
+        "/api/turns",
+        "/static",
+        "/ws",
+    }
+    expected = {(method, path) for path in get_paths for method in ("GET", "HEAD")}
+    expected.update(
+        {
+            ("POST", "/api/aec/{turn}/vad-whatif"),
+            ("POST", "/api/annotate"),
+            ("POST", "/api/export"),
+            ("POST", "/api/replay"),
+        }
+    )
 
-    assert ("GET", "/api/records") in registered
-    assert ("POST", "/api/replay") in registered
-    assert ("GET", "/ws") in registered
-    assert not any(path.startswith("/api/dev/") for _method, path in registered)
+    assert registered == expected
     assert len(app.on_shutdown) == 1
 
 
 @pytest.mark.asyncio
 async def test_route_controller_closes_tracked_websockets_on_shutdown() -> None:
+    """Application shutdown closes and forgets every tracked WebSocket."""
     from aiohttp import WSMsgType, web
 
     closed: list[tuple[int, bytes]] = []
