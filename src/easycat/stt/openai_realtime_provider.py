@@ -82,15 +82,16 @@ class OpenAIRealtimeSTTConfig:
     # tradeoff.  Defaults to that module constant so the provider tests can
     # still monkeypatch it.
     final_transcript_timeout_s: float = field(default_factory=lambda: _FINAL_TRANSCRIPT_TIMEOUT_S)
-    # Keep one transcription WebSocket across logical voice turns. OpenAI's
-    # commit event clears the input buffer, so a single session can accept the
-    # next turn without another DNS/TLS/WebSocket/session.update handshake.
-    persistent_ws: bool = True
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
     ws_connect: Any = field(default=None, repr=False)
     # Optional EventBus for reconnect observability
     event_bus: Any = field(default=None, repr=False)
+    # Keep one transcription WebSocket across logical voice turns. Appended
+    # after the original public fields to preserve positional construction.
+    # OpenAI's commit event clears the input buffer, so a single session can
+    # accept the next turn without another connection/session.update handshake.
+    persistent_ws: bool = True
 
 
 class OpenAIRealtimeSTT(WebSocketSTTBase):

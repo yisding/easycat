@@ -627,6 +627,27 @@ def test_openai_realtime_config_final_timeout_default() -> None:
     assert config.persistent_ws is True
 
 
+def test_openai_realtime_config_preserves_legacy_positional_field_order() -> None:
+    factory = _MockWSFactory()
+    event_bus = object()
+
+    config = OpenAIRealtimeSTTConfig(
+        "sk-test",
+        "gpt-realtime-whisper",
+        None,
+        "en",
+        "low",
+        "wss://example.test/realtime",
+        0.5,
+        factory,
+        event_bus,
+    )
+
+    assert config.ws_connect is factory
+    assert config.event_bus is event_bus
+    assert config.persistent_ws is True
+
+
 @pytest.mark.asyncio
 async def test_openai_realtime_promotes_partial_on_final_timeout_via_config_field() -> None:
     """The config field — not just the module constant — drives the wait."""
