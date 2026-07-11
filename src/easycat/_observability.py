@@ -8,6 +8,7 @@ OTel SDK/exporter get spans and metrics through the standard API.
 from __future__ import annotations
 
 import contextlib
+import functools
 import threading
 from collections.abc import Iterator, Mapping
 from typing import Any, Literal
@@ -303,7 +304,14 @@ def _make_observation(value: int | float, attributes: dict[str, Any]) -> Any:
     return Observation(value, attributes=attributes)
 
 
+@functools.cache
 def _get_tracer() -> Any | None:
+    """Return the process-wide tracer without repeating import discovery.
+
+    OpenTelemetry returns a proxy tracer before an SDK provider is configured,
+    so retaining this handle preserves its supported late-configuration
+    behavior while keeping import machinery off every span's hot path.
+    """
     try:
         from opentelemetry import trace
     except ImportError:
@@ -311,7 +319,14 @@ def _get_tracer() -> Any | None:
     return trace.get_tracer(INSTRUMENTATION_NAME)
 
 
+@functools.cache
 def _get_meter() -> Any | None:
+    """Return the process-wide meter without repeating import discovery.
+
+    Like tracers, OpenTelemetry meters are proxy objects that pick up a
+    provider configured later in process startup.  Caching the proxy avoids a
+    costly package lookup for every audio frame and journal append.
+    """
     try:
         from opentelemetry import metrics
     except ImportError:
