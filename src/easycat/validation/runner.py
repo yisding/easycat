@@ -592,15 +592,20 @@ def run_release_validation(
             and cli_smoke_ok
         )
 
-    def child_command_runner(command: list[str], *, env: Mapping[str, str]) -> CommandResult:
+    def child_command_runner(
+        command: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | Path | None = None,
+    ) -> CommandResult:
         child_env = {
-            **env,
+            **(env or os.environ),
             "PYTHONPATH": "",
             "EASYCAT_VALIDATION_PYTEST_COMMAND": shlex.join([str(venv_python), "-m", "pytest"]),
             "EASYCAT_VALIDATION_TEST_PATHS": str(source_root / "tests"),
             "EASYCAT_VALIDATION_TEST_ROOT": str(source_root / "tests"),
         }
-        return command_runner(command, env=child_env, cwd=outside_dir)
+        return command_runner(command, env=child_env, cwd=cwd or outside_dir)
 
     def record_child_result(name: str, result: ValidationRunResult) -> None:
         artifact_key = name.removeprefix("release.").replace(".", "_") + "_report"
