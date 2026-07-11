@@ -865,6 +865,14 @@ class TestSSETranslator:
         assert ev.call_id == ""
         assert pending == {}
 
+    @pytest.mark.parametrize("item", [None, [], "function_call"])
+    def test_function_call_added_ignores_malformed_item(self, item: object):
+        rec = _recorder()
+
+        ev = translate_sse_event("response.output_item.added", {"item": item}, rec)
+
+        assert ev is None
+
     def test_function_call_done_returns_none(self):
         rec = _recorder()
         ev = translate_sse_event(
@@ -914,6 +922,14 @@ class TestSSETranslator:
         assert ev.call_id == ""
         assert ev.result == "result"
         assert pending == {"safe": "get_weather"}
+
+    @pytest.mark.parametrize("item", [None, [], "function_call_output"])
+    def test_function_call_output_ignores_malformed_item(self, item: object):
+        rec = _recorder()
+
+        ev = translate_sse_event("response.output_item.done", {"item": item}, rec)
+
+        assert ev is None
 
     def test_response_completed_returns_none(self):
         rec = _recorder()

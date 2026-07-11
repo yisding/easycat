@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
 
 logger = logging.getLogger(__name__)
+
+_PendingTools = dict[str, str] | None
+_SSETranslator = Callable[
+    [dict[str, Any], AgentRecorder, _PendingTools],
+    AgentBridgeEvent | None,
+]
+_CALLER_HANDLED_EVENTS = frozenset(("response.completed", "response.failed"))
 
 
 def _scalar_identifier(value: Any) -> str:
@@ -32,7 +40,7 @@ def _scalar_identifier(value: Any) -> str:
     return ""
 
 
-def _response_identifier(data: dict[str, Any], *keys: str) -> str:
+def _response_identifier(data: Mapping[str, Any], *keys: str) -> str:
     for key in keys:
         value = _scalar_identifier(data.get(key))
         if value:
@@ -74,6 +82,79 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
     return event_type, data
 
 
+def _event_item(data: dict[str, Any]) -> Mapping[str, Any]:
+    item = data.get("item")
+    return item if isinstance(item, Mapping) else {}
+
+
+def _translate_text_delta(
+    data: dict[str, Any],
+    _recorder: AgentRecorder,
+    _pending: _PendingTools,
+) -> AgentBridgeEvent | None:
+    delta = data.get("delta")
+    return (
+        AgentBridgeEvent(kind="text_delta", text=delta)
+        if isinstance(delta, str) and delta
+        else None
+    )
+
+
+def _translate_output_item_added(
+    data: dict[str, Any],
+    recorder: AgentRecorder,
+    pending: _PendingTools,
+) -> AgentBridgeEvent | None:
+    item = _event_item(data)
+    if item.get("type") != "function_call":
+        return None
+    name = _scalar_identifier(item.get("name"))
+    call_id = _response_identifier(item, "call_id", "id")
+    if pending is not None and call_id:
+        pending[call_id] = name
+    recorder.record_tool_call(phase="start", name=name, call_id=call_id)
+    return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
+
+
+def _translate_tool_delta(
+    data: dict[str, Any],
+    recorder: AgentRecorder,
+    pending: _PendingTools,
+) -> AgentBridgeEvent | None:
+    delta = data.get("delta")
+    if not isinstance(delta, str) or not delta:
+        return None
+    call_id = _response_identifier(data, "call_id", "item_id")
+    name = pending.get(call_id, "") if pending is not None else ""
+    recorder.record_tool_call(phase="delta", name=name, call_id=call_id)
+    return AgentBridgeEvent(kind="tool_delta", text=delta, call_id=call_id)
+
+
+def _translate_output_item_done(
+    data: dict[str, Any],
+    recorder: AgentRecorder,
+    pending: _PendingTools,
+) -> AgentBridgeEvent | None:
+    item = _event_item(data)
+    item_type = item.get("type")
+    if item_type != "function_call_output":
+        return None
+
+    call_id = _response_identifier(item, "call_id", "id")
+    result_str = str(item.get("output", ""))
+    name = pending.pop(call_id, "") if pending is not None else ""
+    recorder.record_tool_call(phase="result", name=name, call_id=call_id)
+    return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
+
+
+_SSE_TRANSLATORS: dict[str, _SSETranslator] = {
+    "response.output_text.delta": _translate_text_delta,
+    "response.output_item.added": _translate_output_item_added,
+    "response.function_call_arguments.delta": _translate_tool_delta,
+    "response.output_item.done": _translate_output_item_done,
+}
+
+
 def translate_sse_event(
     event_type: str,
     data: dict[str, Any],
@@ -90,51 +171,10 @@ def translate_sse_event(
     when recording ``delta`` and ``result`` phases.  When ``None``, tool
     name is omitted from those records.
     """
-    if event_type == "response.output_text.delta":
-        delta = data.get("delta", "")
-        if delta:
-            return AgentBridgeEvent(kind="text_delta", text=delta)
-        return None
-
-    if event_type == "response.output_item.added":
-        item = data.get("item", {})
-        if item.get("type") == "function_call":
-            name = item.get("name", "")
-            call_id = _response_identifier(item, "call_id", "id")
-            if pending is not None and call_id:
-                pending[call_id] = name
-            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
-            return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
-        return None
-
-    if event_type == "response.function_call_arguments.delta":
-        delta = data.get("delta", "")
-        call_id = _response_identifier(data, "call_id", "item_id")
-        if delta:
-            name = pending.get(call_id, "") if pending is not None else ""
-            recorder.record_tool_call(phase="delta", name=name, call_id=call_id)
-            return AgentBridgeEvent(kind="tool_delta", text=delta, call_id=call_id)
-        return None
-
-    if event_type == "response.output_item.done":
-        item = data.get("item", {})
-        item_type = item.get("type", "")
-
-        if item_type == "function_call":
-            # tool_started already emitted on output_item.added
-            return None
-
-        if item_type == "function_call_output":
-            call_id = _response_identifier(item, "call_id", "id")
-            result_str = str(item.get("output", ""))
-            name = pending.pop(call_id, "") if pending is not None else ""
-            recorder.record_tool_call(phase="result", name=name, call_id=call_id)
-            return AgentBridgeEvent(kind="tool_result", call_id=call_id, result=result_str)
-
-        return None
-
-    if event_type in ("response.completed", "response.failed"):
-        # Handled by the streaming loop in RemoteResponsesAPIBridge.invoke().
+    translator = _SSE_TRANSLATORS.get(event_type)
+    if translator is not None:
+        return translator(data, recorder, pending)
+    if event_type in _CALLER_HANDLED_EVENTS:
         return None
 
     logger.debug("Unhandled Responses API SSE event: %s", event_type)
