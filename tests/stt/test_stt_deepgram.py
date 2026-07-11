@@ -576,6 +576,103 @@ async def test_deepgram_persistent_end_accepts_bare_finalize_ack():
 
 
 @pytest.mark.asyncio
+async def test_deepgram_end_reuses_outstanding_finalize_request():
+    ws = PersistentMockWebSocket(respond_to_finalize=False)
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+    assert await stt.commit_segment()
+    assert ws.finalize_count == 1
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await asyncio.sleep(0)
+    assert ws.finalize_count == 1
+
+    await ws.push_message({"from_finalize": True})
+    await asyncio.wait_for(end_task, timeout=0.1)
+
+    assert stt._ws is not None
+    assert stt._ws.is_connected
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_end_serializes_finalize_for_audio_after_pending_request():
+    ws = PersistentMockWebSocket(respond_to_finalize=False)
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.start_stream()
+    chunks = make_audio_chunks(generate_pcm_sine(duration_ms=200))
+    await stt.send_audio(chunks[0])
+    assert await stt.commit_segment()
+    await stt.send_audio(chunks[1])
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await asyncio.sleep(0)
+    assert ws.finalize_count == 1
+
+    await ws.push_message({"from_finalize": True})
+    for _ in range(10):
+        if ws.finalize_count == 2:
+            break
+        await asyncio.sleep(0)
+    assert ws.finalize_count == 2
+
+    await ws.push_message({"from_finalize": True})
+    await asyncio.wait_for(end_task, timeout=0.1)
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_finalize_send_failure_promotes_partial(monkeypatch):
+    ws = PersistentMockWebSocket(respond_to_finalize=False)
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", ws_connect=mock_connect))
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+    await ws.push_result("best interim", is_final=False)
+    await asyncio.sleep(0)
+
+    async def fail_finalize(payload, *, label):
+        assert payload == {"type": "Finalize"}
+        assert label == "Deepgram Finalize"
+        return False
+
+    monkeypatch.setattr(stt, "_send_json_control", fail_finalize)
+    await stt.end_stream()
+
+    events = [event async for event in stt.events()]
+    assert [(event.type, event.text) for event in events] == [
+        (STTEventType.PARTIAL, "best interim"),
+        (STTEventType.FINAL, "best interim"),
+    ]
+    assert stt._partial_text == ""
+    assert ws.close_code == 1000
+
+
+@pytest.mark.asyncio
 async def test_deepgram_finalize_timeout_promotes_partial_and_reconnects():
     sockets = [PersistentMockWebSocket(respond_to_finalize=False), PersistentMockWebSocket()]
     connect_count = 0

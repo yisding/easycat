@@ -218,6 +218,15 @@ class DeepgramSTT(WebSocketSTTBase):
         return await self._send_finalize() is not None
 
     async def _send_finalize(self, *, wait_for_ack: bool = False) -> int | None:
+        # Deepgram acknowledgments carry no request identifier. Keep at most
+        # one Finalize in flight so a later waiter cannot mistake which audio
+        # epoch a bare ``from_finalize`` frame covers.
+        if self._pending_finalizes:
+            sequence, _ = self._pending_finalizes[-1]
+            if wait_for_ack:
+                self._final_wait_sequence = sequence
+            return sequence
+
         # Reserve the sequence before sending: the receive loop can process a
         # very fast acknowledgment while ``ws.send`` is still yielding.
         self._finalize_seq += 1
@@ -246,43 +255,48 @@ class DeepgramSTT(WebSocketSTTBase):
     async def _finish_persistent_turn(self) -> None:
         # A pause-triggered commit may already have finalized every audio frame.
         # In that common case there is nothing to flush; keep the socket warm.
-        if self._audio_epoch <= self._finalized_epoch:
-            return
-
-        final_received = asyncio.Event()
-        self._final_received = final_received
-        wait_sequence = await self._send_finalize(wait_for_ack=True)
-        if wait_sequence is None:
-            self._final_received = None
-            await self._discard_connection()
-            return
-        try:
-            await asyncio.wait_for(
-                final_received.wait(), timeout=self._config.final_transcript_timeout_s
-            )
-        except TimeoutError:
-            logger.warning(
-                "Timed out after %.1fs waiting for Deepgram Finalize; "
-                "promoting %d-char interim transcript and reconnecting",
-                self._config.final_transcript_timeout_s,
-                len(self._partial_text),
-            )
-            if self._partial_text:
-                self._emit_event(
-                    STTEvent(
-                        type=STTEventType.FINAL,
-                        text=self._partial_text,
-                        language=self._config.language,
-                    )
-                )
-                self._partial_text = ""
-            # Prevent a late result from this turn entering the next turn's
-            # replacement queue. The next start reconnects transparently.
-            await self._discard_connection()
-        finally:
-            if self._final_received is final_received:
+        while self._audio_epoch > self._finalized_epoch:
+            final_received = asyncio.Event()
+            self._final_received = final_received
+            wait_sequence = await self._send_finalize(wait_for_ack=True)
+            if wait_sequence is None:
                 self._final_received = None
-                self._final_wait_sequence = None
+                self._promote_partial_to_final()
+                await self._discard_connection()
+                return
+            try:
+                await asyncio.wait_for(
+                    final_received.wait(), timeout=self._config.final_transcript_timeout_s
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Timed out after %.1fs waiting for Deepgram Finalize; "
+                    "promoting %d-char interim transcript and reconnecting",
+                    self._config.final_transcript_timeout_s,
+                    len(self._partial_text),
+                )
+                self._promote_partial_to_final()
+                # Prevent a late result from this turn entering the next turn's
+                # replacement queue. The next start reconnects transparently.
+                await self._discard_connection()
+                return
+            finally:
+                if self._final_received is final_received:
+                    self._final_received = None
+                    self._final_wait_sequence = None
+
+    def _promote_partial_to_final(self) -> None:
+        """Emit the latest interim transcript when Finalize cannot complete."""
+        if not self._partial_text:
+            return
+        self._emit_event(
+            STTEvent(
+                type=STTEventType.FINAL,
+                text=self._partial_text,
+                language=self._config.language,
+            )
+        )
+        self._partial_text = ""
 
     async def aclose(self) -> None:
         """Close a persistent socket during Session teardown."""
