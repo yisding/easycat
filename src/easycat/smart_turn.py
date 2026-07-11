@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
@@ -27,6 +28,27 @@ from easycat.audio_format import AudioChunk
 _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onnx")
 
 logger = logging.getLogger(__name__)
+
+_MAX_INTRA_OP_THREADS = 4
+
+
+def _intra_op_thread_count() -> int:
+    """Size ONNX's inference pool to the worker's available CPU set.
+
+    ONNX Runtime's automatic pool can oversubscribe constrained containers,
+    producing large endpointing-latency spikes.  Four threads is the measured
+    latency optimum for the bundled model; smaller workers use only the CPUs
+    available through their affinity mask (or ``os.cpu_count`` off Linux).
+    """
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if get_affinity is not None:
+        try:
+            available = len(get_affinity(0))
+        except OSError:
+            available = os.cpu_count() or 1
+    else:
+        available = os.cpu_count() or 1
+    return max(1, min(_MAX_INTRA_OP_THREADS, available))
 
 
 def _validate_probability_threshold(name: str, value: float) -> float:
@@ -164,7 +186,16 @@ def _spectrogram(
         timestep += hop_length
 
     spec = (np.abs(spec, dtype=np.float64) ** 2.0).T
-    spec = np.maximum(1e-10, np.dot(mel_filters.T, spec))
+    # This is a small, fixed-shape contraction (80 x 201 x ~800).  ``np.dot``
+    # delegates it to the process-wide BLAS pool, whose auto-sized worker team
+    # can contend with the ONNX pool that runs immediately afterward.  The
+    # explicit non-optimizing einsum stays single-threaded, is numerically
+    # equivalent at float32 precision, and removes the endpoint-latency spikes
+    # without mutating host-wide BLAS environment settings.
+    spec = np.maximum(
+        1e-10,
+        np.einsum("ij,jk->ik", mel_filters.T, spec, optimize=False),
+    )
     spec = np.log10(spec)
     return spec.astype(np.float32)
 
@@ -329,6 +360,7 @@ class SmartTurnONNX:
         so = ort.SessionOptions()
         so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
         so.inter_op_num_threads = 1
+        so.intra_op_num_threads = _intra_op_thread_count()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self._session = ort.InferenceSession(self._model_path, sess_options=so)
 

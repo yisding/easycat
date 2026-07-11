@@ -79,6 +79,7 @@ def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
 
     monkeypatch.setattr("easycat.smart_turn.require_module", fake_require_module)
     monkeypatch.setattr("easycat.smart_turn._WhisperFeatureExtractorNP", fake_feature_extractor)
+    monkeypatch.setattr("easycat.smart_turn._intra_op_thread_count", lambda: 3)
 
     provider = SmartTurnONNX(model_path=str(tmp_path / "smart-turn.onnx"))
     provider._ensure_loaded()
@@ -87,6 +88,70 @@ def test_smart_turn_ensure_loaded_uses_numpy_and_onnxruntime_only(
     assert created_feature_extractors == [(fake_np, 8)]
     assert provider._feature_extractor == "fake-feature-extractor"
     assert provider._session[0] == "fake-session"
+    assert provider._session[2].inter_op_num_threads == 1
+    assert provider._session[2].intra_op_num_threads == 3
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [(1, 1), (2, 2), (4, 4), (8, 4)],
+)
+def test_intra_op_thread_count_respects_affinity_and_cap(
+    available: int,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.smart_turn as smart_turn
+
+    monkeypatch.setattr(smart_turn.os, "sched_getaffinity", lambda _pid: set(range(available)))
+
+    assert smart_turn._intra_op_thread_count() == expected
+
+
+def test_single_thread_mel_contraction_matches_dot() -> None:
+    np = pytest.importorskip("numpy")
+
+    from easycat.smart_turn import _spectrogram
+
+    class DotReference:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(np, name)
+
+        def einsum(
+            self,
+            subscripts: str,
+            left: Any,
+            right: Any,
+            *,
+            optimize: bool,
+        ) -> Any:
+            assert subscripts == "ij,jk->ik"
+            assert optimize is False
+            return np.dot(left, right)
+
+    rng = np.random.default_rng(7)
+    waveform = rng.normal(size=1600).astype(np.float32)
+    window = np.hanning(400).astype(np.float64)
+    mel_filters = np.abs(rng.normal(size=(201, 80))).astype(np.float64)
+
+    actual = _spectrogram(
+        waveform,
+        np=np,
+        window=window,
+        frame_length=400,
+        hop_length=160,
+        mel_filters=mel_filters,
+    )
+    expected = _spectrogram(
+        waveform,
+        np=DotReference(),
+        window=window,
+        frame_length=400,
+        hop_length=160,
+        mel_filters=mel_filters,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def _make_provider_with_probability(probability: float, threshold: float) -> SmartTurnONNX:
