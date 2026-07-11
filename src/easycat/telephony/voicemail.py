@@ -554,6 +554,7 @@ _SIT_FREQUENCIES: tuple[tuple[float, float], ...] = (
     (1350.0, 1450.0),  # ~1400 Hz
     (1750.0, 1850.0),  # ~1800 Hz
 )
+_SIT_WINDOW_DURATION_MS = 50
 
 
 def _sit_frequency_index(
@@ -583,6 +584,7 @@ class _SITSequenceTracker:
     detected_tones: list[int] = field(default_factory=list)
     current_tone: int | None = None
     current_windows: int = 0
+    invalid_order: bool = False
 
     def observe(self, tone: int | None) -> None:
         if tone is not None and tone == self.current_tone:
@@ -595,13 +597,15 @@ class _SITSequenceTracker:
 
     def complete(self) -> bool:
         self._commit_current()
-        return self.detected_tones == list(range(len(_SIT_FREQUENCIES)))
+        return not self.invalid_order and self.detected_tones == list(range(len(_SIT_FREQUENCIES)))
 
     def _commit_current(self) -> None:
         if self.current_tone is None or self.current_windows < self.min_windows:
             return
-        if not self.detected_tones or self.detected_tones[-1] < self.current_tone:
-            self.detected_tones.append(self.current_tone)
+        if self.current_tone != len(self.detected_tones):
+            self.invalid_order = True
+            return
+        self.detected_tones.append(self.current_tone)
 
 
 def detect_sit_tones(
@@ -621,12 +625,13 @@ def detect_sit_tones(
     samples = _unpack_pcm16(pcm16_data)
 
     # Divide audio into 50ms windows and analyze each.
-    window_size = sample_rate // 20  # 50ms
+    window_size = sample_rate * _SIT_WINDOW_DURATION_MS // 1000
     if window_size < 2:
         return False
 
-    window_ms = window_size * 1000 / sample_rate
-    tracker = _SITSequenceTracker(min_windows=max(1, math.ceil(min_tone_duration_ms / window_ms)))
+    tracker = _SITSequenceTracker(
+        min_windows=max(1, math.ceil(min_tone_duration_ms / _SIT_WINDOW_DURATION_MS))
+    )
 
     for start in range(0, len(samples) - window_size + 1, window_size):
         window = samples[start : start + window_size]

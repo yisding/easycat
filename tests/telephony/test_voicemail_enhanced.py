@@ -133,6 +133,16 @@ class TestSITToneDetection:
 
         assert detect_sit_tones(audio, min_tone_duration_ms=200) is True
 
+    def test_exact_duration_is_detected_at_fractional_window_sample_rate(self) -> None:
+        sample_rate = 22050
+        audio = (
+            _generate_tone(950, 0.2, sample_rate)
+            + _generate_tone(1400, 0.2, sample_rate)
+            + _generate_tone(1800, 0.2, sample_rate)
+        )
+
+        assert detect_sit_tones(audio, sample_rate, min_tone_duration_ms=200) is True
+
     def test_sit_tones_shorter_than_minimum_duration_are_rejected(self) -> None:
         audio = (
             _generate_tone(950, 0.25)
@@ -145,6 +155,16 @@ class TestSITToneDetection:
 
     def test_sit_tones_out_of_order_are_rejected(self) -> None:
         audio = _generate_tone(1400, 0.3) + _generate_tone(950, 0.3) + _generate_tone(1800, 0.3)
+
+        assert detect_sit_tones(audio) is False
+
+    def test_sit_tones_with_decreasing_middle_tone_are_rejected(self) -> None:
+        audio = (
+            _generate_tone(950, 0.3)
+            + _generate_tone(1400, 0.3)
+            + _generate_tone(950, 0.3)
+            + _generate_tone(1800, 0.3)
+        )
 
         assert detect_sit_tones(audio) is False
 
