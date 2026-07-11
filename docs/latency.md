@@ -83,6 +83,12 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 
 ## What is *not* a knob
 
+- **OpenAI Realtime STT connection setup** — the provider keeps its
+  transcription WebSocket warm across turns by default, using each
+  `input_audio_buffer.commit` to delimit and clear a logical turn. Set
+  `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
+  turn. A final-transcript timeout discards the reusable socket before the
+  next turn so a late final cannot leak into the replacement transcript queue.
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models

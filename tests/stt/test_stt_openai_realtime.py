@@ -10,10 +10,29 @@ from typing import Any
 
 import pytest
 
+from easycat.audio_format import AudioChunk
 from easycat.events import STTEvent, STTEventType
 from easycat.stt import openai_realtime_provider as realtime_provider
 from easycat.stt.openai_realtime_provider import OpenAIRealtimeSTT, OpenAIRealtimeSTTConfig
-from tests.stt.helpers import collect_stt_events, generate_pcm_sine, make_audio_chunks
+from tests.stt.helpers import (
+    collect_stt_events as _collect_stt_events,
+)
+from tests.stt.helpers import (
+    generate_pcm_sine,
+    make_audio_chunks,
+)
+
+
+async def collect_stt_events(
+    provider: OpenAIRealtimeSTT,
+    audio_chunks: list[AudioChunk],
+) -> list[STTEvent]:
+    """Run one isolated test turn, then release the default persistent socket."""
+    try:
+        return await _collect_stt_events(provider, audio_chunks)
+    finally:
+        await provider.aclose()
+
 
 # ── Mock WebSocket ──────────────────────────────────────────────
 
@@ -83,6 +102,89 @@ class _MockWSFactory:
         return self.connection
 
 
+class _PersistentMockWSConnection:
+    """Queue-backed Realtime socket that survives logical STT turns."""
+
+    _STOP = object()
+
+    def __init__(self, *, respond_to_commit: bool = True) -> None:
+        self.sent: list[str | bytes] = []
+        self.close_code: int | None = None
+        self.commit_count = 0
+        self.clear_count = 0
+        self._respond_to_commit = respond_to_commit
+        self._queue: asyncio.Queue[str | object] = asyncio.Queue()
+
+    async def send(self, data: str | bytes) -> None:
+        self.sent.append(data)
+        if not isinstance(data, str):
+            return
+        message = json.loads(data)
+        message_type = message.get("type")
+        if message_type == "session.update":
+            await self.push({"type": "transcription_session.updated", "session": {}})
+        elif message_type == "input_audio_buffer.commit":
+            self.commit_count += 1
+            if self._respond_to_commit:
+                item_id = f"item-{self.commit_count}"
+                await self.push(
+                    {
+                        "type": "input_audio_buffer.committed",
+                        "item_id": item_id,
+                    }
+                )
+                await self.push(
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "item_id": item_id,
+                        "transcript": f"turn {self.commit_count}",
+                    }
+                )
+        elif message_type == "input_audio_buffer.clear":
+            self.clear_count += 1
+            await self.push({"type": "input_audio_buffer.cleared"})
+        # Exercise the reserve-before-send path by allowing the receive loop
+        # to handle acknowledgements before send() returns.
+        await asyncio.sleep(0)
+
+    async def push(self, message: dict[str, Any]) -> None:
+        await self._queue.put(json.dumps(message))
+
+    async def close(self) -> None:
+        if self.close_code is not None:
+            return
+        self.close_code = 1000
+        await self._queue.put(self._STOP)
+
+    def __aiter__(self) -> _PersistentMockWSConnection:
+        return self
+
+    async def __anext__(self) -> str:
+        message = await self._queue.get()
+        if message is self._STOP:
+            raise StopAsyncIteration
+        assert isinstance(message, str)
+        return message
+
+
+class _PersistentMockWSFactory:
+    def __init__(
+        self,
+        sockets: list[_PersistentMockWSConnection],
+        *,
+        connect_delay_s: float = 0.0,
+    ) -> None:
+        self.sockets = sockets
+        self.connect_delay_s = connect_delay_s
+        self.call_count = 0
+
+    async def __call__(self, _url: str, **_kwargs: Any) -> _PersistentMockWSConnection:
+        await asyncio.sleep(self.connect_delay_s)
+        socket = self.sockets[self.call_count]
+        self.call_count += 1
+        return socket
+
+
 def _make_transcription_completed(transcript: str) -> str:
     return json.dumps(
         {
@@ -125,7 +227,7 @@ async def test_openai_realtime_sends_session_update_on_start():
             _make_transcription_completed("hello"),
         ]
     )
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     await collect_stt_events(stt, [])
@@ -253,7 +355,7 @@ async def test_openai_realtime_merges_explicit_connection_model_into_existing_qu
 @pytest.mark.asyncio
 async def test_openai_realtime_sends_audio_as_base64():
     factory = _MockWSFactory([_make_transcription_completed("test")])
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -277,7 +379,7 @@ async def test_openai_realtime_sends_audio_as_base64():
 @pytest.mark.asyncio
 async def test_openai_realtime_sends_commit_on_end():
     factory = _MockWSFactory([_make_transcription_completed("done")])
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -302,7 +404,7 @@ async def test_openai_realtime_skips_commit_on_short_tail():
     buffer.
     """
     factory = _MockWSFactory()
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     # ~20ms at 16 kHz → well below the 100ms OpenAI Realtime minimum
@@ -334,7 +436,7 @@ async def test_openai_realtime_short_tail_then_more_audio_commits():
     has the buffered bytes from the first (skipped) attempt.
     """
     factory = _MockWSFactory()
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     await stt.start_stream()
@@ -366,7 +468,7 @@ async def test_openai_realtime_reports_pending_commit_bytes():
     from easycat.providers import PendingCommitReporter
 
     factory = _MockWSFactory()
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
     assert isinstance(stt, PendingCommitReporter)
 
@@ -406,7 +508,12 @@ async def test_openai_realtime_emits_error_event_on_server_error_message():
         {"type": "error", "error": {"message": "buffer too small", "code": "buffer_too_small"}}
     )
     factory = _MockWSFactory([error_msg])
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory, event_bus=bus)
+    config = OpenAIRealtimeSTTConfig(
+        api_key="sk-test",
+        persistent_ws=False,
+        ws_connect=factory,
+        event_bus=bus,
+    )
     stt = OpenAIRealtimeSTT(config)
     await stt.start_stream()
     # Give the receive loop a turn to process the error message and
@@ -435,7 +542,7 @@ async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio(
             _make_transcription_completed("world"),
         ]
     )
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
     collected = []
@@ -517,6 +624,7 @@ def test_openai_realtime_config_final_timeout_default() -> None:
 
     assert config.final_transcript_timeout_s == realtime_provider._FINAL_TRANSCRIPT_TIMEOUT_S
     assert config.final_transcript_timeout_s == pytest.approx(0.9)
+    assert config.persistent_ws is True
 
 
 @pytest.mark.asyncio
@@ -798,9 +906,8 @@ async def test_openai_realtime_receive_loop_end_leaves_resolved_future() -> None
 
 
 @pytest.mark.asyncio
-async def test_openai_realtime_warmup_connects_handshakes_and_closes():
-    """warmup() opens the socket, completes the session.update handshake,
-    then closes — no persistent socket is held across the warmup."""
+async def test_openai_realtime_warmup_keeps_default_persistent_socket():
+    """Default warmup completes one handshake and retains it for user audio."""
     factory = _MockWSFactory([])
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
@@ -814,7 +921,26 @@ async def test_openai_realtime_warmup_connects_handshakes_and_closes():
         if isinstance(m, str) and '"type": "session.update"' in m
     ]
     assert len(session_msgs) == 1
-    # No persistent socket survives warmup.
+    assert stt._ws is not None
+    assert stt._receive_task is not None
+    assert factory.connection.close_code is None
+    await stt.aclose()
+    assert factory.connection.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_one_shot_warmup_closes_socket():
+    factory = _MockWSFactory([])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(
+            api_key="sk-test",
+            persistent_ws=False,
+            ws_connect=factory,
+        )
+    )
+
+    await stt.warmup()
+
     assert stt._ws is None
     assert stt._receive_task is None
     assert factory.connection.close_code == 1000
@@ -828,7 +954,7 @@ async def test_openai_realtime_warmup_swallows_start_errors():
     async def _boom() -> None:
         raise ConnectionError("boom")
 
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test")
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False)
     stt = OpenAIRealtimeSTT(config)
     stt.start_stream = _boom  # type: ignore[method-assign]
 
@@ -836,13 +962,135 @@ async def test_openai_realtime_warmup_swallows_start_errors():
     await stt.warmup()
 
 
+@pytest.mark.asyncio
+async def test_openai_realtime_persistent_warmup_swallows_connect_errors():
+    async def _boom() -> None:
+        raise ConnectionError("boom")
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ensure_persistent_connection = _boom  # type: ignore[method-assign]
+
+    await stt.warmup()
+
+    assert stt._ws is None
+    assert stt._receive_task is None
+
+
 # ── Reusability ─────────────────────────────────────────────────
+
+
+async def _run_persistent_turn(
+    stt: OpenAIRealtimeSTT,
+    *,
+    duration_ms: int = 100,
+    commit_before_end: bool = False,
+) -> list[STTEvent]:
+    collected: list[STTEvent] = []
+    await stt.start_stream()
+
+    async def _collect() -> None:
+        async for event in stt.events():
+            collected.append(event)
+
+    collector = asyncio.create_task(_collect())
+    for chunk in make_audio_chunks(generate_pcm_sine(duration_ms=duration_ms)):
+        await stt.send_audio(chunk)
+    if commit_before_end:
+        assert await stt.commit_segment() is True
+        await asyncio.sleep(0)
+    await stt.end_stream()
+    await collector
+    return collected
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_warmup_reuses_one_socket_across_turns():
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+
+    await stt.warmup()
+    observed: list[str] = []
+    for _ in range(2):
+        events = await _run_persistent_turn(stt, commit_before_end=True)
+        observed.extend(event.text for event in events if event.type is STTEventType.FINAL)
+
+    assert factory.call_count == 1
+    assert observed == ["turn 1", "turn 2"]
+    assert socket.close_code is None
+
+    await stt.aclose()
+    assert socket.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_persistent_end_clears_short_tail():
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.warmup()
+
+    first_events = await _run_persistent_turn(stt, duration_ms=20)
+    second_events = await _run_persistent_turn(stt, duration_ms=100)
+
+    assert first_events == []
+    assert socket.clear_count == 1
+    assert socket.commit_count == 1
+    assert [event.text for event in second_events if event.type is STTEventType.FINAL] == [
+        "turn 1"
+    ]
+    assert factory.call_count == 1
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_final_timeout_discards_socket_before_next_turn():
+    first_socket = _PersistentMockWSConnection(respond_to_commit=False)
+    second_socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([first_socket, second_socket])
+    stt = OpenAIRealtimeSTT(
+        OpenAIRealtimeSTTConfig(
+            api_key="sk-test",
+            final_transcript_timeout_s=0.01,
+            ws_connect=factory,
+        )
+    )
+    await stt.warmup()
+
+    await stt.start_stream()
+    collector = asyncio.create_task(_collect_events(stt))
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+    await first_socket.push(
+        {
+            "type": "conversation.item.input_audio_transcription.delta",
+            "delta": "best interim",
+        }
+    )
+    await stt.end_stream()
+    first_events = await collector
+
+    assert [(event.type, event.text) for event in first_events] == [
+        (STTEventType.PARTIAL, "best interim"),
+        (STTEventType.FINAL, "best interim"),
+    ]
+    assert first_socket.close_code == 1000
+
+    second_events = await _run_persistent_turn(stt)
+    assert [event.text for event in second_events if event.type is STTEventType.FINAL] == [
+        "turn 1"
+    ]
+    assert factory.call_count == 2
+    await stt.aclose()
+
+
+async def _collect_events(stt: OpenAIRealtimeSTT) -> list[STTEvent]:
+    return [event async for event in stt.events()]
 
 
 @pytest.mark.asyncio
 async def test_openai_realtime_reusable_across_streams():
     factory1 = _MockWSFactory([_make_transcription_completed("stream one")])
-    config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory1)
+    config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory1)
     stt = OpenAIRealtimeSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -855,7 +1103,9 @@ async def test_openai_realtime_reusable_across_streams():
 
     # Second stream with a fresh factory.
     factory2 = _MockWSFactory([_make_transcription_completed("stream two")])
-    stt._config = OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory2)
+    stt._config = OpenAIRealtimeSTTConfig(
+        api_key="sk-test", persistent_ws=False, ws_connect=factory2
+    )
 
     events2 = await collect_stt_events(stt, chunks)
     finals2 = [e for e in events2 if e.type == STTEventType.FINAL]
