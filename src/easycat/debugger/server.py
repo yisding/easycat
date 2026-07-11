@@ -41,12 +41,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from easycat._net import is_loopback_host
-from easycat.debug._issues import build_issues as _build_issues
+from easycat.debug._issues import build_issues as _build_issues  # noqa: F401
 from easycat.debug._pcm import full_scale as _full_scale
 from easycat.debug._pcm import is_supported_width as _is_supported_width
 from easycat.debug._turn_timeline import build_timeline as _build_timeline  # noqa: F401
 from easycat.debug._turn_timeline import summarise_turns as _summarise_turns
-from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall
+from easycat.debug._turn_timeline import turn_waterfall as _turn_waterfall  # noqa: F401
 from easycat.debug.annotations import (
     Annotation,
     AnnotationError,
@@ -91,6 +91,7 @@ from easycat.debugger._audio import (
     _serialize_frame,
     _wav_header,
 )
+from easycat.debugger._core_routes import register_core_routes
 from easycat.debugger._install_hint import DEBUGGER_INSTALL_HINT
 
 # Record filtering / full-text search / transcript / record coercion helpers
@@ -650,118 +651,6 @@ def _make_app(
                     status=403, text="state-changing requests require an Origin header"
                 )
         return await handler(request)
-
-    async def index(_request: Any) -> Any:
-        return web.FileResponse(static_dir / "index.html")
-
-    async def manifest(_request: Any) -> Any:
-        return web.json_response(source.manifest())
-
-    async def records(request: Any) -> Any:
-        params = request.query
-        try:
-            from_seq = int(params["from"]) if "from" in params else None
-            to_seq = int(params["to"]) if "to" in params else None
-            limit = int(params["limit"]) if "limit" in params else None
-            offset = int(params["offset"]) if "offset" in params else 0
-        except ValueError:
-            return web.Response(status=400, text="from/to/limit/offset must be integers")
-        # aiohttp's ``getall`` returns every repeated ``name=`` value so
-        # the Live view can request only the handful of event names it
-        # actually renders (e.g. ``name=vad_start_speaking&name=stt_partial``)
-        # without being capped by ``limit``.
-        names = [n for n in params.getall("name", ()) if n]
-        query = params.get("q") or None
-        use_regex = params.get("regex") == "1"
-        errors_only = params.get("errors") == "1"
-        scan_truncated = False
-        try:
-            if offset < 0:
-                raise ValueError("offset must be >= 0")
-            if limit is not None and limit <= 0:
-                raise ValueError("limit must be > 0")
-            if query is None:
-                page, total = _filter_and_paginate(
-                    source.records(),
-                    stage=params.get("stage") or None,
-                    turn_id=params.get("turn") or None,
-                    name=names or None,
-                    from_seq=from_seq,
-                    to_seq=to_seq,
-                    errors_only=errors_only,
-                    limit=limit,
-                    offset=offset,
-                )
-            else:
-                # Filter first (no pagination), full-text search the subset, then
-                # paginate the matches so "X of N" reflects the search result set.
-                subset = _filter_records(
-                    source.records(),
-                    stage=params.get("stage") or None,
-                    turn_id=params.get("turn") or None,
-                    name=names or None,
-                    from_seq=from_seq,
-                    to_seq=to_seq,
-                    errors_only=errors_only,
-                    limit=None,
-                    offset=0,
-                )
-                # Offload the full-text scan to a worker thread: a regex
-                # search compiles a user-supplied pattern (q=...&regex=1) and
-                # runs re.search over up to _SEARCH_SCAN_LIMIT records, so a
-                # catastrophic-backtracking pattern must not block the event
-                # loop. The substring path is offloaded too for uniformity.
-                matched, scan_truncated = await asyncio.to_thread(
-                    _search_records, subset, query=query, use_regex=use_regex
-                )
-                total = len(matched)
-                page = matched[offset:]
-                if limit is not None:
-                    page = page[:limit]
-        except ValueError as exc:
-            logger.warning("Invalid records query: %s", exc)
-            if str(exc) in {"invalid regex", _UNSAFE_REGEX_MESSAGE}:
-                text = str(exc)
-            else:
-                text = "invalid query parameters"
-            return web.Response(status=400, text=text)
-        return web.json_response(
-            {
-                "records": page,
-                "page_size": len(page),
-                "total": total,
-                "offset": offset,
-                "limit": limit,
-                "scan_truncated": scan_truncated,
-            }
-        )
-
-    async def turns(_request: Any) -> Any:
-        return web.json_response({"turns": _summarise_turns(source.records())})
-
-    async def timeline(_request: Any) -> Any:
-        # ``turn_waterfall`` carries the same stage spans as ``build_timeline``
-        # (so the existing SPA span rendering is unaffected) plus the per-turn
-        # ``milestones`` the critical-path panel needs.
-        return web.json_response({"timeline": _turn_waterfall(source.records())})
-
-    async def transcript(_request: Any) -> Any:
-        return web.json_response({"transcripts": _build_transcript(source.records())})
-
-    async def issues(_request: Any) -> Any:
-        return web.json_response(
-            _build_issues(source.records(), artifact_resolver=source.artifact_for_analysis)
-        )
-
-    async def artifact(request: Any) -> Any:
-        try:
-            ref = _safe_ref(request.match_info["ref"])
-        except ValueError:
-            return web.Response(status=400, text="invalid artifact ref")
-        blob = source.artifact(ref)
-        if blob is None:
-            return web.Response(status=404, text=f"artifact {ref} not found")
-        return web.Response(body=blob, content_type="application/octet-stream")
 
     async def audio_concat(request: Any) -> Any:
         try:
@@ -1398,14 +1287,7 @@ def _make_app(
         )
 
     app = web.Application(middlewares=[_origin_guard])
-    app.router.add_get("/", index)
-    app.router.add_get("/api/manifest", manifest)
-    app.router.add_get("/api/records", records)
-    app.router.add_get("/api/turns", turns)
-    app.router.add_get("/api/timeline", timeline)
-    app.router.add_get("/api/transcript", transcript)
-    app.router.add_get("/api/issues", issues)
-    app.router.add_get("/api/artifact/{ref}", artifact)
+    register_core_routes(app, source, static_dir=static_dir, web=web)
     app.router.add_get("/api/audio/concat/{turn}", audio_concat)
     app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
     app.router.add_get("/api/aec/{turn}", aec_diagnostics)
