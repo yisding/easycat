@@ -70,7 +70,7 @@ class TurnManagerConfig:
     # punctuation during the pause.  None disables punctuation-aware
     # endpointing. Smart-turn incomplete/error decisions still receive the
     # full end_of_turn_silence_ms grace period.
-    punctuated_end_of_turn_silence_ms: int | None = 250
+    punctuated_end_of_turn_silence_ms: int | None = 200
     # Silence budget, after VAD stop, before finalizing the current STT segment.
     # 0 means commit the segment immediately when VAD reports a pause.
     #

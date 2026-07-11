@@ -107,7 +107,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--fixed-ms", type=int, default=500)
-    parser.add_argument("--punctuated-ms", type=int, default=250)
+    parser.add_argument("--punctuated-ms", type=int, default=200)
     parser.add_argument("--require-faster", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
