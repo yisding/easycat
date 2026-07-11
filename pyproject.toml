@@ -441,6 +441,7 @@ module = [
     "easycat.session.*",
     "easycat.integrations.*",
     "easycat.validation._lane_harness.*",
+    "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",

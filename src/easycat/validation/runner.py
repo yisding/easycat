@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import shlex
 import sys
@@ -13,35 +12,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from easycat._provider_catalog import provider_names
-from easycat.validation import _environment, _latency_runner, _runner_support
+from easycat.validation import _environment, _latency_runner, _live_runner, _runner_support
 from easycat.validation._lane_harness import (
     ValidationRunResult,
     _finish_lane_run,
     _start_lane_run,
-    _write_atomic,
 )
 from easycat.validation._runner_support import CommandResult, CommandRunner
 from easycat.validation._slice_runner import VALIDATION_SELECTORS, run_validation_slice
-from easycat.validation.latency import (
-    FailureCategory,
-    LatencyMode,
-    classify_failure_category,
-)
-from easycat.validation.provider_reports import (
-    ProviderSurfaceSpec,
-    build_provider_capability_report,
-    known_live_providers,
-    known_live_surfaces,
-    select_provider_surfaces,
-)
+from easycat.validation.latency import LatencyMode
 from easycat.validation.report import (
     ArtifactRef,
-    ProviderCheck,
-    ProviderCheckState,
     ValidationCheck,
     ValidationFailure,
-    ValidationSkip,
     ValidationStatus,
     redact_runtime_secrets,
 )
@@ -55,6 +38,8 @@ RELEASE_TEST_DEPENDENCIES = ("pytest", "pytest-asyncio", "pytest-xdist", "hypoth
 LATENCY_SYNTHETIC_FAILURE_SAMPLE = _latency_runner.LATENCY_SYNTHETIC_FAILURE_SAMPLE
 LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY = _latency_runner.LATENCY_SYNTHETIC_SAMPLE_DEBUG_KEY
 run_latency_validation = _latency_runner.run_latency_validation
+classify_live_failure = _live_runner.classify_live_failure
+run_live_validation = _live_runner.run_live_validation
 _RELEASE_IMPORT_SMOKE = """
 import os
 import pathlib
@@ -87,247 +72,6 @@ for name in documented:
     getattr(easycat, name)
 print(f"validated {len(documented)} documented public API exports")
 """
-
-
-def run_live_validation(
-    *,
-    providers: Sequence[str] | None = None,
-    surfaces: Sequence[str] | None = None,
-    strict: bool = False,
-    release: bool = False,
-    artifacts_dir: str | Path = ".easycat/validation",
-    report_path: str | Path | None = None,
-    command_runner: CommandRunner | None = None,
-    started_at: datetime | None = None,
-) -> ValidationRunResult:
-    command_runner = command_runner or _runner_support.run_subprocess
-    started_at = started_at or datetime.now(UTC)
-    artifacts_root = Path(artifacts_dir)
-    ctx = _start_lane_run(
-        "live",
-        started_at=started_at,
-        artifacts_root=artifacts_root,
-        report_path=report_path,
-    )
-    run_dir = ctx.run_dir
-
-    provider_report_dir = run_dir / "providers"
-    provider_report_dir.mkdir(parents=True, exist_ok=True)
-    stdout_path = run_dir / "stdout.log"
-    stderr_path = run_dir / "stderr.log"
-
-    selected = select_provider_surfaces(providers=providers, surfaces=surfaces)
-    selector_errors = _live_selector_errors(providers=providers, surfaces=surfaces)
-    runtime_secret_values = _environment.runtime_secret_values()
-    explicit_provider_request = bool(providers)
-    started_monotonic = time.perf_counter()
-    checks: list[ValidationCheck] = []
-    skips: list[ValidationSkip] = []
-    failures: list[ValidationFailure] = []
-    provider_checks: list[ProviderCheck] = []
-    provider_reports: list[dict[str, object]] = []
-    artifacts: dict[str, ArtifactRef] = {
-        **ctx.artifacts,
-        "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
-        "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
-    }
-    if ctx.requested_report_path is not None:
-        artifacts["requested_report"] = ArtifactRef(
-            kind="validation_report",
-            path=str(ctx.requested_report_path),
-        )
-
-    stdout_log: list[str] = []
-    stderr_log: list[str] = []
-    tool_exit_codes: dict[str, int] = {}
-
-    for selector_error in selector_errors:
-        failures.append(selector_error)
-        checks.append(
-            ValidationCheck(
-                name=selector_error.name,
-                status="fail",
-                duration_s=0.0,
-                details=selector_error.details,
-            )
-        )
-
-    for spec in selected:
-        check_name = f"provider.{spec.provider}.{spec.surface}"
-        credential_present = bool(
-            spec.credential_env_var and os.environ.get(spec.credential_env_var)
-        )
-        missing_required_secret = bool(spec.credential_env_var and not credential_present)
-        required_missing_should_fail = missing_required_secret and (
-            release or (strict and explicit_provider_request)
-        )
-
-        check_started = time.perf_counter()
-        if required_missing_should_fail:
-            duration_s = time.perf_counter() - check_started
-            failure = ValidationFailure(
-                name=check_name,
-                message=(
-                    f"{spec.credential_env_var} is required for {spec.provider} {spec.surface}"
-                ),
-                failure_class="auth_or_quota",
-            )
-            failures.append(failure)
-            checks.append(
-                ValidationCheck(
-                    name=check_name,
-                    status="fail",
-                    duration_s=duration_s,
-                    details={"credential_env_var": spec.credential_env_var},
-                )
-            )
-            provider_checks.append(
-                ProviderCheck(
-                    provider=spec.provider,
-                    surface=spec.surface,
-                    state=ProviderCheckState.FAILED_MISSING_REQUIRED_SECRET,
-                    credential_env=spec.credential_env_var,
-                    required=True,
-                    failure_class="auth_or_quota",
-                )
-            )
-            report = build_provider_capability_report(
-                spec,
-                live_checked_at=datetime.now(UTC),
-                credential_present=False,
-                live_status=ProviderCheckState.FAILED_MISSING_REQUIRED_SECRET.value,
-                failure_class="auth_or_quota",
-            ).to_dict()
-        elif missing_required_secret:
-            duration_s = time.perf_counter() - check_started
-            skip = ValidationSkip(
-                name=check_name,
-                reason=f"{spec.credential_env_var} missing",
-                expected=True,
-            )
-            skips.append(skip)
-            checks.append(
-                ValidationCheck(
-                    name=check_name,
-                    status="skip",
-                    duration_s=duration_s,
-                    details={"credential_env_var": spec.credential_env_var},
-                )
-            )
-            provider_checks.append(
-                ProviderCheck(
-                    provider=spec.provider,
-                    surface=spec.surface,
-                    state=ProviderCheckState.SKIPPED_MISSING_SECRET,
-                    credential_env=spec.credential_env_var,
-                    required=False,
-                )
-            )
-            report = build_provider_capability_report(
-                spec,
-                live_checked_at=datetime.now(UTC),
-                credential_present=False,
-                live_status="expected_skip",
-            ).to_dict()
-        else:
-            command = _live_pytest_command(spec)
-            command_result = command_runner(command, env={**os.environ})
-            duration_s = time.perf_counter() - check_started
-            stdout_log.append(command_result.stdout)
-            stderr_log.append(command_result.stderr)
-            tool_exit_codes[f"pytest.{spec.provider}.{spec.surface}"] = command_result.exit_code
-            check_status: ValidationStatus
-            if command_result.exit_code == 0:
-                check_status = "pass"
-                state: ProviderCheckState | str = ProviderCheckState.PASSED
-                failure_class = None
-            else:
-                check_status = "fail"
-                state = ProviderCheckState.FAILED
-                failure_message = (
-                    command_result.stderr
-                    or command_result.stdout
-                    or f"pytest exited {command_result.exit_code}"
-                )
-                failure_message = redact_runtime_secrets(
-                    failure_message,
-                    runtime_secret_values,
-                )
-                failure_class = classify_live_failure(failure_message)
-                failures.append(
-                    ValidationFailure(
-                        name=check_name,
-                        message=failure_message,
-                        failure_class=failure_class,
-                    )
-                )
-
-            checks.append(
-                ValidationCheck(
-                    name=check_name,
-                    status=check_status,
-                    duration_s=duration_s,
-                    command=command,
-                )
-            )
-            provider_checks.append(
-                ProviderCheck(
-                    provider=spec.provider,
-                    surface=spec.surface,
-                    state=state,
-                    credential_env=spec.credential_env_var or None,
-                    required=bool(spec.credential_env_var),
-                    failure_class=failure_class,
-                )
-            )
-            report = build_provider_capability_report(
-                spec,
-                live_checked_at=datetime.now(UTC),
-                credential_present=credential_present,
-                live_status=state.value if isinstance(state, ProviderCheckState) else state,
-                failure_class=failure_class,
-            ).to_dict()
-
-        report_path_for_provider = provider_report_dir / f"{spec.artifact_key}.json"
-        _write_atomic(
-            report_path_for_provider,
-            json.dumps(report, indent=2, sort_keys=True) + "\n",
-        )
-        artifacts[spec.artifact_key] = ArtifactRef(
-            kind="provider_capability_report",
-            path=str(report_path_for_provider),
-        )
-        provider_reports.append(report)
-
-    duration_s = time.perf_counter() - started_monotonic
-    finished_at = datetime.now(UTC)
-    exit_code = 1 if failures else 0
-    status: ValidationStatus = "fail" if failures else "pass"
-
-    stdout_path.write_text(redact_runtime_secrets("\n".join(stdout_log), runtime_secret_values))
-    stderr_path.write_text(redact_runtime_secrets("\n".join(stderr_log), runtime_secret_values))
-    return _finish_lane_run(
-        ctx,
-        artifacts_root=artifacts_root,
-        command=_live_validation_command(
-            providers=providers,
-            surfaces=surfaces,
-            strict=strict,
-            release=release,
-        ),
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_s=duration_s,
-        status=status,
-        exit_code=exit_code,
-        tool_exit_codes=tool_exit_codes,
-        checks=checks,
-        skips=skips,
-        failures=failures,
-        providers=provider_checks,
-        provider_reports=provider_reports,
-        artifacts=artifacts,
-    )
 
 
 def run_release_validation(
@@ -695,54 +439,6 @@ def run_release_validation(
     )
 
 
-# Live-path vocabulary (preserved for back-compat and `_capability_status`).
-_LIVE_FAILURE_CLASSES: dict[FailureCategory, str] = {
-    FailureCategory.AUTH: "auth_or_quota",
-    FailureCategory.QUOTA: "provider_quota",
-    FailureCategory.TIMEOUT: "network",
-    FailureCategory.NETWORK: "network",
-    FailureCategory.DRIFT: "provider_drift",
-    FailureCategory.REGRESSION: "easycat_regression",
-    FailureCategory.OTHER: "environment",
-}
-
-
-def classify_live_failure(message: str) -> str:
-    return _LIVE_FAILURE_CLASSES[classify_failure_category(message)]
-
-
-def _live_selector_errors(
-    *,
-    providers: Sequence[str] | None,
-    surfaces: Sequence[str] | None,
-) -> list[ValidationFailure]:
-    failures: list[ValidationFailure] = []
-    known_providers = known_live_providers()
-    for provider in {provider.strip().lower() for provider in providers or () if provider.strip()}:
-        if provider not in known_providers:
-            failures.append(
-                ValidationFailure(
-                    name="provider.selector",
-                    message=f"unknown live provider selector: {provider}",
-                    failure_class="environment",
-                    details={"provider": provider, "known_providers": sorted(known_providers)},
-                )
-            )
-
-    known_surfaces = known_live_surfaces()
-    for surface in {surface.strip().lower() for surface in surfaces or () if surface.strip()}:
-        if surface not in known_surfaces:
-            failures.append(
-                ValidationFailure(
-                    name="provider.selector",
-                    message=f"unknown live surface selector: {surface}",
-                    failure_class="environment",
-                    details={"surface": surface, "known_surfaces": sorted(known_surfaces)},
-                )
-            )
-    return failures
-
-
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -833,50 +529,3 @@ def _temporary_environ(overrides: Mapping[str, str]) -> Iterator[None]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = previous_value
-
-
-def _live_pytest_command(spec: ProviderSurfaceSpec) -> list[str]:
-    command = [*_runner_support.pytest_command_prefix(), "-q"]
-    if spec.live_pytest_target:
-        command.append(_runner_support.resolve_validation_test_arg(spec.live_pytest_target))
-    command.extend(["-m", _live_marker_expression(spec)])
-    return command
-
-
-def _live_marker_expression(spec: ProviderSurfaceSpec) -> str:
-    markers = ["integration_live"]
-    provider_marker = _provider_marker(spec.provider)
-    if provider_marker is not None:
-        markers.append(provider_marker)
-    markers.append(f"surface_{spec.surface.removesuffix('_bridge')}")
-    markers.append("not flaky")
-    return " and ".join(markers)
-
-
-def _provider_marker(provider: str) -> str | None:
-    # OpenAI variants (openai-realtime, openai-agents, ...) all share the
-    # provider_openai marker; the known-provider set comes from the
-    # STT/TTS provider catalogs instead of a hardcoded copy.
-    normalized = "openai" if provider.startswith("openai") else provider
-    if normalized in provider_names():
-        return f"provider_{normalized}"
-    return None
-
-
-def _live_validation_command(
-    *,
-    providers: Sequence[str] | None,
-    surfaces: Sequence[str] | None,
-    strict: bool,
-    release: bool,
-) -> list[str]:
-    command = ["easycat", "validate", "live"]
-    for provider in providers or ():
-        command.extend(["--provider", provider])
-    for surface in surfaces or ():
-        command.extend(["--surface", surface])
-    if strict:
-        command.append("--strict")
-    if release:
-        command.append("--release")
-    return command
