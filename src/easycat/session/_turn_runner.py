@@ -440,7 +440,7 @@ class TurnRunner:
         # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
         # the agent timeout after the agent has already completed.
         await self._await_first_tts_lifecycle_ready(st, tts_task)
-        agent_error = agent_result.error if agent_result else caught_exc
+        agent_error = caught_exc or (agent_result.error if agent_result else None)
         interrupted = agent_result.interrupted if agent_result else False
         accumulated_text = agent_result.text if agent_result else ""
         structured_output = agent_result.structured_output if agent_result else None
@@ -694,7 +694,6 @@ class TurnRunner:
                 await with_agent_timeout(
                     asyncio.shield(agent_task),
                     timeout=self._timeout_config.agent_timeout,
-                    event_bus=self._event_bus,
                 )
             else:
                 await asyncio.shield(agent_task)
@@ -708,11 +707,14 @@ class TurnRunner:
                     pass
             raise
         except Exception as exc:
-            # AgentTimeoutError is already logged and emitted by with_agent_timeout.
-            if not isinstance(exc, AgentTimeoutError):
+            self._cancel_pending(agent_task, tts_task)
+            if isinstance(exc, AgentTimeoutError):
+                # Cancel the shielded agent before dispatching handlers: a slow
+                # Error subscriber must not give overdue work time to succeed.
+                await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
+            else:
                 logger.exception("Streaming agent error")
                 await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            self._cancel_pending(agent_task, tts_task)
             return exc
         return None
 
