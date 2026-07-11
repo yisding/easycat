@@ -4,6 +4,7 @@ import asyncio
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -104,8 +105,57 @@ def test_intra_op_thread_count_respects_affinity_and_cap(
     import easycat.smart_turn as smart_turn
 
     monkeypatch.setattr(smart_turn.os, "sched_getaffinity", lambda _pid: set(range(available)))
+    monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: None)
 
     assert smart_turn._intra_op_thread_count() == expected
+
+
+@pytest.mark.parametrize(
+    ("quota", "expected"),
+    [(1, 1), (2, 2), (8, 4), (None, 4)],
+)
+def test_intra_op_thread_count_respects_cgroup_quota(
+    quota: int | None,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.smart_turn as smart_turn
+
+    monkeypatch.setattr(smart_turn.os, "sched_getaffinity", lambda _pid: set(range(16)))
+    monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: quota)
+
+    assert smart_turn._intra_op_thread_count() == expected
+
+
+def test_cgroup_cpu_count_reads_v2_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    (tmp_path / "cpu.max").write_text("150000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path) == 2
+
+
+def test_cgroup_cpu_count_reads_v1_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cpu_root = tmp_path / "cpu"
+    cpu_root.mkdir()
+    (cpu_root / "cpu.cfs_quota_us").write_text("250000\n")
+    (cpu_root / "cpu.cfs_period_us").write_text("100000\n")
+
+    assert _cgroup_cpu_count(tmp_path) == 3
+
+
+@pytest.mark.parametrize("quota", ["max 100000\n", "-1 100000\n", "invalid\n"])
+def test_cgroup_cpu_count_ignores_unbounded_or_invalid_v2_quota(
+    quota: str,
+    tmp_path: Path,
+) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    (tmp_path / "cpu.max").write_text(quota)
+
+    assert _cgroup_cpu_count(tmp_path) is None
 
 
 def test_single_thread_mel_contraction_matches_dot() -> None:

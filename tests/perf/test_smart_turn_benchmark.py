@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from easycat.validation.latency import LatencyPercentileStats
 from perf.bench_smart_turn import compare_results, summarize_samples
 
 
@@ -22,6 +23,20 @@ def test_summarize_samples_reports_latency_distribution() -> None:
 def test_summarize_samples_rejects_empty_input() -> None:
     with pytest.raises(ValueError, match="at least one"):
         summarize_samples([])
+
+
+def test_summarize_samples_uses_canonical_latency_percentiles() -> None:
+    samples = [float(value) for value in range(1, 11)]
+    expected = LatencyPercentileStats.from_values(samples)
+    assert expected.p50 is not None
+    assert expected.p90 is not None
+    assert expected.p99 is not None
+
+    summary = summarize_samples(samples)
+
+    assert summary["p50_ms"] == round(expected.p50, 3)
+    assert summary["p90_ms"] == round(expected.p90, 3)
+    assert summary["p99_ms"] == round(expected.p99, 3)
 
 
 def test_compare_results_requires_identical_model_and_both_percentiles() -> None:

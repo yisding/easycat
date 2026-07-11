@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import platform
 import statistics
@@ -31,25 +30,25 @@ import time
 from pathlib import Path
 from typing import Any
 
+from easycat.validation.latency import LatencyPercentileStats
+
 _RESULT_PREFIX = "EASYCAT_SMART_TURN_RESULT="
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _percentile(samples: list[float], percentile: float) -> float:
-    ordered = sorted(samples)
-    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * percentile) - 1))
-    return ordered[index]
 
 
 def summarize_samples(samples_ms: list[float]) -> dict[str, float | int]:
     """Return stable latency statistics for one framework worker."""
     if not samples_ms:
         raise ValueError("at least one latency sample is required")
+    percentiles = LatencyPercentileStats.from_values(samples_ms)
+    assert percentiles.p50 is not None
+    assert percentiles.p90 is not None
+    assert percentiles.p99 is not None
     return {
         "runs": len(samples_ms),
-        "p50_ms": round(statistics.median(samples_ms), 3),
-        "p90_ms": round(_percentile(samples_ms, 0.90), 3),
-        "p99_ms": round(_percentile(samples_ms, 0.99), 3),
+        "p50_ms": round(percentiles.p50, 3),
+        "p90_ms": round(percentiles.p90, 3),
+        "p99_ms": round(percentiles.p99, 3),
         "mean_ms": round(statistics.mean(samples_ms), 3),
         "min_ms": round(min(samples_ms), 3),
         "max_ms": round(max(samples_ms), 3),

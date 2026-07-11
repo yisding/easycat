@@ -30,6 +30,40 @@ _BUNDLED_MODEL = str(Path(__file__).parent / "models" / "smart-turn-v3.2-cpu.onn
 logger = logging.getLogger(__name__)
 
 _MAX_INTRA_OP_THREADS = 4
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+def _quota_cpu_count(quota: str, period: str) -> int | None:
+    """Convert a cgroup CPU quota/period pair into schedulable CPU units."""
+    if quota.strip() in {"max", "-1"}:
+        return None
+    try:
+        quota_value = int(quota)
+        period_value = int(period)
+    except ValueError:
+        return None
+    if quota_value <= 0 or period_value <= 0:
+        return None
+    return max(1, math.ceil(quota_value / period_value))
+
+
+def _cgroup_cpu_count(root: Path = _CGROUP_ROOT) -> int | None:
+    """Read the current cgroup v2 or v1 CPU bandwidth limit when available."""
+    try:
+        quota, period = (root / "cpu.max").read_text().split()[:2]
+    except (OSError, ValueError):
+        pass
+    else:
+        return _quota_cpu_count(quota, period)
+
+    for cpu_root in (root / "cpu", root):
+        try:
+            quota = (cpu_root / "cpu.cfs_quota_us").read_text()
+            period = (cpu_root / "cpu.cfs_period_us").read_text()
+        except OSError:
+            continue
+        return _quota_cpu_count(quota, period)
+    return None
 
 
 def _intra_op_thread_count() -> int:
@@ -38,7 +72,8 @@ def _intra_op_thread_count() -> int:
     ONNX Runtime's automatic pool can oversubscribe constrained containers,
     producing large endpointing-latency spikes.  Four threads is the measured
     latency optimum for the bundled model; smaller workers use only the CPUs
-    available through their affinity mask (or ``os.cpu_count`` off Linux).
+    available through their affinity mask (or ``os.cpu_count`` off Linux) and
+    cgroup CPU bandwidth quota.
     """
     get_affinity = getattr(os, "sched_getaffinity", None)
     if get_affinity is not None:
@@ -48,6 +83,9 @@ def _intra_op_thread_count() -> int:
             available = os.cpu_count() or 1
     else:
         available = os.cpu_count() or 1
+    quota_count = _cgroup_cpu_count()
+    if quota_count is not None:
+        available = min(available, quota_count)
     return max(1, min(_MAX_INTRA_OP_THREADS, available))
 
 
