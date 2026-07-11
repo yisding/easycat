@@ -476,7 +476,11 @@ class ElevenLabsTTS(_WSTTSBase):
                 events.append(self._make_audio_event(audio_bytes, self._source_format))
         if data.get("alignment"):
             events.append(self._make_markers_event([data["alignment"]]))
-        return events, bool(data.get("isFinal"))
+        # The one-shot /stream-input path signals completion with ``isFinal``;
+        # the persistent /multi-stream-input path uses ``is_final``. Normalize
+        # both so the shared decoder recognizes either terminal frame and the
+        # persistent turn completes instead of hanging until the socket closes.
+        return events, bool(data.get("isFinal") or data.get("is_final"))
 
     async def _synthesize_ws_persistent(self, text: str) -> AsyncIterator[TTSEvent]:
         """Synthesize over the shared persistent multi-stream-input socket.

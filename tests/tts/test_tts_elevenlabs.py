@@ -734,6 +734,35 @@ class TestElevenLabsPersistent:
         assert factory.call_count == 1
         await provider.close()
 
+    async def test_persistent_terminates_on_snake_case_is_final(self):
+        # The /multi-stream-input endpoint marks completion with ``is_final``
+        # (snake_case), unlike the one-shot ``isFinal``. The shared decoder must
+        # accept it so the persistent turn completes instead of hanging until
+        # the socket closes.
+        provider = self._make_provider()
+
+        class SnakeCaseFinalWS(FakePersistentWS):
+            async def send(self, message: str) -> None:
+                self.sent.append(message)
+                msg = json.loads(message)
+                if msg.get("text") == "" and "context_id" in msg:
+                    ctx_id = msg["context_id"]
+                    audio = base64.b64encode(_pcm16_bytes(120)).decode()
+                    await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
+                    await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
+
+        events = []
+
+        async def _collect(agen):
+            async for event in agen:
+                events.append(event)
+
+        with patch.object(provider, "_build_multi_ws", return_value=SnakeCaseFinalWS()):
+            await asyncio.wait_for(_collect(provider.synthesize("hi")), timeout=2.0)
+
+        assert events  # audio decoded and the turn completed without hanging
+        await provider.close()
+
     async def test_warmup_failure_is_retried_by_synthesis(self):
         provider = self._make_provider()
 
