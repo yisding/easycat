@@ -514,6 +514,41 @@ async def test_preemptive_wait_uses_session_timeout_then_runs_confirmed_path() -
 
 
 @pytest.mark.asyncio
+async def test_preemptive_wait_propagates_confirmed_turn_cancellation() -> None:
+    class BlockingAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = BlockingAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext("turn-cancel", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("cancel now")
+    await session._turn_runner.on_stt_final(STTFinal(text="cancel now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    confirmed_task = asyncio.create_task(session._turn_runner.handle_end_of_speech(turn=turn))
+    await asyncio.sleep(0)
+    confirmed_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await confirmed_task
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+@pytest.mark.asyncio
 async def test_graceful_stop_cancels_preemptive_generation_before_agent_close() -> None:
     class StopAwareAgent:
         def __init__(self) -> None:

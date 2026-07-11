@@ -470,6 +470,9 @@ class TurnRunner:
             else:
                 result = await task
         except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
             return None
         except AgentTimeoutError:
             logger.debug("Preemptive agent generation timed out; using confirmed path")
