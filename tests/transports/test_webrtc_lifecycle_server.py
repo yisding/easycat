@@ -11,6 +11,7 @@ import pytest
 import easycat.transports.webrtc as webrtc_mod
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, TransportDegraded
+from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 from easycat.transports.webrtc import (
     _DEGRADED_INBOUND_CONSUME_ERROR,
     _DEGRADED_NEGOTIATION_FAILED,
@@ -18,7 +19,6 @@ from easycat.transports.webrtc import (
     ICEServer,
     WebRTCTransport,
     WebRTCTransportConfig,
-    serve_webrtc_config_sessions,
 )
 
 from ._webrtc_fakes import (

@@ -67,7 +67,20 @@ from easycat.server.transports import CapacityGate
 from easycat.server.voice_server import VoiceServer
 
 if TYPE_CHECKING:
-    from easycat.server.webrtc_routes import WebRTCRoutes
+    from easycat.server.webrtc_routes import (
+        WebRTCRoutes,
+        run_webrtc_config_server,
+        serve_webrtc_config_sessions,
+    )
+    from easycat.server.websocket import (
+        run_websocket_config_server,
+        serve_websocket_config_sessions,
+        serve_websocket_sessions,
+    )
+    from easycat.server.webtransport import (
+        run_webtransport_config_server,
+        serve_webtransport_config_sessions,
+    )
 
 __all__ = [
     "AuthPolicy",
@@ -81,18 +94,57 @@ __all__ = [
     "WebRTCRoutes",
     "bearer_auth_from_env",
     "enforce_bind_guard",
+    "run_webrtc_config_server",
+    "run_websocket_config_server",
+    "run_webtransport_config_server",
+    "serve_webrtc_config_sessions",
+    "serve_websocket_config_sessions",
+    "serve_websocket_sessions",
+    "serve_webtransport_config_sessions",
 ]
+
+_LAZY_ATTRS = {
+    "WebRTCRoutes": ("easycat.server.webrtc_routes", "WebRTCRoutes"),
+    "run_webrtc_config_server": (
+        "easycat.server.webrtc_routes",
+        "run_webrtc_config_server",
+    ),
+    "serve_webrtc_config_sessions": (
+        "easycat.server.webrtc_routes",
+        "serve_webrtc_config_sessions",
+    ),
+    "run_websocket_config_server": (
+        "easycat.server.websocket",
+        "run_websocket_config_server",
+    ),
+    "serve_websocket_config_sessions": (
+        "easycat.server.websocket",
+        "serve_websocket_config_sessions",
+    ),
+    "serve_websocket_sessions": ("easycat.server.websocket", "serve_websocket_sessions"),
+    "run_webtransport_config_server": (
+        "easycat.server.webtransport",
+        "run_webtransport_config_server",
+    ),
+    "serve_webtransport_config_sessions": (
+        "easycat.server.webtransport",
+        "serve_webtransport_config_sessions",
+    ),
+}
 
 
 def __getattr__(name: str) -> object:
-    """Lazily resolve :class:`WebRTCRoutes` without eager-importing transports.
+    """Lazily resolve server adapters without importing optional transports.
 
-    Keeps ``import easycat.server`` from pulling ``easycat.transports.webrtc``
-    (and aiohttp's transitive siblings) at package load; the route unit is only
-    imported when actually accessed.
+    Keeps ``import easycat.server`` from pulling WebRTC/WebTransport modules at
+    package load; each adapter is imported only when accessed.
     """
-    if name == "WebRTCRoutes":
-        from easycat.server.webrtc_routes import WebRTCRoutes
+    try:
+        module_name, attribute = _LAZY_ATTRS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+    from importlib import import_module
 
-        return WebRTCRoutes
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

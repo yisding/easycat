@@ -493,3 +493,85 @@ class WebRTCRoutes:
 
     async def handle_cors_preflight(self, request: Any) -> Any:
         return await self._signaling().handle_cors_preflight(request)
+
+
+async def serve_webrtc_config_sessions(
+    config_factory: Callable[[WebRTCTransport], Any],
+    config: WebRTCTransportConfig | None = None,
+    *,
+    stop_event: asyncio.Event | None = None,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
+) -> None:
+    """Serve one EasyCat session per browser WebRTC offer."""
+    from easycat._extras import require_module
+    from easycat._net import normalize_auth_token
+    from easycat._signals import create_shutdown_event
+    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
+    from easycat.server.transports import CapacityGate
+    from easycat.session_manager import SessionManager
+
+    settings = config or WebRTCTransportConfig()
+    auth_token = normalize_auth_token(settings.auth_token)
+    bind_auth = (
+        BearerTokenAuth(token=auth_token, allow_query_token=settings.allow_query_token)
+        if auth_token is not None
+        else None
+    )
+    enforce_bind_guard(
+        settings.host,
+        auth=bind_auth,
+        unsafe_allow_no_auth=unsafe_allow_no_auth,
+    )
+    web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
+    manager: SessionManager[int] = SessionManager()
+    gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
+    routes = WebRTCRoutes(
+        settings,
+        auth=bind_auth,
+        config_factory=config_factory,
+        gate=gate,
+        manager=manager,
+        runtime_feedback=runtime_feedback,
+    )
+
+    app = web.Application()
+    routes.register(app, prefix="", web=web)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, settings.host, settings.port)
+    await site.start()
+    if announce:
+        print(f"\nServer ready. Open http://{settings.host}:{settings.port} in your browser")
+        print("Press Ctrl+C to stop.\n")
+
+    event = stop_event or create_shutdown_event()
+    try:
+        await event.wait()
+    finally:
+        gate.start_draining()
+        await site.stop()
+        await runner.cleanup()
+        await routes.cancel_cleanup_tasks()
+        await manager.stop_all()
+
+
+def run_webrtc_config_server(
+    config_factory: Callable[[WebRTCTransport], Any],
+    config: WebRTCTransportConfig | None = None,
+    *,
+    runtime_feedback: bool = True,
+    announce: bool = True,
+    unsafe_allow_no_auth: bool = False,
+) -> None:
+    """Run a multi-session WebRTC signaling server synchronously."""
+    asyncio.run(
+        serve_webrtc_config_sessions(
+            config_factory,
+            config,
+            runtime_feedback=runtime_feedback,
+            announce=announce,
+            unsafe_allow_no_auth=unsafe_allow_no_auth,
+        )
+    )

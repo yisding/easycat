@@ -219,6 +219,26 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     assert "extending/" in section
 
 
+def test_server_package_owns_standalone_transport_orchestration() -> None:
+    """Process lifecycle helpers belong to ``easycat.server``, not providers."""
+    import easycat.server as server
+    import easycat.transports as transports
+
+    helpers = {
+        "run_webrtc_config_server",
+        "run_websocket_config_server",
+        "run_webtransport_config_server",
+        "serve_webrtc_config_sessions",
+        "serve_websocket_config_sessions",
+        "serve_websocket_sessions",
+        "serve_webtransport_config_sessions",
+    }
+    for name in helpers:
+        assert name in server.__all__
+        assert name not in transports.__all__
+        assert callable(getattr(server, name))
+
+
 def test_public_api_documents_deprecation_and_removal_policy() -> None:
     """The public-API contract must name the `@deprecated` aliases and removal window."""
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
