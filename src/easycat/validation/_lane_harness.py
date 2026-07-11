@@ -1,9 +1,8 @@
 """Shared prologue/epilogue for every validation lane module.
 
-The lanes in :mod:`easycat.validation.runner` and
-:mod:`easycat.validation._slice_runner` share a run-id/run-dir/report-path
-prologue and git/env-stamp plus triple atomic-write epilogue. This module owns
-just those two shared halves so a report-format change is a one-site edit:
+The lane modules under :mod:`easycat.validation` share a run-id/run-dir/report-
+path prologue and git/env-stamp plus triple atomic-write epilogue. This module
+owns just those two shared halves so a report-format change is a one-site edit:
 
 - :func:`_start_lane_run` creates the run id, the run directory, resolves the
   report paths, and seeds the base artifacts dict.
