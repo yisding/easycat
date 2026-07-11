@@ -213,6 +213,16 @@ class TestCartesiaPersistent:
         assert factory.call_count == 2
         await provider.close()
 
+    async def test_warmup_is_noop_when_persistent_disabled(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=False))
+        factory = MagicMock(return_value=FakePersistentWS())
+
+        with patch.object(provider, "_build_ws", factory):
+            await provider.warmup()
+
+        assert factory.call_count == 0
+        await provider.close()
+
     async def test_synthesize_yields_audio(self):
         provider = self._make_provider()
         fake = FakePersistentWS()

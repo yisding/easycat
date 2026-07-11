@@ -17,6 +17,7 @@ import base64
 import json
 import statistics
 import time
+from collections.abc import AsyncIterator
 
 from easycat.tts.cartesia_tts import CartesiaTTS, CartesiaTTSConfig
 
@@ -45,7 +46,7 @@ class _BenchmarkSocket:
             )
         )
 
-    async def recv_iter(self):
+    async def recv_iter(self) -> AsyncIterator[str]:
         while True:
             frame = await self._queue.get()
             if frame is None:
