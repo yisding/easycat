@@ -75,8 +75,8 @@ def parse_sse_line(line: str) -> tuple[str, dict[str, Any]] | None:
     if not isinstance(data, dict):
         return None
 
-    event_type = data.get("type", "")
-    if not event_type:
+    event_type = data.get("type")
+    if not isinstance(event_type, str) or not event_type:
         return None
 
     return event_type, data

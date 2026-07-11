@@ -325,6 +325,38 @@ class TestN1ChainInterruption:
         assert "function_call" in types
         assert "function_call_output" in types
 
+    @pytest.mark.parametrize("malformed_item", [["function_call"], "function_call"])
+    @pytest.mark.asyncio
+    async def test_interruption_ignores_malformed_completed_items(
+        self,
+        malformed_item: object,
+    ) -> None:
+        class MalformedItemServer(MockResponsesServer):
+            def _build_sse_events(
+                self,
+                response_id: str,
+                request_data: dict[str, Any],
+            ) -> list[str]:
+                events = super()._build_sse_events(response_id, request_data)
+                malformed_event = {
+                    "type": "response.output_item.done",
+                    "item": malformed_item,
+                }
+                events.insert(0, f"data: {json.dumps(malformed_event)}")
+                return events
+
+        bridge = _make_bridge(MalformedItemServer())
+        rec = _recorder()
+
+        async for _ in bridge.invoke(AgentTurnInput.from_text("hello"), rec):
+            pass
+
+        bridge.apply_interruption("partial", CancellationMode.IMMEDIATE_STOP)
+
+        assert bridge._last_accumulated_items == []
+        assert bridge._replay_items is not None
+        assert all(isinstance(item, dict) for item in bridge._replay_items)
+
 
 # ── AC2C.5: drain_current_unit on SSE stream ────────────────────
 
@@ -774,6 +806,10 @@ class TestSSEParser:
 
     def test_missing_type_returns_none(self):
         assert parse_sse_line('data: {"delta": "hi"}') is None
+
+    @pytest.mark.parametrize("event_type", [[], {}, 1, True])
+    def test_non_string_type_returns_none(self, event_type: object):
+        assert parse_sse_line(f"data: {json.dumps({'type': event_type})}") is None
 
 
 class TestSSETranslator:
