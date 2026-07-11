@@ -86,7 +86,11 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively. The one knob here is
+  or stream more aggressively. OpenAI TTS consumes the HTTP response at its
+  native cadence, releases the first 20 ms of PCM immediately, then coalesces
+  steady-state audio into 100 ms frames; this avoids making first audio wait
+  for a full steady-state frame without increasing per-frame overhead for the
+  rest of the utterance. The one knob here is
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI

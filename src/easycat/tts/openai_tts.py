@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 import httpx
@@ -19,6 +19,47 @@ logger = logging.getLogger(__name__)
 
 # OpenAI's pcm response format returns raw PCM16 at 24kHz mono
 _OPENAI_PCM_FORMAT = AudioFormat(sample_rate=24000, channels=1, sample_width=2)
+
+# Release one transport-friendly 20 ms frame as soon as it is available, then
+# return to 100 ms chunks for steady-state playback.  Passing ``chunk_size=4800``
+# to httpx buffered a full 100 ms of 24 kHz PCM before the first yield, adding
+# avoidable framework latency after the provider had already started streaming.
+_FIRST_AUDIO_CHUNK_BYTES = 960
+_STEADY_AUDIO_CHUNK_BYTES = 4800
+
+
+async def _iter_low_latency_pcm_chunks(
+    source: AsyncIterable[bytes],
+    *,
+    should_stop: Callable[[], bool] | None = None,
+) -> AsyncIterator[bytes]:
+    """Rechunk raw response bytes with a small first frame and stable tail.
+
+    httpx's default ``aiter_bytes()`` preserves the response's natural stream
+    cadence.  This helper coalesces that cadence into a 20 ms first PCM frame,
+    followed by the existing 100 ms frame size, and flushes the final remainder
+    without dropping or duplicating bytes.
+    """
+    pending = bytearray()
+    target = _FIRST_AUDIO_CHUNK_BYTES
+
+    iterator = source.__aiter__()
+    while not (should_stop is not None and should_stop()):
+        try:
+            chunk = await anext(iterator)
+        except StopAsyncIteration:
+            break
+        if not chunk:
+            continue
+        pending.extend(chunk)
+        while len(pending) >= target and not (should_stop is not None and should_stop()):
+            output = bytes(pending[:target])
+            del pending[:target]
+            target = _STEADY_AUDIO_CHUNK_BYTES
+            yield output
+
+    if pending and not (should_stop is not None and should_stop()):
+        yield bytes(pending)
 
 
 @dataclass
@@ -107,7 +148,13 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
                 self._response = response
                 response.raise_for_status()
 
-                async for chunk in response.aiter_bytes(chunk_size=4800):
+                # Read at the response's native cadence so httpx does not hold
+                # the first audio until a full 100 ms / 4800-byte block has
+                # accumulated.  The local rechunker releases 20 ms first and
+                # preserves the former 100 ms steady-state frame size.
+                async for chunk in _iter_low_latency_pcm_chunks(
+                    response.aiter_bytes(), should_stop=lambda: self._cancelled
+                ):
                     if self._cancelled:
                         break
                     if chunk:
