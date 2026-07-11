@@ -15,6 +15,7 @@ from easycat.session.interruption import (
 )
 from easycat.session.text import (
     _cleanup_estimation_text,
+    _split_first_phrase,
     _text_for_estimation_timeline,
     split_at_sentence_boundaries,
     split_first_clause,
@@ -194,6 +195,26 @@ def test_split_first_clause_handles_semicolon_and_colon():
     ready, remaining = split_first_clause("Two options are available: A and B.")
     assert ready == "Two options are available: "
     assert remaining == "A and B."
+
+
+def test_split_first_phrase_bounds_punctuation_free_opener() -> None:
+    text = "This response keeps streaming words without reaching punctuation for quite a while"
+
+    ready, remaining = _split_first_phrase(text)
+
+    assert ready == "This response keeps streaming words without "
+    assert remaining == "reaching punctuation for quite a while"
+    assert ready + remaining == text
+
+
+def test_split_first_phrase_waits_for_target_length() -> None:
+    text = "This short phrase is still below the target"
+    assert _split_first_phrase(text) == ("", text)
+
+
+def test_split_first_phrase_does_not_clip_long_unbroken_token() -> None:
+    text = "prefix " + "x" * 80
+    assert _split_first_phrase(text) == ("", text)
 
 
 def test_text_for_estimation_timeline_encodes_ssml_breaks() -> None:
