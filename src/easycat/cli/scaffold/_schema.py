@@ -150,6 +150,8 @@ def _as_required_string(payload: Mapping[str, Any], key: str) -> str:
     value = payload[key]
     if not isinstance(value, str):
         _reject(f"{key!r} must be a string")
+    if not value.strip():
+        _reject(f"{key!r} must be a non-empty string")
     return value
 
 

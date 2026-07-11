@@ -78,6 +78,12 @@ def test_parse_config_distinguishes_required_field_presence_and_type() -> None:
         parse_config(_config_json(template=42))
 
 
+@pytest.mark.parametrize("template", ["", " ", "\t"])
+def test_parse_config_rejects_blank_required_strings(template: str) -> None:
+    with pytest.raises(EasyCatError, match="'template' must be a non-empty string"):
+        parse_config(_config_json(template=template))
+
+
 @pytest.mark.parametrize(
     "field_name",
     [
