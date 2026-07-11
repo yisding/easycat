@@ -14,7 +14,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from easycat.tts.openai_tts import (
     _FIRST_AUDIO_CHUNK_BYTES,
@@ -22,8 +22,28 @@ from easycat.tts.openai_tts import (
 )
 
 
-def _first_dispatch(*, target_bytes: int, network_chunk_bytes: int, interval_ms: float) -> dict:
-    chunks = math.ceil(target_bytes / network_chunk_bytes)
+class DispatchMetrics(TypedDict):
+    network_chunks: int
+    latency_ms: float
+    payload_bytes: int
+
+
+class FirstAudioBenchmarkResult(TypedDict):
+    schema_version: int
+    source_format: str
+    network_chunk_bytes: int
+    network_interval_ms: float
+    legacy_fixed_chunk: DispatchMetrics
+    low_latency_first_chunk: DispatchMetrics
+    steady_state_chunk_bytes: int
+    saved_ms: float
+    reduction_percent: float
+
+
+def _first_dispatch(
+    *, target_bytes: int, network_chunk_bytes: int, interval_ms: float
+) -> DispatchMetrics:
+    chunks = (target_bytes + network_chunk_bytes - 1) // network_chunk_bytes
     return {
         "network_chunks": chunks,
         "latency_ms": chunks * interval_ms,
@@ -31,11 +51,13 @@ def _first_dispatch(*, target_bytes: int, network_chunk_bytes: int, interval_ms:
     }
 
 
-def compare(*, network_chunk_bytes: int = 480, interval_ms: float = 10.0) -> dict[str, Any]:
+def compare(
+    *, network_chunk_bytes: int = 480, interval_ms: float = 10.0
+) -> FirstAudioBenchmarkResult:
     """Return modeled legacy and low-latency first-dispatch measurements."""
     if network_chunk_bytes <= 0:
         raise ValueError("network_chunk_bytes must be positive")
-    if interval_ms < 0:
+    if interval_ms < 0 or not math.isfinite(interval_ms):
         raise ValueError("interval_ms must be non-negative")
 
     legacy = _first_dispatch(

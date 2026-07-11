@@ -58,6 +58,16 @@ class FakeStreamResponse:
         await self.aclose()
 
 
+class StreamClosedResponse(FakeStreamResponse):
+    """Yield one frame, then model a close racing the next stream read."""
+
+    async def aiter_bytes(self, chunk_size: int | None = None):
+        self.aiter_bytes_chunk_size = chunk_size
+        self.chunks_read += 1
+        yield _pcm16_bytes(480)
+        raise httpx.StreamClosed()
+
+
 class ChunkedAsyncByteStream(httpx.AsyncByteStream):
     """Exercise the provider through httpx's real response byte iterator."""
 
@@ -227,6 +237,26 @@ class TestOpenAITTS:
         assert len(events) == 2
         assert provider.is_cancelled
         assert fake_response.chunks_read == 6
+
+    async def test_cancel_suppresses_stream_closed_race(self):
+        provider = self._make_provider()
+        fake_response = StreamClosedResponse([])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            async for _event in provider.synthesize("long text"):
+                await provider.cancel()
+
+        assert provider.is_cancelled
+        assert fake_response.chunks_read == 1
+
+    async def test_stream_closed_without_cancel_propagates(self):
+        provider = self._make_provider()
+        fake_response = StreamClosedResponse([])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            with pytest.raises(httpx.StreamClosed):
+                async for _event in provider.synthesize("long text"):
+                    pass
 
     async def test_stop_sets_inactive(self):
         provider = self._make_provider()

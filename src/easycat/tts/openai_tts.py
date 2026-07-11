@@ -42,9 +42,10 @@ async def _iter_low_latency_pcm_chunks(
     """
     pending = bytearray()
     target = _FIRST_AUDIO_CHUNK_BYTES
+    stopped = should_stop or (lambda: False)
 
     iterator = source.__aiter__()
-    while not (should_stop is not None and should_stop()):
+    while not stopped():
         try:
             chunk = await anext(iterator)
         except StopAsyncIteration:
@@ -52,13 +53,13 @@ async def _iter_low_latency_pcm_chunks(
         if not chunk:
             continue
         pending.extend(chunk)
-        while len(pending) >= target and not (should_stop is not None and should_stop()):
+        while len(pending) >= target and not stopped():
             output = bytes(pending[:target])
             del pending[:target]
             target = _STEADY_AUDIO_CHUNK_BYTES
             yield output
 
-    if pending and not (should_stop is not None and should_stop()):
+    if pending and not stopped():
         yield bytes(pending)
 
 
@@ -168,6 +169,10 @@ class OpenAITTS(ProviderErrorEmitter, TTSBase):
                 exc, http_status=exc.response.status_code, body=exc.response.text[:400]
             )
             raise
+        except httpx.StreamError as exc:
+            if not self._cancelled:
+                raise
+            logger.debug("OpenAI TTS stream closed after cancel: %s", exc)
         except httpx.HTTPError as exc:
             if not self._cancelled:
                 logger.error("OpenAI TTS HTTP error: %s", exc)
