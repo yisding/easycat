@@ -10,6 +10,8 @@ output), and any explicit runtime secret passed to
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -68,6 +70,23 @@ def test_redact_text_prefilter_covers_every_pattern_family(
     redacted_marker: str,
 ) -> None:
     assert redacted_marker in redact_text(value)
+
+
+def test_redact_text_prefilter_covers_midword_bearer_policy() -> None:
+    assert redact_text("clientBearer abc123") == f"clientBearer {REDACTED_SECRET}"
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [pattern for pattern, _replacement in redaction_module._TEXT_REDACTIONS],
+)
+@given(data=st.data())
+def test_text_redaction_trigger_is_policy_superset(
+    pattern: re.Pattern[str],
+    data: st.DataObject,
+) -> None:
+    value = data.draw(st.from_regex(pattern, fullmatch=False))
+    assert redaction_module._TEXT_REDACTION_TRIGGER_RE.search(value) is not None
 
 
 def test_redact_text_preserves_ordinary_text() -> None:

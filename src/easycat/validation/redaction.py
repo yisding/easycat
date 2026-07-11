@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
@@ -92,6 +92,28 @@ _KEY_VALUE_SECRET_RE = re.compile(
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
 _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
+
+
+def _secret_after_prefix(match: re.Match[str]) -> str:
+    return f"{match.group(1)}{REDACTED_SECRET}"
+
+
+def _redacted_home_path(match: re.Match[str]) -> str:
+    return f"{match.group('prefix')}~"
+
+
+_TextReplacement = str | Callable[[re.Match[str]], str]
+_TEXT_REDACTIONS: tuple[tuple[re.Pattern[str], _TextReplacement], ...] = (
+    (_URL_RE, REDACTED_URL),
+    (_HEADER_SECRET_RE, _secret_after_prefix),
+    (_BEARER_RE, _secret_after_prefix),
+    (_KEY_VALUE_SECRET_RE, _secret_after_prefix),
+    (_JWT_RE, REDACTED_SECRET),
+    (_SECRET_RE, REDACTED_SECRET),
+    (_REQUEST_ID_RE, REDACTED_REQUEST_ID),
+    (_PHONE_RE, REDACTED_PHONE),
+    (_HOME_PATH_RE, _redacted_home_path),
+)
 # Every text-redaction pattern above requires at least one of these trigger
 # characters, except the standalone ``Bearer <value>`` and phone-number forms.
 # The latter is included with its complete shape so an isolated digit does not
@@ -99,7 +121,7 @@ _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 # this superset first keeps that work off common hot-path values.  False
 # positives are harmless: they merely fall through to the complete policy.
 _TEXT_REDACTION_TRIGGER_RE = re.compile(
-    r"[:/=_\-.]|\bbearer\s|(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)",
+    rf"[:/=_\-.]|bearer\s|{_PHONE_RE.pattern}",
     re.IGNORECASE,
 )
 _SENSITIVE_COMMAND_FLAGS = frozenset(
@@ -118,15 +140,9 @@ def redact_text(value: str) -> str:
     """Redact sensitive substrings from free-form validation text."""
     if _TEXT_REDACTION_TRIGGER_RE.search(value) is None:
         return value
-    redacted = _URL_RE.sub(REDACTED_URL, value)
-    redacted = _HEADER_SECRET_RE.sub(lambda match: f"{match.group(1)}{REDACTED_SECRET}", redacted)
-    redacted = _BEARER_RE.sub(rf"\1{REDACTED_SECRET}", redacted)
-    redacted = _KEY_VALUE_SECRET_RE.sub(rf"\1{REDACTED_SECRET}", redacted)
-    redacted = _JWT_RE.sub(REDACTED_SECRET, redacted)
-    redacted = _SECRET_RE.sub(REDACTED_SECRET, redacted)
-    redacted = _REQUEST_ID_RE.sub(REDACTED_REQUEST_ID, redacted)
-    redacted = _PHONE_RE.sub(REDACTED_PHONE, redacted)
-    redacted = _HOME_PATH_RE.sub(lambda match: f"{match.group('prefix')}~", redacted)
+    redacted = value
+    for pattern, replacement in _TEXT_REDACTIONS:
+        redacted = pattern.sub(replacement, redacted)
     return redacted
 
 
