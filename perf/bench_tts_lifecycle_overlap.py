@@ -73,8 +73,14 @@ async def _measure_once(*, handler_s: float, provider_s: float, overlap: bool) -
         task = asyncio.create_task(
             synth.synthesize(TTSInput("hello"), None, start_barrier=barrier)
         )
-        await asyncio.sleep(0)
-        await turn_manager.bot_started_speaking()
+        try:
+            await asyncio.sleep(0)
+            await turn_manager.bot_started_speaking()
+        except BaseException:
+            task.cancel()
+            barrier.set()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         barrier.set()
         await task
     else:

@@ -408,6 +408,40 @@ async def test_begin_synthesis_cancels_provider_when_lifecycle_dispatch_is_cance
 
 
 @pytest.mark.asyncio
+async def test_begin_synthesis_cleans_up_when_cancelled_during_initial_yield(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.session._tts_scheduler as scheduler_module
+
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    created_tasks: list[asyncio.Task[object]] = []
+    real_create_task = asyncio.create_task
+
+    def _capture_task(coro: Awaitable[object]) -> asyncio.Task[object]:
+        task = real_create_task(coro)
+        created_tasks.append(task)
+        return task
+
+    async def _cancel_initial_yield(_delay: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(scheduler_module.asyncio, "create_task", _capture_task)
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _cancel_initial_yield)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+        )
+
+    assert len(created_tasks) == 1
+    assert created_tasks[0].cancelled()
+    assert ctx["audio_emissions"] == []
+
+
+@pytest.mark.asyncio
 async def test_begin_synthesis_cancels_provider_when_lifecycle_dispatch_fails() -> None:
     tts = _CoordinatedTTS()
     tts.release.set()

@@ -366,8 +366,7 @@ async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
     session = Session(_config())
     session._turn = TurnContext("turn-cancelled-tts", CancelToken())
 
-    async def _cancel_tts_consumer(st: _StreamingTtsState) -> None:
-        st.first_tts_lifecycle_ready.set()
+    async def _cancel_tts_consumer(_st: _StreamingTtsState) -> None:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(session._turn_runner, "_consume_tts_payloads", _cancel_tts_consumer)
@@ -726,14 +725,56 @@ async def test_tts_consumer_starts_before_agent_consumer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_tts_lifecycle_wait_is_outside_agent_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.session._turn_runner as turn_runner_module
+
+    lifecycle_started = asyncio.Event()
+    release_lifecycle = asyncio.Event()
+    agent_wait_finished = asyncio.Event()
+    session = Session(_config(timeout_config=TimeoutConfig(agent_timeout=0.01)))
+
+    async def _block_lifecycle(_event: BotStartedSpeaking) -> None:
+        lifecycle_started.set()
+        await release_lifecycle.wait()
+
+    async def _observe_agent_wait(task: asyncio.Task[None], **_kwargs: object) -> None:
+        await task
+        agent_wait_finished.set()
+
+    session.event_bus.subscribe(BotStartedSpeaking, _block_lifecycle)
+    monkeypatch.setattr(turn_runner_module, "with_agent_timeout", _observe_agent_wait)
+    session._turn = TurnContext("turn-lifecycle-timeout", CancelToken())
+
+    run_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    try:
+        await asyncio.wait_for(lifecycle_started.wait(), timeout=0.5)
+        await asyncio.wait_for(agent_wait_finished.wait(), timeout=0.5)
+        assert not run_task.done()
+    finally:
+        release_lifecycle.set()
+
+    await asyncio.wait_for(run_task, timeout=0.5)
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
     """``bot_stopped_speaking`` must be emitted after drain when not stopping."""
     stopped: list[BotStoppedSpeaking] = []
+    order: list[str] = []
     session = Session(_config())
-    session.event_bus.subscribe(BotStoppedSpeaking, lambda e: stopped.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda _e: order.append("agent_final"))
+
+    def _record_stopped(event: BotStoppedSpeaking) -> None:
+        stopped.append(event)
+        order.append("bot_stopped")
+
+    session.event_bus.subscribe(BotStoppedSpeaking, _record_stopped)
     session._turn = TurnContext("turn-stop2", CancelToken())
     await session._turn_runner.run_streaming_agent("hello", token=None)
     assert len(stopped) == 1
+    assert order == ["agent_final", "bot_stopped"]
 
 
 @pytest.mark.asyncio

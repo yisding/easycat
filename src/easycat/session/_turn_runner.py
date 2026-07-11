@@ -99,6 +99,9 @@ class _StreamingTtsState:
     #: Released after first-payload lifecycle dispatch (or a no-audio terminal
     #: path) so AgentFinal cannot overtake BotStartedSpeaking.
     first_tts_lifecycle_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Released after the outer task has emitted (or intentionally skipped)
+    #: AgentFinal so fast TTS completion cannot overtake agent output ordering.
+    agent_output_settled: asyncio.Event = field(default_factory=asyncio.Event)
     #: The consumer received its first payload and decided gating/playback.
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
@@ -417,29 +420,31 @@ class TurnRunner:
                 strip_md=self._tts.strip_markdown_enabled,
                 turn=turn,
             )
-            # Starting the provider early adds one deliberate scheduler yield
-            # inside the TTS consumer. Hold task completion here so the outer
-            # turn cannot emit AgentFinal before first-payload lifecycle
-            # dispatch (or the no-audio sentinel path) has settled.
-            await st.first_tts_lifecycle_ready.wait()
 
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
 
         caught_exc = await self._await_agent_task_recording_cancel(st, agent_task, tts_task)
+        # Lifecycle ordering is not agent execution time. Wait outside
+        # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
+        # the agent timeout after the agent has already completed.
+        await self._await_first_tts_lifecycle_ready(st, tts_task)
         agent_error = agent_result.error if agent_result else caught_exc
         interrupted = agent_result.interrupted if agent_result else False
         accumulated_text = agent_result.text if agent_result else ""
         structured_output = agent_result.structured_output if agent_result else None
         stream_succeeded = agent_error is None and not (token and token.is_cancelled)
 
-        if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
-            accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
+        try:
+            if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
+                accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
 
-        if (accumulated_text or structured_output is not None) and stream_succeeded:
-            await self._emit(
-                AgentFinal(text=accumulated_text, structured_output=structured_output)
-            )
+            if (accumulated_text or structured_output is not None) and stream_succeeded:
+                await self._emit(
+                    AgentFinal(text=accumulated_text, structured_output=structured_output)
+                )
+        finally:
+            st.agent_output_settled.set()
 
         await self._await_tts_task_recording_cancel(st, tts_task)
 
@@ -564,6 +569,9 @@ class TurnRunner:
 
     async def _settle_turn_after_tts(self, st: _StreamingTtsState) -> None:
         """Return the TurnManager toward IDLE (or keep the gated turn alive)."""
+        current_task = asyncio.current_task()
+        if current_task is None or current_task.cancelling() == 0:
+            await st.agent_output_settled.wait()
         if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             st.should_stop = await self._tts.finalize_speaking_turn(
                 st.turn, turn_generation=st.turn_gen
@@ -615,17 +623,46 @@ class TurnRunner:
                 # historical behavior of treating that as a settled consumer.
                 return
 
-            self._cancel_pending(tts_task)
-            try:
-                await tts_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._record_streaming_interruption(
-                st,
-                interrupted=st.turn.last_barge_in_time is not None,
-                source="streaming_turn_cancelled",
-            )
+            await self._cancel_tts_for_streaming_turn(st, tts_task)
             raise
+
+    async def _await_first_tts_lifecycle_ready(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        """Preserve event order without charging lifecycle work to the agent."""
+        ready_task = asyncio.create_task(st.first_tts_lifecycle_ready.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                (ready_task, tts_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if ready_task in done:
+                await ready_task
+        except asyncio.CancelledError:
+            await self._cancel_tts_for_streaming_turn(st, tts_task)
+            raise
+        finally:
+            if not ready_task.done():
+                ready_task.cancel()
+                await asyncio.gather(ready_task, return_exceptions=True)
+
+    async def _cancel_tts_for_streaming_turn(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        self._cancel_pending(tts_task)
+        try:
+            await tts_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._record_streaming_interruption(
+            st,
+            interrupted=st.turn.last_barge_in_time is not None,
+            source="streaming_turn_cancelled",
+        )
 
     async def _await_agent_task(
         self,

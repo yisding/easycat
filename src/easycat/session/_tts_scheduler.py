@@ -261,11 +261,12 @@ class TTSScheduler:
             )
         )
 
-        # Give the provider task one loop turn to issue its network request and
-        # settle on either network I/O or the first-event barrier. No provider
-        # event can escape while the barrier is closed.
-        await asyncio.sleep(0)
         try:
+            # Give the provider task one loop turn to issue its network request
+            # and settle on either network I/O or the first-event barrier. Keep
+            # the yield inside the cleanup guard because cancellation can land
+            # at this first suspension point.
+            await asyncio.sleep(0)
             await self._turn_manager.bot_started_speaking()
         except BaseException:
             task.cancel()
