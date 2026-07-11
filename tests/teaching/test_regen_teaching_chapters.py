@@ -6,6 +6,16 @@ from pathlib import Path
 
 import pytest
 
+from easycat.events import (
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
+)
+from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     ROOT,
     TEACHING,
@@ -196,18 +206,13 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
         encoding="utf-8"
     )
-    journal_sink = (ROOT / "src" / "easycat" / "session" / "_journal_sink.py").read_text(
-        encoding="utf-8"
-    )
 
     assert "SessionJournalSink" in plan
     assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
-    expected_tool_records = (
-        '_EventRecordSpec(ToolCallStarted, JournalRecordKind.EVENT, "tool_call_started")',
-        '_EventRecordSpec(ToolCallDelta, JournalRecordKind.EVENT, "tool_call_delta")',
-        '_EventRecordSpec(ToolCallResult, JournalRecordKind.EVENT, "tool_call_result")',
-    )
-    assert all(record in journal_sink for record in expected_tool_records)
+    registered_records = {spec.event_type: spec.name for spec in _SIMPLE_EVENT_RECORDS}
+    assert registered_records[ToolCallStarted] == "tool_call_started"
+    assert registered_records[ToolCallDelta] == "tool_call_delta"
+    assert registered_records[ToolCallResult] == "tool_call_result"
     assert "tool name and call id" in plan
     assert "tool name and args" not in plan
     assert "session/_session.py" not in plan
@@ -217,17 +222,10 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     # SessionAction lifecycle events are now journaled in the same declarative
     # registry as tool calls; the plan must document this instead of
     # claiming a journaling gap.
-    action_events = (
-        "SessionActionRequested",
-        "SessionActionStarted",
-        "SessionActionCompleted",
-        "SessionActionFailed",
-    )
-    assert all(event in journal_sink for event in action_events)
-    assert (
-        '_EventRecordSpec(SessionActionFailed, JournalRecordKind.EVENT, "session_action_failed")'
-        in journal_sink
-    )
+    assert registered_records[SessionActionRequested] == "session_action_requested"
+    assert registered_records[SessionActionStarted] == "session_action_started"
+    assert registered_records[SessionActionCompleted] == "session_action_completed"
+    assert registered_records[SessionActionFailed] == "session_action_failed"
     assert "*not* currently journaled" not in plan
     assert "`SessionAction` flows are journaled too" in plan
     assert "session_action_requested" in plan
