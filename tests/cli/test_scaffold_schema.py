@@ -71,6 +71,13 @@ def test_parse_config_requires_closed_json_object() -> None:
         parse_config(_config_json(extra=True))
 
 
+def test_parse_config_distinguishes_required_field_presence_and_type() -> None:
+    with pytest.raises(EasyCatError, match="missing required key 'template'"):
+        parse_config(json.dumps({"schema_version": 1}))
+    with pytest.raises(EasyCatError, match="'template' must be a string"):
+        parse_config(_config_json(template=42))
+
+
 @pytest.mark.parametrize(
     "field_name",
     [
@@ -83,9 +90,13 @@ def test_parse_config_requires_closed_json_object() -> None:
         "easycat_source",
     ],
 )
-def test_parse_config_rejects_non_string_optional_fields(field_name: str) -> None:
+@pytest.mark.parametrize("value", [42, None])
+def test_parse_config_rejects_present_non_string_optional_fields(
+    field_name: str,
+    value: object,
+) -> None:
     with pytest.raises(EasyCatError, match=rf"{field_name!r} must be a string"):
-        parse_config(_config_json(**{field_name: 42}))
+        parse_config(_config_json(**{field_name: value}))
 
 
 @pytest.mark.parametrize("field_name", ["tools", "mcp_servers"])

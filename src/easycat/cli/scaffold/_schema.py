@@ -145,16 +145,18 @@ def _reject_unknown_keys(payload: dict[str, Any]) -> None:
 
 
 def _as_required_string(payload: Mapping[str, Any], key: str) -> str:
-    value = payload.get(key)
-    if not value or not isinstance(value, str):
+    if key not in payload:
         _reject(f"missing required key {key!r}")
+    value = payload[key]
+    if not isinstance(value, str):
+        _reject(f"{key!r} must be a string")
     return value
 
 
 def _as_optional_string(payload: Mapping[str, Any], key: str) -> str | None:
-    value = payload.get(key)
-    if value is None:
+    if key not in payload:
         return None
+    value = payload[key]
     if not isinstance(value, str):
         _reject(f"{key!r} must be a string")
     return value
