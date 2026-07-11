@@ -467,7 +467,7 @@ def test_session_queue_drop_delegates_to_journal_sink() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_journal_stays_read_only_after_shutdown() -> None:
+async def test_session_journal_stays_read_only_after_stop() -> None:
     bus = EventBus()
     journal = InMemoryRingBuffer()
     session = Session(SessionConfig(runtime_mode="text_session", event_bus=bus, journal=journal))
