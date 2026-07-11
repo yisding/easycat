@@ -174,16 +174,12 @@ def _spectrogram(
     window = window.astype(np.float64)
 
     num_frames = int(1 + np.floor((waveform.size - frame_length) / hop_length))
-    num_frequency_bins = (frame_length // 2) + 1
-    spec = np.empty((num_frames, num_frequency_bins), dtype=np.complex64)
-    buffer = np.zeros(frame_length, dtype=np.float64)
-
-    timestep = 0
-    for frame_idx in range(num_frames):
-        buffer[:] = waveform[timestep : timestep + frame_length]
-        buffer *= window
-        spec[frame_idx] = np.fft.rfft(buffer)
-        timestep += hop_length
+    frames = np.lib.stride_tricks.sliding_window_view(waveform, frame_length)[::hop_length]
+    frames = frames[:num_frames]
+    # Batch all ~800 windows into one NumPy FFT call.  Keep the explicit
+    # complex64 cast from the former per-frame output buffer so this is a
+    # scheduling optimization, not a feature-precision/model-input change.
+    spec = np.fft.rfft(frames * window, axis=1).astype(np.complex64, copy=False)
 
     spec = (np.abs(spec, dtype=np.float64) ** 2.0).T
     # This is a small, fixed-shape contraction (80 x 201 x ~800).  ``np.dot``
