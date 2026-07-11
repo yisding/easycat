@@ -10,30 +10,14 @@ document the older version under ``easycat explain init-schema``.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields
 from difflib import get_close_matches
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Never, cast
 
 from easycat.errors import EASYCAT_E102, EASYCAT_E103
-
-# Keys accepted in the top-level ``--config`` JSON object.  Anything
-# else fails loudly with EASYCAT_E102 + fuzzy suggestion.
-SCHEMA_V1_KEYS: frozenset[str] = frozenset(
-    {
-        "schema_version",
-        "template",
-        "stt",
-        "tts",
-        "llm",
-        "transport",
-        "agent_name",
-        "agent_instructions",
-        "tools",
-        "mcp_servers",
-        "easycat_source",
-    }
-)
 
 # Directory names that can appear as local tooling, cache, build, or secret-bearing
 # artifacts next to bundled templates, but must never be treated as scaffold
@@ -65,20 +49,41 @@ TEMPLATE_ARTIFACT_DIRECTORY_NAMES: frozenset[str] = frozenset(
 )
 
 
+class _InitFieldKind(StrEnum):
+    REQUIRED_STRING = "required_string"
+    OPTIONAL_STRING = "optional_string"
+    STRING_LIST = "string_list"
+
+
+_FIELD_KIND_METADATA_KEY = "easycat.init_field_kind"
+_REQUIRED_STRING_METADATA = {_FIELD_KIND_METADATA_KEY: _InitFieldKind.REQUIRED_STRING}
+_OPTIONAL_STRING_METADATA = {_FIELD_KIND_METADATA_KEY: _InitFieldKind.OPTIONAL_STRING}
+_STRING_LIST_METADATA = {_FIELD_KIND_METADATA_KEY: _InitFieldKind.STRING_LIST}
+
+
 @dataclass
 class InitConfig:
     """Typed view of a validated ``--config`` payload."""
 
-    template: str
-    stt: str | None = None
-    tts: str | None = None
-    llm: str | None = None
-    transport: str | None = None
-    agent_name: str | None = None
-    agent_instructions: str | None = None
-    tools: list[str] = field(default_factory=list)
-    mcp_servers: list[str] = field(default_factory=list)
-    easycat_source: str | None = None
+    template: str = field(metadata=_REQUIRED_STRING_METADATA)
+    stt: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    tts: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    llm: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    transport: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    agent_name: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    agent_instructions: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+    tools: list[str] = field(default_factory=list, metadata=_STRING_LIST_METADATA)
+    mcp_servers: list[str] = field(default_factory=list, metadata=_STRING_LIST_METADATA)
+    easycat_source: str | None = field(default=None, metadata=_OPTIONAL_STRING_METADATA)
+
+
+_INIT_CONFIG_FIELDS = fields(InitConfig)
+
+# Treat the JSON object as a closed schema: model fields are accepted and
+# every other key fails loudly with EASYCAT_E102 + a fuzzy suggestion.
+SCHEMA_V1_KEYS: frozenset[str] = frozenset(
+    {"schema_version", *(item.name for item in _INIT_CONFIG_FIELDS)}
+)
 
 
 def available_templates() -> list[str]:
@@ -95,7 +100,7 @@ def available_templates() -> list[str]:
     )
 
 
-def _reject(problem: str) -> None:
+def _reject(problem: str) -> Never:
     raise EASYCAT_E102(problem=problem)
 
 
@@ -108,13 +113,7 @@ def _fuzzy_suggest(key: str) -> str:
     return matches[0] if matches else ""
 
 
-def parse_config(raw: str) -> InitConfig:
-    """Parse and validate a ``--config`` JSON string.
-
-    Returns an :class:`InitConfig` on success.  Raises :class:`EasyCatError`
-    with code ``EASYCAT_E102`` on malformed JSON or unknown keys, and
-    ``EASYCAT_E103`` when the requested template is not in the catalog.
-    """
+def _parse_json_object(raw: str) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -122,55 +121,83 @@ def parse_config(raw: str) -> InitConfig:
 
     if not isinstance(payload, dict):
         _reject("top-level value must be a JSON object")
+    return cast(dict[str, Any], payload)
 
+
+def _validate_schema_version(payload: Mapping[str, Any]) -> None:
     schema_version = payload.get("schema_version")
     if schema_version is None:
         _reject("missing required key 'schema_version'")
-    if schema_version != 1:
+    if type(schema_version) is not int or schema_version != 1:
         _reject(
             f"unsupported schema_version={schema_version!r} — "
             f"this version of easycat understands schema_version=1"
         )
 
-    template = payload.get("template")
-    if not template or not isinstance(template, str):
-        _reject("missing required key 'template'")
 
-    if unknown := _unknown_keys(payload):
-        bad = unknown[0]
-        suggestion = _fuzzy_suggest(bad)
-        hint = f" Did you mean {suggestion!r}?" if suggestion else ""
-        _reject(f"unknown key {bad!r}.{hint}")
+def _reject_unknown_keys(payload: dict[str, Any]) -> None:
+    if not (unknown := _unknown_keys(payload)):
+        return
+    bad = unknown[0]
+    suggestion = _fuzzy_suggest(bad)
+    hint = f" Did you mean {suggestion!r}?" if suggestion else ""
+    _reject(f"unknown key {bad!r}.{hint}")
+
+
+def _as_required_string(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not value or not isinstance(value, str):
+        _reject(f"missing required key {key!r}")
+    return value
+
+
+def _as_optional_string(payload: Mapping[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        _reject(f"{key!r} must be a string")
+    return value
+
+
+def _as_string_list(payload: Mapping[str, Any], key: str) -> list[str]:
+    value = payload.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        _reject(f"{key!r} must be a list of strings")
+    return list(value)
+
+
+_FieldParser = Callable[[Mapping[str, Any], str], Any]
+_FIELD_PARSERS: Mapping[_InitFieldKind, _FieldParser] = {
+    _InitFieldKind.REQUIRED_STRING: _as_required_string,
+    _InitFieldKind.OPTIONAL_STRING: _as_optional_string,
+    _InitFieldKind.STRING_LIST: _as_string_list,
+}
+
+
+def _parse_config_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for item in _INIT_CONFIG_FIELDS:
+        kind = item.metadata.get(_FIELD_KIND_METADATA_KEY)
+        if not isinstance(kind, _InitFieldKind):
+            raise RuntimeError(f"InitConfig field {item.name!r} has no parser contract")
+        parsed[item.name] = _FIELD_PARSERS[kind](payload, item.name)
+    return parsed
+
+
+def parse_config(raw: str) -> InitConfig:
+    """Parse and validate a ``--config`` JSON string.
+
+    Returns an :class:`InitConfig` on success.  Raises :class:`EasyCatError`
+    with code ``EASYCAT_E102`` on malformed JSON or unknown keys, and
+    ``EASYCAT_E103`` when the requested template is not in the catalog.
+    """
+    payload = _parse_json_object(raw)
+    _validate_schema_version(payload)
+    _reject_unknown_keys(payload)
+    config = InitConfig(**_parse_config_fields(payload))
 
     templates = available_templates()
-    if template not in templates:
-        raise EASYCAT_E103(template=template, available=", ".join(templates))
-
-    # Coerce list-typed fields so downstream code can iterate without
-    # re-checking types.
-    def _as_str_list(key: str) -> list[str]:
-        value = payload.get(key, [])
-        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-            _reject(f"{key!r} must be a list of strings")
-        return list(value)
-
-    def _as_optional_str(key: str) -> str | None:
-        value = payload.get(key)
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            _reject(f"{key!r} must be a string")
-        return value
-
-    return InitConfig(
-        template=template,
-        stt=_as_optional_str("stt"),
-        tts=_as_optional_str("tts"),
-        llm=_as_optional_str("llm"),
-        transport=_as_optional_str("transport"),
-        agent_name=_as_optional_str("agent_name"),
-        agent_instructions=_as_optional_str("agent_instructions"),
-        tools=_as_str_list("tools"),
-        mcp_servers=_as_str_list("mcp_servers"),
-        easycat_source=_as_optional_str("easycat_source"),
-    )
+    if config.template not in templates:
+        raise EASYCAT_E103(template=config.template, available=", ".join(templates))
+    return config
