@@ -70,17 +70,17 @@ class CartesiaTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
-    # Opt-in persistent multi-context socket. Default ``False`` preserves the
-    # current one-shot-per-synthesize behavior byte-for-byte (no manager is
-    # created). When ``True`` one WebSocket is reused across turns, each
+    # Persistent multi-context socket. Default ``True`` keeps one WebSocket
+    # warm across turns and removes connection setup from reply latency. Each
     # utterance scoped by a fresh context_id, and barge-in cancels just the
     # context (falling back to a full socket close) rather than tearing the
-    # socket down. Accepted tradeoff: a mid-stream reconnect replays the
+    # socket down. Set ``False`` to restore the one-shot-per-synthesize path.
+    # Accepted tradeoff: a mid-stream reconnect replays the
     # context from the top (audible repetition). Socket warmth between turns
     # relies on WebSocket-level ping/pong; after a very long idle gap the socket
     # may be closed server-side and is transparently reconnected on the next
     # utterance.
-    persistent_ws: bool = False
+    persistent_ws: bool = True
     # Bounded per-context queue for the persistent demux reader.
     context_queue_maxsize: int = 256
 
@@ -102,11 +102,10 @@ class CartesiaTTSConfig:
 class CartesiaTTS(_WSTTSBase):
     """TTS provider using Cartesia's Sonic WebSocket API.
 
-    One WebSocket connection is opened per :meth:`synthesize` call. The
-    synthesis request is sent as a single JSON frame and audio chunks
-    arrive as base64-encoded ``chunk`` messages on the same socket. A
-    ``done`` message (or ``done: true`` on the final chunk) terminates
-    the loop.
+    By default one multi-context WebSocket is warmed at session startup and
+    reused across turns. Set ``persistent_ws=False`` to open one connection
+    per :meth:`synthesize` call. Synthesis requests are sent as JSON frames and
+    audio arrives in base64-encoded ``chunk`` messages.
     """
 
     _provider_error_name = "cartesia"
@@ -169,6 +168,17 @@ class CartesiaTTS(_WSTTSBase):
             )
             self._mgr = MultiContextWSManager(adapter)
         return self._mgr
+
+    async def warmup(self) -> None:
+        """Best-effort connect the persistent socket before the first reply."""
+        if not self._persistent_enabled():
+            return
+        try:
+            await self._get_mgr().warmup()
+        except Exception as exc:
+            # Startup warmup is an optimization, not a new availability gate.
+            # The manager clears a failed socket so synthesize() can retry.
+            logger.debug("Cartesia TTS warmup skipped: %s", exc)
 
     @staticmethod
     def _route_key(parsed: Any) -> str | None:
