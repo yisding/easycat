@@ -126,6 +126,7 @@ class TurnRunner:
     """Drives the per-turn agent loop."""
 
     _TEXT_TURN_TASK_NAME = "text_turn"
+    _PREEMPTIVE_TASK_NAME = "preemptive_agent_generation"
 
     def __init__(
         self,
@@ -203,7 +204,7 @@ class TurnRunner:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
         if not self._is_running():
             return
-        await self._cancel_preemptive_generation()
+        await self.cancel_preemptive_generation()
         # TurnManager always stamps TurnStarted with a generated id;
         # synthesize one for hand-built events so the TurnContext (and
         # every journal record keyed off it) still gets a real id.
@@ -276,7 +277,7 @@ class TurnRunner:
         # A later final segment invalidates the previous transcript. Cancel
         # and drain it before invoking the same simple agent again so agents
         # never see overlapping ``run()`` calls.
-        await self._cancel_preemptive_generation()
+        await self.cancel_preemptive_generation()
         if self._preemptive_turn_generation != turn.generation:
             self._preemptive_turn_generation = turn.generation
             self._preemptive_attempts = 0
@@ -298,7 +299,7 @@ class TurnRunner:
 
         self._preemptive_task = self._runtime_scope.create_journaled_task(
             _prepare(),
-            name="preemptive_agent_generation",
+            name=self._PREEMPTIVE_TASK_NAME,
             journal_sink=self._journal_sink,
             turn_id=turn.id,
         )
@@ -391,7 +392,7 @@ class TurnRunner:
         transcript = await self._finalize_turn_transcript(turn)
 
         if not transcript or (token and token.is_cancelled):
-            await self._cancel_preemptive_generation()
+            await self.cancel_preemptive_generation()
             if self._turn.current is turn:
                 self._reset_turn_state()
             return
@@ -425,7 +426,7 @@ class TurnRunner:
             and self._turn.generation == generation
         )
 
-    async def _cancel_preemptive_generation(self) -> None:
+    async def cancel_preemptive_generation(self) -> None:
         """Cancel and drain the current preemptive task, if any."""
         task = self._preemptive_task
         self._preemptive_task = None
@@ -454,14 +455,24 @@ class TurnRunner:
             or self._preemptive_turn_generation != turn.generation
             or self._preemptive_transcript != transcript
         ):
-            await self._cancel_preemptive_generation()
+            await self.cancel_preemptive_generation()
             return None
 
         self._preemptive_task = None
         self._preemptive_transcript = ""
         try:
-            result = await task
+            if self._timeout_config and self._timeout_config.agent_timeout:
+                result = await with_agent_timeout(
+                    task,
+                    timeout=self._timeout_config.agent_timeout,
+                    event_bus=self._event_bus,
+                )
+            else:
+                result = await task
         except asyncio.CancelledError:
+            return None
+        except AgentTimeoutError:
+            logger.debug("Preemptive agent generation timed out; using confirmed path")
             return None
         finally:
             self._runtime_scope.discard(task)

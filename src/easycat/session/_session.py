@@ -1106,6 +1106,11 @@ class Session:
                 except (asyncio.CancelledError, Exception):
                     pass
 
+            # Speculative plain-agent work is not part of the confirmed turn
+            # task yet. Drain it explicitly before either teardown path can
+            # close the wrapped agent.
+            await self._turn_runner.cancel_preemptive_generation()
+
             if force:
                 # Force path: aggressively cancel every pipeline task and
                 # signal scoped work before awaiting any handle so the

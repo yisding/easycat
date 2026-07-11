@@ -84,7 +84,7 @@ class AgentRunnerConfig:
     # final segment, overlapping model latency with endpoint confirmation.
     # Stateful ExternalAgentBridge implementations are excluded because the
     # bridge contract does not provide transactional rollback.
-    preemptive_generation: bool = True
+    preemptive_generation: bool = False
     # Bound restarts when a paused user resumes and produces a longer final
     # transcript before the endpoint is confirmed.
     preemptive_max_retries: int = 3
@@ -96,6 +96,7 @@ class PreparedAgentResponse:
 
     input_text: str
     response: str
+    started_at_ns: int = 0
     committed: bool = False
 
 
@@ -169,6 +170,7 @@ class AgentRunner:
         if not self.supports_preemptive_generation:
             raise RuntimeError("agent does not support preemptive generation")
 
+        started_at_ns = time.monotonic_ns()
         try:
             if self._config.timeout is not None:
                 response = await asyncio.wait_for(
@@ -180,7 +182,11 @@ class AgentRunner:
         except TimeoutError:
             raise AgentTimeoutError(self._config.timeout or 0) from None
 
-        return PreparedAgentResponse(input_text=turn_input.text, response=response)
+        return PreparedAgentResponse(
+            input_text=turn_input.text,
+            response=response,
+            started_at_ns=started_at_ns,
+        )
 
     async def invoke_prepared(
         self,
@@ -193,12 +199,14 @@ class AgentRunner:
             raise RuntimeError("agent does not support preemptive generation")
         if prepared.committed:
             raise RuntimeError("prepared agent response has already been committed")
+        if cancel_token and cancel_token.is_cancelled:
+            return
 
         cursor = ExecutionCursor(
             unit_id=f"runner-{uuid4().hex[:8]}",
             unit_kind=UnitKind.AGENT,
             display_name=type(self._agent).__name__,
-            entered_at=time.monotonic_ns(),
+            entered_at=prepared.started_at_ns or time.monotonic_ns(),
             committable=False,
         )
         recorder.record_unit_entered(cursor)
@@ -206,9 +214,6 @@ class AgentRunner:
         self._history.append({"role": "user", "content": prepared.input_text})
         self._history.append({"role": "assistant", "content": prepared.response})
         recorder.record_unit_exited(cursor.with_committable(True), reason=None)
-
-        if cancel_token and cancel_token.is_cancelled:
-            return
 
         yield AgentBridgeEvent(kind="text_delta", text=prepared.response)
         yield AgentBridgeEvent(kind="done", text=prepared.response)
@@ -303,6 +308,9 @@ class AgentRunner:
                 # normal completion / a handled timeout ``inner_iter`` is
                 # already drained, so this is a harmless no-op.
                 await aclose_quietly(inner_iter)
+
+        if cancel_token and cancel_token.is_cancelled:
+            return
 
         cursor = ExecutionCursor(
             unit_id=f"runner-{uuid4().hex[:8]}",

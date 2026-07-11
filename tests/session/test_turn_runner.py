@@ -39,7 +39,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -51,12 +51,19 @@ from easycat.session._session import Session
 from easycat.session._turn_runner import TurnRunner
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
-from easycat.timeouts import TimeoutConfig
+from easycat.timeouts import AgentTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
+
+
+def _preemptive_runner(agent: object, *, timeout: float | None = 30.0) -> AgentRunner:
+    return AgentRunner(
+        agent,
+        AgentRunnerConfig(timeout=timeout, preemptive_generation=True),
+    )
 
 
 # ── Test fakes (mirrors _session_streaming_helpers.py) ────────────
@@ -360,7 +367,7 @@ async def test_stt_final_prepares_simple_agent_before_endpoint_confirmation() ->
             return f"Reply to {text}."
 
     agent = BlockingSimpleAgent()
-    runner_agent = AgentRunner(agent)
+    runner_agent = _preemptive_runner(agent)
     session = Session(_config(agent=runner_agent))
     turn = TurnContext("turn-preemptive", CancelToken())
     session._turn = turn
@@ -403,7 +410,7 @@ async def test_later_stt_final_cancels_and_replaces_preemptive_generation() -> N
             return f"Reply to {text}."
 
     agent = RestartableSimpleAgent()
-    runner_agent = AgentRunner(agent)
+    runner_agent = _preemptive_runner(agent)
     session = Session(_config(agent=runner_agent))
     turn = TurnContext("turn-restart", CancelToken())
     session._turn = turn
@@ -438,7 +445,7 @@ async def test_replaced_turn_does_not_commit_slow_preemptive_response() -> None:
             return f"Reply to {text}."
 
     agent = SlowSimpleAgent()
-    runner_agent = AgentRunner(agent)
+    runner_agent = _preemptive_runner(agent)
     session = Session(_config(agent=runner_agent))
     old_turn = TurnContext("turn-old", CancelToken())
     session._turn_runner._turn.set(old_turn)
@@ -458,6 +465,83 @@ async def test_replaced_turn_does_not_commit_slow_preemptive_response() -> None:
 
     assert agent.calls == ["abandoned"]
     assert runner_agent.history == []
+
+
+@pytest.mark.asyncio
+async def test_preemptive_wait_uses_session_timeout_then_runs_confirmed_path() -> None:
+    class TimeoutThenRespondAgent:
+        def __init__(self) -> None:
+            self.first_started = asyncio.Event()
+            self.first_cancelled = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                self.first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.first_cancelled.set()
+                    raise
+            return f"Confirmed reply to {text}."
+
+    agent = TimeoutThenRespondAgent()
+    runner_agent = _preemptive_runner(agent, timeout=None)
+    session = Session(
+        _config(
+            agent=runner_agent,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+        )
+    )
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+    turn = TurnContext("turn-timeout", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_started.wait(), timeout=1)
+
+    await asyncio.wait_for(session._turn_runner.handle_end_of_speech(turn=turn), timeout=1)
+
+    assert agent.calls == ["hello", "hello"]
+    assert agent.first_cancelled.is_set()
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Confirmed reply to hello."},
+    ]
+    assert any(isinstance(event.exception, AgentTimeoutError) for event in errors)
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_cancels_preemptive_generation_before_agent_close() -> None:
+    class StopAwareAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = StopAwareAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext("turn-stop", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("stop now")
+    await session._turn_runner.on_stt_final(STTFinal(text="stop now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(), timeout=1)
+
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
 
 
 @pytest.mark.asyncio

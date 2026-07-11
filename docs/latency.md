@@ -81,6 +81,13 @@ Sources: [`turn_manager.py`](../src/easycat/turn_manager.py),
 [`integrations/agents/_agent_runner.py`](../src/easycat/integrations/agents/_agent_runner.py),
 and [`session/_types.py`](../src/easycat/session/_types.py).
 
+Plain `async run(text) -> str` agents can overlap model work with endpoint
+confirmation by setting
+`AgentRunnerConfig(preemptive_generation=True)`. This is intentionally opt-in:
+the agent may be cancelled and retried when speech resumes, so its `run()`
+implementation must be replayable and must not perform irreversible side
+effects for an unconfirmed transcript.
+
 ## What is *not* a knob
 
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
