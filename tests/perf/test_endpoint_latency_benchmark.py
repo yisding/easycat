@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -31,3 +33,28 @@ def test_summarize_rejects_empty_samples() -> None:
     benchmark = _load_benchmark()
     with pytest.raises(ValueError, match="must not be empty"):
         benchmark.summarize([])
+
+
+def test_compare_rejects_zero_baseline() -> None:
+    benchmark = _load_benchmark()
+    with pytest.raises(ValueError, match="baseline p50 must be positive"):
+        benchmark.compare([0.0], [0.0])
+
+
+def test_run_rejects_zero_fixed_delay() -> None:
+    benchmark = _load_benchmark()
+    with pytest.raises(ValueError, match="full_ms must be positive"):
+        asyncio.run(benchmark.run(samples=1, full_ms=0, punctuated_ms=0))
+
+
+def test_cli_rejects_zero_fixed_delay(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    benchmark = _load_benchmark()
+    monkeypatch.setattr(sys, "argv", ["bench_endpoint_latency.py", "--fixed-ms", "0"])
+
+    with pytest.raises(SystemExit, match="2"):
+        benchmark.main()
+
+    assert "fixed delay must be positive" in capsys.readouterr().err

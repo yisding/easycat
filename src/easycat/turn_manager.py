@@ -187,6 +187,7 @@ class TurnManager:
         self._silence_start_time: float | None = None
         self._silence_timer_task: asyncio.Task[None] | None = None
         self._punctuated_transcript_event = asyncio.Event()
+        self._pause_generation = 0
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
@@ -225,6 +226,11 @@ class TurnManager:
     @property
     def cancel_token(self) -> CancelToken | None:
         return self._cancel_token
+
+    @property
+    def pause_generation(self) -> int:
+        """Monotonic identifier for the most recently opened VAD pause."""
+        return self._pause_generation
 
     @property
     def turn_audio(self) -> list[AudioChunk]:
@@ -385,17 +391,21 @@ class TurnManager:
         elif isinstance(event, VADStopSpeaking):
             await self._handle_speech_stop()
 
-    def on_stt_final(self, text: str) -> None:
-        """Notify the active pause that STT finalized a complete sentence.
+    def on_stt_final(self, text: str, *, pause_generation: int) -> None:
+        """Notify the originating pause that STT finalized a complete sentence.
 
-        Only terminal punctuation observed while ``USER_PAUSED`` can shorten
-        the fixed endpoint timer. Finals that arrive while the user is still
-        speaking are ignored so a late segment result cannot leak into the
-        next pause.
+        Only terminal punctuation from the active pause can shorten its fixed
+        endpoint timer. The generation check prevents a delayed segment final
+        from an earlier pause from leaking into a later pause.
         """
-        if self._state != TurnManagerState.USER_PAUSED:
+        if (
+            self._state != TurnManagerState.USER_PAUSED
+            or pause_generation != self._pause_generation
+        ):
             return
         normalized = text.rstrip().rstrip("\"'”’)]}")
+        if normalized.endswith(("...", "…")):
+            return
         if normalized.endswith((".", "!", "?", "。", "！", "？", "．")):
             self._punctuated_transcript_event.set()
 
@@ -467,7 +477,9 @@ class TurnManager:
         if self._state != TurnManagerState.USER_SPEAKING:
             return
 
+        self._cancel_silence_timer()
         self._silence_start_time = time.monotonic()
+        self._pause_generation += 1
         self._punctuated_transcript_event.clear()
         self._transition(
             TurnManagerState.USER_PAUSED,
@@ -475,7 +487,6 @@ class TurnManager:
         )
 
         # Start the end-of-turn silence timer
-        self._cancel_silence_timer()
         self._silence_timer_task = asyncio.create_task(self._silence_timeout())
 
     def _detector_audio_window(self) -> list[AudioChunk]:
@@ -515,8 +526,9 @@ class TurnManager:
         """
         try:
             punctuated_endpoint = False
-            detector_attempted = self._endpoint_detector is not None and bool(self._turn_audio)
-            if detector_attempted:
+            detector = self._endpoint_detector
+            detector_attempted = detector is not None and bool(self._turn_audio)
+            if detector_attempted and detector is not None:
                 try:
                     if (
                         self._endpoint_stage is not None
@@ -529,9 +541,7 @@ class TurnManager:
                             self._endpoint_turn_getter(),
                         )
                     else:
-                        result = await self._endpoint_detector.detect(
-                            self._detector_audio_window()
-                        )
+                        result = await detector.detect(self._detector_audio_window())
                     logger.debug(
                         "Smart-turn prediction=%d probability=%.3f",
                         result.prediction,
@@ -578,9 +588,7 @@ class TurnManager:
                 self._transition(
                     TurnManagerState.PROCESSING,
                     reason=(
-                        "punctuated_silence_timeout"
-                        if punctuated_endpoint
-                        else "silence_timeout"
+                        "punctuated_silence_timeout" if punctuated_endpoint else "silence_timeout"
                     ),
                 )
                 await self._event_bus.emit(

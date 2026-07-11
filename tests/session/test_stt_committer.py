@@ -102,6 +102,7 @@ def _make_committer(
     current_turn=lambda: None,
     on_speech_detection_reset=lambda: None,
     stt_track_label=lambda: None,
+    turn_config: TurnManagerConfig | None = None,
 ) -> tuple[STTCommitter, _RecordingSTT, _EmissionLog, TurnContext, TurnManager]:
     stt = stt or _RecordingSTT()
     journal = journal if journal is not None else InMemoryRingBuffer(capacity=64)
@@ -114,7 +115,7 @@ def _make_committer(
         emitted.append(event)
 
     no_turn = TurnContext("no-turn", CancelToken())
-    tm = TurnManager(bus, config=TurnManagerConfig())
+    tm = TurnManager(bus, config=turn_config or TurnManagerConfig())
     sink = SessionJournalSink(
         event_bus=bus,
         journal=journal,
@@ -227,10 +228,11 @@ async def test_commit_now_uncommitted_reset_when_provider_returns_false() -> Non
     committer.mark_active()
     turn = _new_turn()
 
-    await committer.commit_now(turn)
+    await committer.commit_now(turn, pause_generation=1)
 
     assert turn.stt_has_uncommitted_audio is True
     assert turn.pending_stt_segment_futures == []  # future was popped
+    assert committer._pause_generation_by_future == {}
 
 
 @pytest.mark.asyncio
@@ -574,19 +576,80 @@ async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
 
 @pytest.mark.asyncio
 async def test_final_transcript_notifies_turn_manager_endpoint_hint() -> None:
-    stt = _RecordingSTT()
+    class _PunctuatedSTT(_RecordingSTT):
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            await self._queue.put(STTEvent(type=STTEventType.FINAL, text="Complete."))
+            return True
+
+    stt = _PunctuatedSTT()
     committer, _stt, emitted, _no_turn, tm = _make_committer(stt=stt)
     committer.mark_active()
-    tm._state = TurnManagerState.USER_PAUSED
     turn = _new_turn()
     committer.start_event_loop(turn)
 
     try:
-        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Complete."))
+        await tm.on_vad_event(VADStartSpeaking())
+        await tm.on_vad_event(VADStopSpeaking())
+        committer.schedule(VADStopSpeaking(), turn=turn)
         await emitted.wait_for(STTFinal)
         assert tm._punctuated_transcript_event.is_set()
     finally:
         await committer.cancel(turn)
+        await tm.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_delayed_final_cannot_shorten_a_later_pause() -> None:
+    class _DeferredFinalSTT(_RecordingSTT):
+        async def commit_segment(self) -> bool:
+            self.commit_calls += 1
+            return True
+
+    stt = _DeferredFinalSTT()
+    committer, _stt, emitted, _no_turn, tm = _make_committer(
+        stt=stt,
+        turn_config=TurnManagerConfig(
+            end_of_turn_silence_ms=1_000,
+            punctuated_end_of_turn_silence_ms=100,
+        ),
+    )
+    committer.mark_active()
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    try:
+        await tm.on_vad_event(VADStartSpeaking())
+        await tm.on_vad_event(VADStopSpeaking())
+        first_pause = tm.pause_generation
+        committer.schedule(VADStopSpeaking(), turn=turn)
+        assert committer._pause_commit_task is not None
+        await committer._pause_commit_task
+        await committer.await_inflight_commit()
+
+        await tm.on_vad_event(VADStartSpeaking())
+        committer.cancel_scheduled(VADStartSpeaking(), turn=turn)
+        turn.stt_has_uncommitted_audio = True
+        await tm.on_vad_event(VADStopSpeaking())
+        second_pause = tm.pause_generation
+        committer.schedule(VADStopSpeaking(), turn=turn)
+        assert committer._pause_commit_task is not None
+        await committer._pause_commit_task
+        await committer.await_inflight_commit()
+
+        assert second_pause > first_pause
+        assert len(turn.pending_stt_segment_futures) == 2
+
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Old segment."))
+        await emitted.wait_for(STTFinal)
+        assert not tm._punctuated_transcript_event.is_set()
+
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Current segment."))
+        await asyncio.wait_for(tm._punctuated_transcript_event.wait(), timeout=1.0)
+        assert committer._pause_generation_by_future == {}
+    finally:
+        await committer.cancel(turn)
+        await tm.shutdown()
 
 
 @pytest.mark.asyncio
