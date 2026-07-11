@@ -202,21 +202,20 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
 
     assert "SessionJournalSink" in plan
     assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
-    assert "ToolCallStarted" in journal_sink
-    assert "ToolCallDelta" in journal_sink
-    assert "ToolCallResult" in journal_sink
-    expected_tool_started_sub = (
-        'self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))'
+    expected_tool_records = (
+        '_EventRecordSpec(ToolCallStarted, JournalRecordKind.EVENT, "tool_call_started")',
+        '_EventRecordSpec(ToolCallDelta, JournalRecordKind.EVENT, "tool_call_delta")',
+        '_EventRecordSpec(ToolCallResult, JournalRecordKind.EVENT, "tool_call_result")',
     )
-    assert expected_tool_started_sub in journal_sink
+    assert all(record in journal_sink for record in expected_tool_records)
     assert "tool name and call id" in plan
     assert "tool name and args" not in plan
     assert "session/_session.py" not in plan
     assert "_sub(ToolCallStarted" not in plan
     assert "Session._subscribe_journal_sink" not in plan
 
-    # SessionAction lifecycle events are now journaled (same pattern as the
-    # tool-call subscriptions above); the plan must document this instead of
+    # SessionAction lifecycle events are now journaled in the same declarative
+    # registry as tool calls; the plan must document this instead of
     # claiming a journaling gap.
     action_events = (
         "SessionActionRequested",
@@ -225,7 +224,10 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
         "SessionActionFailed",
     )
     assert all(event in journal_sink for event in action_events)
-    assert 'self._make_event_handler(evt, "session_action_failed")' in journal_sink
+    assert (
+        '_EventRecordSpec(SessionActionFailed, JournalRecordKind.EVENT, "session_action_failed")'
+        in journal_sink
+    )
     assert "*not* currently journaled" not in plan
     assert "`SessionAction` flows are journaled too" in plan
     assert "session_action_requested" in plan
