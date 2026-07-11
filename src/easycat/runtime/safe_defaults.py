@@ -212,7 +212,7 @@ class _SafeRenderer:
         if omitted:
             parts.append(_SAFE_REPR_OMITTED)
         inner = ", ".join(parts)
-        return f"({inner},)" if len(value) == 1 else f"({inner})"
+        return f"({inner},)" if tuple.__len__(value) == 1 else f"({inner})"
 
     def _render_set(self, value: set[Any] | frozenset[Any], *, depth: int) -> str:
         iterator = set.__iter__(value) if isinstance(value, set) else frozenset.__iter__(value)

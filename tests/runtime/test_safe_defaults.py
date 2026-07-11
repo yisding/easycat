@@ -281,6 +281,15 @@ class TestBoundedSafeRendering:
         assert "sk-never-render" not in snap["stt"]
         assert "_LeakyString object>" in snap["stt"]
 
+    def test_tuple_subclass_len_is_not_called(self):
+        class _HostileTuple(tuple):
+            def __len__(self) -> int:
+                raise AssertionError("custom __len__ must not run")
+
+        snap = safe_config_snapshot(_ValueConfig(stt=_HostileTuple((42,))))
+
+        assert snap["stt"] == "(42,)"
+
     def test_secret_string_subclass_key_redacts_value(self):
         class _SecretKey(str):
             def __repr__(self) -> str:
