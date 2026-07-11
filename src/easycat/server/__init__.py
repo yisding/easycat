@@ -104,32 +104,14 @@ __all__ = [
 ]
 
 _LAZY_ATTRS = {
-    "WebRTCRoutes": ("easycat.server.webrtc_routes", "WebRTCRoutes"),
-    "run_webrtc_config_server": (
-        "easycat.server.webrtc_routes",
-        "run_webrtc_config_server",
-    ),
-    "serve_webrtc_config_sessions": (
-        "easycat.server.webrtc_routes",
-        "serve_webrtc_config_sessions",
-    ),
-    "run_websocket_config_server": (
-        "easycat.server.websocket",
-        "run_websocket_config_server",
-    ),
-    "serve_websocket_config_sessions": (
-        "easycat.server.websocket",
-        "serve_websocket_config_sessions",
-    ),
-    "serve_websocket_sessions": ("easycat.server.websocket", "serve_websocket_sessions"),
-    "run_webtransport_config_server": (
-        "easycat.server.webtransport",
-        "run_webtransport_config_server",
-    ),
-    "serve_webtransport_config_sessions": (
-        "easycat.server.webtransport",
-        "serve_webtransport_config_sessions",
-    ),
+    "WebRTCRoutes": "easycat.server.webrtc_routes",
+    "run_webrtc_config_server": "easycat.server.webrtc_routes",
+    "serve_webrtc_config_sessions": "easycat.server.webrtc_routes",
+    "run_websocket_config_server": "easycat.server.websocket",
+    "serve_websocket_config_sessions": "easycat.server.websocket",
+    "serve_websocket_sessions": "easycat.server.websocket",
+    "run_webtransport_config_server": "easycat.server.webtransport",
+    "serve_webtransport_config_sessions": "easycat.server.webtransport",
 }
 
 
@@ -140,11 +122,11 @@ def __getattr__(name: str) -> object:
     package load; each adapter is imported only when accessed.
     """
     try:
-        module_name, attribute = _LAZY_ATTRS[name]
+        module_name = _LAZY_ATTRS[name]
     except KeyError:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
     from importlib import import_module
 
-    value = getattr(import_module(module_name), attribute)
+    value = getattr(import_module(module_name), name)
     globals()[name] = value
     return value

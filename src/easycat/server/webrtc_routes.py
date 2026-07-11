@@ -496,13 +496,15 @@ class WebRTCRoutes:
 
 
 async def serve_webrtc_config_sessions(
-    config_factory: Callable[[WebRTCTransport], Any],
+    config_factory: WebRTCConfigFactory,
     config: WebRTCTransportConfig | None = None,
     *,
     stop_event: asyncio.Event | None = None,
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
+    drain_timeout_s: float = 30.0,
+    force_shutdown_timeout_s: float = 5.0,
 ) -> None:
     """Serve one EasyCat session per browser WebRTC offer."""
     from easycat._extras import require_module
@@ -527,6 +529,7 @@ async def serve_webrtc_config_sessions(
     web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
     manager: SessionManager[int] = SessionManager()
     gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
+    active_sessions: dict[int, Any] = {}
     routes = WebRTCRoutes(
         settings,
         auth=bind_auth,
@@ -534,14 +537,19 @@ async def serve_webrtc_config_sessions(
         gate=gate,
         manager=manager,
         runtime_feedback=runtime_feedback,
+        active_session_objs=active_sessions,
     )
 
     app = web.Application()
     routes.register(app, prefix="", web=web)
     runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, settings.host, settings.port)
-    await site.start()
+    try:
+        await runner.setup()
+        site = web.TCPSite(runner, settings.host, settings.port)
+        await site.start()
+    except BaseException:
+        await runner.cleanup()
+        raise
     if announce:
         print(f"\nServer ready. Open http://{settings.host}:{settings.port} in your browser")
         print("Press Ctrl+C to stop.\n")
@@ -553,17 +561,34 @@ async def serve_webrtc_config_sessions(
         gate.start_draining()
         await site.stop()
         await runner.cleanup()
+        await gate.drain(
+            lambda: tuple(active_sessions.items()),
+            drain_timeout_s=max(drain_timeout_s, 0.0),
+            force_after=True,
+            force_timeout_s=max(force_shutdown_timeout_s, 0.0),
+        )
         await routes.cancel_cleanup_tasks()
-        await manager.stop_all()
+        try:
+            await asyncio.wait_for(
+                manager.stop_all(),
+                timeout=max(force_shutdown_timeout_s, 0.0),
+            )
+        except TimeoutError:
+            logger.warning(
+                "Standalone WebRTC session cleanup exceeded %.2fs; abandoning final sweep",
+                force_shutdown_timeout_s,
+            )
 
 
 def run_webrtc_config_server(
-    config_factory: Callable[[WebRTCTransport], Any],
+    config_factory: WebRTCConfigFactory,
     config: WebRTCTransportConfig | None = None,
     *,
     runtime_feedback: bool = True,
     announce: bool = True,
     unsafe_allow_no_auth: bool = False,
+    drain_timeout_s: float = 30.0,
+    force_shutdown_timeout_s: float = 5.0,
 ) -> None:
     """Run a multi-session WebRTC signaling server synchronously."""
     asyncio.run(
@@ -573,5 +598,7 @@ def run_webrtc_config_server(
             runtime_feedback=runtime_feedback,
             announce=announce,
             unsafe_allow_no_auth=unsafe_allow_no_auth,
+            drain_timeout_s=drain_timeout_s,
+            force_shutdown_timeout_s=force_shutdown_timeout_s,
         )
     )
