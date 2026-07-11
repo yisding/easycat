@@ -56,22 +56,26 @@ class _ApparentlySelectableLines(_Lines):
 
 
 class _RaisingLines:
+    def __init__(self, error: RuntimeError) -> None:
+        self.error = error
+
     def fileno(self) -> int:
         raise ValueError("not selectable")
 
     def readline(self) -> str:
-        raise RuntimeError("stdin failed")
+        raise self.error
 
 
 class _RaisingSelectable:
-    def __init__(self, fd: int) -> None:
+    def __init__(self, fd: int, error: RuntimeError) -> None:
         self._fd = fd
+        self.error = error
 
     def fileno(self) -> int:
         return self._fd
 
     def readline(self) -> str:
-        raise RuntimeError("stdin failed")
+        raise self.error
 
 
 async def test_run_stdin_push_to_talk_toggles_turns_from_enter_presses() -> None:
@@ -162,11 +166,18 @@ async def test_selectable_reader_is_removed_on_cancellation(
 
 
 async def test_thread_reader_propagates_read_failure() -> None:
-    with pytest.raises(RuntimeError, match="stdin failed"):
+    error = RuntimeError("stdin failed")
+
+    with pytest.raises(RuntimeError, match="stdin failed") as exc_info:
         await asyncio.wait_for(
-            run_stdin_push_to_talk(_FakeSession(), input_stream=_RaisingLines()),  # type: ignore[arg-type]
+            run_stdin_push_to_talk(
+                _FakeSession(),
+                input_stream=_RaisingLines(error),  # type: ignore[arg-type]
+            ),
             timeout=1,
         )
+
+    assert exc_info.value is error
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is skipped on Windows")
@@ -194,16 +205,18 @@ async def test_add_reader_failure_uses_thread_fallback(
 @pytest.mark.skipif(sys.platform == "win32", reason="add_reader is a Unix stdin path")
 async def test_selector_reader_propagates_read_failure() -> None:
     read_fd, write_fd = os.pipe()
+    error = RuntimeError("stdin failed")
     try:
         os.write(write_fd, b"x")
-        with pytest.raises(RuntimeError, match="stdin failed"):
+        with pytest.raises(RuntimeError, match="stdin failed") as exc_info:
             await asyncio.wait_for(
                 run_stdin_push_to_talk(
                     _FakeSession(),
-                    input_stream=_RaisingSelectable(read_fd),  # type: ignore[arg-type]
+                    input_stream=_RaisingSelectable(read_fd, error),  # type: ignore[arg-type]
                 ),
                 timeout=1,
             )
+        assert exc_info.value is error
     finally:
         os.close(read_fd)
         os.close(write_fd)
