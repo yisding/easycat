@@ -61,6 +61,10 @@ class PersistentMockWebSocket:
             self.finalize_sent.set()
             if self._respond_to_finalize:
                 await self.push_result(f"turn {self.finalize_count}", is_final=True)
+                # Let the provider's receive loop observe an acknowledgment
+                # before this send returns, exercising the reserve-before-send
+                # race in the production socket path.
+                await asyncio.sleep(0)
 
     async def push_result(
         self,
@@ -74,6 +78,9 @@ class PersistentMockWebSocket:
         await self._queue.put(
             _deepgram_result(text, is_final=is_final, from_finalize=from_finalize)
         )
+
+    async def push_message(self, message: dict[str, object]) -> None:
+        await self._queue.put(json.dumps(message))
 
     async def close(self) -> None:
         if self.close_code is not None:
@@ -536,6 +543,35 @@ async def test_deepgram_persistent_end_waits_for_finalize_marker():
         "natural segment",
         "finalized tail",
     ]
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_persistent_end_accepts_bare_finalize_ack():
+    ws = PersistentMockWebSocket(respond_to_finalize=False)
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.warmup()
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await ws.finalize_sent.wait()
+    await ws.push_message({"from_finalize": True})
+    await asyncio.wait_for(end_task, timeout=0.1)
+
+    assert stt._ws is not None
+    assert stt._ws.is_connected
+    assert [event async for event in stt.events()] == []
     await stt.aclose()
 
 

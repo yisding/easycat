@@ -106,9 +106,10 @@ class DeepgramSTT(WebSocketSTTBase):
         self._final_received: asyncio.Event | None = None
         self._partial_text = ""
         self._audio_epoch = 0
-        self._finalize_epochs: deque[int] = deque()
+        self._finalize_seq = 0
+        self._pending_finalizes: deque[tuple[int, int]] = deque()
         self._finalized_epoch = 0
-        self._final_wait_epoch: int | None = None
+        self._final_wait_sequence: int | None = None
 
     def _persistent_enabled(self) -> bool:
         return bool(self._config.persistent_ws and not self._config.is_flux)
@@ -127,11 +128,11 @@ class DeepgramSTT(WebSocketSTTBase):
     async def _on_start(self) -> None:
         self._partial_text = ""
         self._final_received = None
-        self._final_wait_epoch = None
+        self._final_wait_sequence = None
         if self._persistent_enabled():
             await self._ensure_persistent_connection()
             return
-        self._finalize_epochs.clear()
+        self._pending_finalizes.clear()
         await self._connect_new_websocket()
 
     async def _connect_new_websocket(self) -> None:
@@ -196,7 +197,7 @@ class DeepgramSTT(WebSocketSTTBase):
     async def _discard_connection(self) -> None:
         await self._cancel_keepalive()
         await self._close_active_websocket(close_before_drain=True)
-        self._finalize_epochs.clear()
+        self._pending_finalizes.clear()
         # A discarded socket cannot deliver any more results. Treat its audio
         # epochs as closed so only fresh audio on the replacement connection
         # needs a future Finalize.
@@ -214,13 +215,24 @@ class DeepgramSTT(WebSocketSTTBase):
         # v2 endpoint); keep returning the base ``False`` for Flux models.
         if self._config.is_flux:
             return False
-        return await self._send_finalize()
+        return await self._send_finalize() is not None
 
-    async def _send_finalize(self) -> bool:
+    async def _send_finalize(self, *, wait_for_ack: bool = False) -> int | None:
+        # Reserve the sequence before sending: the receive loop can process a
+        # very fast acknowledgment while ``ws.send`` is still yielding.
+        self._finalize_seq += 1
+        sequence = self._finalize_seq
+        self._pending_finalizes.append((sequence, self._audio_epoch))
+        if wait_for_ack:
+            self._final_wait_sequence = sequence
         sent = await self._send_json_control({"type": "Finalize"}, label="Deepgram Finalize")
-        if sent:
-            self._finalize_epochs.append(self._audio_epoch)
-        return sent
+        if not sent:
+            if self._pending_finalizes and self._pending_finalizes[-1][0] == sequence:
+                self._pending_finalizes.pop()
+            if self._final_wait_sequence == sequence:
+                self._final_wait_sequence = None
+            return None
+        return sequence
 
     async def _on_end(self) -> None:
         if self._persistent_enabled():
@@ -239,11 +251,11 @@ class DeepgramSTT(WebSocketSTTBase):
 
         final_received = asyncio.Event()
         self._final_received = final_received
-        if not await self._send_finalize():
+        wait_sequence = await self._send_finalize(wait_for_ack=True)
+        if wait_sequence is None:
             self._final_received = None
             await self._discard_connection()
             return
-        self._final_wait_epoch = self._audio_epoch
         try:
             await asyncio.wait_for(
                 final_received.wait(), timeout=self._config.final_transcript_timeout_s
@@ -270,7 +282,7 @@ class DeepgramSTT(WebSocketSTTBase):
         finally:
             if self._final_received is final_received:
                 self._final_received = None
-                self._final_wait_epoch = None
+                self._final_wait_sequence = None
 
     async def aclose(self) -> None:
         """Close a persistent socket during Session teardown."""
@@ -280,6 +292,12 @@ class DeepgramSTT(WebSocketSTTBase):
         await self._close_active_websocket(close_before_drain=True)
 
     def _handle_json_message(self, msg: dict[str, Any]) -> None:
+        # Deepgram may acknowledge Finalize with a bare
+        # ``{"from_finalize": true}`` control frame: advance lifecycle state
+        # before any type/channel/transcript guards. A Results-shaped ack then
+        # continues below so its transcript is still emitted normally.
+        if msg.get("from_finalize") is True:
+            self._handle_finalize_ack()
         msg_type = msg.get("type", "")
         if msg_type == "Error":
             # Deepgram error frames carry the human-readable text under
@@ -298,6 +316,19 @@ class DeepgramSTT(WebSocketSTTBase):
         if msg_type == "Results":
             self._handle_results_message(msg)
 
+    def _handle_finalize_ack(self) -> None:
+        """Advance the oldest pending Finalize and release its matching waiter."""
+        if not self._pending_finalizes:
+            return
+        sequence, finalize_epoch = self._pending_finalizes.popleft()
+        self._finalized_epoch = max(self._finalized_epoch, finalize_epoch)
+        if (
+            self._final_received is not None
+            and self._final_wait_sequence is not None
+            and sequence >= self._final_wait_sequence
+        ):
+            self._final_received.set()
+
     def _handle_results_message(self, msg: dict[str, Any]) -> None:
         """Parse one Nova Results frame and advance finalize bookkeeping."""
         channel = msg.get("channel", {})
@@ -308,23 +339,8 @@ class DeepgramSTT(WebSocketSTTBase):
         best = alternatives[0]
         transcript = best.get("transcript", "")
         is_final = bool(msg.get("is_final", False))
-        from_finalize = bool(msg.get("from_finalize", False))
         if is_final:
             self._partial_text = ""
-            # Deepgram marks the terminal response produced by our explicit
-            # control frame with ``from_finalize``. Waiting for that marker
-            # prevents a preceding natural segment-final from ending the
-            # logical turn while more finalize results are still in flight.
-            if from_finalize:
-                if self._finalize_epochs:
-                    finalize_epoch = self._finalize_epochs.popleft()
-                    self._finalized_epoch = max(self._finalized_epoch, finalize_epoch)
-                if (
-                    self._final_received is not None
-                    and self._final_wait_epoch is not None
-                    and self._finalized_epoch >= self._final_wait_epoch
-                ):
-                    self._final_received.set()
         elif transcript:
             # Deepgram interim Results replace the current hypothesis rather
             # than append a delta; keep the latest for timeout degradation.
