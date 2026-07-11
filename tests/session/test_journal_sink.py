@@ -52,6 +52,7 @@ def test_simple_event_record_registry_is_complete() -> None:
         spec.event_type.__name__: spec.name for spec in _SIMPLE_EVENT_RECORDS
     } == expected_names
     assert len(_SIMPLE_EVENT_RECORDS) == len(expected_names)
+    assert len({spec.name for spec in _SIMPLE_EVENT_RECORDS}) == len(_SIMPLE_EVENT_RECORDS)
     assert all(spec.kind == JournalRecordKind.EVENT for spec in _SIMPLE_EVENT_RECORDS)
 
 
