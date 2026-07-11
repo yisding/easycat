@@ -536,12 +536,8 @@ async def test_openai_realtime_emits_error_event_on_server_error_message():
 
 @pytest.mark.asyncio
 async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio():
-    factory = _MockWSFactory(
-        [
-            _make_transcription_completed("hello"),
-            _make_transcription_completed("world"),
-        ]
-    )
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
     config = OpenAIRealtimeSTTConfig(api_key="sk-test", persistent_ws=False, ws_connect=factory)
     stt = OpenAIRealtimeSTT(config)
 
@@ -563,11 +559,11 @@ async def test_openai_realtime_commit_segment_keeps_stream_open_for_later_audio(
     await collect_task
 
     finals = [event.text for event in collected if event.type == STTEventType.FINAL]
-    assert finals == ["hello", "world"]
+    assert finals == ["turn 1", "turn 2"]
 
     commit_msgs = [
         json.loads(m)
-        for m in factory.connection.sent
+        for m in socket.sent
         if isinstance(m, str) and "input_audio_buffer.commit" in m
     ]
     assert len(commit_msgs) == 2
@@ -997,6 +993,21 @@ async def test_openai_realtime_persistent_warmup_swallows_connect_errors():
     assert stt._receive_task is None
 
 
+@pytest.mark.asyncio
+async def test_openai_realtime_persistent_warmup_swallows_cleanup_errors():
+    async def _connect_boom() -> None:
+        raise ConnectionError("connect boom")
+
+    async def _cleanup_boom() -> None:
+        raise ConnectionError("cleanup boom")
+
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test"))
+    stt._ensure_persistent_connection = _connect_boom  # type: ignore[method-assign]
+    stt._discard_connection = _cleanup_boom  # type: ignore[method-assign]
+
+    await stt.warmup()
+
+
 # ── Reusability ─────────────────────────────────────────────────
 
 
@@ -1042,6 +1053,67 @@ async def test_openai_realtime_warmup_reuses_one_socket_across_turns():
 
     await stt.aclose()
     assert socket.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_retry_replaces_queue_after_failed_close():
+    socket = _PersistentMockWSConnection()
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+
+    async def _finish_failed_close() -> None:
+        await asyncio.sleep(0)
+        stt._event_queue.put_nowait(None)
+
+    stt._close_task = asyncio.create_task(_finish_failed_close())
+
+    events = await _run_persistent_turn(stt)
+
+    assert [event.text for event in events if event.type is STTEventType.FINAL] == ["turn 1"]
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_realtime_serializes_overlapping_commits():
+    socket = _PersistentMockWSConnection(respond_to_commit=False)
+    factory = _PersistentMockWSFactory([socket])
+    stt = OpenAIRealtimeSTT(OpenAIRealtimeSTTConfig(api_key="sk-test", ws_connect=factory))
+    await stt.start_stream()
+    chunks = make_audio_chunks(generate_pcm_sine(duration_ms=200))
+    await stt.send_audio(chunks[0])
+    assert await stt.commit_segment()
+    await stt.send_audio(chunks[1])
+
+    second_commit = asyncio.create_task(stt.commit_segment())
+    await asyncio.sleep(0)
+    assert socket.commit_count == 1
+    assert not second_commit.done()
+
+    await socket.push(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item-1",
+            "transcript": "first segment",
+        }
+    )
+    assert await asyncio.wait_for(second_commit, timeout=0.1)
+    assert socket.commit_count == 2
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await asyncio.sleep(0)
+    assert not end_task.done()
+    await socket.push(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item-2",
+            "transcript": "second segment",
+        }
+    )
+    await asyncio.wait_for(end_task, timeout=0.1)
+
+    assert stt._ws is not None
+    assert stt._ws.is_connected
+    await stt.aclose()
 
 
 @pytest.mark.asyncio

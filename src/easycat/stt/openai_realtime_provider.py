@@ -153,7 +153,12 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                     await self._ensure_persistent_connection()
             except Exception as exc:
                 logger.debug("OpenAI Realtime warmup skipped: %s", exc)
-                await self._discard_connection()
+                try:
+                    await self._discard_connection()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug("OpenAI Realtime warmup cleanup failed", exc_info=True)
             return
         try:
             await self.start_stream()
@@ -179,11 +184,17 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _on_start(self) -> None:
         if self._close_task is not None:
+            # ``start_stream`` installs this turn's queue before entering the
+            # provider hook. The old persistent receive loop may terminate
+            # that queue while its close task drains, so replace it only after
+            # the task has fully completed.
             try:
                 await self._close_task
             except Exception:
                 pass
             self._close_task = None
+            if self._persistent_enabled():
+                self._event_queue = asyncio.Queue()
         self._reset_logical_turn_state()
         if self._persistent_enabled():
             await self._ensure_persistent_connection()
@@ -399,7 +410,23 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
-        if ws is None or not self._audio_pending_commit:
+        if ws is None:
+            return False
+
+        # The protocol does not let the client attach an identifier to a
+        # commit request. Serialize requests so one completion event can never
+        # acknowledge a later logical segment or escape into the next turn.
+        if self._commit_pending:
+            if self._final_wait_timed_out:
+                return False
+            previous_final = self._final_received
+            if previous_final is None:
+                return False
+            await self._await_final(previous_final)
+            if self._commit_pending:
+                return False
+
+        if not self._audio_pending_commit:
             return False
         if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
             # Tail too short — skip the server round-trip (the server
