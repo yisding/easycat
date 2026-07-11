@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -37,12 +38,67 @@ class MockWebSocket:
         return msg
 
 
+class PersistentMockWebSocket:
+    """Queue-backed socket that stays open across logical STT turns."""
+
+    _STOP = object()
+
+    def __init__(self, *, respond_to_finalize: bool = True) -> None:
+        self.sent: list[bytes | str] = []
+        self.close_code: int | None = None
+        self.finalize_count = 0
+        self.finalize_sent = asyncio.Event()
+        self._respond_to_finalize = respond_to_finalize
+        self._queue: asyncio.Queue[str | bytes | object] = asyncio.Queue()
+
+    async def send(self, data: bytes | str) -> None:
+        self.sent.append(data)
+        if not isinstance(data, str):
+            return
+        message = json.loads(data)
+        if message.get("type") == "Finalize":
+            self.finalize_count += 1
+            self.finalize_sent.set()
+            if self._respond_to_finalize:
+                await self.push_result(f"turn {self.finalize_count}", is_final=True)
+
+    async def push_result(
+        self,
+        text: str,
+        *,
+        is_final: bool,
+        from_finalize: bool | None = None,
+    ) -> None:
+        if from_finalize is None:
+            from_finalize = is_final
+        await self._queue.put(
+            _deepgram_result(text, is_final=is_final, from_finalize=from_finalize)
+        )
+
+    async def close(self) -> None:
+        if self.close_code is not None:
+            return
+        self.close_code = 1000
+        await self._queue.put(self._STOP)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> str | bytes:
+        message = await self._queue.get()
+        if message is self._STOP:
+            raise StopAsyncIteration
+        assert isinstance(message, (str, bytes))
+        return message
+
+
 def _deepgram_result(
     transcript: str,
     is_final: bool = False,
     confidence: float = 0.95,
     words: list[dict] | None = None,
     speech_final: bool | None = None,
+    from_finalize: bool | None = None,
 ) -> str:
     """Create a Deepgram-format Results message."""
     alt: dict = {"transcript": transcript, "confidence": confidence}
@@ -55,6 +111,8 @@ def _deepgram_result(
     }
     if speech_final is not None:
         payload["speech_final"] = speech_final
+    if from_finalize is not None:
+        payload["from_finalize"] = from_finalize
     return json.dumps(payload)
 
 
@@ -79,6 +137,7 @@ def _make_deepgram_stt(
     *,
     event_bus=None,
     model: str = "nova-2",
+    persistent_ws: bool = False,
 ) -> tuple[DeepgramSTT, MockWebSocket]:
     """Create a DeepgramSTT with a mocked WebSocket."""
     ws = MockWebSocket(messages or [])
@@ -89,6 +148,7 @@ def _make_deepgram_stt(
     config = DeepgramSTTConfig(
         api_key="test-key",
         model=model,
+        persistent_ws=persistent_ws,
         ws_connect=mock_connect,
         event_bus=event_bus,
     )
@@ -207,7 +267,9 @@ async def test_deepgram_includes_language():
     async def mock_connect(url, **kwargs):
         return ws
 
-    config = DeepgramSTTConfig(api_key="k", language="fr", ws_connect=mock_connect)
+    config = DeepgramSTTConfig(
+        api_key="k", language="fr", persistent_ws=False, ws_connect=mock_connect
+    )
     stt = DeepgramSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -302,6 +364,26 @@ def test_deepgram_config_constructs_without_api_key():
     config = DeepgramSTTConfig(model="nova-2")
     assert config.api_key == ""
     assert config.model == "nova-2"
+    assert config.persistent_ws is True
+
+
+def test_deepgram_flux_disables_persistence_by_default():
+    config = DeepgramSTTConfig(model="flux-general-en")
+    assert config.persistent_ws is False
+
+
+def test_deepgram_flux_rejects_explicit_persistence():
+    with pytest.raises(ValueError, match="not supported for Flux"):
+        DeepgramSTTConfig(model="flux-general-en", persistent_ws=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("keepalive_interval_s", 0.0), ("final_transcript_timeout_s", -1.0)),
+)
+def test_deepgram_rejects_non_positive_persistent_timing(field: str, value: float):
+    with pytest.raises(ValueError, match="must be positive"):
+        DeepgramSTTConfig(**{field: value})
 
 
 def test_deepgram_build_url():
@@ -350,7 +432,7 @@ async def test_deepgram_reusable_across_streams():
         call_count += 1
         return MockWebSocket([_deepgram_result(f"stream {call_count}", is_final=True)])
 
-    config = DeepgramSTTConfig(api_key="k", ws_connect=mock_connect)
+    config = DeepgramSTTConfig(api_key="k", persistent_ws=False, ws_connect=mock_connect)
     stt = DeepgramSTT(config)
 
     pcm = generate_pcm_sine(duration_ms=100)
@@ -361,6 +443,141 @@ async def test_deepgram_reusable_across_streams():
 
     events2 = await collect_stt_events(stt, chunks)
     assert events2[0].text == "stream 2"
+
+
+@pytest.mark.asyncio
+async def test_deepgram_warmup_reuses_one_socket_across_turns():
+    connect_count = 0
+    ws = PersistentMockWebSocket()
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        connect_count += 1
+        return ws
+
+    stt = DeepgramSTT(DeepgramSTTConfig(api_key="k", ws_connect=mock_connect))
+    await stt.warmup()
+
+    pcm = generate_pcm_sine(duration_ms=100)
+    chunks = make_audio_chunks(pcm)
+    observed: list[str] = []
+    for _ in range(2):
+        events = await collect_stt_events(stt, chunks)
+        observed.extend(event.text for event in events if event.type == STTEventType.FINAL)
+
+    assert connect_count == 1
+    assert observed == ["turn 1", "turn 2"]
+    assert not any(
+        json.loads(frame).get("type") == "CloseStream"
+        for frame in ws.sent
+        if isinstance(frame, str)
+    )
+
+    await stt.aclose()
+    assert ws.close_code == 1000
+    assert any(
+        json.loads(frame).get("type") == "CloseStream"
+        for frame in ws.sent
+        if isinstance(frame, str)
+    )
+
+
+@pytest.mark.asyncio
+async def test_deepgram_persistent_socket_sends_idle_keepalive():
+    ws = PersistentMockWebSocket()
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            keepalive_interval_s=0.01,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.warmup()
+    await asyncio.sleep(0.03)
+
+    assert any(
+        json.loads(frame).get("type") == "KeepAlive" for frame in ws.sent if isinstance(frame, str)
+    )
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_persistent_end_waits_for_finalize_marker():
+    ws = PersistentMockWebSocket(respond_to_finalize=False)
+
+    async def mock_connect(url, **kwargs):
+        return ws
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=1.0,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.warmup()
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+
+    end_task = asyncio.create_task(stt.end_stream())
+    await ws.finalize_sent.wait()
+    await ws.push_result("natural segment", is_final=True, from_finalize=False)
+    await asyncio.sleep(0)
+    assert not end_task.done()
+
+    await ws.push_result("finalized tail", is_final=True, from_finalize=True)
+    await end_task
+    events = [event async for event in stt.events()]
+    assert [event.text for event in events if event.type == STTEventType.FINAL] == [
+        "natural segment",
+        "finalized tail",
+    ]
+    await stt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_deepgram_finalize_timeout_promotes_partial_and_reconnects():
+    sockets = [PersistentMockWebSocket(respond_to_finalize=False), PersistentMockWebSocket()]
+    connect_count = 0
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        socket = sockets[connect_count]
+        connect_count += 1
+        return socket
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            final_transcript_timeout_s=0.01,
+            ws_connect=mock_connect,
+        )
+    )
+    await stt.warmup()
+    await stt.start_stream()
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+    await sockets[0].push_result("best interim", is_final=False)
+    await stt.end_stream()
+    first_events = [event async for event in stt.events()]
+
+    assert [(event.type, event.text) for event in first_events] == [
+        (STTEventType.PARTIAL, "best interim"),
+        (STTEventType.FINAL, "best interim"),
+    ]
+    assert sockets[0].close_code == 1000
+
+    second_events = await collect_stt_events(
+        stt, make_audio_chunks(generate_pcm_sine(duration_ms=100))
+    )
+    assert [event.text for event in second_events if event.type == STTEventType.FINAL] == [
+        "turn 1"
+    ]
+    assert connect_count == 2
+    await stt.aclose()
 
 
 @pytest.mark.asyncio

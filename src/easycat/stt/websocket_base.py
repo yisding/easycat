@@ -41,11 +41,13 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
         provider_error_name: str,
         expected_sample_rate: int | None = None,
         close_timeout: float = 2.0,
+        dynamic_event_queue: bool = False,
     ) -> None:
         super().__init__(expected_sample_rate=expected_sample_rate)
         self._provider_name = provider_name
         self._provider_error_name = provider_error_name
         self._close_timeout = close_timeout
+        self._dynamic_event_queue = dynamic_event_queue
         self._ws: ReconnectingWebSocket | None = None
         self._receive_task: asyncio.Task[None] | None = None
         self._provider_event_bus: Any | None = None
@@ -186,7 +188,13 @@ class WebSocketSTTBase(ProviderErrorEmitter, STTBase):
                 self._emit_provider_error(
                     ConnectionError(f"{self._provider_log_label} STT WebSocket died mid-stream")
                 )
-            queue.put_nowait(None)
+            # Persistent STT providers keep this receive loop alive while
+            # replacing the logical per-turn queue in ``start_stream``. They
+            # opt into signaling the current queue; one-shot providers retain
+            # the socket-bound queue so a late predecessor cannot terminate a
+            # newly opened stream.
+            terminal_queue = self._event_queue if self._dynamic_event_queue else queue
+            terminal_queue.put_nowait(None)
 
     async def _handle_ws_bytes_message(self, message: bytes) -> None:
         """Handle binary messages from the provider. Default policy ignores them."""

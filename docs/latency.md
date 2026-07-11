@@ -83,16 +83,24 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 
 ## What is *not* a knob
 
-- **Provider time** — STT finalization, agent tokens, and TTS synthesis are
-  network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
-  but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively. The one knob here is
+- **Provider time** — STT inference, agent tokens, and TTS synthesis are
+  network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans).
+  Choose faster providers/models or stream more aggressively. EasyCat keeps
+  Deepgram Nova's STT WebSocket warm across turns by default, sends a
+  provider `KeepAlive` while idle, and uses `Finalize` to delimit each turn;
+  set `DeepgramSTTConfig.persistent_ws=False` to restore one socket per turn.
+  Flux keeps the one-socket-per-turn lifecycle because its v2 endpoint does
+  not support explicit `Finalize`. The bounded final-transcript knobs are
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI
   occasionally stalls several seconds on that event, so the wait caps the
   worst-case end-of-turn pause; lower it to trade a little tail correction for
   snappier handoff, raise it if you see truncated end-of-turn transcripts.
+  `DeepgramSTTConfig.final_transcript_timeout_s` similarly defaults to `2.0`
+  seconds for a persistent Nova `Finalize`; on timeout EasyCat promotes the
+  latest interim transcript, drops the stale socket, and reconnects next turn
+  so late text cannot leak across the turn boundary.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
