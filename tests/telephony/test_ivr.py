@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -191,6 +192,26 @@ class TestIVRAgentDecision:
             await bus.emit(STTFinal(text="invalid menu"))
             assert len(actions) == 1
             assert actions[0].type == IVRActionType.HANGUP
+        finally:
+            nav.stop()
+
+    @pytest.mark.asyncio
+    async def test_malformed_agent_result_waits_without_advancing(self) -> None:
+        bus = EventBus()
+        actions: list[IVRAction] = []
+        bus.subscribe(IVRAction, actions.append)
+
+        async def mock_agent(ctx: dict) -> Any:
+            return None
+
+        nav = IVRNavigator(bus, agent_callback=mock_agent)
+        nav.start()
+        nav.activate()
+        try:
+            await bus.emit(STTFinal(text="Press 1 for sales"))
+            assert actions == []
+            assert nav.menu_depth == 0
+            assert nav._prompt_timeout_task is not None
         finally:
             nav.stop()
 
