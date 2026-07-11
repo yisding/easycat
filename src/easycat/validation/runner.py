@@ -34,14 +34,12 @@ from easycat.validation.latency import (
     LatencyMode,
     LatencySample,
     LatencyStageDurations,
-    ReliabilitySample,
     build_latency_artifact,
     classify_failure_category,
     classify_latency_failure,
     compare_latency_baseline,
     latency_pytest_args,
     load_latency_samples,
-    load_reliability_samples,
 )
 from easycat.validation.provider_reports import (
     ProviderSurfaceSpec,
@@ -175,14 +173,13 @@ def run_latency_validation(
             ),
             failure_class="latency_artifact_error",
         )
-    reliability_failure = _redact_validation_failure(
-        _reliability_policy.load_reliability_failure(reliability_samples_path),
-        runtime_secret_values,
+    loaded_reliability_samples, reliability_failure = _reliability_policy.load_reliability(
+        reliability_samples_path
     )
-    reliability_samples: list[ReliabilitySample] = []
+    reliability_failure = _redact_validation_failure(reliability_failure, runtime_secret_values)
+    reliability_samples = loaded_reliability_samples or []
     reliability_budget_failure: ValidationFailure | None = None
-    if reliability_samples_path.exists() and reliability_failure is None:
-        reliability_samples = load_reliability_samples(reliability_samples_path.read_text())
+    if loaded_reliability_samples is not None:
         reliability_budget_failure = _reliability_policy.reliability_budget_failure(
             reliability_samples
         )
@@ -843,15 +840,20 @@ def run_release_validation(
             and cli_smoke_ok
         )
 
-    def child_command_runner(command: list[str], *, env: Mapping[str, str]) -> CommandResult:
+    def child_command_runner(
+        command: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | Path | None = None,
+    ) -> CommandResult:
         child_env = {
-            **env,
+            **(env or os.environ),
             "PYTHONPATH": "",
             "EASYCAT_VALIDATION_PYTEST_COMMAND": shlex.join([str(venv_python), "-m", "pytest"]),
             "EASYCAT_VALIDATION_TEST_PATHS": str(source_root / "tests"),
             "EASYCAT_VALIDATION_TEST_ROOT": str(source_root / "tests"),
         }
-        return command_runner(command, env=child_env, cwd=outside_dir)
+        return command_runner(command, env=child_env, cwd=cwd or outside_dir)
 
     def record_child_result(name: str, result: ValidationRunResult) -> None:
         artifact_key = name.removeprefix("release.").replace(".", "_") + "_report"
