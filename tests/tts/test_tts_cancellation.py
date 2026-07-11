@@ -149,9 +149,11 @@ class TestDeepgramCancellation:
         assert len(events) == 3
         assert provider.is_cancelled
         assert not provider.is_active
+        assert json.loads(fake_ws._sent[-1])["type"] == "Clear"
+        assert provider._ws is None
 
-    async def test_cancel_closes_websocket(self):
-        """Verify WebSocket is closed after cancel."""
+    async def test_cancel_without_clear_ack_closes_websocket(self):
+        """A missing Cleared boundary must discard the potentially dirty socket."""
         provider = DeepgramTTS(DeepgramTTSConfig(api_key="test"))
         fake_ws = FakeWS(messages=[_pcm16_bytes()] * 10)
 
@@ -161,6 +163,8 @@ class TestDeepgramCancellation:
                 break
 
         assert provider._ws is None
+        assert fake_ws._closed
+        assert json.loads(fake_ws._sent[-1])["type"] == "Clear"
         assert not provider.is_active
 
     async def test_cancel_on_first_chunk(self):
@@ -177,6 +181,7 @@ class TestDeepgramCancellation:
         assert len(events) == 1
         assert provider.is_cancelled
         assert provider._ws is None
+        assert json.loads(fake_ws._sent[-1])["type"] == "Clear"
 
 
 # ── ElevenLabs HTTP cancellation ─────────────────────────────────

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -20,15 +21,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DeepgramTTSConfig:
-    """Configuration for the Deepgram TTS provider.
-
-    Note: persistent multi-context socket reuse (``persistent_ws``, as on
-    Cartesia/ElevenLabs) is deliberately out of scope here. Aura's WebSocket
-    has no documented per-message context routing or per-context cancel, so the
-    one-shot-per-utterance model is the only safe option. The field is
-    intentionally absent so the contract matrix / provider registry stay
-    unchanged and Deepgram always runs the default path.
-    """
+    """Configuration for the Deepgram TTS provider."""
 
     api_key: str = ""
     model: str = "aura-asteria-en"
@@ -43,14 +36,20 @@ class DeepgramTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
+    # Aura's streaming API supports repeated sequential Speak/Flush cycles on
+    # one connection. Keep it warm by default so DNS/TLS/WebSocket setup stays
+    # off the reply path. Set False for the legacy one-socket-per-utterance
+    # behavior. Deepgram has no context IDs, so EasyCat serializes synthesis
+    # calls on the shared socket and uses Clear for context-free barge-in.
+    persistent_ws: bool = True
 
 
 class DeepgramTTS(_WSTTSBase):
     """TTS provider using Deepgram's Aura WebSocket API.
 
-    Opens a WebSocket connection to Deepgram, sends text, and receives
-    audio chunks as binary messages. Uses ReconnectingWebSocket for
-    connection lifecycle management.
+    Warms one WebSocket at session startup and reuses it for sequential
+    Speak/Flush cycles by default. Uses ReconnectingWebSocket for connection
+    lifecycle management and falls back to one-shot sockets when configured.
 
     Requests linear16 (PCM16) encoding directly from Deepgram to avoid
     needing audio decoding dependencies.
@@ -62,6 +61,8 @@ class DeepgramTTS(_WSTTSBase):
     def __init__(self, config: DeepgramTTSConfig) -> None:
         super().__init__(output_format=config.output_format)
         self._config = config
+        self._stream_lock = asyncio.Lock()
+        self._synthesis_owner: asyncio.Task[Any] | None = None
         # Text of the in-flight utterance, replayed by the on_reconnect hook
         # so a mid-stream drop restarts the utterance from the top instead of
         # aborting it. Known tradeoff: Deepgram synthesis is one-shot per
@@ -99,6 +100,29 @@ class DeepgramTTS(_WSTTSBase):
             on_reconnect=self._replay_request,
         )
 
+    async def _ensure_ws(self) -> ReconnectingWebSocket:
+        """Return a live socket, connecting or reconnecting when necessary."""
+        ws = self._ws
+        if ws is None:
+            ws = self._create_ws()
+            self._ws = ws
+            await ws.connect()
+        elif not ws.is_connected:
+            await ws.connect()
+        return ws
+
+    async def warmup(self) -> None:
+        """Best-effort connect the persistent socket before the first reply."""
+        if not self._config.persistent_ws:
+            return
+        try:
+            await self._ensure_ws()
+        except Exception as exc:
+            # Warmup is a latency optimization, not an availability gate. Drop
+            # the failed wrapper so the first synthesis gets a clean retry.
+            logger.debug("Deepgram TTS warmup skipped: %s", exc)
+            await self._close_ws()
+
     async def _replay_request(self) -> None:
         """Re-send the Speak + Flush frames after a reconnect.
 
@@ -121,6 +145,28 @@ class DeepgramTTS(_WSTTSBase):
         await ws.send(json.dumps({"type": "Speak", "text": text}))
         await ws.send(json.dumps({"type": "Flush"}))
 
+    def _handle_control(self, message: str) -> str | None:
+        """Handle one Deepgram control frame and return its type."""
+        try:
+            ctrl = json.loads(message)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(ctrl, dict):
+            return None
+        ctrl_type = ctrl.get("type")
+        if ctrl_type == "Error":
+            # Deepgram surfaces invalid model / rate-limit / quota rejections
+            # as Error frames. Emit the journal-visible provider error and end
+            # this cycle instead of silently waiting for a socket close.
+            self._emit_provider_error_from_msg(ctrl)
+        elif ctrl_type == "Warning":
+            # Warnings (including Flush-rate advisories) are non-fatal.
+            logger.info(
+                "Deepgram TTS warning: %s",
+                ctrl.get("description") or ctrl.get("message") or ctrl.get("reason") or ctrl,
+            )
+        return str(ctrl_type) if ctrl_type is not None else None
+
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using Deepgram's WebSocket TTS API.
 
@@ -131,9 +177,21 @@ class DeepgramTTS(_WSTTSBase):
         SSML is not supported (``supports_ssml`` is ``False``), so the
         scheduler always delivers a plain-text payload here.
         """
-        self._start_synthesis()
-        self._ws = self._create_ws()
         text = coerce_tts_input(payload).text
+        # Deepgram's stream has no context IDs. Serializing guarantees exactly
+        # one recv_iter consumer and one outstanding Flush cycle on the shared
+        # connection, matching the provider's sequential streaming contract.
+        async with self._stream_lock:
+            async for event in self._synthesize_locked(text):
+                yield event
+
+    async def _synthesize_locked(self, text: str) -> AsyncIterator[TTSEvent]:
+        """Run one serialized Speak/Flush cycle."""
+        self._start_synthesis()
+        self._synthesis_owner = asyncio.current_task()
+        cycle_completed = False
+        if not self._config.persistent_ws:
+            self._ws = self._create_ws()
         # Leave replay disarmed until the request has actually been sent on a
         # connected stream. ``on_reconnect`` fires for retries during the
         # *initial* connect too, and arming earlier would replay the Speak/
@@ -141,13 +199,13 @@ class DeepgramTTS(_WSTTSBase):
         self._pending_text = None
 
         try:
-            await self._ws.connect()
+            ws = await self._ensure_ws()
 
             # Send the text payload
-            await self._ws.send(json.dumps({"type": "Speak", "text": text}))
+            await ws.send(json.dumps({"type": "Speak", "text": text}))
 
             # Send flush to signal end of text input
-            await self._ws.send(json.dumps({"type": "Flush"}))
+            await ws.send(json.dumps({"type": "Flush"}))
 
             # Request is now live on a connected stream: arm replay so a
             # *mid-stream* reconnect re-sends these frames and restarts the
@@ -156,44 +214,26 @@ class DeepgramTTS(_WSTTSBase):
             self._pending_text = text
 
             # Receive audio chunks
-            async for message in self._ws.recv_iter():
+            async for message in ws.recv_iter():
                 if self._cancelled:
-                    break
+                    # Clear is acknowledged with Cleared. Drain and discard all
+                    # old audio/control frames until that boundary so no tail
+                    # from the cancelled utterance can leak into the next turn.
+                    if isinstance(message, str) and self._handle_control(message) in {
+                        "Cleared",
+                        "Error",
+                    }:
+                        cycle_completed = True
+                        break
+                    continue
 
                 if isinstance(message, bytes) and message:
                     yield self._make_audio_event(message, self._source_format)
                 elif isinstance(message, str):
-                    # Handle control messages from Deepgram
-                    try:
-                        ctrl = json.loads(message)
-                    except json.JSONDecodeError:
-                        continue
-                    if not isinstance(ctrl, dict):
-                        continue
-                    ctrl_type = ctrl.get("type")
-                    if ctrl_type == "Flushed":
+                    ctrl_type = self._handle_control(message)
+                    if ctrl_type in {"Flushed", "Error"}:
+                        cycle_completed = True
                         break
-                    if ctrl_type == "Error":
-                        # Deepgram surfaces invalid model / rate-limit /
-                        # quota rejections as Error frames. Route them through
-                        # the journal-visible Error event and stop the loop so
-                        # the failure is observable instead of silently waiting
-                        # for a socket close.
-                        self._emit_provider_error_from_msg(ctrl)
-                        break
-                    if ctrl_type == "Warning":
-                        # Warning frames are non-fatal advisories (e.g.
-                        # TEXT_LENGTH_WARNING or the Flush rate-limit warning)
-                        # that do not prevent the connection from continuing.
-                        # Log and keep receiving so synthesis is not truncated.
-                        logger.info(
-                            "Deepgram TTS warning: %s",
-                            ctrl.get("description")
-                            or ctrl.get("message")
-                            or ctrl.get("reason")
-                            or ctrl,
-                        )
-                        continue
 
         except Exception as exc:
             if not self._cancelled:
@@ -201,29 +241,44 @@ class DeepgramTTS(_WSTTSBase):
                 self._emit_provider_error(exc, ws_close_code=getattr(exc, "code", None))
                 raise
         finally:
-            await self._close_ws()
+            # An abandoned/cancelled cycle without its protocol boundary would
+            # leave unscoped frames queued on the context-free socket. Closing
+            # is the only safe recovery in that case.
+            if not self._config.persistent_ws or not cycle_completed:
+                await self._close_ws()
             self._pending_text = None
+            self._synthesis_owner = None
             self._end_synthesis()
 
     async def stop(self) -> None:
         """Gracefully stop synthesis.
 
-        Sends a final Flush so Deepgram emits any buffered audio, then closes
-        the socket. Closing here matches Cartesia/ElevenLabs ``stop()`` so a
-        graceful stop between turns does not leave the WebSocket lingering
-        until the next ``cancel()``/``close()``.
+        Every synthesis cycle sends Flush before receiving, so no extra Flush
+        is needed here (and sending one would consume Deepgram's Flush quota).
+        Persistent mode keeps the connection warm; one-shot mode closes it.
         """
         await super().stop()
-        if self._ws is not None:
-            try:
-                await self._ws.send(json.dumps({"type": "Flush"}))
-            except Exception:
-                logger.debug("Error sending Deepgram Flush on stop", exc_info=True)
-        await self._close_ws()
+        if not self._config.persistent_ws:
+            await self._close_ws()
 
     async def cancel(self) -> None:
-        """Immediately cancel synthesis and close the WebSocket."""
+        """Cancel synthesis with Clear while preserving a healthy warm socket."""
+        was_active = self.is_active
         await super().cancel()
+        ws = self._ws
+        if self._config.persistent_ws and was_active and ws is not None:
+            try:
+                await ws.send(json.dumps({"type": "Clear"}))
+            except Exception:
+                logger.debug("Error sending Deepgram Clear; closing socket", exc_info=True)
+            else:
+                # Session barge-in normally runs in a separate task while the
+                # synthesis owner drains Cleared. A direct caller may invoke
+                # cancel() inside the async-for body, where that same task
+                # cannot concurrently drain; close immediately in that shape.
+                if asyncio.current_task() is self._synthesis_owner:
+                    await self._close_ws()
+                return
         await self._close_ws()
 
     def _emit_provider_error_from_msg(self, msg: dict[str, Any]) -> None:

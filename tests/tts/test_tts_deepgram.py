@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -39,6 +39,10 @@ class FakeReconnectingWS:
         self._reconnect_after = reconnect_after
         self.connect = AsyncMock()
 
+    @property
+    def is_connected(self) -> bool:
+        return self.connect.await_count > 0 and not self._closed
+
     async def send(self, message: str | bytes) -> None:
         self._sent.append(message)
 
@@ -54,6 +58,176 @@ class FakeReconnectingWS:
         self._closed = True
 
 
+class FakePersistentWS:
+    """Queue-backed Deepgram socket supporting repeated Speak/Flush cycles."""
+
+    def __init__(
+        self,
+        *,
+        fail_connect: bool = False,
+        hold_first_flush: bool = False,
+    ) -> None:
+        self._queue: asyncio.Queue[bytes | str | None] = asyncio.Queue()
+        self._pending_text: str | None = None
+        self._fail_connect = fail_connect
+        self._hold_first_flush = hold_first_flush
+        self._connected = False
+        self._closed = False
+        self.connect_calls = 0
+        self.sent: list[dict[str, str]] = []
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected and not self._closed
+
+    async def connect(self) -> None:
+        self.connect_calls += 1
+        if self._fail_connect:
+            raise RuntimeError("connect boom")
+        self._connected = True
+
+    async def send(self, message: str | bytes) -> None:
+        assert isinstance(message, str)
+        frame = json.loads(message)
+        self.sent.append(frame)
+        if frame["type"] == "Speak":
+            self._pending_text = frame["text"]
+        elif frame["type"] == "Flush":
+            assert self._pending_text is not None
+            await self._queue.put(_pcm16_bytes(120))
+            if self._hold_first_flush:
+                self._hold_first_flush = False
+            else:
+                await self._queue.put(json.dumps({"type": "Flushed"}))
+            self._pending_text = None
+        elif frame["type"] == "Clear":
+            self._pending_text = None
+            await self._queue.put(json.dumps({"type": "Cleared"}))
+
+    async def recv_iter(self):
+        while True:
+            message = await self._queue.get()
+            if message is None:
+                return
+            yield message
+
+    async def close(self) -> None:
+        self._closed = True
+        self._connected = False
+        await self._queue.put(None)
+
+
+class TestDeepgramPersistent:
+    def _make_provider(self) -> DeepgramTTS:
+        return DeepgramTTS(DeepgramTTSConfig(api_key="test-key"))
+
+    async def test_warmup_and_two_syntheses_reuse_one_connection(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_create_ws", factory):
+            await provider.warmup()
+            first = [event async for event in provider.synthesize("first")]
+            second = [event async for event in provider.synthesize("second")]
+
+        assert first and second
+        assert factory.call_count == 1
+        assert fake.connect_calls == 1
+        assert [frame["type"] for frame in fake.sent] == [
+            "Speak",
+            "Flush",
+            "Speak",
+            "Flush",
+        ]
+        assert not fake._closed
+        await provider.close()
+        assert fake._closed
+
+    async def test_warmup_failure_retries_with_fresh_socket(self):
+        provider = self._make_provider()
+        failed = FakePersistentWS(fail_connect=True)
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[failed, working])
+
+        with patch.object(provider, "_create_ws", factory):
+            await provider.warmup()
+            events = [event async for event in provider.synthesize("retry")]
+
+        assert events
+        assert factory.call_count == 2
+        assert failed._closed
+        assert working.connect_calls == 1
+        await provider.close()
+
+    async def test_cancel_uses_clear_and_keeps_socket_for_next_turn(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS(hold_first_flush=True)
+        first_audio = asyncio.Event()
+        cancelled_events = []
+
+        async def _consume_cancelled_turn() -> None:
+            async for event in provider.synthesize("cancel me"):
+                cancelled_events.append(event)
+                first_audio.set()
+
+        with patch.object(provider, "_create_ws", return_value=fake):
+            synthesis_task = asyncio.create_task(_consume_cancelled_turn())
+            await first_audio.wait()
+            await provider.cancel()
+            await synthesis_task
+            next_events = [event async for event in provider.synthesize("next turn")]
+
+        assert len(cancelled_events) == 1
+        assert next_events
+        assert [frame["type"] for frame in fake.sent].count("Clear") == 1
+        assert fake.connect_calls == 1
+        assert not fake._closed
+        await provider.close()
+
+    async def test_stop_keeps_idle_persistent_socket_open(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+
+        with patch.object(provider, "_create_ws", return_value=fake):
+            await provider.warmup()
+            await provider.stop()
+
+        assert fake.sent == []
+        assert not fake._closed
+        await provider.close()
+
+    async def test_cancel_does_not_wait_for_clear_ack(self):
+        provider = self._make_provider()
+
+        class NoClearAckWS(FakePersistentWS):
+            async def send(self, message: str | bytes) -> None:
+                assert isinstance(message, str)
+                frame = json.loads(message)
+                if frame["type"] == "Clear":
+                    self.sent.append(frame)
+                    return
+                await super().send(message)
+
+        fake = NoClearAckWS(hold_first_flush=True)
+        first_audio = asyncio.Event()
+
+        async def _consume() -> None:
+            async for _ in provider.synthesize("cancel promptly"):
+                first_audio.set()
+
+        with patch.object(provider, "_create_ws", return_value=fake):
+            synthesis_task = asyncio.create_task(_consume())
+            await first_audio.wait()
+            await asyncio.wait_for(provider.cancel(), timeout=0.05)
+            synthesis_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await synthesis_task
+
+        assert fake._closed
+        assert provider._ws is None
+
+
 class TestDeepgramTTSConfig:
     def test_defaults(self):
         config = DeepgramTTSConfig(api_key="test-key")
@@ -61,6 +235,7 @@ class TestDeepgramTTSConfig:
         assert config.encoding == "linear16"
         assert config.sample_rate == 24000
         assert config.output_format == PCM16_MONO_24K
+        assert config.persistent_ws is True
 
     def test_custom_values(self):
         config = DeepgramTTSConfig(
@@ -74,7 +249,7 @@ class TestDeepgramTTSConfig:
 
 class TestDeepgramTTS:
     def _make_provider(self, api_key: str = "test-key") -> DeepgramTTS:
-        return DeepgramTTS(DeepgramTTSConfig(api_key=api_key))
+        return DeepgramTTS(DeepgramTTSConfig(api_key=api_key, persistent_ws=False))
 
     def test_build_url(self):
         provider = self._make_provider()
@@ -260,18 +435,14 @@ class TestDeepgramTTS:
         assert provider._sample_carry == b""
         assert len(fake_ws._sent) == 2
 
-    async def test_stop_sends_flush_and_closes_ws(self):
+    async def test_stop_closes_one_shot_ws_without_redundant_flush(self):
         provider = self._make_provider()
         fake_ws = FakeReconnectingWS()
         provider._ws = fake_ws
 
         await provider.stop()
         assert not provider.is_active
-        assert len(fake_ws._sent) == 1
-        msg = json.loads(fake_ws._sent[0])
-        assert msg["type"] == "Flush"
-        # stop() closes the socket so a graceful stop between turns does not
-        # leave the WebSocket lingering until cancel()/close().
+        assert fake_ws._sent == []
         assert fake_ws._closed
         assert provider._ws is None
 
@@ -373,9 +544,12 @@ class TestDeepgramTTS:
             pytest.skip("DEEPGRAM_API_KEY not set")
 
         provider = DeepgramTTS(DeepgramTTSConfig(api_key=api_key))
-        events = []
-        async for event in provider.synthesize("Hello, this is a test."):
-            events.append(event)
+        try:
+            events = []
+            async for event in provider.synthesize("Hello, this is a test."):
+                events.append(event)
+        finally:
+            await provider.close()
 
         assert len(events) > 0
         chunks = extract_audio_chunks(events)
