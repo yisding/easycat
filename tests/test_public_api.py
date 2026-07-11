@@ -230,8 +230,10 @@ def test_public_api_documents_deprecation_and_removal_policy() -> None:
         ) from exc
 
     assert "`settings=`" in section
+    assert "machine-visible deprecation signal" in section
     assert "pre-release" in section
     assert "ownership ambiguity" in section
+    assert "`params=`" in section
 
 
 def test_curated_public_api_lazy_imports() -> None:

@@ -187,6 +187,15 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
         "record_to",
     ):
         assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"
+    for stale in (
+        "session.shutdown()",
+        "Session.shutdown()",
+        "session.close()",
+        "Session.close()",
+        "session.destroy()",
+        "Session.destroy()",
+    ):
+        assert stale not in text
 
 
 def test_explain_concept_topics_print_docs_routes() -> None:

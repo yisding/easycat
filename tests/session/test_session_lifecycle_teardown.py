@@ -111,6 +111,40 @@ async def test_session_teardown_finalizes_and_closes_journal(force: bool):
 
 
 @pytest.mark.asyncio
+async def test_session_stop_retries_after_backend_finalize_failure() -> None:
+    class FailingOnceJournal(TrackingJournal):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next_finalize = True
+
+        def finalize(self) -> None:
+            self.finalize_calls += 1
+            if self.fail_next_finalize:
+                self.fail_next_finalize = False
+                raise RuntimeError("finalize failed")
+
+    journal = FailingOnceJournal()
+    session = Session(_full_config(journal=journal))
+    await session.start()
+    waiter = asyncio.create_task(session.wait_closed())
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="finalize failed"):
+        await session.stop()
+
+    assert session._closed is False
+    assert waiter.done() is False
+
+    await session.stop()
+
+    await asyncio.wait_for(waiter, timeout=1.0)
+    assert session._closed is True
+    assert session.journal.read() == []
+    assert journal.finalize_calls == 2
+    assert journal.close_calls == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("force", [False, True])
 async def test_session_teardown_closes_audio_providers(force: bool):
     calls: list[str] = []
