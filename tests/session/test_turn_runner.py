@@ -47,7 +47,7 @@ from easycat.integrations.agents.base import (
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
-from easycat.session._turn_runner import TurnRunner
+from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
 from easycat.timeouts import TimeoutConfig
@@ -357,6 +357,22 @@ async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> N
     assert len(finals) == 1
     assert finals[0].text == "Reply."
     assert tts.synthesized_texts == ["Reply."]
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    session._turn = TurnContext("turn-cancelled-tts", CancelToken())
+
+    async def _cancel_tts_consumer(st: _StreamingTtsState) -> None:
+        st.first_tts_lifecycle_ready.set()
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(session._turn_runner, "_consume_tts_payloads", _cancel_tts_consumer)
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
 
 
 @pytest.mark.asyncio

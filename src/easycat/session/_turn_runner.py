@@ -441,10 +441,7 @@ class TurnRunner:
                 AgentFinal(text=accumulated_text, structured_output=structured_output)
             )
 
-        try:
-            await tts_task
-        except asyncio.CancelledError:
-            pass
+        await self._await_tts_task_recording_cancel(st, tts_task)
 
         if agent_error is not None and st.error is not None:
             await self._emit(
@@ -603,24 +600,64 @@ class TurnRunner:
             )
             raise
 
+    async def _await_tts_task_recording_cancel(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        """Await final TTS without letting its cancellation consume ours."""
+        try:
+            await asyncio.shield(tts_task)
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is None or current_task.cancelling() == 0:
+                # The TTS task was cancelled independently. Preserve the
+                # historical behavior of treating that as a settled consumer.
+                return
+
+            self._cancel_pending(tts_task)
+            try:
+                await tts_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._record_streaming_interruption(
+                st,
+                interrupted=st.turn.last_barge_in_time is not None,
+                source="streaming_turn_cancelled",
+            )
+            raise
+
     async def _await_agent_task(
         self,
         agent_task: asyncio.Task[None],
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
         """Await the agent under its timeout; cancel both tasks on failure."""
+        timeout_task: asyncio.Task[None] | None = None
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
-                await with_agent_timeout(
-                    agent_task,
-                    timeout=self._timeout_config.agent_timeout,
-                    event_bus=self._event_bus,
+                timeout_task = asyncio.create_task(
+                    with_agent_timeout(
+                        agent_task,
+                        timeout=self._timeout_config.agent_timeout,
+                        event_bus=self._event_bus,
+                    )
                 )
+                await asyncio.shield(timeout_task)
             else:
-                await agent_task
+                await asyncio.shield(agent_task)
         except asyncio.CancelledError:
-            self._cancel_pending(agent_task, tts_task)
-            for t in (agent_task, tts_task):
+            tasks = (
+                (agent_task, tts_task)
+                if timeout_task is None
+                else (
+                    timeout_task,
+                    agent_task,
+                    tts_task,
+                )
+            )
+            self._cancel_pending(*tasks)
+            for t in tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
