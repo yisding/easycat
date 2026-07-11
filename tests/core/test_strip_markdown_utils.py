@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
+from statistics import median
 from time import perf_counter
 
 import pytest
@@ -28,18 +28,12 @@ def _malformed_destinations(count: int) -> str:
     return " ".join("[label](()" for _ in range(count))
 
 
-def _min_runtime(fn: Callable[[str], object], payload: str, *, repeats: int = 5) -> float:
-    """Return the fastest of *repeats* runs of *fn* on *payload* (seconds).
-
-    Taking the minimum filters out scheduler/GC noise so the size-vs-size
-    ratio reflects algorithmic scaling rather than one-off jitter.
-    """
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
+def _batched_runtime(fn: Callable[[str], object], payload: str, *, iterations: int = 3) -> float:
+    """Return per-call runtime across a short batch to reduce timer noise."""
+    start = perf_counter()
+    for _ in range(iterations):
         fn(payload)
-        best = min(best, time.perf_counter() - start)
-    return best
+    return (perf_counter() - start) / iterations
 
 
 def _assert_subquadratic(
@@ -51,12 +45,17 @@ def _assert_subquadratic(
     near 2. We require the ratio to stay comfortably below 3 so the assertion
     is robust to noise while still catching a regression to O(n^2).
     """
-    small = _min_runtime(fn, build(n))
-    large = _min_runtime(fn, build(2 * n))
-    # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
-    if small <= 0:
-        return
-    ratio = large / small
+    small_payload = build(n)
+    large_payload = build(2 * n)
+    fn(small_payload)
+    fn(large_payload)
+    ratios: list[float] = []
+    for _ in range(5):
+        small = _batched_runtime(fn, small_payload)
+        large = _batched_runtime(fn, large_payload)
+        if small > 0:
+            ratios.append(large / small)
+    ratio = median(ratios)
     assert ratio < 3.0, f"scaling ratio {ratio:.2f} suggests quadratic blowup"
 
 

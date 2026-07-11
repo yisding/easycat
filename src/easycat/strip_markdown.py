@@ -205,9 +205,16 @@ def _is_escaped(text: str, idx: int) -> bool:
 class _DelimiterScanner:
     """Index balanced delimiters and malformed-input recovery in linear time."""
 
-    def __init__(self, text: str, opener: str, closer: str) -> None:
+    def __init__(
+        self,
+        text: str,
+        opener: str,
+        closer: str,
+        *,
+        track_recovery: bool = False,
+    ) -> None:
         self._matches: dict[int, int | None] = {}
-        self._next_closes: dict[int, int | None] = {}
+        self._next_closes: dict[int, int | None] | None = None
         stack: list[int] = []
         i = 0
         length = len(text)
@@ -226,15 +233,22 @@ class _DelimiterScanner:
         for unmatched in stack:
             self._matches[unmatched] = None
 
+        if track_recovery:
+            self._next_closes = self._index_next_closes(text, closer)
+
+    def _index_next_closes(self, text: str, closer: str) -> dict[int, int | None]:
+        """Index literal recovery closers for malformed references."""
+        next_closes: dict[int, int | None] = {}
         next_close: int | None = None
-        for i in range(length - 1, -1, -1):
+        for i in range(len(text) - 1, -1, -1):
             # Malformed-reference recovery historically advanced to the next
             # literal closer, including an escaped one. Keep that policy while
             # balanced matching above continues to honor escapes.
             if text[i] == closer:
                 next_close = i
             if i in self._matches:
-                self._next_closes[i] = next_close
+                next_closes[i] = next_close
+        return next_closes
 
     def find_close(self, start: int) -> int | None:
         """Return the balanced close for the opener at *start*, if any."""
@@ -242,6 +256,8 @@ class _DelimiterScanner:
 
     def find_next_close(self, start: int) -> int | None:
         """Return the first literal closer after the opener at *start*."""
+        if self._next_closes is None:
+            raise RuntimeError("recovery indexing is disabled")
         return self._next_closes.get(start)
 
 
@@ -284,7 +300,7 @@ class _MarkdownReferenceScanner:
         self._text = text
         self._length = len(text)
         self._labels = _DelimiterScanner(text, "[", "]")
-        self._destinations = _DelimiterScanner(text, "(", ")")
+        self._destinations = _DelimiterScanner(text, "(", ")", track_recovery=True)
 
     def __iter__(self) -> Iterator[_MarkdownReference]:
         index = 0
