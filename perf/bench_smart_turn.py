@@ -34,6 +34,7 @@ from easycat.validation.latency import LatencyPercentileStats
 
 _RESULT_PREFIX = "EASYCAT_SMART_TURN_RESULT="
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_WORKER_TIMEOUT_S = 300
 
 
 def summarize_samples(samples_ms: list[float]) -> dict[str, float | int]:
@@ -158,7 +159,19 @@ def _run_worker(
         "--runs",
         str(runs),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, env=env, check=True)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+            timeout=_WORKER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"{framework} worker timed out after {_WORKER_TIMEOUT_S} seconds"
+        ) from exc
     for line in reversed(completed.stdout.splitlines()):
         if line.startswith(_RESULT_PREFIX):
             return json.loads(line.removeprefix(_RESULT_PREFIX))

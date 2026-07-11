@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from easycat.validation.latency import LatencyPercentileStats
-from perf.bench_smart_turn import compare_results, summarize_samples
+from perf.bench_smart_turn import _run_worker, compare_results, summarize_samples
 
 
 def test_summarize_samples_reports_latency_distribution() -> None:
@@ -54,3 +56,14 @@ def test_compare_results_requires_identical_model_and_both_percentiles() -> None
     comparison = compare_results(easycat, pipecat)
     assert comparison["models_identical"] is False
     assert comparison["easycat_faster"] is False
+
+
+def test_run_worker_reports_framework_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def time_out(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["timeout"] == 300
+        raise subprocess.TimeoutExpired(command, timeout=300)
+
+    monkeypatch.setattr(subprocess, "run", time_out)
+
+    with pytest.raises(RuntimeError, match="easycat worker timed out after 300 seconds"):
+        _run_worker("easycat", python="python", warmup=1, runs=1)

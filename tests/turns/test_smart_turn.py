@@ -104,7 +104,12 @@ def test_intra_op_thread_count_respects_affinity_and_cap(
 ) -> None:
     import easycat.smart_turn as smart_turn
 
-    monkeypatch.setattr(smart_turn.os, "sched_getaffinity", lambda _pid: set(range(available)))
+    monkeypatch.setattr(
+        smart_turn.os,
+        "sched_getaffinity",
+        lambda _pid: set(range(available)),
+        raising=False,
+    )
     monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: None)
 
     assert smart_turn._intra_op_thread_count() == expected
@@ -121,7 +126,12 @@ def test_intra_op_thread_count_respects_cgroup_quota(
 ) -> None:
     import easycat.smart_turn as smart_turn
 
-    monkeypatch.setattr(smart_turn.os, "sched_getaffinity", lambda _pid: set(range(16)))
+    monkeypatch.setattr(
+        smart_turn.os,
+        "sched_getaffinity",
+        lambda _pid: set(range(16)),
+        raising=False,
+    )
     monkeypatch.setattr(smart_turn, "_cgroup_cpu_count", lambda: quota)
 
     assert smart_turn._intra_op_thread_count() == expected
