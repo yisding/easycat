@@ -297,6 +297,24 @@ async def test_misconfigured_punctuation_wait_logs_disabled_shortening(
 
 
 @pytest.mark.asyncio
+async def test_none_punctuation_wait_disables_shortening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tm = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=None,
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert await tm._wait_for_fixed_endpoint() is False
+    sleep.assert_awaited_once_with(0.1)
+
+
+@pytest.mark.asyncio
 async def test_stt_final_before_pause_does_not_shorten_next_pause():
     bus = EventBus()
     tm = TurnManager(
