@@ -25,6 +25,7 @@ from easycat.turn_manager import (
     TurnManagerState,
     TurnMode,
 )
+from easycat.vad.factory import VADConfig
 
 
 def _chunk(n_bytes: int = 640, value: int = 0) -> AudioChunk:
@@ -49,6 +50,17 @@ class EventCollector:
     @property
     def type_names(self) -> list[str]:
         return [type(e).__name__ for e in self.events]
+
+
+def test_default_fixed_endpoint_budget_is_150_ms():
+    """VAD stop detection plus turn grace should match the low-latency target."""
+    vad = VADConfig()
+    turn = TurnManagerConfig()
+
+    assert vad.min_silence_duration_ms == 50
+    assert turn.end_of_turn_silence_ms == 100
+    assert turn.punctuated_end_of_turn_silence_ms == 50
+    assert vad.min_silence_duration_ms + turn.end_of_turn_silence_ms == 150
 
 
 # ── State machine transition tests ──────────────────────────────────
