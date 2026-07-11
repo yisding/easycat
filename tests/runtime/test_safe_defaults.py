@@ -31,6 +31,11 @@ class _FakeConfig:
     timeouts: str = "default"
 
 
+@dataclass
+class _ValueConfig:
+    stt: object = None
+
+
 class TestSafeConfigSnapshot:
     def test_includes_allowlisted_fields(self):
         cfg = _FakeConfig()
@@ -194,6 +199,122 @@ class TestNestedSecretRedaction:
         assert "bearer-secret" not in snap["stt"]
         assert "LeakyProvider" in snap["stt"]
         assert "api_key" not in snap["stt"]
+
+
+class TestBoundedSafeRendering:
+    def test_self_referential_list_uses_recursion_marker(self):
+        value: list[object] = []
+        value.append(value)
+
+        snap = safe_config_snapshot(_ValueConfig(stt=value))
+
+        assert snap["stt"] == "[...]"
+
+    def test_self_referential_dataclass_uses_recursion_marker(self):
+        @dataclass
+        class _Node:
+            name: str
+            child: object = None
+
+        node = _Node("root")
+        node.child = node
+
+        snap = safe_config_snapshot(_ValueConfig(stt=node))
+
+        assert snap["stt"] == "_Node(name='root', child=...)"
+
+    def test_shared_value_is_rendered_at_each_non_recursive_path(self):
+        shared = ["nova"]
+
+        snap = safe_config_snapshot(_ValueConfig(stt=[shared, shared]))
+
+        assert snap["stt"] == "[['nova'], ['nova']]"
+
+    def test_large_collection_is_limited(self):
+        snap = safe_config_snapshot(_ValueConfig(stt=list(range(100_000))))
+
+        assert snap["stt"].endswith("14, 15, ...]")
+        assert len(snap["stt"]) < 100
+
+    def test_deep_collection_is_limited(self):
+        value: object = "unreachable"
+        for _ in range(100):
+            value = [value]
+
+        snap = safe_config_snapshot(_ValueConfig(stt=value))
+
+        assert snap["stt"] == "[[[[[[...]]]]]]"
+
+    def test_oversized_scalar_is_replaced_without_rendering_content(self):
+        secret = "sk-testsecret123456"
+        value = f"{'a' * 1_000} {secret} {'z' * 1_000}"
+
+        snap = safe_config_snapshot(_ValueConfig(stt=value))
+
+        assert secret not in snap["stt"]
+        assert snap["stt"] == f"<str {len(value)} chars>"
+
+    def test_oversized_mapping_key_redacts_value_conservatively(self):
+        secret = "not-pattern-shaped-but-sensitive"
+        snap = safe_config_snapshot(_ValueConfig(stt={"x" * 10_000: secret}))
+
+        assert secret not in snap["stt"]
+        assert "'***'" in snap["stt"]
+        assert len(snap["stt"]) < 300
+
+    def test_broad_nested_value_respects_global_output_budget(self):
+        leaf_values = [f"{index:02d}-{'x' * 245}" for index in range(16)]
+        value = [list(leaf_values) for _ in range(16)]
+
+        snap = safe_config_snapshot(_ValueConfig(stt=value))
+
+        assert len(snap["stt"]) <= 8_192
+        assert "..." in snap["stt"]
+
+    def test_scalar_subclass_repr_is_not_called(self):
+        class _LeakyString(str):
+            def __repr__(self) -> str:
+                raise AssertionError("custom repr must not run")
+
+        snap = safe_config_snapshot(_ValueConfig(stt=_LeakyString("sk-never-render")))
+
+        assert "sk-never-render" not in snap["stt"]
+        assert "_LeakyString object>" in snap["stt"]
+
+    def test_secret_string_subclass_key_redacts_value(self):
+        class _SecretKey(str):
+            def __repr__(self) -> str:
+                raise AssertionError("custom repr must not run")
+
+        secret = "sk-mapping-secret123456"
+        snap = safe_config_snapshot(_ValueConfig(stt={_SecretKey("api_key"): secret}))
+
+        assert secret not in snap["stt"]
+        assert "'***'" in snap["stt"]
+
+    def test_unreadable_dataclass_field_does_not_break_snapshot(self):
+        @dataclass
+        class _Unreadable:
+            model: str = "nova"
+
+            def __getattribute__(self, name: str):
+                if name == "model":
+                    raise RuntimeError("unavailable")
+                return super().__getattribute__(name)
+
+        snap = safe_config_snapshot(_ValueConfig(stt=_Unreadable()))
+
+        assert snap["stt"] == "_Unreadable(model=<unavailable>)"
+
+    def test_unreadable_config_property_does_not_break_snapshot(self):
+        class _UnreadableConfig:
+            @property
+            def debug(self) -> str:
+                raise RuntimeError("unavailable")
+
+        snap = safe_config_snapshot(_UnreadableConfig())
+
+        assert snap["debug"] == "<unavailable>"
 
 
 class TestSafeEnvSnapshot:
