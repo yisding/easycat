@@ -57,18 +57,30 @@ def test_opentelemetry_handles_are_cached(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setitem(sys.modules, "opentelemetry", package)
     monkeypatch.setitem(sys.modules, "opentelemetry.metrics", metrics)
     monkeypatch.setitem(sys.modules, "opentelemetry.trace", trace)
-    observability._get_meter.cache_clear()
-    observability._get_tracer.cache_clear()
-    try:
-        assert observability._get_meter() is meter
-        assert observability._get_meter() is meter
-        assert observability._get_tracer() is tracer
-        assert observability._get_tracer() is tracer
-        assert meter_lookups == 1
-        assert tracer_lookups == 1
-    finally:
-        observability._get_meter.cache_clear()
-        observability._get_tracer.cache_clear()
+
+    assert observability._get_meter() is meter
+    assert observability._get_meter() is meter
+    assert observability._get_tracer() is tracer
+    assert observability._get_tracer() is tracer
+    assert meter_lookups == 1
+    assert tracer_lookups == 1
+
+
+def test_opentelemetry_handles_cache_missing_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "opentelemetry", None)
+    monkeypatch.setitem(sys.modules, "opentelemetry.metrics", None)
+    monkeypatch.setitem(sys.modules, "opentelemetry.trace", None)
+
+    assert observability._get_meter() is None
+    assert observability._get_meter() is None
+    assert observability._get_tracer() is None
+    assert observability._get_tracer() is None
+    assert observability._get_meter.cache_info().misses == 1
+    assert observability._get_meter.cache_info().hits == 1
+    assert observability._get_tracer.cache_info().misses == 1
+    assert observability._get_tracer.cache_info().hits == 1
 
 
 def test_observable_gauge_uses_callback_contract(monkeypatch: pytest.MonkeyPatch) -> None:
