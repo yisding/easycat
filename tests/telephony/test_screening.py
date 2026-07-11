@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -117,6 +118,43 @@ class TestScreeningPatterns:
         )
         assert match_screening_platform("Please use custom ios pattern here", custom) == "ios"
         assert match_screening_platform("using a screening service", custom) is None
+
+    def test_custom_patterns_are_normalized_and_immutable(self) -> None:
+        custom = ScreeningPatternSet(
+            ios=["  Straße  ", "STRASSE"],
+            android=[],
+            carrier=[],
+            third_party=[],
+            exclusions=[],
+        )
+
+        assert custom.ios == ("strasse",)
+        assert match_screening_platform("Bitte STRASSE nennen", custom) == "ios"
+        with pytest.raises(FrozenInstanceError):
+            custom.ios = ()
+
+    def test_rejects_blank_custom_pattern(self) -> None:
+        with pytest.raises(ValueError, match="screening patterns must not be empty"):
+            ScreeningPatternSet(ios=[" "])
+
+    def test_exclusions_and_platform_order_define_match_precedence(self) -> None:
+        overlapping = ScreeningPatternSet(
+            ios=["shared prompt"],
+            android=["shared prompt"],
+            carrier=["shared prompt"],
+            third_party=["shared prompt"],
+            exclusions=[],
+        )
+        excluded = ScreeningPatternSet(
+            ios=["shared prompt"],
+            android=[],
+            carrier=[],
+            third_party=[],
+            exclusions=["shared prompt"],
+        )
+
+        assert match_screening_platform("shared prompt", overlapping) == "ios"
+        assert match_screening_platform("shared prompt", excluded) is None
 
     def test_no_match_early_media_announcement(self) -> None:
         assert (
@@ -914,9 +952,9 @@ class TestScreeningPatternsFactory:
 
     def test_unknown_language_returns_empty_platform_lists(self) -> None:
         result = screening_patterns_for_languages(["xx"])
-        assert result.ios == []
-        assert result.android == []
-        assert result.carrier == []
+        assert not result.ios
+        assert not result.android
+        assert not result.carrier
 
     def test_third_party_always_included(self) -> None:
         result = screening_patterns_for_languages(["es"])
