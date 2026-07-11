@@ -86,10 +86,14 @@ def _project_data(data: object) -> dict[str, Any]:
     safe_data = {
         str(key): redact_value(data[key], str(key))
         for key in sorted(data, key=str)
-        if str(key) in _CONTEXT_DATA_KEYS
+        if str(key) in _CONTEXT_DATA_KEYS and data[key] not in _EMPTY_VALUES
     }
     projected: dict[str, Any] = {"data": safe_data} if safe_data else {}
-    omitted = len(data) - len(safe_data)
+    omitted = sum(
+        1
+        for key, value in data.items()
+        if str(key) not in _CONTEXT_DATA_KEYS and value not in _EMPTY_VALUES
+    )
     if omitted:
         projected["omitted_data_fields"] = omitted
     return projected

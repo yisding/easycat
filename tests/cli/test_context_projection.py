@@ -55,3 +55,33 @@ def test_context_projection_counts_non_mapping_payload_as_omitted() -> None:
         "sequence": 1,
         "omitted_data_fields": 1,
     }
+
+
+def test_context_projection_ignores_empty_allowed_and_disallowed_fields() -> None:
+    projected = project_context_record(
+        {
+            "sequence": 1,
+            "data": {
+                "provider": "",
+                "stage": "agent",
+                "transcript": "",
+                "tool_arguments": {"query": "sensitive"},
+            },
+            "error": {
+                "type": "",
+                "code": "provider_error",
+                "message": "",
+                "notes": "sensitive detail",
+            },
+        }
+    )
+
+    assert projected == {
+        "sequence": 1,
+        "data": {"stage": "agent"},
+        "omitted_data_fields": 1,
+        "error": {
+            "code": "provider_error",
+            "omitted_error_fields": 1,
+        },
+    }
