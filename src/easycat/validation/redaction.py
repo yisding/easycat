@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
@@ -203,7 +204,14 @@ def should_redact_key(key: str | None) -> bool:
     return normalized_key in UNSAFE_TEXT_FIELDS or _is_secret_value_key(normalized_key)
 
 
+@functools.lru_cache(maxsize=256)
 def _is_secret_value_key(key: str | None) -> bool:
+    """Classify repeated schema keys without rerunning the policy regex.
+
+    Journal and validation records repeatedly use a small vocabulary of field
+    names.  The bound prevents arbitrary input keys from growing process memory
+    while keeping those common names on the constant-time path.
+    """
     if not key or key in _SAFE_SECRET_NAME_FIELDS:
         return False
     return bool(_SECRET_KEY_RE.search(key))

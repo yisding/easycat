@@ -14,6 +14,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
     contains_unredacted_sensitive_text,
@@ -75,6 +76,18 @@ def test_redact_text_preserves_ordinary_text() -> None:
         "partial transcript word 123",
     ):
         assert redact_text(value) is value
+
+
+def test_secret_key_classification_cache_is_bounded() -> None:
+    redaction_module._is_secret_value_key.cache_clear()
+    try:
+        for index in range(512):
+            redact_value("ordinary value", f"field_{index}")
+        cache_info = redaction_module._is_secret_value_key.cache_info()
+        assert cache_info.maxsize == 256
+        assert cache_info.currsize == 256
+    finally:
+        redaction_module._is_secret_value_key.cache_clear()
 
 
 @given(
