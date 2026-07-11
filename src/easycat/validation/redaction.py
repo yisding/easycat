@@ -91,6 +91,12 @@ _KEY_VALUE_SECRET_RE = re.compile(
 _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\b")
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
 _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
+# Every text-redaction pattern above requires at least one of these trigger
+# characters, except the standalone ``Bearer <value>`` form.  Checking this
+# small superset first keeps the nine substitution regexes off common hot-path
+# values such as transcripts and stage names.  False positives are harmless:
+# they merely fall through to the complete policy below.
+_TEXT_REDACTION_TRIGGER_RE = re.compile(r"[\d:/=_\-.]|\bbearer\s", re.IGNORECASE)
 _SENSITIVE_COMMAND_FLAGS = frozenset(
     {
         "--access-token",
@@ -105,6 +111,8 @@ _SENSITIVE_COMMAND_FLAGS = frozenset(
 
 def redact_text(value: str) -> str:
     """Redact sensitive substrings from free-form validation text."""
+    if _TEXT_REDACTION_TRIGGER_RE.search(value) is None:
+        return value
     redacted = _URL_RE.sub(REDACTED_URL, value)
     redacted = _HEADER_SECRET_RE.sub(lambda match: f"{match.group(1)}{REDACTED_SECRET}", redacted)
     redacted = _BEARER_RE.sub(rf"\1{REDACTED_SECRET}", redacted)

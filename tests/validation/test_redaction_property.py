@@ -10,6 +10,7 @@ output), and any explicit runtime secret passed to
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -45,6 +46,32 @@ def test_redact_text_is_idempotent(value: str) -> None:
 def test_redact_text_is_idempotent_arbitrary(value: str) -> None:
     once = redact_text(value)
     assert redact_text(once) == once
+
+
+@pytest.mark.parametrize(
+    ("value", "redacted_marker"),
+    [
+        ("https://api.openai.com/v1", "[REDACTED_URL]"),
+        ("Authorization: Bearer short-secret", "[REDACTED_SECRET]"),
+        ("bearer short-secret", "[REDACTED_SECRET]"),
+        ("token=short-secret", "[REDACTED_SECRET]"),
+        ("eyJabcdefghijk.abcdefghijk.abcdefghijk", "[REDACTED_SECRET]"),
+        ("sk-abcdefghijkl", "[REDACTED_SECRET]"),
+        ("request_abcdef", "[REDACTED_REQUEST_ID]"),
+        ("+1 (415) 555-0123", "[REDACTED_PHONE]"),
+        ("failed in /Users/alice/project", "~"),
+    ],
+)
+def test_redact_text_prefilter_covers_every_pattern_family(
+    value: str,
+    redacted_marker: str,
+) -> None:
+    assert redacted_marker in redact_text(value)
+
+
+def test_redact_text_preserves_ordinary_text() -> None:
+    value = "ordinary transcript without sensitive material"
+    assert redact_text(value) is value
 
 
 @given(
