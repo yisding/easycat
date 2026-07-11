@@ -8,7 +8,7 @@ from time import perf_counter
 
 import pytest
 
-from easycat.strip_markdown import has_markdown, strip_markdown
+from easycat.strip_markdown import _MarkdownReferenceScanner, has_markdown, strip_markdown
 
 # ── Adversarial DoS payloads ───────────────────────────────────────
 #
@@ -22,6 +22,10 @@ _ADVERSARIAL_PAYLOADS: tuple[tuple[str, Callable[[int], str]], ...] = (
     ("open_brackets_then_paren", lambda n: "[" * n + ")"),
     ("open_brackets_then_close", lambda n: "[" * n + "]"),
 )
+
+
+def _malformed_destinations(count: int) -> str:
+    return " ".join("[label](()" for _ in range(count))
 
 
 def _min_runtime(fn: Callable[[str], object], payload: str, *, repeats: int = 5) -> float:
@@ -135,6 +139,56 @@ class TestHasMarkdown:
     ) -> None:
         _assert_subquadratic(has_markdown, build)
 
+    def test_malformed_destinations_detection_scales_subquadratically(self) -> None:
+        _assert_subquadratic(has_markdown, _malformed_destinations, n=1000)
+
+
+class TestMarkdownReferenceScanner:
+    @pytest.mark.parametrize(
+        ("text", "detected", "expected"),
+        [
+            (
+                "broken [x](a(b) then [ok](url)",
+                True,
+                "broken [x](a(b) then ok url",
+            ),
+            (
+                "broken [x](a(b then [ok](url)",
+                False,
+                "broken [x](a(b then [ok](url)",
+            ),
+            (
+                r"broken [x](a(b\) then [ok](url)",
+                True,
+                r"broken [x](a(b\) then ok url",
+            ),
+            ("![one](img) and [two](url)", True, "one and two url"),
+            ("[label]   (url)", True, "label url"),
+            ("[outer [inner]](url)", True, "outer [inner] url"),
+            ('[Docs](https://example.test "title")', True, "Docs https://example.test"),
+        ],
+    )
+    def test_detection_and_rendering_share_reference_policy(
+        self,
+        text: str,
+        detected: bool,
+        expected: str,
+    ) -> None:
+        assert has_markdown(text) is detected
+        assert strip_markdown(text) == expected
+
+    def test_scanner_yields_consecutive_typed_references(self) -> None:
+        references = list(
+            _MarkdownReferenceScanner('![diagram](image.png) [Docs](https://example.test "title")')
+        )
+
+        assert [reference.is_image for reference in references] == [True, False]
+        assert [reference.label for reference in references] == ["diagram", "Docs"]
+        assert [reference.destination_url for reference in references] == [
+            "image.png",
+            "https://example.test",
+        ]
+
 
 # ── strip_markdown ─────────────────────────────────────────────────
 
@@ -242,6 +296,11 @@ class TestStripMarkdown:
         self, build: Callable[[int], str]
     ) -> None:
         _assert_subquadratic(strip_markdown, build)
+
+    def test_malformed_destinations_stripping_scales_subquadratically(self) -> None:
+        payload = _malformed_destinations(1000)
+        assert strip_markdown(payload) == payload
+        _assert_subquadratic(strip_markdown, _malformed_destinations, n=1000)
 
     def test_heading_h1(self) -> None:
         assert strip_markdown("# Main Title") == "Main Title"
