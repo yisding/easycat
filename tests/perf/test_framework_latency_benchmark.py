@@ -7,6 +7,7 @@ import pytest
 
 from perf.bench_framework_latency import (
     PINS,
+    _lock_metadata,
     _validate_sample,
     percentile,
     run_benchmark,
@@ -21,9 +22,23 @@ def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -
     easycat, livekit, pipecat = specs
     assert easycat.command == (sys.executable, str(worker), "--framework", "easycat")
     assert "--isolated" in livekit.command
-    assert "--no-project" in livekit.command
-    assert PINS["livekit"][0] in livekit.command
-    assert all(pin in pipecat.command for pin in PINS["pipecat"])
+    assert "--locked" in livekit.command
+    assert "--locked" in pipecat.command
+    assert livekit.command[livekit.command.index("--python") + 1] == sys.executable
+    assert pipecat.command[pipecat.command.index("--python") + 1] == sys.executable
+    assert PINS == {
+        "livekit": ("livekit-agents==1.6.4",),
+        "pipecat": ("pipecat-ai==1.0.0", "websockets==15.0.1"),
+    }
+
+
+def test_competitor_lock_metadata_is_content_addressed() -> None:
+    metadata = _lock_metadata()
+
+    assert set(metadata) == {"livekit", "pipecat"}
+    for lock in metadata.values():
+        assert lock["path"].endswith("uv.lock")
+        assert len(lock["sha256"]) == 64
 
 
 def test_percentile_interpolates_and_validates_inputs() -> None:
@@ -41,24 +56,28 @@ def test_percentile_interpolates_and_validates_inputs() -> None:
         {
             "latency_ms": -1.0,
             "provider_elapsed_ms": 0.0,
+            "framework": "easycat",
             "text": "Hello there.",
             "audio_bytes": 1,
         },
         {
             "latency_ms": 1.0,
             "provider_elapsed_ms": 0.5,
+            "framework": "easycat",
             "text": "wrong",
             "audio_bytes": 1,
         },
         {
             "latency_ms": 1.0,
             "provider_elapsed_ms": 0.5,
+            "framework": "easycat",
             "text": "Hello there.",
             "audio_bytes": 0,
         },
         {
             "latency_ms": 1.0,
             "provider_elapsed_ms": 2.0,
+            "framework": "easycat",
             "text": "Hello there.",
             "audio_bytes": 1,
         },

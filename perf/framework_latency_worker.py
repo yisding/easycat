@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 Framework = Literal["easycat", "livekit", "pipecat"]
-EXPECTED_TEXT = "Hello there."
+RESPONSE_TEXT = "Hello there."
 
 
 def _version(framework: Framework) -> str:
@@ -116,14 +116,15 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
             provider_started = time.perf_counter()
             await asyncio.sleep(llm_delay_s)
             self.elapsed_ms = (time.perf_counter() - provider_started) * 1_000.0
-            return EXPECTED_TEXT
+            return RESPONSE_TEXT
 
     class TTS:
         def __init__(self) -> None:
             self.elapsed_ms = 0.0
+            self.spoken_text = ""
 
         async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
-            _ = payload
+            self.spoken_text += payload.text
             provider_started = time.perf_counter()
             await asyncio.sleep(tts_delay_s)
             self.elapsed_ms = (time.perf_counter() - provider_started) * 1_000.0
@@ -162,7 +163,7 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
     return {
         "latency_ms": (first_audio - started) * 1_000.0,
         "provider_elapsed_ms": agent.elapsed_ms + tts.elapsed_ms,
-        "text": EXPECTED_TEXT,
+        "text": tts.spoken_text,
         "audio_bytes": transport.audio_bytes,
     }
 
@@ -239,18 +240,20 @@ async def _sample_livekit(  # noqa: C901 - self-contained adapter mirrors AgentS
             )
             self.llm_elapsed_ms = 0.0
             self.tts_elapsed_ms = 0.0
+            self.spoken_text = ""
 
         async def llm_node(self, chat_ctx: Any, tools: Any, model_settings: Any) -> Any:
             _ = chat_ctx, tools, model_settings
             provider_started = time.perf_counter()
             await asyncio.sleep(llm_delay_s)
             self.llm_elapsed_ms = (time.perf_counter() - provider_started) * 1_000.0
-            yield EXPECTED_TEXT
+            yield RESPONSE_TEXT
 
         async def tts_node(self, text: AsyncIterator[str], model_settings: Any) -> Any:
             _ = model_settings
             async for chunk in text:
                 if chunk.strip():
+                    self.spoken_text += chunk
                     provider_started = time.perf_counter()
                     await asyncio.sleep(tts_delay_s)
                     self.tts_elapsed_ms = (time.perf_counter() - provider_started) * 1_000.0
@@ -284,7 +287,7 @@ async def _sample_livekit(  # noqa: C901 - self-contained adapter mirrors AgentS
     return {
         "latency_ms": (first_audio - started) * 1_000.0,
         "provider_elapsed_ms": agent.llm_elapsed_ms + agent.tts_elapsed_ms,
-        "text": EXPECTED_TEXT,
+        "text": agent.spoken_text,
         "audio_bytes": output.audio_bytes,
     }
 
@@ -324,9 +327,9 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
                 provider_started = time.perf_counter()
                 await asyncio.sleep(llm_delay_s)
                 self.elapsed_ms = (time.perf_counter() - provider_started) * 1_000.0
-                self.generated_text = EXPECTED_TEXT
+                self.generated_text = RESPONSE_TEXT
                 await self.push_frame(LLMFullResponseStartFrame())
-                await self.push_frame(TextFrame(EXPECTED_TEXT))
+                await self.push_frame(TextFrame(RESPONSE_TEXT))
                 await self.push_frame(LLMFullResponseEndFrame())
             else:
                 await self.push_frame(frame, direction)
@@ -335,10 +338,12 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
         def __init__(self) -> None:
             super().__init__()
             self.elapsed_ms = 0.0
+            self.spoken_text = ""
 
         async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
             await super().process_frame(frame, direction)
             if type(frame) is TextFrame:
+                self.spoken_text += frame.text
                 await self.push_frame(TTSStartedFrame())
                 provider_started = time.perf_counter()
                 await asyncio.sleep(tts_delay_s)
@@ -394,7 +399,7 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
     return {
         "latency_ms": (first_audio - started) * 1_000.0,
         "provider_elapsed_ms": llm_processor.elapsed_ms + tts_processor.elapsed_ms,
-        "text": llm_processor.generated_text,
+        "text": tts_processor.spoken_text,
         "audio_bytes": sink.audio_bytes,
     }
 
