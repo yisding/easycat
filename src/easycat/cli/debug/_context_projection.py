@@ -60,20 +60,29 @@ _REFERENCE_KEYS = ("input_ref", "output_ref")
 _EMPTY_VALUES: tuple[object, ...] = (None, "", [], {})
 
 
+def _project_allowlisted(
+    mapping: Mapping[object, Any],
+    allowed_keys: frozenset[str],
+) -> tuple[dict[str, Any], int]:
+    projected: dict[str, Any] = {}
+    omitted = 0
+    for key in sorted(mapping, key=str):
+        value = mapping[key]
+        if value in _EMPTY_VALUES:
+            continue
+        normalized_key = str(key)
+        if normalized_key not in allowed_keys:
+            omitted += 1
+            continue
+        projected[normalized_key] = redact_value(value, normalized_key)
+    return projected, omitted
+
+
 def _project_error(error: object) -> dict[str, Any] | None:
     if not isinstance(error, Mapping):
         return None
 
-    projected = {
-        str(key): redact_value(error[key], str(key))
-        for key in sorted(error, key=str)
-        if str(key) in _CONTEXT_ERROR_KEYS and error[key] not in _EMPTY_VALUES
-    }
-    omitted = sum(
-        1
-        for key, value in error.items()
-        if str(key) not in _CONTEXT_ERROR_KEYS and value not in _EMPTY_VALUES
-    )
+    projected, omitted = _project_allowlisted(error, _CONTEXT_ERROR_KEYS)
     if omitted:
         projected["omitted_error_fields"] = omitted
     return projected or None
@@ -83,17 +92,8 @@ def _project_data(data: object) -> dict[str, Any]:
     if not isinstance(data, Mapping):
         return {"omitted_data_fields": 1} if data not in _EMPTY_VALUES else {}
 
-    safe_data = {
-        str(key): redact_value(data[key], str(key))
-        for key in sorted(data, key=str)
-        if str(key) in _CONTEXT_DATA_KEYS and data[key] not in _EMPTY_VALUES
-    }
+    safe_data, omitted = _project_allowlisted(data, _CONTEXT_DATA_KEYS)
     projected: dict[str, Any] = {"data": safe_data} if safe_data else {}
-    omitted = sum(
-        1
-        for key, value in data.items()
-        if str(key) not in _CONTEXT_DATA_KEYS and value not in _EMPTY_VALUES
-    )
     if omitted:
         projected["omitted_data_fields"] = omitted
     return projected
