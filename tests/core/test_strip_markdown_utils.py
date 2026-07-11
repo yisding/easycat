@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from statistics import median
 from time import perf_counter
 
 import pytest
@@ -47,26 +48,23 @@ def _assert_subquadratic(
     near 2. We require the ratio to stay comfortably below 3 so the assertion
     still catches a regression to O(n^2).
 
-    Timing on shared CI runners is noisy: a single ratio can spike above the
-    threshold even for a linear algorithm (a lucky-fast small run or a
-    contended large run). Take the best (smallest) ratio over several
-    independent measurements — a genuinely quadratic algorithm stays near 4 on
-    *every* attempt, so this filters scheduler jitter without weakening the
-    O(n^2) regression check.
+    Timing on shared runners is noisy, so aggregate several independent ratios
+    by their median. This filters isolated scheduler spikes without allowing a
+    single unusually favorable measurement to hide quadratic behavior.
     """
     small_payload = build(n)
     large_payload = build(2 * n)
-    best_ratio = float("inf")
+    ratios: list[float] = []
     for _ in range(5):
         small = _min_runtime(fn, small_payload)
         large = _min_runtime(fn, large_payload)
         # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
         if small <= 0:
-            return
-        best_ratio = min(best_ratio, large / small)
-        if best_ratio < 3.0:
-            return
-    assert best_ratio < 3.0, f"scaling ratio {best_ratio:.2f} suggests quadratic blowup"
+            continue
+        ratios.append(large / small)
+    assert ratios, "timing resolution produced no usable scaling samples"
+    median_ratio = median(ratios)
+    assert median_ratio < 3.0, f"scaling ratio {median_ratio:.2f} suggests quadratic blowup"
 
 
 # ── has_markdown detection ─────────────────────────────────────────
@@ -140,6 +138,7 @@ class TestHasMarkdown:
     def test_adversarial_brackets_not_detected(self, build: Callable[[int], str]) -> None:
         assert has_markdown(build(2000)) is False
 
+    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
@@ -248,6 +247,7 @@ class TestStripMarkdown:
         payload = build(2000)
         assert strip_markdown(payload) == payload
 
+    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
