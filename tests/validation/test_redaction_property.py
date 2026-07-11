@@ -85,7 +85,7 @@ def test_text_redaction_trigger_is_policy_superset(
     pattern: re.Pattern[str],
     data: st.DataObject,
 ) -> None:
-    value = data.draw(st.from_regex(pattern, fullmatch=False))
+    value = data.draw(st.from_regex(pattern, fullmatch=True))
     assert redaction_module._TEXT_REDACTION_TRIGGER_RE.search(value) is not None
 
 
