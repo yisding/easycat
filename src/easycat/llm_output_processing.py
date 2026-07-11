@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from easycat.strip_markdown import strip_markdown
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 PauseStyle = Literal["ssml", "ellipsis", "emdash"]
 MAX_SSML_BREAK_MS = 5_000
+_PAUSE_STYLES: frozenset[str] = frozenset({"ssml", "ellipsis", "emdash"})
 
 
 @dataclass(frozen=True)
@@ -73,56 +74,85 @@ class PauseProcessor:
     flags: int = 0
     style: PauseStyle = "ssml"
     ellipsis_count: int = 1
+    _pattern_re: re.Pattern[str] = field(init=False, repr=False, compare=False)
+    _unit_re: re.Pattern[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.style not in _PAUSE_STYLES:
+            raise ValueError(f"unsupported pause style: {self.style!r}")
+        if (
+            isinstance(self.minimum_units, bool)
+            or not isinstance(self.minimum_units, int)
+            or self.minimum_units < 1
+        ):
+            raise ValueError("minimum_units must be a positive integer")
+        if self.style == "ellipsis" and (
+            isinstance(self.ellipsis_count, bool)
+            or not isinstance(self.ellipsis_count, int)
+            or self.ellipsis_count < 1
+        ):
+            raise ValueError("ellipsis_count must be a positive integer")
+        object.__setattr__(
+            self, "_pattern_re", _compile_regex(self.pattern, self.flags, "pattern")
+        )
+        object.__setattr__(
+            self,
+            "_unit_re",
+            _compile_regex(self.unit_pattern, 0, "unit_pattern"),
+        )
 
     def process(self, payload: TTSInput, *, is_final: bool, is_streaming: bool) -> TTSInput:
         source = payload.text if payload.format == "plain" else strip_ssml_tags(payload.text)
-        compiled = re.compile(self.pattern, self.flags)
-
-        def matched_units(match_text: str) -> list[str] | None:
-            units = re.findall(self.unit_pattern, match_text)
-            if len(units) < self.minimum_units:
-                return None
-            return units
-
         if self.style == "ssml":
-            parts: list[str | _SSMLBreak] = []
-            cursor = 0
-            changed = False
+            return self._process_ssml(payload, source)
+        return self._process_plain(payload, source)
 
-            for match in compiled.finditer(source):
-                units = matched_units(match.group(0))
-                if units is None:
-                    continue
+    def _matched_units(self, match_text: str) -> list[str] | None:
+        units = [match.group(0) for match in self._unit_re.finditer(match_text)]
+        return units if len(units) >= self.minimum_units else None
 
-                changed = True
-                parts.append(source[cursor : match.start()])
-                for index, unit in enumerate(units):
-                    if index:
-                        parts.extend((" ", _SSMLBreak(self.pause_ms), " "))
-                    parts.append(unit)
-                cursor = match.end()
+    def _process_ssml(self, payload: TTSInput, source: str) -> TTSInput:
+        parts: list[str | _SSMLBreak] = []
+        cursor = 0
 
-            if not changed:
-                return payload
-
-            parts.append(source[cursor:])
-            return _to_ssml_payload(parts)
-
-        def repl(match: re.Match[str]) -> str:
-            units = matched_units(match.group(0))
+        for match in self._pattern_re.finditer(source):
+            units = self._matched_units(match.group(0))
             if units is None:
-                return match.group(0)
-            if self.style == "ellipsis":
-                count = max(1, self.ellipsis_count)
-                pause = " ".join(["..."] * count)
-            else:
-                pause = "—"
-            return f" {pause} ".join(units)
+                continue
+            parts.append(source[cursor : match.start()])
+            self._append_ssml_units(parts, units)
+            cursor = match.end()
 
-        transformed = compiled.sub(repl, source)
+        if not parts:
+            return payload
+        parts.append(source[cursor:])
+        return _to_ssml_payload(parts)
+
+    def _append_ssml_units(self, parts: list[str | _SSMLBreak], units: list[str]) -> None:
+        for index, unit in enumerate(units):
+            if index:
+                parts.extend((" ", _SSMLBreak(self.pause_ms), " "))
+            parts.append(unit)
+
+    def _process_plain(self, payload: TTSInput, source: str) -> TTSInput:
+        transformed = self._pattern_re.sub(self._replace_plain_match, source)
         if transformed == source:
             return payload
         return TTSInput(text=transformed, format="plain")
+
+    def _replace_plain_match(self, match: re.Match[str]) -> str:
+        units = self._matched_units(match.group(0))
+        if units is None:
+            return match.group(0)
+        pause = " ".join(["..."] * self.ellipsis_count) if self.style == "ellipsis" else "—"
+        return f" {pause} ".join(units)
+
+
+def _compile_regex(pattern: str, flags: int, name: str) -> re.Pattern[str]:
+    try:
+        return re.compile(pattern, flags)
+    except re.error as exc:
+        raise ValueError(f"invalid {name}: {exc}") from exc
 
 
 @dataclass(frozen=True)
