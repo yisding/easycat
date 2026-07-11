@@ -227,7 +227,8 @@ def _validate_attribute_key(normalized: str, allowed_keys: frozenset[str]) -> No
     # Allow-list membership bypasses only the substring guard below.
     if normalized in allowed_keys:
         return
-    if any(substring in normalized.lower() for substring in _FORBIDDEN_SUBSTRINGS):
+    lowered = normalized.lower()
+    if any(substring in lowered for substring in _FORBIDDEN_SUBSTRINGS):
         raise ValueError(f"forbidden observability attribute: {normalized}")
     raise ValueError(f"unsupported observability attribute: {normalized}")
 
