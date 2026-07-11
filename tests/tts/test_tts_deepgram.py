@@ -469,6 +469,32 @@ class TestDeepgramTTS:
         for e in events:
             assert e.type == TTSEventType.AUDIO
 
+    async def test_flush_rate_warning_rotates_socket_and_emits_error(self):
+        bus = EventBus()
+        errors: list[Error] = []
+        bus.subscribe(Error, lambda e: errors.append(e))
+
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="k", event_bus=bus))
+        # Deepgram throttles the flush past its rate limit and sends a flush-rate
+        # Warning instead of Flushed. Synthesis must not hang waiting for audio:
+        # it surfaces a provider error and rotates (closes) the socket.
+        warning_frame = json.dumps(
+            {"type": "Warning", "description": "Exceeded 20 Flush messages in 60 seconds"}
+        )
+        fake_ws = FakeReconnectingWS(messages=[warning_frame])
+
+        with patch.object(provider, "_create_ws", return_value=fake_ws):
+            events = [event async for event in provider.synthesize("test")]
+
+        await asyncio.sleep(0)
+        assert events == []  # no audio, and no hang waiting for Flushed
+        assert len(errors) == 1
+        assert errors[0].stage == ErrorStage.TTS
+        assert "flush rate limit" in str(errors[0].exception).lower()
+        assert fake_ws._closed  # socket rotated so the next reply gets a fresh window
+        assert provider._ws is None
+        await provider.close()
+
     async def test_non_object_control_frame_does_not_truncate_audio(self):
         provider = self._make_provider()
         flushed = json.dumps({"type": "Flushed"})

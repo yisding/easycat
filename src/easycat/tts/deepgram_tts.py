@@ -20,6 +20,11 @@ from easycat.tts.input import TTSInput, coerce_tts_input
 
 logger = logging.getLogger(__name__)
 
+# Internal sentinel returned by ``_handle_control`` for a Deepgram flush-rate
+# advisory. It is not a real Deepgram control type; it signals the recv loop
+# that the current flush was throttled and no ``Flushed`` frame will arrive.
+_FLUSH_RATE_LIMITED = "__flush_rate_limited__"
+
 
 @dataclass
 class DeepgramTTSConfig:
@@ -190,12 +195,38 @@ class DeepgramTTS(_WSTTSBase):
             # this cycle instead of silently waiting for a socket close.
             self._emit_provider_error_from_msg(ctrl)
         elif ctrl_type == "Warning":
-            # Warnings (including Flush-rate advisories) are non-fatal.
-            logger.info(
-                "Deepgram TTS warning: %s",
-                ctrl.get("description") or ctrl.get("message") or ctrl.get("reason") or ctrl,
-            )
+            description = ctrl.get("description") or ctrl.get("message") or ctrl.get("reason")
+            logger.info("Deepgram TTS warning: %s", description or ctrl)
+            # Most warnings (e.g. TEXT_LENGTH_WARNING) are non-fatal advisories.
+            # A flush-rate warning is different: once the per-connection Flush
+            # limit is exceeded Deepgram stops processing flushes and will not
+            # emit ``Flushed`` for this utterance. Signal the recv loop so it
+            # stops waiting on audio that will never arrive and rotates the
+            # socket, rather than blocking the turn and holding ``_stream_lock``.
+            if isinstance(description, str) and "flush" in description.lower():
+                return _FLUSH_RATE_LIMITED
         return str(ctrl_type) if ctrl_type is not None else None
+
+    def _terminal_cycle_state(self, ctrl_type: str | None) -> bool | None:
+        """Classify a control frame for the recv loop.
+
+        Returns ``None`` when the cycle should keep receiving, otherwise the
+        ``cycle_completed`` value to break with: ``True`` for a clean boundary
+        (``Flushed``/``Error``) that keeps the warm socket, or ``False`` for a
+        throttled flush. Proactive rotation (``_ensure_flush_capacity``) normally
+        keeps us under Deepgram's limit, but if a flush is throttled anyway we
+        surface a provider error and leave ``cycle_completed`` False so the
+        finally block rotates the socket, giving the next reply a fresh window
+        instead of blocking on a ``Flushed`` that will never arrive.
+        """
+        if ctrl_type in {"Flushed", "Error"}:
+            return True
+        if ctrl_type == _FLUSH_RATE_LIMITED:
+            self._emit_provider_error(
+                RuntimeError("Deepgram TTS flush rate limit reached; rotating socket")
+            )
+            return False
+        return None
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using Deepgram's WebSocket TTS API.
@@ -264,9 +295,9 @@ class DeepgramTTS(_WSTTSBase):
                 if isinstance(message, bytes) and message:
                     yield self._make_audio_event(message, self._source_format)
                 elif isinstance(message, str):
-                    ctrl_type = self._handle_control(message)
-                    if ctrl_type in {"Flushed", "Error"}:
-                        cycle_completed = True
+                    terminal = self._terminal_cycle_state(self._handle_control(message))
+                    if terminal is not None:
+                        cycle_completed = terminal
                         break
 
         except Exception as exc:
