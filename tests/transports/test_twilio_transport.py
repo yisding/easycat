@@ -585,6 +585,46 @@ class TestTwilioProtocolConsolidation:
         assert issubclass(TwilioTransport, _TwilioProtocolMixin)
         assert issubclass(TwilioConnectionTransport, _TwilioProtocolMixin)
 
+    def test_router_registers_every_twilio_inbound_event(self) -> None:
+        assert set(_TwilioProtocolMixin._MESSAGE_HANDLERS) == {
+            "connected",
+            "start",
+            "media",
+            "dtmf",
+            "stop",
+            "mark",
+        }
+
+    @pytest.mark.parametrize("raw", ["{", "[]", json.dumps({"event": []})])
+    @pytest.mark.asyncio
+    async def test_router_ignores_malformed_messages(self, raw: str) -> None:
+        transport = TwilioTransport(event_bus=EventBus())
+
+        await transport._handle_message(raw)
+
+        assert transport.stream_sid is None
+        assert transport.call_sid is None
+
+    @pytest.mark.asyncio
+    async def test_router_ignores_mark_with_non_string_name(self) -> None:
+        event_bus = EventBus()
+        marks: list[str] = []
+        event_bus.subscribe(PlaybackMarkAck, lambda event: marks.append(event.mark_name))
+        transport = TwilioTransport(event_bus=event_bus)
+        await transport._handle_message(_twilio_start_msg("STREAM1", "CALL1"))
+
+        await transport._handle_message(
+            json.dumps(
+                {
+                    "event": "mark",
+                    "streamSid": "STREAM1",
+                    "mark": {"name": ["invalid"]},
+                }
+            )
+        )
+
+        assert marks == []
+
     @pytest.mark.asyncio
     async def test_connection_transport_logs_connected_and_unknown_events(
         self, caplog: pytest.LogCaptureFixture
