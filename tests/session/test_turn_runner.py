@@ -27,11 +27,13 @@ from easycat.events import (
     Error,
     ErrorStage,
     Event,
+    EventBus,
     STTEvent,
     STTEventType,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TTSAudio,
     TTSEvent,
     TTSEventType,
     TurnStarted,
@@ -357,6 +359,32 @@ async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> N
     assert len(finals) == 1
     assert finals[0].text == "Reply."
     assert tts.synthesized_texts == ["Reply."]
+
+
+@pytest.mark.asyncio
+async def test_done_only_agent_releases_first_tts_payload_gate() -> None:
+    class DoneOnlyAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return "Done only."
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="done", text="Done only.")
+
+    tts = FakeTTS()
+    session = Session(_config(agent=DoneOnlyAgent(), tts=tts))
+    session._turn = TurnContext("turn-done-only", CancelToken())
+
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None), timeout=0.5
+    )
+
+    assert tts.synthesized_texts == ["Done only."]
 
 
 @pytest.mark.asyncio
@@ -737,6 +765,81 @@ async def test_tts_consumer_starts_before_agent_consumer() -> None:
     # payload, which happens before the agent's final event is emitted.
     assert "bot" in started
     assert started.index("bot") < started.index("final")
+
+
+@pytest.mark.asyncio
+async def test_first_tts_provider_overlaps_agent_delta_handler() -> None:
+    class StartSignalingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(payload):
+                yield event
+
+    tts = StartSignalingTTS()
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    order: list[str] = []
+    session = Session(_config(tts=tts))
+
+    async def _slow_delta_handler(_event: AgentDelta) -> None:
+        handler_started.set()
+        await release_handler.wait()
+        order.append("agent_delta")
+
+    session.event_bus.subscribe(AgentDelta, _slow_delta_handler)
+    session.event_bus.subscribe(BotStartedSpeaking, lambda _event: order.append("bot_started"))
+    session._turn = TurnContext("turn-overlap-delta", CancelToken())
+
+    run_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    try:
+        await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+        await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+        assert order == []
+    finally:
+        release_handler.set()
+
+    await asyncio.wait_for(run_task, timeout=0.5)
+    assert order[:2] == ["agent_delta", "bot_started"]
+
+
+@pytest.mark.asyncio
+async def test_agent_delta_handler_failure_rejects_speculative_tts() -> None:
+    class StartSignalingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(payload):
+                yield event
+
+    tts = StartSignalingTTS()
+    event_bus = EventBus(handler_error_policy="raise")
+    bot_started: list[BotStartedSpeaking] = []
+    audio: list[TTSAudio] = []
+    errors: list[Error] = []
+    session = Session(_config(tts=tts, event_bus=event_bus))
+
+    async def _fail_delta_handler(_event: AgentDelta) -> None:
+        raise RuntimeError("delta handler failed")
+
+    event_bus.subscribe(AgentDelta, _fail_delta_handler)
+    event_bus.subscribe(BotStartedSpeaking, bot_started.append)
+    event_bus.subscribe(TTSAudio, audio.append)
+    event_bus.subscribe(Error, errors.append)
+    session._turn = TurnContext("turn-reject-delta", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert tts.started.is_set()
+    assert bot_started == []
+    assert audio == []
+    assert any(event.stage == ErrorStage.AGENT for event in errors)
 
 
 @pytest.mark.asyncio

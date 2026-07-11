@@ -240,16 +240,15 @@ class TTSScheduler:
         token: CancelToken | None,
         *,
         is_active: Callable[[], bool] | None,
+        lifecycle_ready: asyncio.Future[bool] | None = None,
     ) -> asyncio.Task[TTSSynthResult]:
         """Start provider work while dispatching ``BotStartedSpeaking``.
 
         The provider request starts first and may receive its first event while
-        lifecycle handlers run. A synthesizer barrier keeps that event private
-        until every ``BotStartedSpeaking`` handler completes, preserving the
-        public event order while replacing serial handler + provider latency
-        with their maximum. If lifecycle dispatch fails or is cancelled, the
-        speculative synthesis task is cancelled and drained before the error
-        propagates.
+        agent-delta and lifecycle handlers run. A synthesizer barrier keeps
+        that event private until the optional first-payload admission future
+        succeeds and every ``BotStartedSpeaking`` handler completes. If either
+        dispatch fails or is cancelled, speculative synthesis is drained.
         """
         barrier = asyncio.Event()
         task = asyncio.create_task(
@@ -267,6 +266,13 @@ class TTSScheduler:
             # the yield inside the cleanup guard because cancellation can land
             # at this first suspension point.
             await asyncio.sleep(0)
+            if lifecycle_ready is not None:
+                allowed = await asyncio.shield(lifecycle_ready)
+                if not allowed:
+                    task.cancel()
+                    barrier.set()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return task
             await self._turn_manager.bot_started_speaking()
         except BaseException:
             task.cancel()
