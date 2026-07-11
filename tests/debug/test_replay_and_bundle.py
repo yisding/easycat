@@ -699,6 +699,31 @@ class TestBundleValidation:
             RunBundle.load(bundle_path)
         assert exc_info.value.reason_code == "INVALID_MANIFEST"
 
+    def test_env_metadata_values_must_be_strings(self, tmp_path):
+        bundle_path = _make_bundle_zip(
+            tmp_path,
+            manifest={
+                "format_version": FORMAT_VERSION,
+                "env_metadata": {"python": 314},
+            },
+        )
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_MANIFEST"
+
+    def test_manifest_must_be_utf8_json(self, tmp_path):
+        bundle_path = tmp_path / "invalid-utf8.zip"
+        with zipfile.ZipFile(bundle_path, "w") as archive:
+            archive.writestr("manifest.json", b"\xff\xfe")
+            archive.writestr("journal.ndjson", b"")
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.load(bundle_path)
+
+        assert exc_info.value.reason_code == "INVALID_MANIFEST_JSON"
+
     def test_metadata_too_large(self, tmp_path):
         """Journal records with >1MB metadata should be rejected."""
         # Create a record with oversized metadata

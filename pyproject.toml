@@ -274,7 +274,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/config/easy.py" = ["C901", "PLR0912"]
 # Landed in a concurrent wave-4 item, grandfathered at integration time.
 "src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915", "B007"]
-"src/easycat/debug/bundle.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debug/bundle.py" = ["C901"]
 "src/easycat/debug/export.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/debugger/_audio.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_records.py" = ["C901", "PLR0912"]
@@ -588,4 +588,14 @@ ignore_imports = [
     "easycat.transports.websocket -> easycat.session_manager",
     "easycat.transports.webrtc -> easycat.session_manager",
     "easycat.transports.webtransport -> easycat.session_manager",
+]
+
+[[tool.importlinter.contracts]]
+name = "Bundle archive loader does not import the bundle facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debug._bundle_loader",
+]
+forbidden_modules = [
+    "easycat.debug.bundle",
 ]

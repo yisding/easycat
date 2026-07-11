@@ -14,17 +14,52 @@ dispatch on the suffix.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
-import re
 import sqlite3
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from easycat.debug._bundle_loader import _reject_traversal, load_bundle
+from easycat.debug._bundle_models import (
+    _ARTIFACT_SIZE_CAP,
+    _SHA256_REF,
+    FORMAT_VERSION,
+    ArtifactEntry,
+    BundleError,
+    BundleExists,
+    BundleInUseError,
+    BundleRecoveryError,
+    BundleValidationError,
+    BundleVersionError,
+    CommittableCheckpoint,
+    DebugCaptureDisabledError,
+    Manifest,
+    checkpoint_id,
+    parse_checkpoint_id,
+)
+
+__all__ = [
+    "FORMAT_VERSION",
+    "ArtifactEntry",
+    "BundleError",
+    "BundleExists",
+    "BundleInUseError",
+    "BundleRecoveryError",
+    "BundleValidationError",
+    "BundleVersionError",
+    "CommittableCheckpoint",
+    "DebugCaptureDisabledError",
+    "Manifest",
+    "RunBundle",
+    "checkpoint_id",
+    "discover_bundles",
+    "discover_bundles_with_status",
+    "parse_checkpoint_id",
+]
 
 if TYPE_CHECKING:
     from easycat.runtime.replay import (
@@ -33,137 +68,6 @@ if TYPE_CHECKING:
         ReplayResult,
         ReplaySpec,
     )
-
-_ARTIFACT_SIZE_CAP = 500_000_000  # 500MB aggregate cap across artifacts.
-
-
-def _reject_traversal(name: str) -> None:
-    """Raise if *name* looks like a traversal or absolute path.
-
-    ZIP entry names are POSIX-style, but attackers can embed backslashes
-    or absolute paths that naïve string checks miss.  Normalise
-    backslashes, parse as a posix path, and reject absolute paths or any
-    ``..`` component.
-    """
-    normalized = name.replace("\\", "/")
-    posix = PurePosixPath(normalized)
-    if posix.is_absolute() or any(part == ".." for part in posix.parts):
-        raise BundleValidationError(
-            f"Path traversal detected: {name!r}",
-            reason_code="PATH_TRAVERSAL",
-        )
-
-
-def _read_zip_member(
-    zf: zipfile.ZipFile,
-    name: str,
-    *,
-    missing_reason_code: str,
-) -> bytes:
-    try:
-        return zf.read(name)
-    except KeyError as exc:
-        raise BundleValidationError(
-            f"Bundle is missing {name}",
-            reason_code=missing_reason_code,
-        ) from exc
-    except zipfile.BadZipFile as exc:
-        raise BundleValidationError(
-            f"Invalid bundle member {name!r}: {exc}",
-            reason_code="BAD_ZIP",
-        ) from exc
-
-
-FORMAT_VERSION = 1
-
-
-class BundleError(RuntimeError): ...
-
-
-class BundleExists(BundleError): ...
-
-
-class BundleVersionError(BundleError): ...
-
-
-class BundleValidationError(BundleError):
-    def __init__(self, message: str, *, reason_code: str = "UNKNOWN") -> None:
-        super().__init__(message)
-        self.reason_code = reason_code
-
-
-class BundleInUseError(BundleError): ...
-
-
-class BundleRecoveryError(BundleError): ...
-
-
-class DebugCaptureDisabledError(BundleError): ...
-
-
-# Artifact refs are the content-addressed SHA-256 hex digests produced
-# by ``ArtifactStore.put``. This regex validates that incoming refs
-# match that format — purely a structural sanity check on the ref
-# string, not a tamper-proofing mechanism for the bundle contents.
-_SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
-
-
-@dataclass(frozen=True)
-class ArtifactEntry:
-    ref: str
-    size_bytes: int = 0
-
-
-_CHECKPOINT_ID_PREFIX = "cp_"
-
-
-def checkpoint_id(sequence: int) -> str:
-    """Convert a monotonic journal sequence to its user-facing checkpoint id.
-
-    The ``cp_<sequence>`` vocabulary (``cp_87``) is what the debugger
-    UI, replay commands, and LLM-coding-agent prompts use externally;
-    the journal itself keeps the raw integer for ordering and
-    indexing.  Keeping both forms isolated behind this helper means a
-    future format change (e.g. short hashes) can happen in one place.
-    """
-    if sequence < 0:
-        raise ValueError(f"checkpoint sequence must be non-negative, got {sequence}")
-    return f"{_CHECKPOINT_ID_PREFIX}{sequence}"
-
-
-def parse_checkpoint_id(value: str) -> int:
-    """Inverse of :func:`checkpoint_id`.  Raises ``ValueError`` on a bad id."""
-    if not isinstance(value, str) or not value.startswith(_CHECKPOINT_ID_PREFIX):
-        raise ValueError(f"Invalid checkpoint id {value!r}: expected 'cp_<int>'")
-    raw = value[len(_CHECKPOINT_ID_PREFIX) :]
-    try:
-        seq = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"Invalid checkpoint id {value!r}: not an integer") from exc
-    if seq < 0:
-        raise ValueError(f"Invalid checkpoint id {value!r}: negative sequence")
-    return seq
-
-
-@dataclass(frozen=True)
-class CommittableCheckpoint:
-    sequence: int
-    stage: str
-    unit_id: str = ""
-
-    @property
-    def checkpoint_id(self) -> str:
-        """Return the ``cp_<sequence>`` user-facing id for this checkpoint."""
-        return checkpoint_id(self.sequence)
-
-
-@dataclass(frozen=True)
-class Manifest:
-    format_version: int = FORMAT_VERSION
-    provider_versions: dict[str, Any] = field(default_factory=dict)
-    config_snapshot: dict[str, Any] = field(default_factory=dict)
-    env_metadata: dict[str, str] = field(default_factory=dict)
-    sharing_banner: str = ""
 
 
 @dataclass
@@ -362,229 +266,16 @@ class RunBundle:
         ZIP we're handed. Use filesystem ACLs or a signing layer on
         top if you need integrity guarantees.
         """
-        path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"Bundle not found: {path}")
-
-        try:
-            zf = zipfile.ZipFile(path, "r")
-        except zipfile.BadZipFile as exc:
-            raise BundleValidationError(
-                f"Invalid bundle archive: {path}",
-                reason_code="BAD_ZIP",
-            ) from exc
-
-        with zf:
-            # Read manifest
-            try:
-                manifest_data = json.loads(
-                    _read_zip_member(
-                        zf,
-                        "manifest.json",
-                        missing_reason_code="MISSING_MANIFEST",
-                    )
-                )
-            except json.JSONDecodeError as exc:
-                raise BundleValidationError(
-                    "Bundle manifest is not valid JSON",
-                    reason_code="INVALID_MANIFEST_JSON",
-                ) from exc
-            if not isinstance(manifest_data, dict):
-                raise BundleValidationError(
-                    "Bundle manifest must be a JSON object",
-                    reason_code="INVALID_MANIFEST",
-                )
-            fmt_ver = manifest_data.get("format_version", 0)
-            if not isinstance(fmt_ver, int) or isinstance(fmt_ver, bool) or fmt_ver < 0:
-                raise BundleValidationError(
-                    "Bundle format_version must be a non-negative integer",
-                    reason_code="INVALID_MANIFEST",
-                )
-            if fmt_ver > FORMAT_VERSION:
-                raise BundleVersionError(
-                    f"Bundle format_version {fmt_ver} is newer than "
-                    f"supported version {FORMAT_VERSION}"
-                )
-
-            # Validate manifest entries for path traversal
-            for name in zf.namelist():
-                _reject_traversal(name)
-
-            provider_versions = manifest_data.get("provider_versions", {})
-            config_snapshot = manifest_data.get("config_snapshot", {})
-            env_metadata = manifest_data.get("env_metadata", {})
-            for key, value in (
-                ("provider_versions", provider_versions),
-                ("config_snapshot", config_snapshot),
-                ("env_metadata", env_metadata),
-            ):
-                if not isinstance(value, dict):
-                    raise BundleValidationError(
-                        f"Bundle manifest {key} must be a JSON object",
-                        reason_code="INVALID_MANIFEST",
-                    )
-            sharing_banner = manifest_data.get("sharing_banner", "")
-            if not isinstance(sharing_banner, str):
-                raise BundleValidationError(
-                    "Bundle manifest sharing_banner must be a string",
-                    reason_code="INVALID_MANIFEST",
-                )
-
-            manifest = Manifest(
-                format_version=fmt_ver,
-                provider_versions=provider_versions,
-                config_snapshot=config_snapshot,
-                env_metadata=env_metadata,
-                sharing_banner=sharing_banner,
-            )
-
-            # Read journal
-            journal_ndjson = _read_zip_member(
-                zf,
-                "journal.ndjson",
-                missing_reason_code="MISSING_JOURNAL",
-            )
-
-            # Read artifacts.  Check each entry's declared uncompressed
-            # size before reading so a zip bomb can't force a massive
-            # in-memory decompression.
-            artifact_index: dict[str, ArtifactEntry] = {}
-            artifact_blobs: dict[str, bytes] = {}
-            total_size = 0
-            for info in zf.infolist():
-                name = info.filename
-                if not name.startswith("artifacts/"):
-                    continue
-                ref = name.removeprefix("artifacts/").removesuffix(".bin")
-                if not ref:
-                    continue
-                if not _SHA256_REF.match(ref):
-                    raise BundleValidationError(
-                        f"Invalid artifact ref: {ref!r}",
-                        reason_code="INVALID_REF",
-                    )
-                declared = info.file_size
-                if declared < 0 or total_size + declared > _ARTIFACT_SIZE_CAP:
-                    raise BundleValidationError(
-                        "Total artifact size exceeds 500MB cap",
-                        reason_code="SIZE_EXCEEDED",
-                    )
-                data = _read_zip_member(
-                    zf,
-                    name,
-                    missing_reason_code="MISSING_ARTIFACT",
-                )
-                if len(data) > declared or total_size + len(data) > _ARTIFACT_SIZE_CAP:
-                    raise BundleValidationError(
-                        "Total artifact size exceeds 500MB cap",
-                        reason_code="SIZE_EXCEEDED",
-                    )
-                total_size += len(data)
-                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
-                artifact_blobs[ref] = data
-
-            # Reconstruct artifacts from inline base64 blobs in manifest
-            inline_artifacts = manifest_data.get("inline_artifacts", {})
-            if not isinstance(inline_artifacts, dict):
-                raise BundleValidationError(
-                    "Bundle inline_artifacts must be a JSON object",
-                    reason_code="INVALID_MANIFEST",
-                )
-            for ref, b64 in inline_artifacts.items():
-                if ref in artifact_index:
-                    continue  # file-based entry takes precedence
-                if not _SHA256_REF.match(ref):
-                    raise BundleValidationError(
-                        f"Invalid inline artifact ref: {ref!r}",
-                        reason_code="INVALID_REF",
-                    )
-                if not isinstance(b64, str):
-                    raise BundleValidationError(
-                        f"Inline artifact {ref!r} must be a base64 string",
-                        reason_code="INVALID_MANIFEST",
-                    )
-                estimated_size = (len(b64) * 3) // 4
-                if total_size + estimated_size > _ARTIFACT_SIZE_CAP:
-                    raise BundleValidationError(
-                        "Total artifact size exceeds 500MB cap",
-                        reason_code="SIZE_EXCEEDED",
-                    )
-                try:
-                    data = base64.b64decode(b64, validate=True)
-                except (binascii.Error, ValueError) as exc:
-                    raise BundleValidationError(
-                        f"Invalid base64 for inline artifact {ref!r}: {exc}",
-                        reason_code="INVALID_BASE64",
-                    ) from exc
-                total_size += len(data)
-                if total_size > _ARTIFACT_SIZE_CAP:
-                    raise BundleValidationError(
-                        "Total artifact size exceeds 500MB cap",
-                        reason_code="SIZE_EXCEEDED",
-                    )
-                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))
-                artifact_blobs[ref] = data
-
-            # Validate metadata sizes
-            for record_line in journal_ndjson.decode("utf-8", errors="replace").splitlines():
-                if not record_line.strip():
-                    continue
-                try:
-                    record = json.loads(record_line)
-                    for key in ("metadata", "framework_metadata"):
-                        if key in record:
-                            meta_json = json.dumps(record[key])
-                            if len(meta_json) > 1_000_000:
-                                raise BundleValidationError(
-                                    f"Record metadata exceeds 1MB: {key}",
-                                    reason_code="METADATA_TOO_LARGE",
-                                )
-                except json.JSONDecodeError:
-                    continue
-
-            entry_points = []
-            raw_entry_points = manifest_data.get("replay_entry_points", [])
-            if not isinstance(raw_entry_points, list):
-                raise BundleValidationError(
-                    "Bundle replay_entry_points must be a list",
-                    reason_code="INVALID_REPLAY_ENTRY_POINT",
-                )
-            for ep in raw_entry_points:
-                if not isinstance(ep, dict):
-                    raise BundleValidationError(
-                        "Bundle replay_entry_points entries must be objects",
-                        reason_code="INVALID_REPLAY_ENTRY_POINT",
-                    )
-                sequence = ep.get("sequence", 0)
-                if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
-                    raise BundleValidationError(
-                        "Bundle replay_entry_points sequence must be a non-negative integer",
-                        reason_code="INVALID_REPLAY_ENTRY_POINT",
-                    )
-                stage = ep.get("stage", "")
-                unit_id = ep.get("unit_id", "")
-                if not isinstance(stage, str) or not isinstance(unit_id, str):
-                    raise BundleValidationError(
-                        "Bundle replay_entry_points stage and unit_id must be strings",
-                        reason_code="INVALID_REPLAY_ENTRY_POINT",
-                    )
-                entry_points.append(
-                    CommittableCheckpoint(
-                        sequence=sequence,
-                        stage=stage,
-                        unit_id=unit_id,
-                    )
-                )
-
-            return RunBundle(
-                format_version=fmt_ver,
-                manifest=manifest,
-                journal_ndjson=journal_ndjson,
-                artifact_index=artifact_index,
-                artifact_blobs=artifact_blobs,
-                replay_entry_points=entry_points,
-                sharing_banner=manifest.sharing_banner,
-            )
+        loaded = load_bundle(path)
+        return RunBundle(
+            format_version=loaded.manifest.format_version,
+            manifest=loaded.manifest,
+            journal_ndjson=loaded.journal_ndjson,
+            artifact_index=loaded.artifact_index,
+            artifact_blobs=loaded.artifact_blobs,
+            replay_entry_points=loaded.replay_entry_points,
+            sharing_banner=loaded.manifest.sharing_banner,
+        )
 
     @staticmethod
     def from_partial_journal(
