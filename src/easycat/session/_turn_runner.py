@@ -386,6 +386,7 @@ class TurnRunner:
         if turn is None:
             turn = self._turn.current
         token = turn.cancel_token if turn else None
+        turn_generation = self._turn.generation
 
         transcript = await self._finalize_turn_transcript(turn)
 
@@ -397,11 +398,31 @@ class TurnRunner:
 
         await self._emit(AgentRequestStarted())
         prepared_response = await self._take_preemptive_response(transcript, turn)
+        # The await above spans the remaining model latency. Speech may resume
+        # during it, cancelling/replacing this turn. Never fall through to the
+        # confirmed invocation for an abandoned transcript: even a cancelled
+        # AgentRunner records its user message before it observes the token.
+        if not self._is_active_voice_turn(turn, token, turn_generation):
+            return
         await self.run_streaming_agent(
             transcript,
             token,
             turn=turn,
             prepared_response=prepared_response,
+        )
+
+    def _is_active_voice_turn(
+        self,
+        turn: TurnContext | None,
+        token: CancelToken | None,
+        generation: int,
+    ) -> bool:
+        """Whether a post-await voice turn is still the session's active generation."""
+        return bool(
+            turn is not None
+            and not (token and token.is_cancelled)
+            and self._turn.current is turn
+            and self._turn.generation == generation
         )
 
     async def _cancel_preemptive_generation(self) -> None:

@@ -424,6 +424,43 @@ async def test_later_stt_final_cancels_and_replaces_preemptive_generation() -> N
 
 
 @pytest.mark.asyncio
+async def test_replaced_turn_does_not_commit_slow_preemptive_response() -> None:
+    class SlowSimpleAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            self.started.set()
+            await self.release.wait()
+            return f"Reply to {text}."
+
+    agent = SlowSimpleAgent()
+    runner_agent = AgentRunner(agent)
+    session = Session(_config(agent=runner_agent))
+    old_turn = TurnContext("turn-old", CancelToken())
+    session._turn_runner._turn.set(old_turn)
+    old_turn.append_stt_segment("abandoned")
+    await session._turn_runner.on_stt_final(STTFinal(text="abandoned", turn_id=old_turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    old_turn_task = asyncio.create_task(session._turn_runner.handle_end_of_speech(turn=old_turn))
+    await asyncio.sleep(0)
+    assert session._turn_runner._preemptive_task is None
+
+    old_turn.cancel_token.cancel()
+    new_turn = TurnContext("turn-new", CancelToken())
+    session._turn_runner._turn.set(new_turn)
+    agent.release.set()
+    await asyncio.wait_for(old_turn_task, timeout=1)
+
+    assert agent.calls == ["abandoned"]
+    assert runner_agent.history == []
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> None:
     tts = FakeTTS()
     session = Session(_config(tts=tts))
