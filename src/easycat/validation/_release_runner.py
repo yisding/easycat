@@ -21,11 +21,11 @@ from easycat.validation._lane_harness import (
     _finish_lane_run,
     _start_lane_run,
 )
+from easycat.validation._latency_models import LatencyMode
 from easycat.validation._latency_runner import run_latency_validation
 from easycat.validation._live_runner import run_live_validation
 from easycat.validation._runner_support import CommandResult, CommandRunner, run_subprocess
 from easycat.validation._slice_runner import run_validation_slice
-from easycat.validation.latency import LatencyMode
 from easycat.validation.report import (
     ArtifactRef,
     ValidationCheck,

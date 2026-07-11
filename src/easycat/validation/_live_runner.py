@@ -12,6 +12,10 @@ from pathlib import Path
 
 from easycat._provider_catalog import provider_names
 from easycat.validation._environment import runtime_secret_values
+from easycat.validation._failure_classification import (
+    FailureCategory,
+    classify_failure_category,
+)
 from easycat.validation._lane_harness import (
     LaneRunContext,
     ValidationRunResult,
@@ -26,7 +30,6 @@ from easycat.validation._runner_support import (
     resolve_validation_test_arg,
     run_subprocess,
 )
-from easycat.validation.latency import FailureCategory, classify_failure_category
 from easycat.validation.provider_reports import (
     ProviderSurfaceSpec,
     build_provider_capability_report,

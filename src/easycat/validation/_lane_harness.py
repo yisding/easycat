@@ -27,8 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from easycat.validation._environment import PROVIDER_ENV_VARS
-from easycat.validation.latency import _is_ci
+from easycat.validation._environment import PROVIDER_ENV_VARS, is_ci
 from easycat.validation.report import (
     ArtifactRef,
     GitMetadata,
@@ -176,7 +175,7 @@ def _collect_environment_metadata() -> ValidationEnvironment:
     return ValidationEnvironment(
         python=f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         platform=platform.platform(),
-        ci=_is_ci(),
+        ci=is_ci(),
         env_vars={name: name in os.environ for name in PROVIDER_ENV_VARS},
     )
 
