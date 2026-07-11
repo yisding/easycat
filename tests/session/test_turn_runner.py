@@ -542,6 +542,21 @@ async def test_tts_streaming_failure_emits_error_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tts_lifecycle_failure_finishes_bot_speaking_turn() -> None:
+    session = Session(_config())
+
+    async def _fail_after_bot_start(_event: BotStartedSpeaking) -> None:
+        raise RuntimeError("bot start handler failed")
+
+    session.event_bus.subscribe(BotStartedSpeaking, _fail_after_bot_start)
+    session._turn = TurnContext("turn-bot-start-err", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert session._turn_manager.state == TurnManagerState.IDLE
+
+
+@pytest.mark.asyncio
 async def test_agent_and_tts_streaming_failures_emit_pipeline_exception_group() -> None:
     session = Session(_config(agent=_FailingAfterDeltaAgent(), tts=_FailingTTS()))
     errors: list[Error] = []

@@ -541,8 +541,8 @@ class TurnRunner:
                             ),
                         )
                         st.playback_started = True
-                    st.synth_started = True
                 finally:
+                    st.synth_started = True
                     st.first_tts_lifecycle_ready.set()
 
             if first_synthesis_task is not None:
