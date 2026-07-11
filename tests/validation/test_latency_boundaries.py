@@ -19,12 +19,20 @@ from easycat.validation._latency_models import (
     ReliabilitySample,
     ReliabilitySignals,
 )
+from easycat.validation._latency_selectors import (
+    LATENCY_SMOKE_TEST,
+    LATENCY_SWEEP_TEST,
+    LATENCY_TEST_FILE,
+)
 
 
 def test_public_latency_facade_reexports_leaf_implementations() -> None:
     assert latency.LatencySample is LatencySample
     assert latency.LatencyBudget is LatencyBudget
     assert latency.ReliabilitySample is ReliabilitySample
+    assert latency.LATENCY_TEST_FILE is LATENCY_TEST_FILE
+    assert latency.LATENCY_SMOKE_TEST is LATENCY_SMOKE_TEST
+    assert latency.LATENCY_SWEEP_TEST is LATENCY_SWEEP_TEST
     assert set(latency.__all__) == {name for name in vars(latency) if not name.startswith("_")}
 
 

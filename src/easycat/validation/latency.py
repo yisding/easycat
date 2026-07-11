@@ -36,12 +36,20 @@ from easycat.validation._latency_models import (
     ReliabilitySample,
     ReliabilitySignals,
 )
-from easycat.validation._latency_selectors import latency_pytest_args
+from easycat.validation._latency_selectors import (
+    LATENCY_SMOKE_TEST,
+    LATENCY_SWEEP_TEST,
+    LATENCY_TEST_FILE,
+    latency_pytest_args,
+)
 
 __all__ = [
     "DEFAULT_BUDGETS",
     "DEFAULT_RELIABILITY_BUDGETS",
     "FailureCategory",
+    "LATENCY_SMOKE_TEST",
+    "LATENCY_SWEEP_TEST",
+    "LATENCY_TEST_FILE",
     "LatencyBudget",
     "LatencyBudgetViolation",
     "LatencyComparisonThresholds",
