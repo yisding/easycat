@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+import easycat.integrations.agents._factory as agent_factory
 from easycat.integrations.agents._factory import auto_adapt_agent
+from easycat.integrations.agents.base import BridgeInputError
 
 
 class _CustomAgent:
@@ -13,6 +15,44 @@ class _CustomAgent:
 class _Workflow:
     async def on_user_turn(self, text: str) -> str:
         return text
+
+
+class _ExtraPositionalWorkflow:
+    async def on_user_turn(self, text: str, context: object) -> str:
+        return text
+
+
+class _UnsupportedKeywordWorkflow:
+    async def on_user_turn(self, text: str, *, tenant: str) -> str:
+        return text
+
+
+class _FakeGraph:
+    def __init__(self) -> None:
+        self.applied_config: dict | None = None
+
+    def with_config(self, config: dict):
+        self.applied_config = config
+        return self
+
+
+class _FakeBindingBase:
+    def __init__(
+        self,
+        bound,
+        *,
+        config: dict | None = None,
+        kwargs: dict | None = None,
+        config_factories: list | None = None,
+    ) -> None:
+        self.bound = bound
+        self.config = config or {}
+        self.kwargs = kwargs or {}
+        self.config_factories = config_factories or []
+
+
+class _FakeBinding(_FakeBindingBase):
+    pass
 
 
 def test_auto_adapt_agent_returns_plain_run_agents_unchanged():
@@ -72,3 +112,87 @@ def test_auto_adapt_agent_runner_wrapping_raw_framework_adapts_inner():
     assert adapted is runner
     assert isinstance(runner._agent, GenericWorkflowBridge)
     assert runner._is_bridge is True
+
+
+def test_auto_adapt_agent_consults_builtin_adapters_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    adapted = object()
+
+    def miss(agent, model):
+        calls.append(f"miss:{model}")
+        return None
+
+    def match(agent, model):
+        calls.append(f"match:{model}")
+        return agent_factory._AdaptedAgent(adapted)
+
+    def should_not_run(agent, model):
+        calls.append("late")
+        return None
+
+    monkeypatch.setattr(
+        agent_factory,
+        "_BUILTIN_AGENT_ADAPTERS",
+        (miss, match, should_not_run),
+    )
+
+    assert auto_adapt_agent(object(), model="voice-model") is adapted
+    assert calls == ["miss:voice-model", "match:voice-model"]
+
+
+@pytest.mark.parametrize(
+    ("workflow_type", "message"),
+    [
+        (_ExtraPositionalWorkflow, "2 required positional"),
+        (_UnsupportedKeywordWorkflow, "tenant"),
+    ],
+)
+def test_auto_adapt_agent_rejects_uncallable_workflow_signatures(
+    workflow_type: type,
+    message: str,
+) -> None:
+    with pytest.raises(BridgeInputError, match=message):
+        auto_adapt_agent(workflow_type())
+
+
+@pytest.fixture
+def fake_langgraph_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        agent_factory,
+        "_langgraph_runtime_types",
+        lambda: (_FakeGraph, (_FakeBinding,), (_FakeBindingBase,)),
+    )
+
+
+def test_unwrap_compiled_graph_preserves_binding_only_chain(fake_langgraph_types) -> None:
+    graph = _FakeGraph()
+    outer = _FakeBinding(_FakeBinding(graph))
+
+    assert agent_factory._unwrap_compiled_state_graph(outer) is outer
+
+
+def test_unwrap_compiled_graph_restores_peeled_config(fake_langgraph_types) -> None:
+    graph = _FakeGraph()
+    retry = _FakeBindingBase(
+        graph,
+        config={"configurable": {"thread_id": "inner", "tenant": "acme"}},
+    )
+    outer = _FakeBinding(
+        retry,
+        config={"configurable": {"thread_id": "outer"}, "tags": ["voice"]},
+    )
+
+    assert agent_factory._unwrap_compiled_state_graph(outer) is graph
+    assert graph.applied_config == {
+        "configurable": {"thread_id": "outer", "tenant": "acme"},
+        "tags": ["voice"],
+    }
+
+
+def test_unwrap_compiled_graph_rejects_behavior_above_retry(fake_langgraph_types) -> None:
+    wrapped = _FakeBindingBase(_FakeGraph(), kwargs={"stop": ["done"]})
+
+    with pytest.raises(BridgeInputError, match="silently dropped"):
+        agent_factory._unwrap_compiled_state_graph(wrapped)
