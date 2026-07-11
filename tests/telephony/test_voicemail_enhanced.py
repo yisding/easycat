@@ -128,6 +128,26 @@ class TestSITToneDetection:
         )
         assert detect_sit_tones(audio) is True
 
+    def test_sit_tones_at_exact_minimum_duration_are_detected(self) -> None:
+        audio = _generate_tone(950, 0.2) + _generate_tone(1400, 0.2) + _generate_tone(1800, 0.2)
+
+        assert detect_sit_tones(audio, min_tone_duration_ms=200) is True
+
+    def test_sit_tones_shorter_than_minimum_duration_are_rejected(self) -> None:
+        audio = (
+            _generate_tone(950, 0.25)
+            + _generate_tone(1400, 0.25)
+            + _generate_tone(1800, 0.25)
+            + _generate_silence(0.05)
+        )
+
+        assert detect_sit_tones(audio, min_tone_duration_ms=275) is False
+
+    def test_sit_tones_out_of_order_are_rejected(self) -> None:
+        audio = _generate_tone(1400, 0.3) + _generate_tone(950, 0.3) + _generate_tone(1800, 0.3)
+
+        assert detect_sit_tones(audio) is False
+
 
 # ── CNG Detection ────────────────────────────────────────────────
 
