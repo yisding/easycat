@@ -45,15 +45,28 @@ def _assert_subquadratic(
 
     A quadratic algorithm yields a time(2n)/time(n) ratio near 4; a linear one
     near 2. We require the ratio to stay comfortably below 3 so the assertion
-    is robust to noise while still catching a regression to O(n^2).
+    still catches a regression to O(n^2).
+
+    Timing on shared CI runners is noisy: a single ratio can spike above the
+    threshold even for a linear algorithm (a lucky-fast small run or a
+    contended large run). Take the best (smallest) ratio over several
+    independent measurements — a genuinely quadratic algorithm stays near 4 on
+    *every* attempt, so this filters scheduler jitter without weakening the
+    O(n^2) regression check.
     """
-    small = _min_runtime(fn, build(n))
-    large = _min_runtime(fn, build(2 * n))
-    # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
-    if small <= 0:
-        return
-    ratio = large / small
-    assert ratio < 3.0, f"scaling ratio {ratio:.2f} suggests quadratic blowup"
+    small_payload = build(n)
+    large_payload = build(2 * n)
+    best_ratio = float("inf")
+    for _ in range(5):
+        small = _min_runtime(fn, small_payload)
+        large = _min_runtime(fn, large_payload)
+        # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
+        if small <= 0:
+            return
+        best_ratio = min(best_ratio, large / small)
+        if best_ratio < 3.0:
+            return
+    assert best_ratio < 3.0, f"scaling ratio {best_ratio:.2f} suggests quadratic blowup"
 
 
 # ── has_markdown detection ─────────────────────────────────────────
