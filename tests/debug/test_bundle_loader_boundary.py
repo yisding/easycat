@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -81,7 +82,7 @@ def test_zip_member_limit_rejects_declared_size_before_reading() -> None:
 
 
 def test_loader_caps_manifest_and_journal_members(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "bounded-members.zip"
@@ -116,7 +117,7 @@ def test_loader_caps_manifest_and_journal_members(
     assert observed_limits["journal.ndjson"] == _ARTIFACT_SIZE_CAP
 
 
-def test_journal_scalar_records_do_not_break_bundle_loading(tmp_path) -> None:
+def test_journal_scalar_records_do_not_break_bundle_loading(tmp_path: Path) -> None:
     path = tmp_path / "scalar-record.zip"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps({"format_version": FORMAT_VERSION}))
