@@ -66,6 +66,11 @@ class TurnManagerConfig:
 
     # End-of-turn silence timeout in milliseconds
     end_of_turn_silence_ms: int = 500
+    # Shorter silence timeout used when STT finalizes text with terminal
+    # punctuation during the pause.  None disables punctuation-aware
+    # endpointing. Smart-turn incomplete/error decisions still receive the
+    # full end_of_turn_silence_ms grace period.
+    punctuated_end_of_turn_silence_ms: int | None = 250
     # Silence budget, after VAD stop, before finalizing the current STT segment.
     # 0 means commit the segment immediately when VAD reports a pause.
     #
@@ -113,6 +118,11 @@ class TurnManagerConfig:
     def __post_init__(self) -> None:
         if self.end_of_turn_silence_ms < 0:
             raise ValueError("end_of_turn_silence_ms must be non-negative")
+        if (
+            self.punctuated_end_of_turn_silence_ms is not None
+            and self.punctuated_end_of_turn_silence_ms < 0
+        ):
+            raise ValueError("punctuated_end_of_turn_silence_ms must be non-negative or None")
         if self.stt_segment_silence_ms < 0:
             raise ValueError("stt_segment_silence_ms must be non-negative")
         if self.pre_roll_ms < 0:
@@ -176,6 +186,7 @@ class TurnManager:
         # Silence timeout tracking
         self._silence_start_time: float | None = None
         self._silence_timer_task: asyncio.Task[None] | None = None
+        self._punctuated_transcript_event = asyncio.Event()
 
         # Cancel token for the current turn
         self._cancel_token: CancelToken | None = None
@@ -374,6 +385,20 @@ class TurnManager:
         elif isinstance(event, VADStopSpeaking):
             await self._handle_speech_stop()
 
+    def on_stt_final(self, text: str) -> None:
+        """Notify the active pause that STT finalized a complete sentence.
+
+        Only terminal punctuation observed while ``USER_PAUSED`` can shorten
+        the fixed endpoint timer. Finals that arrive while the user is still
+        speaking are ignored so a late segment result cannot leak into the
+        next pause.
+        """
+        if self._state != TurnManagerState.USER_PAUSED:
+            return
+        normalized = text.rstrip().rstrip("\"'”’)]}")
+        if normalized.endswith((".", "!", "?", "。", "！", "？", "．")):
+            self._punctuated_transcript_event.set()
+
     async def _handle_speech_start(self) -> None:
         """Handle VAD speech start."""
         if self._state == TurnManagerState.BOT_SPEAKING:
@@ -443,6 +468,7 @@ class TurnManager:
             return
 
         self._silence_start_time = time.monotonic()
+        self._punctuated_transcript_event.clear()
         self._transition(
             TurnManagerState.USER_PAUSED,
             reason="vad_silence",
@@ -488,7 +514,9 @@ class TurnManager:
         the turn immediately.
         """
         try:
-            if self._endpoint_detector is not None and self._turn_audio:
+            punctuated_endpoint = False
+            detector_attempted = self._endpoint_detector is not None and bool(self._turn_audio)
+            if detector_attempted:
                 try:
                     if (
                         self._endpoint_stage is not None
@@ -536,21 +564,55 @@ class TurnManager:
                 except Exception:
                     logger.exception("Endpoint detection failed, falling back to silence timeout")
 
-            # Grant the full grace budget from the moment of the "incomplete"
-            # (or failed) decision — do not penalize the user for detector
-            # latency, which would let a slow model collapse the wait to zero.
-            await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
+            if detector_attempted:
+                # Grant the full grace budget from the moment of the
+                # "incomplete" (or failed) decision — do not penalize the user
+                # for detector latency, which would let a slow model collapse
+                # the wait to zero. A model verdict also takes precedence over
+                # the punctuation hint.
+                await asyncio.sleep(self._config.end_of_turn_silence_ms / 1000.0)
+            else:
+                punctuated_endpoint = await self._wait_for_fixed_endpoint()
 
             if self._state == TurnManagerState.USER_PAUSED:
                 self._transition(
                     TurnManagerState.PROCESSING,
-                    reason="silence_timeout",
+                    reason=(
+                        "punctuated_silence_timeout"
+                        if punctuated_endpoint
+                        else "silence_timeout"
+                    ),
                 )
                 await self._event_bus.emit(
                     TurnEnded(session_id=self._session_id, turn_id=self._current_turn_id)
                 )
         except asyncio.CancelledError:
             pass
+
+    async def _wait_for_fixed_endpoint(self) -> bool:
+        """Wait for the fixed timeout and report whether punctuation shortened it."""
+        full_delay_s = self._config.end_of_turn_silence_ms / 1000.0
+        punctuated_ms = self._config.punctuated_end_of_turn_silence_ms
+        if punctuated_ms is None or punctuated_ms >= self._config.end_of_turn_silence_ms:
+            await asyncio.sleep(full_delay_s)
+            return False
+        if full_delay_s <= 0:
+            return False
+
+        try:
+            await asyncio.wait_for(
+                self._punctuated_transcript_event.wait(),
+                timeout=full_delay_s,
+            )
+        except TimeoutError:
+            return False
+
+        silence_started = self._silence_start_time
+        elapsed_s = time.monotonic() - silence_started if silence_started is not None else 0.0
+        remaining_s = punctuated_ms / 1000.0 - elapsed_s
+        if remaining_s > 0:
+            await asyncio.sleep(remaining_s)
+        return True
 
     def _cancel_silence_timer(self) -> None:
         """Cancel the pending silence timeout task."""

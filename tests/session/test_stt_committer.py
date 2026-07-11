@@ -573,6 +573,23 @@ async def test_transport_track_label_stamped_on_unlabeled_final() -> None:
 
 
 @pytest.mark.asyncio
+async def test_final_transcript_notifies_turn_manager_endpoint_hint() -> None:
+    stt = _RecordingSTT()
+    committer, _stt, emitted, _no_turn, tm = _make_committer(stt=stt)
+    committer.mark_active()
+    tm._state = TurnManagerState.USER_PAUSED
+    turn = _new_turn()
+    committer.start_event_loop(turn)
+
+    try:
+        await stt._queue.put(STTEvent(type=STTEventType.FINAL, text="Complete."))
+        await emitted.wait_for(STTFinal)
+        assert tm._punctuated_transcript_event.is_set()
+    finally:
+        await committer.cancel(turn)
+
+
+@pytest.mark.asyncio
 async def test_provider_track_overrides_transport_label() -> None:
     """A provider that stamps its own track is not overwritten by the fallback."""
     stt = _RecordingSTT()

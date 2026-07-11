@@ -173,6 +173,71 @@ async def test_speech_resumes_cancels_timeout():
 
 
 @pytest.mark.asyncio
+async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=120,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+    collector = EventCollector(bus)
+    reasons: list[str] = []
+    tm.bind_journal_hook(lambda _old, _new, reason, _turn_id: reasons.append(reason))
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final('That is complete."')
+    await asyncio.sleep(0.05)
+
+    assert tm.state == TurnManagerState.PROCESSING
+    assert "TurnEnded" in collector.type_names
+    assert reasons[-1] == "punctuated_silence_timeout"
+
+
+@pytest.mark.asyncio
+async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final("still thinking")
+    await asyncio.sleep(0.04)
+    assert tm.state == TurnManagerState.USER_PAUSED
+
+    await asyncio.sleep(0.09)
+    assert tm.state == TurnManagerState.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_stt_final_before_pause_does_not_shorten_next_pause():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    tm.on_stt_final("Old segment.")
+    await tm.on_vad_event(VADStopSpeaking())
+    await asyncio.sleep(0.04)
+
+    assert tm.state == TurnManagerState.USER_PAUSED
+    await tm.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_full_turn_cycle():
     """Full cycle: Idle -> UserSpeaking -> UserPaused -> Processing -> BotSpeaking -> Idle."""
     bus = EventBus()
@@ -828,7 +893,12 @@ async def test_bot_stopped_speaking_ignored_when_not_bot_speaking():
 
 @pytest.mark.parametrize(
     "field",
-    ["end_of_turn_silence_ms", "stt_segment_silence_ms", "pre_roll_ms"],
+    [
+        "end_of_turn_silence_ms",
+        "punctuated_end_of_turn_silence_ms",
+        "stt_segment_silence_ms",
+        "pre_roll_ms",
+    ],
 )
 def test_config_rejects_negative_values(field):
     """Negative timing values should fail at construction with a clear error."""

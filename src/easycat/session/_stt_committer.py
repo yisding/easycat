@@ -349,6 +349,7 @@ class STTCommitter:
                     if stt_event.type == STTEventType.PARTIAL:
                         await self._emit(STTPartial(text=stt_event.text, track=track))
                     elif stt_event.type == STTEventType.FINAL:
+                        self._turn_manager.on_stt_final(stt_event.text)
                         if turn and turn is not self._no_turn:
                             if not turn.pending_stt_segment_futures:
                                 turn.stt_has_uncommitted_audio = False
