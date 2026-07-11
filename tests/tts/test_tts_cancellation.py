@@ -235,6 +235,7 @@ class TestElevenLabsWSCancellation:
             ElevenLabsTTSConfig(
                 api_key="test",
                 stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+                persistent_ws=False,
             )
         )
 

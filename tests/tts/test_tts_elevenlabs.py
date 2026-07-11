@@ -130,6 +130,7 @@ class TestElevenLabsTTSConfig:
         assert config.similarity_boost == 0.75
         assert config.output_format == "pcm_24000"
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
 
     def test_websocket_mode(self):
         config = ElevenLabsTTSConfig(
@@ -137,6 +138,22 @@ class TestElevenLabsTTSConfig:
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
         )
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        assert config.persistent_ws is True
+
+    def test_http_mode_disables_persistence_by_default(self):
+        config = ElevenLabsTTSConfig(
+            api_key="key",
+            stream_mode=ElevenLabsStreamMode.HTTP,
+        )
+        assert config.persistent_ws is False
+
+    def test_websocket_one_shot_can_be_requested_explicitly(self):
+        config = ElevenLabsTTSConfig(
+            api_key="key",
+            stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
+        )
+        assert config.persistent_ws is False
 
     def test_custom_values(self):
         config = ElevenLabsTTSConfig(
@@ -197,6 +214,38 @@ class TestElevenLabsTTSHTTP:
             **kwargs,
         )
         return ElevenLabsTTS(config)
+
+    async def test_warmup_primes_configured_voice_endpoint(self):
+        provider = self._make_provider(voice_id="voice-latency")
+        client = provider._get_http_client()
+        response = MagicMock()
+        response.aclose = AsyncMock()
+
+        with patch.object(
+            client,
+            "get",
+            new_callable=AsyncMock,
+            return_value=response,
+        ) as get:
+            await provider.warmup()
+
+        get.assert_awaited_once_with("/voices/voice-latency")
+        response.aclose.assert_awaited_once()
+        await provider.close()
+
+    async def test_http_warmup_failure_is_best_effort(self):
+        provider = self._make_provider()
+        client = provider._get_http_client()
+
+        with patch.object(
+            client,
+            "get",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connect boom"),
+        ):
+            await provider.warmup()
+
+        await provider.close()
 
     async def test_synthesize_http_yields_audio(self):
         provider = self._make_provider()
@@ -316,6 +365,7 @@ class TestElevenLabsTTSWebSocket:
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
             **kwargs,
         )
         return ElevenLabsTTS(config)
@@ -632,7 +682,6 @@ class TestElevenLabsPersistent:
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
-            persistent_ws=True,
             **kwargs,
         )
         return ElevenLabsTTS(config)
@@ -670,6 +719,38 @@ class TestElevenLabsPersistent:
                     pass
 
         assert not provider.is_active
+        await provider.close()
+
+    async def test_warmup_connects_once_and_first_synthesis_reuses_socket(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_multi_ws", factory):
+            await provider.warmup()
+            async for _ in provider.synthesize("first"):
+                pass
+
+        assert factory.call_count == 1
+        await provider.close()
+
+    async def test_warmup_failure_is_retried_by_synthesis(self):
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        failed = FailingConnectWS()
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[failed, working])
+        with patch.object(provider, "_build_multi_ws", factory):
+            await provider.warmup()
+            async for _ in provider.synthesize("retry"):
+                pass
+
+        assert factory.call_count == 2
+        assert failed.closed
         await provider.close()
 
     async def test_persistent_context_error_frame_surfaced(self):
@@ -828,14 +909,14 @@ class TestElevenLabsTTSGeneral:
         assert not provider.is_active
 
     async def test_stop_closes_websocket(self):
-        """A graceful stop closes the synthesis WS (default mode).
+        """A graceful stop closes an explicitly one-shot synthesis WS.
 
-        Matches Cartesia/Deepgram ``stop()`` so a graceful stop between turns
-        does not leave the socket lingering until the next cancel()/close().
+        Persistent mode keeps its manager-owned socket warm instead.
         """
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
+            persistent_ws=False,
         )
         provider = ElevenLabsTTS(config)
         provider._active = True
