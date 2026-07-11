@@ -252,7 +252,7 @@ class TurnManager:
 
     def bind_journal_hook(
         self,
-        hook: Any,
+        hook: Any | None,
     ) -> None:
         """Install a callable that journals each turn-state transition.
 

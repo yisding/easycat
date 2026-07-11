@@ -315,6 +315,22 @@ async def test_outbound_drain_sends_queued_chunks_to_transport():
 
 
 @pytest.mark.asyncio
+async def test_first_audio_sends_inline_only_when_outbound_path_is_idle():
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport)
+    first = _make_chunk(byte_value=5)
+    queued = _make_chunk(byte_value=6)
+
+    assert await router.try_send_first_audio_inline(first) is True
+    assert transport.sent == [first]
+
+    await router.queue_outbound(queued)
+    assert await router.try_send_first_audio_inline(_make_chunk(byte_value=7)) is False
+    assert transport.sent == [first]
+    assert state["queue"].qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_playback_mark_emitted_after_byte_interval():
     transport = _AckTransport()
     turn = TurnContext(turn_id="t", cancel_token=CancelToken())
@@ -739,6 +755,7 @@ async def test_await_drain_waits_for_in_flight_send():
     # not return until the send completes (it will time out here).
     await router.await_drain(timeout=0.05)
     assert len(transport.sent) == 0  # still in flight, send_audio blocked
+    assert await router.try_send_first_audio_inline(_make_chunk(byte_value=10)) is False
 
     # Releasing the send lets the in-flight chunk land and drain to idle.
     release.set()

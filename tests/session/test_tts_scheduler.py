@@ -93,6 +93,9 @@ class _PolicySSMLTTS(_RecordingTTS):
 
 
 class _FakeTransport:
+    def __init__(self) -> None:
+        self.sent: list[AudioChunk] = []
+
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
 
@@ -101,6 +104,7 @@ class _FakeTransport:
             yield None
 
     async def send_audio(self, chunk: AudioChunk) -> bool:
+        self.sent.append(chunk)
         return True
 
     async def clear_audio(self) -> None: ...
@@ -253,6 +257,7 @@ def _build_scheduler(
         "audio_emissions": audio_emissions,
         "current_turn_ref": current_turn_ref,
         "turn_manager": turn_manager,
+        "transport": transport,
     }
 
 
@@ -320,6 +325,29 @@ def test_prepare_keeps_ssml_when_input_policy_supports_it() -> None:
     assert payload.format == "ssml"
 
 
+def test_prepare_refreshes_cached_policy_when_provider_changes() -> None:
+    scheduler, _ = _build_scheduler(tts=_RecordingTTS(), output_processors=[_SSMLifyProcessor()])
+    assert scheduler.prepare("one", is_streaming=True, is_final=False).format == "plain"
+
+    scheduler._tts_getter = lambda: _PolicySSMLTTS()
+
+    assert scheduler.prepare("two", is_streaming=True, is_final=False).format == "ssml"
+
+
+def test_prepare_skips_journal_payload_when_journaling_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler, _ = _build_scheduler(tts=_RecordingTTS())
+    scheduler._journal_sink.journal = None
+    monkeypatch.setattr(
+        SessionJournalSink,
+        "append_record",
+        lambda self, **kwargs: pytest.fail(f"unexpected journal payload: {kwargs}"),
+    )
+
+    assert scheduler.prepare("hello", is_streaming=True, is_final=False).text == "hello"
+
+
 # ── Tests: synthesize ────────────────────────────────────────
 
 
@@ -334,6 +362,19 @@ async def test_synthesize_bypass_emits_chunks() -> None:
     assert len(ctx["audio_emissions"]) == 2
     for emission in ctx["audio_emissions"]:
         assert emission.bypass_gate is True
+
+
+@pytest.mark.asyncio
+async def test_synthesize_sends_only_first_uncontended_chunk_inline() -> None:
+    tts = _RecordingTTS(chunks=2)
+    scheduler, ctx = _build_scheduler(tts=tts)
+
+    await scheduler.synthesize_bypass("greeting")
+
+    assert len(ctx["transport"].sent) == 1
+    assert ctx["outbound_queue"].qsize() == 1
+    await ctx["router"]._drain_outbound_audio()
+    assert len(ctx["transport"].sent) == 2
 
 
 @pytest.mark.asyncio

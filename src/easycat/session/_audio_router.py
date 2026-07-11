@@ -253,6 +253,7 @@ class AudioRouter:
         self._outbound_in_flight: int = 0
         self._outbound_idle: asyncio.Event = asyncio.Event()
         self._outbound_idle.set()
+        self._outbound_send_lock = asyncio.Lock()
 
     def _update_outbound_idle(self) -> None:
         """Set/clear the idle event based on queue depth and in-flight sends."""
@@ -384,6 +385,23 @@ class AudioRouter:
     async def queue_outbound(self, chunk: AudioChunk) -> None:
         """Enqueue a TTS chunk for the outbound drain loop."""
         await self._outbound_queue.put(chunk)
+
+    async def try_send_first_audio_inline(self, chunk: AudioChunk) -> bool:
+        """Send an uncontended first TTS frame without a queue/task handoff."""
+        if (
+            self._outbound_in_flight != 0
+            or self._outbound_send_lock.locked()
+            or not self._outbound_queue.empty()
+        ):
+            return False
+        async with self._outbound_send_lock:
+            # A contending producer cannot run between the checks and an
+            # immediately available Lock acquisition, but re-check to keep the
+            # ordering invariant explicit if the implementation changes.
+            if not self._outbound_queue.empty():
+                return False
+            await self._send_outbound_chunk(chunk, replayed_chunk=False)
+        return True
 
     def reset_speech_detection(self) -> None:
         """Reset the auto-turn speech-energy counter.
@@ -750,71 +768,53 @@ class AudioRouter:
                 self._replay_chunks_pending > 0
                 and getattr(chunk, "_easycat_replay_chunk", False) is True
             )
-            turn = self._current_turn()
-            # Long-lived drain task: keep its log records correlated with the
-            # turn whose audio is being sent (cleared to "-" between turns).
-            bind_turn(turn.id if turn is not None else None)
-            # Mark the chunk as in flight before the transport send so
-            # ``await_drain`` does not report the queue as drained while
-            # the final chunk is still inside ``send_audio``.
-            self._outbound_in_flight += 1
-            self._update_outbound_idle()
-            try:
-                self._stamp_outbound_chunk(chunk, turn)
-                delivered = await self._transport_stage.execute(
-                    chunk, self._run_ctx, turn or self._no_turn
-                )
-                # The send returned without raising: any prior failure
-                # streak is over, so a later failure surfaces a fresh Error.
-                self._outbound_send_failures = 0
-                if delivered and not self._transport_reports_audio_delivery:
-                    # Stamp turn_id from current_turn() at dequeue time
-                    # (captured before send_audio awaits) so a slow send
-                    # under backpressure doesn't inherit a newer turn's id.
-                    await self._handle_audio_delivery(chunk, turn)
-                    await self._emit(
-                        AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
-                    )
-            except Exception as exc:
-                logger.exception("Failed to send audio to transport")
-                self._outbound_send_failures += 1
-                # Surface a single bus-level Error at the start of a failure
-                # streak so user Error handlers and the journal error
-                # timeline learn the bot's audio is being dropped, without
-                # spamming one Error per chunk when a transport is dead.
-                # The drain keeps consuming the queue (no forced teardown):
-                # a transient send failure must not drop a live call.
-                if self._outbound_send_failures == 1:
-                    try:
-                        await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
-                    except Exception:
-                        # A misbehaving Error handler must not kill the
-                        # long-lived drain task.
-                        logger.debug("Failed to emit outbound send Error", exc_info=True)
-            finally:
-                self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
-                self._update_outbound_idle()
-                replay_pending_finished = False
-                if replayed_chunk:
-                    self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
-                    replay_pending_finished = self._replay_chunks_pending == 0
-                if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
-                    # ``DROP_OLDEST`` queues can evict replay chunks before
-                    # the drain loop ever sees them.  Once the real queue is
-                    # empty, no additional replay-tagged chunks can arrive
-                    # from the current batch, so reconcile the logical
-                    # counter with the retained/drained chunks.  This must run
-                    # after non-replay chunks too, because interleaved live
-                    # audio can be the final retained queue item.
-                    self._replay_chunks_pending = 0
-                    replay_pending_finished = True
-                if (
-                    replay_pending_finished
-                    and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                ):
-                    await self._turn_manager.bot_stopped_speaking()
+            async with self._outbound_send_lock:
+                await self._send_outbound_chunk(chunk, replayed_chunk=replayed_chunk)
 
         await self.flush_trailing_playback_mark()
+
+    async def _send_outbound_chunk(self, chunk: AudioChunk, *, replayed_chunk: bool) -> None:
+        """Deliver one claimed chunk and apply shared accounting/error policy."""
+        turn = self._current_turn()
+        bind_turn(turn.id if turn is not None else None)
+        self._outbound_in_flight += 1
+        self._update_outbound_idle()
+        try:
+            self._stamp_outbound_chunk(chunk, turn)
+            delivered = await self._transport_stage.execute(
+                chunk, self._run_ctx, turn or self._no_turn
+            )
+            self._outbound_send_failures = 0
+            if delivered and not self._transport_reports_audio_delivery:
+                await self._handle_audio_delivery(chunk, turn)
+                await self._emit(
+                    AudioOut(chunk=chunk, turn_id=turn.id if turn is not None else None)
+                )
+        except Exception as exc:
+            logger.exception("Failed to send audio to transport")
+            self._outbound_send_failures += 1
+            if self._outbound_send_failures == 1:
+                try:
+                    await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
+                except Exception:
+                    logger.debug("Failed to emit outbound send Error", exc_info=True)
+        finally:
+            self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
+            self._update_outbound_idle()
+            replay_pending_finished = False
+            if replayed_chunk:
+                self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
+                replay_pending_finished = self._replay_chunks_pending == 0
+            if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
+                # DROP_OLDEST can evict replay chunks before the drain sees
+                # them; once the real queue empties, reconcile the tally.
+                self._replay_chunks_pending = 0
+                replay_pending_finished = True
+            if (
+                replay_pending_finished
+                and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+            ):
+                await self._turn_manager.bot_stopped_speaking()
 
     async def flush_trailing_playback_mark(self, turn: TurnContext | None = None) -> None:
         """Emit a playback mark for queued tail bytes that missed the throttle interval."""
