@@ -27,6 +27,46 @@ from easycat.debugger._sources import DebuggerSource, _safe_ref
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordsQuery:
+    stage: str | None
+    turn_id: str | None
+    names: tuple[str, ...]
+    from_seq: int | None
+    to_seq: int | None
+    search: str | None
+    use_regex: bool
+    errors_only: bool
+    limit: int | None
+    offset: int
+
+
+def _parse_records_query(params: Any) -> _RecordsQuery:
+    try:
+        from_seq = int(params["from"]) if "from" in params else None
+        to_seq = int(params["to"]) if "to" in params else None
+        limit = int(params["limit"]) if "limit" in params else None
+        offset = int(params["offset"]) if "offset" in params else 0
+    except ValueError as exc:
+        raise ValueError("from/to/limit/offset must be integers") from exc
+
+    if offset < 0 or (limit is not None and limit <= 0):
+        raise ValueError("invalid query parameters")
+
+    return _RecordsQuery(
+        stage=params.get("stage") or None,
+        turn_id=params.get("turn") or None,
+        names=tuple(name for name in params.getall("name", ()) if name),
+        from_seq=from_seq,
+        to_seq=to_seq,
+        search=params.get("q") or None,
+        use_regex=params.get("regex") == "1",
+        errors_only=params.get("errors") == "1",
+        limit=limit,
+        offset=offset,
+    )
+
+
 @dataclass(slots=True)
 class _CoreRoutes:
     """Handlers for the debugger's read-only source inspection API."""
@@ -42,59 +82,48 @@ class _CoreRoutes:
         return self.web.json_response(self.source.manifest())
 
     async def records(self, request: Any) -> Any:
-        params = request.query
         try:
-            from_seq = int(params["from"]) if "from" in params else None
-            to_seq = int(params["to"]) if "to" in params else None
-            limit = int(params["limit"]) if "limit" in params else None
-            offset = int(params["offset"]) if "offset" in params else 0
-        except ValueError:
-            return self.web.Response(status=400, text="from/to/limit/offset must be integers")
+            query = _parse_records_query(request.query)
+        except ValueError as exc:
+            logger.warning("Invalid records query: %s", exc)
+            return self.web.Response(status=400, text=str(exc))
 
-        names = [name for name in params.getall("name", ()) if name]
-        query = params.get("q") or None
-        use_regex = params.get("regex") == "1"
-        errors_only = params.get("errors") == "1"
         scan_truncated = False
         try:
-            if offset < 0:
-                raise ValueError("offset must be >= 0")
-            if limit is not None and limit <= 0:
-                raise ValueError("limit must be > 0")
-            if query is None:
+            if query.search is None:
                 page, total = _filter_and_paginate(
                     self.source.records(),
-                    stage=params.get("stage") or None,
-                    turn_id=params.get("turn") or None,
-                    name=names or None,
-                    from_seq=from_seq,
-                    to_seq=to_seq,
-                    errors_only=errors_only,
-                    limit=limit,
-                    offset=offset,
+                    stage=query.stage,
+                    turn_id=query.turn_id,
+                    name=query.names or None,
+                    from_seq=query.from_seq,
+                    to_seq=query.to_seq,
+                    errors_only=query.errors_only,
+                    limit=query.limit,
+                    offset=query.offset,
                 )
             else:
                 subset = _filter_records(
                     self.source.records(),
-                    stage=params.get("stage") or None,
-                    turn_id=params.get("turn") or None,
-                    name=names or None,
-                    from_seq=from_seq,
-                    to_seq=to_seq,
-                    errors_only=errors_only,
+                    stage=query.stage,
+                    turn_id=query.turn_id,
+                    name=query.names or None,
+                    from_seq=query.from_seq,
+                    to_seq=query.to_seq,
+                    errors_only=query.errors_only,
                     limit=None,
                     offset=0,
                 )
                 matched, scan_truncated = await asyncio.to_thread(
                     _search_records,
                     subset,
-                    query=query,
-                    use_regex=use_regex,
+                    query=query.search,
+                    use_regex=query.use_regex,
                 )
                 total = len(matched)
-                page = matched[offset:]
-                if limit is not None:
-                    page = page[:limit]
+                page = matched[query.offset :]
+                if query.limit is not None:
+                    page = page[: query.limit]
         except ValueError as exc:
             logger.warning("Invalid records query: %s", exc)
             if str(exc) in {"invalid regex", _UNSAFE_REGEX_MESSAGE}:
@@ -107,8 +136,8 @@ class _CoreRoutes:
                 "records": page,
                 "page_size": len(page),
                 "total": total,
-                "offset": offset,
-                "limit": limit,
+                "offset": query.offset,
+                "limit": query.limit,
                 "scan_truncated": scan_truncated,
             }
         )
