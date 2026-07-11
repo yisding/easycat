@@ -220,7 +220,7 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
 
 
 def test_public_api_documents_deprecation_and_removal_policy() -> None:
-    """The public-API contract must name the `@deprecated` aliases and removal window."""
+    """The public-API contract must explain pre-release removal policy."""
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     try:
         section = doc.split("## Deprecation & Removal Policy", 1)[1]
@@ -229,10 +229,9 @@ def test_public_api_documents_deprecation_and_removal_policy() -> None:
             "docs/public-api.md is missing the Deprecation & Removal Policy section"
         ) from exc
 
-    assert "`@deprecated`" in section
-    assert "`Session.shutdown()`" in section
     assert "`settings=`" in section
-    assert "minor release" in section
+    assert "pre-release" in section
+    assert "ownership ambiguity" in section
 
 
 def test_curated_public_api_lazy_imports() -> None:

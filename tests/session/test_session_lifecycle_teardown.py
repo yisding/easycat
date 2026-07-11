@@ -76,6 +76,8 @@ async def test_session_default_construction():
     assert session.turn_state == TurnState.IDLE
     assert not session.is_running
     assert session.cancel_token is None
+    for removed in ("shutdown", "close", "destroy"):
+        assert not hasattr(session, removed)
 
 
 @pytest.mark.asyncio
@@ -95,165 +97,22 @@ async def test_session_start_and_stop():
 
 
 @pytest.mark.asyncio
-async def test_session_shutdown():
-    transport = FakeTransport()
-    config = _full_config(transport=transport)
-    session = Session(config)
-
-    await session.start()
-    await session.shutdown()
-
-    assert not session.is_running
-    assert transport.disconnected
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
-async def test_session_teardown_finalizes_and_closes_journal(method_name: str):
+@pytest.mark.parametrize("force", [False, True])
+async def test_session_teardown_finalizes_and_closes_journal(force: bool):
     transport = FakeTransport()
     journal = TrackingJournal()
     session = Session(_full_config(transport=transport, journal=journal, session_id="sess"))
 
     await session.start()
-    await getattr(session, method_name)()
-
-    assert journal.finalize_calls == 1
-    assert journal.close_calls == 1
-
-
-def test_session_close_compatibility_alias_finalizes_journal_only():
-    journal = TrackingJournal()
-    session = Session(_full_config(journal=journal, session_id="sess"))
-
-    session.close()
-    session.close()
-
-    assert journal.finalize_calls == 1
-    assert journal.close_calls == 0
-
-
-def test_session_destroy_compatibility_alias_closes_debug_backends():
-    journal = TrackingJournal()
-    session = Session(_full_config(journal=journal, session_id="sess"))
-
-    session.destroy()
-    session.destroy()
+    await session.stop(force=force)
 
     assert journal.finalize_calls == 1
     assert journal.close_calls == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["close", "destroy"])
-async def test_session_low_level_compatibility_aliases_reject_running_session(
-    method_name: str,
-):
-    transport = FakeTransport()
-    session = Session(_full_config(transport=transport))
-
-    await session.start()
-    try:
-        with pytest.raises(RuntimeError, match="await session.stop"):
-            getattr(session, method_name)()
-        assert transport.connected
-    finally:
-        await session.stop(force=True)
-
-
-def test_session_close_compatibility_alias_retries_after_finalize_failure():
-    class FailingOnceJournal(TrackingJournal):
-        def __init__(self) -> None:
-            super().__init__()
-            self.fail_next_finalize = True
-
-        def finalize(self) -> None:
-            self.finalize_calls += 1
-            if self.fail_next_finalize:
-                self.fail_next_finalize = False
-                raise RuntimeError("finalize failed")
-
-    journal = FailingOnceJournal()
-    session = Session(_full_config(journal=journal, session_id="sess"))
-
-    with pytest.raises(RuntimeError, match="finalize failed"):
-        session.close()
-
-    session.close()
-
-    assert journal.finalize_calls == 2
-    assert journal.close_calls == 0
-
-
-def test_session_destroy_compatibility_alias_retries_after_close_failure():
-    class FailingOnceJournal(TrackingJournal):
-        def __init__(self) -> None:
-            super().__init__()
-            self.fail_next_close = True
-
-        def close(self) -> None:
-            self.close_calls += 1
-            if self.fail_next_close:
-                self.fail_next_close = False
-                raise RuntimeError("close failed")
-
-    journal = FailingOnceJournal()
-    session = Session(_full_config(journal=journal, session_id="sess"))
-
-    with pytest.raises(RuntimeError, match="close failed"):
-        session.destroy()
-
-    session.destroy()
-
-    assert journal.finalize_calls == 1
-    assert journal.close_calls == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["close", "destroy"])
-async def test_session_low_level_compatibility_aliases_reject_stopping_session(
-    method_name: str,
-):
-    reached = asyncio.Event()
-    release = asyncio.Event()
-
-    class BlockingTransport(FakeTransport):
-        async def disconnect(self) -> None:
-            reached.set()
-            await release.wait()
-            await super().disconnect()
-
-    journal = TrackingJournal()
-    session = Session(
-        _full_config(transport=BlockingTransport(), journal=journal, session_id="sess")
-    )
-
-    await session.start()
-    stop_task = asyncio.create_task(session.stop())
-    await reached.wait()
-
-    # Mid-stop window: stopping has begun, running has cleared, and the
-    # clean-close teardown tail has NOT been written yet.
-    assert session._stopping is True
-    assert not session.is_running
-    assert journal.finalize_calls == 0
-
-    # The public alias must refuse to run during the stopping window so it
-    # cannot write the clean-close marker early and corrupt the teardown tail.
-    with pytest.raises(RuntimeError, match="await session.stop"):
-        getattr(session, method_name)()
-    assert journal.finalize_calls == 0
-
-    release.set()
-    await stop_task
-
-    # stop() finishes its own teardown tail exactly once.
-    assert journal.finalize_calls == 1
-    assert journal.close_calls == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
-async def test_session_teardown_closes_audio_providers(method_name: str):
+@pytest.mark.parametrize("force", [False, True])
+async def test_session_teardown_closes_audio_providers(force: bool):
     calls: list[str] = []
 
     class CloseSTT(FakeSTT):
@@ -295,7 +154,7 @@ async def test_session_teardown_closes_audio_providers(method_name: str):
         )
     )
 
-    await getattr(session, method_name)()
+    await session.stop(force=force)
 
     assert calls == [
         "stt.close",
@@ -307,7 +166,7 @@ async def test_session_teardown_closes_audio_providers(method_name: str):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_ends_active_stt_stream_without_close_hook():
+async def test_force_stop_ends_active_stt_stream_without_close_hook():
     class EndOnlySTT(FakeSTT):
         def __init__(self) -> None:
             super().__init__()
@@ -321,20 +180,20 @@ async def test_shutdown_ends_active_stt_stream_without_close_hook():
     session = Session(_full_config(stt=stt))
     session._stt_active = True
 
-    await session.shutdown()
+    await session.stop(force=True)
 
     assert stt.end_calls == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method_name", ["stop", "shutdown"])
-async def test_external_outbound_queue_survives_session_teardown(method_name: str):
+@pytest.mark.parametrize("force", [False, True])
+async def test_external_outbound_queue_survives_session_teardown(force: bool):
     transport = FakeTransport()
     queue = BoundedAudioQueue()
     session = Session(_full_config(transport=transport, outbound_queue=queue))
 
     await session.start()
-    await getattr(session, method_name)()
+    await session.stop(force=force)
 
     assert await queue.put(_make_chunk())
     assert queue.qsize() == 1

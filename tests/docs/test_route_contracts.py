@@ -180,7 +180,7 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
     assert "docs/reference/session-lifecycle.md" in lifecycle_section
     for marker in (
         "`stop(force=True)`",
-        "`session.shutdown()`",
+        "There are no separate public close/destroy phases",
         "`session.journal.read()`",
         "`session.export_debug_bundle(path)`",
         "`async with session:`",

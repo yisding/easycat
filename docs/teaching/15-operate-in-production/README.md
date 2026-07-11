@@ -24,8 +24,8 @@
 
 - **Added:** `SessionManager` and its `add` / `remove` /
   `stop_all` / `connection(...)` surface; the public lifecycle
-  surface (`async with session:`, `stop`, `stop(force=True)`, and
-  the `shutdown` force-stop alias) named and bounded — `start` is
+  surface (`async with session:`, `stop`, and `stop(force=True)`)
+  named and bounded — `start` is
   unchanged from earlier chapters; the
   debugger entry points (`serve_bundle`,
   `serve_session`); the `easycat` CLI (`init`, `doctor`,
@@ -238,7 +238,7 @@
 +    print("Session stopped; manager released the slot.")
 +
 +    # ── 2. Post-stop: journal still works, bundle still exports ───
-+    # The lifecycle invariant: after stop()/shutdown(), the
++    # The lifecycle invariant: after stop(), the
 +    # journal is in a read-only postmortem state. .read() works,
 +    # export_debug_bundle() works, .append() does not.
 +    assert session.journal is not None
@@ -300,7 +300,6 @@ Talk for a few seconds, Ctrl-C. You should see:
   └────────┬────────┘
            │ await session.stop()           (graceful drain)
            │ await session.stop(force=True) (force-cancel)
-           │ await session.shutdown()       (force-cancel alias)
            ▼
   ┌─────────────────┐   public stop paths run private backend teardown
   │ Session stopped │ ──► journal.read() still works
@@ -317,9 +316,8 @@ Talk for a few seconds, Ctrl-C. You should see:
 | `async with session:` | Starts the session on entry and calls `stop(force=True)` on exit. | Preferred scoped idiom for examples and servers that tie one session to one block. |
 | `await session.stop()` | Public graceful halt. Drains in-flight work, disconnects transport, finalizes private backends, and preserves postmortem journal/bundle access. | The normal shutdown path. |
 | `await session.stop(force=True)` | Public force-cancel path. Cancels pipeline/provider work before the same teardown. | When graceful stop is stuck or the caller is exiting a scope. |
-| `await session.shutdown()` | Compatibility alias for `stop(force=True)`. | Existing callers; new docs should usually show `stop(...)` or `async with session:`. |
 
-The invariant worth memorising: **after `stop()` or `shutdown()`,
+The invariant worth memorising: **after `stop()`,
 `session.journal.read()` and `session.export_debug_bundle()` must
 still work.** The journal backend is swapped for a read-only
 snapshot during private teardown, so the postmortem shape is stable

@@ -115,6 +115,6 @@ the raw commands below. For raw docs/onboarding guard commands, use the
 - Keep optional provider dependencies in extras and document any new env vars in `README.md`.
 
 ## Session Lifecycle Notes
-- `await session.stop()` is the preferred public teardown verb: `force=False` (default) drains in-flight work gracefully, `force=True` cancels it first. `async with session:` is the preferred idiom (it calls `stop(force=True)` on exit); `session.shutdown()` is a `@deprecated` thin alias for `stop(force=True)`.
-- Backend teardown (SQLite/Litestream/libSQL/artifact stores) and the journal clean-close marker are handled internally by `stop()` via the `Session._destroy()` / `Session._close()` primitives. `Session.close()` and `Session.destroy()` are `@deprecated` legacy compatibility aliases for old low-level callers after a session has stopped; new code should call `stop()` or use `async with session:`.
+- `await session.stop()` is the single public teardown verb: `force=False` (default) drains in-flight work gracefully, while `force=True` cancels it first. `async with session:` is the preferred scoped idiom and calls `stop(force=True)` on exit.
+- Backend teardown (SQLite/Litestream/libSQL/artifact stores), the journal clean-close marker, and the preserved read-only postmortem view are handled internally by `stop()`.
 - After a clean `stop()`, postmortem inspection is still valid: `session.journal.read()` and `session.export_debug_bundle(...)` continue to work through the preserved read-only view.
