@@ -689,29 +689,17 @@ class TurnRunner:
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
         """Await the agent under its timeout; cancel both tasks on failure."""
-        timeout_task: asyncio.Task[None] | None = None
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
-                timeout_task = asyncio.create_task(
-                    with_agent_timeout(
-                        agent_task,
-                        timeout=self._timeout_config.agent_timeout,
-                        event_bus=self._event_bus,
-                    )
+                await with_agent_timeout(
+                    asyncio.shield(agent_task),
+                    timeout=self._timeout_config.agent_timeout,
+                    event_bus=self._event_bus,
                 )
-                await asyncio.shield(timeout_task)
             else:
                 await asyncio.shield(agent_task)
         except asyncio.CancelledError:
-            tasks = (
-                (agent_task, tts_task)
-                if timeout_task is None
-                else (
-                    timeout_task,
-                    agent_task,
-                    tts_task,
-                )
-            )
+            tasks = (agent_task, tts_task)
             self._cancel_pending(*tasks)
             for t in tasks:
                 try:
