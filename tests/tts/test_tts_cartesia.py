@@ -213,6 +213,26 @@ class TestCartesiaPersistent:
         assert factory.call_count == 2
         await provider.close()
 
+    async def test_unlimited_retry_warmup_times_out_before_synthesis_retry(self):
+        provider = self._make_provider(reconnect_max_retries=-1, warmup_timeout_s=0.01)
+
+        class HangingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                await asyncio.Event().wait()
+
+        hanging = HangingConnectWS()
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[hanging, working])
+
+        with patch.object(provider, "_build_ws", factory):
+            await asyncio.wait_for(provider.warmup(), timeout=0.1)
+            async for _ in provider.synthesize("retry after warmup timeout"):
+                pass
+
+        assert hanging.closed is True
+        assert factory.call_count == 2
+        await provider.close()
+
     async def test_warmup_is_noop_when_persistent_disabled(self):
         provider = CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=False))
         factory = MagicMock(return_value=FakePersistentWS())
@@ -409,6 +429,11 @@ class TestCartesiaTTSConfig:
     def test_rejects_out_of_range_volume(self):
         with pytest.raises(ValueError, match="volume must be in"):
             CartesiaTTSConfig(api_key="k", volume=0.1)
+
+    @pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
+    def test_rejects_invalid_warmup_timeout(self, timeout):
+        with pytest.raises(ValueError, match="warmup_timeout_s"):
+            CartesiaTTSConfig(api_key="k", warmup_timeout_s=timeout)
 
     def test_generation_config_omitted_when_unset(self):
         provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -81,6 +83,10 @@ class CartesiaTTSConfig:
     # may be closed server-side and is transparently reconnected on the next
     # utterance.
     persistent_ws: bool = True
+    # Keep best-effort session startup bounded even when synthesis itself uses
+    # unlimited reconnects. A timed-out attempt is discarded and first use
+    # retries with the normal synthesis policy.
+    warmup_timeout_s: float = 5.0
     # Bounded per-context queue for the persistent demux reader.
     context_queue_maxsize: int = 256
 
@@ -97,6 +103,13 @@ class CartesiaTTSConfig:
             raise ValueError(f"Cartesia speed must be in [0.6, 1.5], got {self.speed}")
         if self.volume is not None and not 0.5 <= self.volume <= 2.0:
             raise ValueError(f"Cartesia volume must be in [0.5, 2.0], got {self.volume}")
+        if (
+            isinstance(self.warmup_timeout_s, bool)
+            or not isinstance(self.warmup_timeout_s, int | float)
+            or not math.isfinite(self.warmup_timeout_s)
+            or self.warmup_timeout_s <= 0
+        ):
+            raise ValueError("Cartesia warmup_timeout_s must be a finite number > 0")
 
 
 class CartesiaTTS(_WSTTSBase):
@@ -174,7 +187,10 @@ class CartesiaTTS(_WSTTSBase):
         if not self._persistent_enabled():
             return
         try:
-            await self._get_mgr().warmup()
+            await asyncio.wait_for(
+                self._get_mgr().warmup(),
+                timeout=self._config.warmup_timeout_s,
+            )
         except Exception as exc:
             # Startup warmup is an optimization, not a new availability gate.
             # The manager clears a failed socket so synthesize() can retry.
