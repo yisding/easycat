@@ -6,6 +6,8 @@ from typing import Any
 
 import pytest
 
+pytest.importorskip("aiohttp")
+
 from easycat.debugger.server import _DebuggerRoutes, _empty_dev_source, _make_app
 
 
