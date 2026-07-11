@@ -96,6 +96,9 @@ class _StreamingTtsState:
     turn_gen: int
     token: CancelToken | None
     queue: asyncio.Queue[TTSInput | None]
+    #: Released after first-payload lifecycle dispatch (or a no-audio terminal
+    #: path) so AgentFinal cannot overtake BotStartedSpeaking.
+    first_tts_lifecycle_ready: asyncio.Event = field(default_factory=asyncio.Event)
     #: The consumer received its first payload and decided gating/playback.
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
@@ -414,6 +417,11 @@ class TurnRunner:
                 strip_md=self._tts.strip_markdown_enabled,
                 turn=turn,
             )
+            # Starting the provider early adds one deliberate scheduler yield
+            # inside the TTS consumer. Hold task completion here so the outer
+            # turn cannot emit AgentFinal before first-payload lifecycle
+            # dispatch (or the no-audio sentinel path) has settled.
+            await st.first_tts_lifecycle_ready.wait()
 
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
@@ -478,6 +486,10 @@ class TurnRunner:
             logger.exception("TTS streaming error")
             await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
 
+        # Safety release for cancellation/error paths that exit before the
+        # first queue item can make the more precise release below.
+        st.first_tts_lifecycle_ready.set()
+
         # Decide whether playback was cut short by a barge-in *now* — while
         # still inside the consumer task and before ``finalize_speaking_turn``
         # emits bot_stopped_speaking (after which the next turn can start and
@@ -496,13 +508,17 @@ class TurnRunner:
     async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
         """Drain the payload queue through the synthesizer until the sentinel."""
         while True:
+            first_synthesis_task = None
             payload = await st.queue.get()
             if payload is None:
+                st.first_tts_lifecycle_ready.set()
                 break
             if st.token and st.token.is_cancelled:
+                st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
             if self._tts.is_playback_suppressed:
+                st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
 
@@ -512,21 +528,33 @@ class TurnRunner:
                 # (the classification gate can flush mid-synthesis); re-reading
                 # it live later would tear down the turn pointer the gated
                 # replay still needs for mark accounting.
-                st.gated = self._is_gated()
-                if not st.gated:
-                    await self._turn_manager.bot_started_speaking()
-                    st.playback_started = True
-                st.synth_started = True
+                try:
+                    st.gated = self._is_gated()
+                    if not st.gated:
+                        first_synthesis_task = await self._tts.begin_synthesis_with_bot_start(
+                            payload,
+                            st.token,
+                            is_active=lambda: (
+                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                            ),
+                        )
+                        st.playback_started = True
+                    st.synth_started = True
+                finally:
+                    st.first_tts_lifecycle_ready.set()
 
-            result = await self._tts.synthesizer.synthesize(
-                payload,
-                st.token,
-                is_active=(
-                    None
-                    if self._is_gated()
-                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                ),
-            )
+            if first_synthesis_task is not None:
+                result = await first_synthesis_task
+            else:
+                result = await self._tts.synthesizer.synthesize(
+                    payload,
+                    st.token,
+                    is_active=(
+                        None
+                        if self._is_gated()
+                        else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                    ),
+                )
             st.chunks.append(
                 TtsChunk(
                     _text_for_estimation_timeline(payload),
