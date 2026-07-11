@@ -601,7 +601,16 @@ class TurnManager:
         """Wait for the fixed timeout and report whether punctuation shortened it."""
         full_delay_s = self._config.end_of_turn_silence_ms / 1000.0
         punctuated_ms = self._config.punctuated_end_of_turn_silence_ms
-        if punctuated_ms is None or punctuated_ms >= self._config.end_of_turn_silence_ms:
+        if punctuated_ms is None:
+            await asyncio.sleep(full_delay_s)
+            return False
+        if punctuated_ms >= self._config.end_of_turn_silence_ms:
+            logger.debug(
+                "Punctuation endpoint shortening disabled: punctuated wait %dms "
+                "is not below fixed wait %dms",
+                punctuated_ms,
+                self._config.end_of_turn_silence_ms,
+            )
             await asyncio.sleep(full_delay_s)
             return False
         if full_delay_s <= 0:

@@ -97,14 +97,15 @@ async def run(*, samples: int, full_ms: int, punctuated_ms: int) -> dict[str, An
         raise ValueError("full_ms must be positive")
     if punctuated_ms < 0:
         raise ValueError("punctuated_ms must be non-negative")
-    baseline = [
-        await _sample(punctuated=False, full_ms=full_ms, punctuated_ms=punctuated_ms)
-        for _ in range(samples)
-    ]
-    punctuated = [
-        await _sample(punctuated=True, full_ms=full_ms, punctuated_ms=punctuated_ms)
-        for _ in range(samples)
-    ]
+    baseline: list[float] = []
+    punctuated: list[float] = []
+    for _ in range(samples):
+        baseline.append(
+            await _sample(punctuated=False, full_ms=full_ms, punctuated_ms=punctuated_ms)
+        )
+        punctuated.append(
+            await _sample(punctuated=True, full_ms=full_ms, punctuated_ms=punctuated_ms)
+        )
     payload = compare(baseline, punctuated)
     payload.update(
         {

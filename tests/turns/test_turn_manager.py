@@ -275,6 +275,28 @@ async def test_late_punctuated_final_uses_elapsed_pause_time(
 
 
 @pytest.mark.asyncio
+async def test_misconfigured_punctuation_wait_logs_disabled_shortening(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tm = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=100,
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with caplog.at_level(logging.DEBUG, logger="easycat.turn_manager"):
+        assert await tm._wait_for_fixed_endpoint() is False
+
+    sleep.assert_awaited_once_with(0.1)
+    assert "Punctuation endpoint shortening disabled" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_stt_final_before_pause_does_not_shorten_next_pause():
     bus = EventBus()
     tm = TurnManager(

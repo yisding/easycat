@@ -47,6 +47,25 @@ def test_run_rejects_zero_fixed_delay() -> None:
         asyncio.run(benchmark.run(samples=1, full_ms=0, punctuated_ms=0))
 
 
+def test_run_interleaves_fixed_and_punctuated_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark = _load_benchmark()
+    sample_order: list[bool] = []
+
+    async def fake_sample(*, punctuated: bool, full_ms: int, punctuated_ms: int) -> float:
+        assert (full_ms, punctuated_ms) == (500, 200)
+        sample_order.append(punctuated)
+        return 200.0 if punctuated else 500.0
+
+    monkeypatch.setattr(benchmark, "_sample", fake_sample)
+
+    result = asyncio.run(benchmark.run(samples=3, full_ms=500, punctuated_ms=200))
+
+    assert sample_order == [False, True, False, True, False, True]
+    assert result["p50_saved_ms"] == 300.0
+
+
 def test_cli_rejects_zero_fixed_delay(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
