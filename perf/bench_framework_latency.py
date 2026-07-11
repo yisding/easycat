@@ -10,6 +10,7 @@ round without including process or environment startup in the metric.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,11 +28,21 @@ from typing import Any, Literal
 
 Framework = Literal["easycat", "livekit", "pipecat"]
 FRAMEWORKS: tuple[Framework, ...] = ("easycat", "livekit", "pipecat")
+ENVIRONMENT_ROOT = Path(__file__).with_name("framework_environments")
 PINS = {
-    "livekit": ("livekit-agents==1.6.4",),
-    "pipecat": ("pipecat-ai==1.0.0", "websockets==15.0.1"),
+    framework: tuple(
+        tomllib.loads((ENVIRONMENT_ROOT / framework / "pyproject.toml").read_text())["project"][
+            "dependencies"
+        ]
+    )
+    for framework in ("livekit", "pipecat")
 }
-EXPECTED_TEXT = "Hello there."
+RESPONSE_TEXT = "Hello there."
+EXPECTED_TTS_TEXT = {
+    "easycat": "Hello there.",
+    "livekit": "Hello there",
+    "pipecat": "Hello there.",
+}
 
 
 @dataclass(frozen=True)
@@ -54,17 +66,18 @@ def worker_specs(
         else:
             if uv is None:
                 raise RuntimeError("uv is required for isolated competitor environments")
-            with_args = tuple(arg for pin in PINS[framework] for arg in ("--with", pin))
+            project = ENVIRONMENT_ROOT / framework
             command = (
                 uv,
                 "run",
                 "--quiet",
                 "--no-progress",
                 "--isolated",
-                "--no-project",
+                "--project",
+                str(project),
+                "--locked",
                 "--python",
-                "3.11",
-                *with_args,
+                sys.executable,
                 "python",
                 str(worker),
                 "--framework",
@@ -72,6 +85,18 @@ def worker_specs(
             )
         specs.append(WorkerSpec(framework=framework, command=command))
     return specs
+
+
+def _lock_metadata() -> dict[str, dict[str, str]]:
+    metadata: dict[str, dict[str, str]] = {}
+    for framework in ("livekit", "pipecat"):
+        lock_path = ENVIRONMENT_ROOT / framework / "uv.lock"
+        digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        metadata[framework] = {
+            "path": str(lock_path.relative_to(Path(__file__).parents[1])),
+            "sha256": digest,
+        }
+    return metadata
 
 
 class Worker:
@@ -170,7 +195,9 @@ def _validate_sample(sample: dict[str, Any]) -> None:
         or provider_elapsed > latency
     ):
         raise ValueError(f"invalid provider elapsed time: {provider_elapsed!r}")
-    if sample.get("text") != EXPECTED_TEXT:
+    framework = sample.get("framework")
+    expected_text = EXPECTED_TTS_TEXT.get(framework)
+    if expected_text is None or sample.get("text") != expected_text:
         raise ValueError(f"incorrect response text: {sample.get('text')!r}")
     audio_bytes = sample.get("audio_bytes")
     if not isinstance(audio_bytes, int) or isinstance(audio_bytes, bool) or audio_bytes <= 0:
@@ -214,7 +241,7 @@ def _revision() -> dict[str, Any]:
     return {"commit": sha, "dirty": dirty}
 
 
-def run_benchmark(  # noqa: C901 - orchestration keeps cleanup and ordering in one scope
+def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and ordering together
     *,
     iterations: int = 30,
     warmups: int = 5,
@@ -241,6 +268,9 @@ def run_benchmark(  # noqa: C901 - orchestration keeps cleanup and ordering in o
     try:
         for spec in worker_specs(frameworks):
             workers[spec.framework] = Worker(spec, timeout_s=worker_timeout_s)
+        python_versions = {worker.python for worker in workers.values()}
+        if len(python_versions) != 1:
+            raise RuntimeError(f"workers used different Python versions: {python_versions}")
         for measured, rounds in ((False, warmups), (True, iterations)):
             for _ in range(rounds):
                 order = list(frameworks)
@@ -299,7 +329,8 @@ def run_benchmark(  # noqa: C901 - orchestration keeps cleanup and ordering in o
             "warmups": warmups,
             "llm_delay_ms": llm_delay_ms,
             "tts_delay_ms": tts_delay_ms,
-            "response_text": EXPECTED_TEXT,
+            "response_text": RESPONSE_TEXT,
+            "expected_tts_text": EXPECTED_TTS_TEXT,
         },
         "methodology": {
             "framework_order": "randomized_per_round",
@@ -308,10 +339,11 @@ def run_benchmark(  # noqa: C901 - orchestration keeps cleanup and ordering in o
             "isolated_competitor_environments": True,
             "gc_disabled_during_critical_path": True,
             "percentile_method": "linear_interpolation",
-            "correctness_gate": "exact_text_and_nonempty_audio",
+            "correctness_gate": "exact_framework_tts_text_and_nonempty_audio",
             "framework_overhead": "latency_ms_minus_measured_provider_elapsed_ms",
         },
         "pins": {name: list(pins) for name, pins in PINS.items()},
+        "environment_locks": _lock_metadata(),
         "results": results,
         "ranking_by_framework_overhead_p50": ranking,
         "easycat_fastest": {

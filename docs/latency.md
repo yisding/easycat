@@ -73,15 +73,19 @@ uv run python perf/bench_framework_latency.py \
   --output /tmp/framework-latency.json
 ```
 
-The harness runs EasyCat from the checkout and starts version-pinned LiveKit
-and Pipecat workers in isolated `uv` environments. Workers stay alive while
+The harness runs EasyCat from the checkout and starts LiveKit and Pipecat
+workers from committed, fully resolved `uv.lock` graphs in isolated
+environments using the exact same Python interpreter as EasyCat. Workers stay alive while
 the orchestrator randomizes their order on every warmup and measured round;
 process startup and dependency installation are outside the metric. Every
-sample must produce the exact expected response plus nonempty audio before it
-is eligible. The JSON artifact includes raw transcript-to-audio latency and a
+sample must deliver its framework-specific expected TTS payload plus nonempty
+audio before it is eligible. (The expectation records punctuation normalization,
+such as LiveKit omitting terminal punctuation from its TTS chunk.) The JSON
+artifact includes raw transcript-to-audio latency and a
 framework-overhead value that subtracts each fake provider's measured elapsed
 time, with P50/P95/P99 for both. It also records pins, revision state, and the
-random seed. Rankings and the `easycat_fastest` result use framework overhead,
+random seed, plus SHA-256 hashes of both environment locks. Rankings and the
+`easycat_fastest` result use framework overhead,
 so host sleep drift cannot masquerade as framework work. Add
 `--require-easycat-fastest` when a comparison should return a nonzero status
 unless EasyCat wins overhead at both P50 and P95.
