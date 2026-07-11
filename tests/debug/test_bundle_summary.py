@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import operator
+
+import pytest
+
 from easycat.debug._bundle_summary import summarise_annotations, summarise_bundle_records
 
 
@@ -60,3 +64,5 @@ def test_annotation_summary_tolerates_untrusted_sidecar_records() -> None:
         "failed": 1,
         "failure_types": {"tts_cutoff": 2},
     }
+    with pytest.raises(TypeError):
+        operator.setitem(summary.failure_types, "tts_cutoff", 3)
