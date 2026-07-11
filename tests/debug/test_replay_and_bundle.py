@@ -509,6 +509,52 @@ class TestBundleExport:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
 
+    def test_export_rejects_invalid_artifact_ref_before_writing(self, tmp_path):
+        session = _FakeSession(
+            debug="full",
+            journal=_FakeJournal(),
+            artifact_store=_FakeArtifactStore({"../outside": b"data"}),
+        )
+        path = tmp_path / "export.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(session, path)
+
+        assert exc_info.value.reason_code == "INVALID_REF"
+        assert not path.exists()
+
+    def test_export_rejects_artifact_checksum_mismatch_before_writing(self, tmp_path):
+        data = b"artifact-data"
+        wrong_ref = hashlib.sha256(b"different-data").hexdigest()
+        session = _FakeSession(
+            debug="full",
+            journal=_FakeJournal(),
+            artifact_store=_FakeArtifactStore({wrong_ref: data}),
+        )
+        path = tmp_path / "export.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(session, path)
+
+        assert exc_info.value.reason_code == "CHECKSUM_MISMATCH"
+        assert not path.exists()
+
+    def test_export_preserves_existing_archive_after_write_failure(self, tmp_path, monkeypatch):
+        session = _FakeSession(debug="light", journal=_FakeJournal())
+        path = tmp_path / "export.zip"
+        path.write_bytes(b"existing archive")
+
+        def fail_write(*args, **kwargs):
+            raise RuntimeError("archive write failed")
+
+        monkeypatch.setattr(zipfile.ZipFile, "writestr", fail_write)
+
+        with pytest.raises(RuntimeError, match="archive write failed"):
+            export_debug_bundle(session, path, overwrite=True)
+
+        assert path.read_bytes() == b"existing archive"
+        assert list(tmp_path.glob("*.tmp")) == []
+
     def test_export_serializes_nested_enum_values(self, tmp_path):
         record = JournalRecord(
             sequence=1,
