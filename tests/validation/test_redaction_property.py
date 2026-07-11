@@ -70,8 +70,11 @@ def test_redact_text_prefilter_covers_every_pattern_family(
 
 
 def test_redact_text_preserves_ordinary_text() -> None:
-    value = "ordinary transcript without sensitive material"
-    assert redact_text(value) is value
+    for value in (
+        "ordinary transcript without sensitive material",
+        "partial transcript word 123",
+    ):
+        assert redact_text(value) is value
 
 
 @given(

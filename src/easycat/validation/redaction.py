@@ -92,11 +92,15 @@ _REQUEST_ID_RE = re.compile(r"\b(?:req|request|resp|response)_[A-Za-z0-9_-]{6,}\
 _PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
 _HOME_PATH_RE = re.compile(r"(?P<prefix>^|[\s=:\"'])(?:/home|/Users)/[^/\s:]+")
 # Every text-redaction pattern above requires at least one of these trigger
-# characters, except the standalone ``Bearer <value>`` form.  Checking this
-# small superset first keeps the nine substitution regexes off common hot-path
-# values such as transcripts and stage names.  False positives are harmless:
-# they merely fall through to the complete policy below.
-_TEXT_REDACTION_TRIGGER_RE = re.compile(r"[\d:/=_\-.]|\bbearer\s", re.IGNORECASE)
+# characters, except the standalone ``Bearer <value>`` and phone-number forms.
+# The latter is included with its complete shape so an isolated digit does not
+# force numbered transcripts through all nine substitution regexes.  Checking
+# this superset first keeps that work off common hot-path values.  False
+# positives are harmless: they merely fall through to the complete policy.
+_TEXT_REDACTION_TRIGGER_RE = re.compile(
+    r"[:/=_\-.]|\bbearer\s|(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)",
+    re.IGNORECASE,
+)
 _SENSITIVE_COMMAND_FLAGS = frozenset(
     {
         "--access-token",
