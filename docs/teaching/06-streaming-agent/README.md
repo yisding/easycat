@@ -53,7 +53,7 @@
 
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-@@ -32,25 +34,28 @@
+@@ -33,25 +35,29 @@
  from easycat.events import (
      EventBus,
      STTEventType,
@@ -63,7 +63,7 @@
  )
 -from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
--from easycat.runtime.capabilities import close_if_supported
+ from easycat.runtime.capabilities import close_if_supported
 +from easycat.session import split_at_sentence_boundaries
 +from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -86,7 +86,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -75,49 +80,110 @@
+@@ -76,49 +82,110 @@
                  self._preroll.append(chunk)
 
 
@@ -136,7 +136,8 @@
              {"role": "system", "content": "You are a helpful voice assistant. Keep it brief."},
              {"role": "user", "content": user_text},
          ],
--    )
++        stream=True,
+     )
 -    return resp.choices[0].message.content or ""
 -
 -
@@ -145,8 +146,6 @@
 -
 -    The STT stream has been receiving chunks from the parent caller's
 -    VAD loop already — we just close it here and drain the FINAL.
-+        stream=True,
-+    )
 +
 +    buffer = ""
 +    first_token_t: float | None = None
@@ -234,7 +233,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -128,51 +194,19 @@
+@@ -129,51 +196,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -254,7 +253,11 @@
 -        "stage.stt_to_agent",
 -        stt_final_t,
 -        at_ms=(agent_dispatch - stt_final_t) * 1000,
--    )
++    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
++    _, first_audio_t = await asyncio.gather(
++        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
++        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
+     )
 -
 -    # Sub-gap 2: the LLM call itself. The biggest sub-gap — usually
 -    # 1-3 seconds of silence on a small model, more on a large one.
@@ -289,16 +292,11 @@
 -        enqueue_ms=tts_enqueue_ms,
 -    )
 -
-+    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    _, first_audio_t = await asyncio.gather(
-+        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
-+        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
-+    )
 +    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -181,23 +215,43 @@
+@@ -182,20 +217,17 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -319,88 +317,42 @@
 
 
 -async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
--    """Stream turns and close every per-turn STT, including on cancellation."""
--    stt = None
--    try:
-+async def main() -> None:
-+    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
-+        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
-+
-+    journal = InMemoryRingBuffer(capacity=10_000)
-+    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-+    vad = create_vad(VADConfig())
-+    detector = MiniTurnDetector(vad)
-+    client = AsyncOpenAI()
-+    tts = create_tts_provider(
-+        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-+    )
-+
-+    def stt_factory():
-+        return create_stt_provider(
-+            STTProviderConfig(
-+                provider="deepgram",
-+                api_key=os.environ["DEEPGRAM_API_KEY"],
-+                params={"sample_rate": 24000, "event_bus": EventBus()},
-+            )
-+        )
-+
-+    await transport.connect()
-+    print("Streaming agent. Ctrl-C to stop.\n")
-+
-+    async def collect_turns():
-+        stt = None
-         async for tag, chunk in detector.frames(transport.receive_audio()):
-             if tag == "speech_started":
-                 if stt is None:
-@@ -206,45 +260,12 @@
-             elif tag == "frame" and stt is not None:
++async def collect_turns(transport, detector, stt_factory, client, tts, journal) -> None:
+     """Stream turns and close every per-turn STT, including on cancellation."""
+     stt = None
+     try:
+@@ -208,11 +240,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
--                active_stt = stt
--                try:
--                    await active_stt.end_stream()
--                    await run_turn(transport, active_stt, client, journal)
--                finally:
--                    stt = None
--                    await close_if_supported(active_stt)
--    finally:
--        if stt is not None:
--            try:
-                 await stt.end_stream()
--            finally:
--                await close_if_supported(stt)
--
--
--async def main() -> None:
--    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
--        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
--
--    journal = InMemoryRingBuffer(capacity=10_000)
--    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
--    vad = create_vad(VADConfig())
--    detector = MiniTurnDetector(vad)
--    client = AsyncOpenAI()
--
--    def stt_factory():
--        return create_stt_provider(
--            STTProviderConfig(
--                provider="deepgram",
--                api_key=os.environ["DEEPGRAM_API_KEY"],
--                params={"sample_rate": 24000, "event_bus": EventBus()},
--            )
--        )
--
--    await transport.connect()
--    print("Talk. Each turn will feel slow. That is the lesson.\n")
-+                await run_turn(transport, stt, client, tts, journal)
+                 active_stt = stt
 +                stt = None
-
-     try:
--        await collect_turns(transport, detector, stt_factory, client, journal)
-+        await collect_turns()
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
+                 try:
+                     await active_stt.end_stream()
+-                    await run_turn(transport, active_stt, client, journal)
++                    await run_turn(transport, active_stt, client, tts, journal)
+                 finally:
+-                    stt = None
+                     await close_if_supported(active_stt)
      finally:
+         if stt is not None:
+@@ -248,10 +280,15 @@
+
+         client = AsyncOpenAI()
+         resources.push_async_callback(close_if_supported, client)
+-
+-        print("Talk. Each turn will feel slow. That is the lesson.\n")
++        tts = create_tts_provider(
++            TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
++        )
++        resources.push_async_callback(close_if_supported, tts)
++
++        print("Streaming agent. Ctrl-C to stop.\n")
++
+         try:
+-            await collect_turns(transport, detector, stt_factory, client, journal)
++            await collect_turns(transport, detector, stt_factory, client, tts, journal)
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
 ```
 
 </details>
@@ -565,6 +517,39 @@ async def drain_sentences_to_speaker(
     return first_audio_t
 ```
 <!-- END auto:snippet -->
+
+## Two ownership scopes
+
+This is the first chapter where the manual example owns a complete
+voice stack. The resources have two different lifetimes:
+
+- A **per-turn STT** begins at `speech_started`. On a normal turn, the
+  script ends its logical stream, drains the final event, and then
+  closes the provider. If cancellation arrives before `speech_ended`,
+  the detector loop's `finally` arm still ends and closes it.
+- The **process-wide stack**—TTS, the OpenAI client, VAD, and the
+  transport—lives until the outer loop exits. `AsyncExitStack`
+  registers each cleanup when ownership begins and runs callbacks in
+  LIFO order: TTS → client → VAD → transport.
+
+That stack is more than compact syntax. If one callback raises,
+`AsyncExitStack` still attempts every registered cleanup before it
+propagates the error. A hand-written sequence of `await close(...)`
+calls would stop at the first failure unless it repeated nested
+`try/finally` blocks.
+
+Run the provider-free probe to see the normal, cancelled, and failing
+cleanup paths:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/voice_stack_cleanup_probe.py
+```
+
+All three paths end with the same resource order. The failure case
+still reaches `client.close`, `vad.close`, and `transport.disconnect`
+after `tts.close` raises. `AsyncExitStack` owns final cleanup; it does
+not replace the separate `end_stream()` step that finishes the active
+STT protocol.
 
 ## The toy vs. the production version
 

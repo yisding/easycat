@@ -67,10 +67,34 @@ over the answer.
    estimator runs into: "what's in the queue" ≠ "what the user
    heard" because the queue holds future audio.
 
+## 4. Cancel between ownership scopes
+
+**Task.** Run the provider-free lifecycle probe:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/voice_stack_cleanup_probe.py
+```
+
+Before looking at the JSON, predict the event order for a normal turn,
+a cancellation after `stt.start`, and a failure in `tts.close`.
+
+**Hints**
+
+1. The per-turn STT must record `stt.end` before `stt.close` in both
+   the normal and cancelled paths. Ending a protocol stream is not the
+   same operation as releasing its provider.
+2. The process-wide resources unwind in reverse registration order:
+   TTS, client, VAD, then transport.
+3. `cleanup_failure.events` should still include all four process-wide
+   callbacks. Replace `AsyncExitStack` in the probe with four plain
+   sequential `await` calls and observe which events disappear when
+   `tts.close` raises.
+
 ## Self-check
 
 You should be able to: (a) draw the architecture diagram from
 memory, (b) explain why sentences (not tokens, not paragraphs) are
-the right unit, and (c) point at the production
+the right unit, (c) distinguish per-turn STT ownership from the
+process-wide voice stack, and (d) point at the production
 `consume_agent_stream` and name one parameter without re-reading
 the README.

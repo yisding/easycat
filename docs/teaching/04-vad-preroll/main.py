@@ -25,6 +25,7 @@ import collections
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from easycat import LocalTransportConfig
@@ -174,8 +175,6 @@ async def main() -> None:
 
     journal = InMemoryRingBuffer(capacity=10_000)
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-    vad = create_vad(VADConfig())
-    detector = MiniTurnDetector(vad, preroll_frames=preroll)
 
     def stt_factory():
         return create_stt_provider(
@@ -186,15 +185,19 @@ async def main() -> None:
             )
         )
 
-    await transport.connect()
-    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
+    async with AsyncExitStack() as resources:
+        resources.push_async_callback(transport.disconnect)
+        await transport.connect()
 
-    try:
-        await parrot(transport, stt_factory, detector, journal, session_id)
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
-    finally:
-        await transport.disconnect()
+        vad = create_vad(VADConfig())
+        resources.push_async_callback(close_if_supported, vad)
+        detector = MiniTurnDetector(vad, preroll_frames=preroll)
+
+        print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
+        try:
+            await parrot(transport, stt_factory, detector, journal, session_id)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{session_id}.bundle"

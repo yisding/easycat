@@ -65,8 +65,8 @@
 +import random
  import time
  import types
- from pathlib import Path
-@@ -51,11 +55,55 @@
+ from contextlib import AsyncExitStack
+@@ -53,11 +57,55 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -124,7 +124,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -80,83 +128,150 @@
+@@ -82,83 +130,150 @@
                  self._preroll.append(chunk)
  
  
@@ -335,7 +335,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -167,7 +282,11 @@
+@@ -169,7 +284,11 @@
                          kind=JournalRecordKind.EVENT,
                          name="tts.first_audio",
                          session_id=SESSION_ID,
@@ -348,7 +348,7 @@
                      )
          journal.append(
              kind=JournalRecordKind.EVENT,
-@@ -175,6 +294,7 @@
+@@ -177,6 +296,7 @@
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
@@ -356,7 +356,7 @@
                  "elapsed_ms": (time.monotonic() - synth_start) * 1000,
                  "text": sentence,
              },
-@@ -183,7 +303,6 @@
+@@ -185,7 +305,6 @@
  
  
  async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -364,7 +364,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -194,16 +313,10 @@
+@@ -196,16 +315,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -383,15 +383,15 @@
          drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
      reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
-@@ -248,7 +361,7 @@
+@@ -285,7 +398,7 @@
          )
+         resources.push_async_callback(close_if_supported, tts)
  
-     await transport.connect()
--    print("Streaming agent. Ctrl-C to stop.\n")
-+    print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
+-        print("Streaming agent. Ctrl-C to stop.\n")
++        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
  
-     async def collect_turns():
-         stt = None
+         try:
+             await collect_turns(transport, detector, stt_factory, client, tts, journal)
 ```
 
 </details>
