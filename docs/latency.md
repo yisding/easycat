@@ -82,12 +82,25 @@ Sources: [`turn_manager.py`](../src/easycat/turn_manager.py),
 [`integrations/agents/_agent_runner.py`](../src/easycat/integrations/agents/_agent_runner.py),
 and [`session/_types.py`](../src/easycat/session/_types.py).
 
+## Provider-specific tuning
+
+- **OpenAI Realtime STT connection setup** — the provider keeps its
+  transcription WebSocket warm across turns by default, using each
+  `input_audio_buffer.commit` to delimit and clear a logical turn. Set
+  `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
+  turn. A final-transcript timeout discards the reusable socket before the
+  next turn so a late final cannot leak into the replacement transcript queue.
+
 ## What is *not* a knob
 
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively. The one knob here is
+  or stream more aggressively. OpenAI TTS consumes the HTTP response at its
+  native cadence, releases the first 20 ms of PCM immediately, then coalesces
+  steady-state audio into 100 ms frames; this avoids making first audio wait
+  for a full steady-state frame without increasing per-frame overhead for the
+  rest of the utterance. The one knob here is
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI
