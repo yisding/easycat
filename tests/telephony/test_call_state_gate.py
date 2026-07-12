@@ -136,6 +136,27 @@ class TestClassificationGate:
             gate.stop()
 
     @pytest.mark.asyncio
+    async def test_reclosing_gate_replaces_existing_timeout(self) -> None:
+        bus = EventBus()
+        gate = ClassificationGate(bus, enabled=True, timeout_s=5.0)
+        gate.start()
+        try:
+            gate.close()
+            first_timeout = gate._tasks.tasks()[0]
+
+            gate.close()
+            second_timeout = gate._tasks.tasks()[0]
+            await asyncio.sleep(0)
+
+            assert first_timeout.cancelled()
+            assert second_timeout is not first_timeout
+            assert gate._tasks.active("classification_gate_timeout")
+        finally:
+            gate.stop()
+
+        assert gate._tasks.empty
+
+    @pytest.mark.asyncio
     async def test_gate_releases_on_first_signal(self) -> None:
         from easycat.audio_format import AudioChunk, AudioFormat
 

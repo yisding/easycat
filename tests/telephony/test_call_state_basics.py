@@ -459,10 +459,28 @@ class TestOutboundCallStateMachine:
         try:
             await bus.emit(CallAnswered(call_sid="CA1"))
             await bus.emit(CallEnded(call_sid="CA1"))
-            # Timer should be cancelled; verify no error after sleep.
-            assert sm._max_duration_task is None or sm._max_duration_task.cancelled()
+            assert not sm._timers.active("call_max_duration")
         finally:
             sm.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_every_owned_timer(self) -> None:
+        bus = EventBus()
+        sm = OutboundCallStateMachine(
+            bus,
+            classification_timeout_s=60,
+            max_call_duration_s=60,
+            late_voicemail_window_s=60,
+        )
+        sm.start()
+        await bus.emit(CallAnswered(call_sid="CA1"))
+        await bus.emit(VoicemailDetected(result="human"))
+
+        assert not sm._timers.empty
+
+        sm.stop()
+
+        assert sm._timers.empty
 
     @pytest.mark.asyncio
     async def test_sip_607_608_maps_to_ended(self) -> None:
