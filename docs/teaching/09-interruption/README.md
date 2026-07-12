@@ -1,5 +1,9 @@
 # Chapter 9 — Interruption / Barge-in
 
+<!-- BEGIN auto:navigation -->
+**Progress: 10 of 16** · [← Chapter 8](../08-smart-turn/) · [Ladder index](../) · [Chapter 10 →](../10-cleaning-signal/)
+<!-- END auto:navigation -->
+
 > Three versions of the same feature. Each one better. Each one
 > teaching something the previous one didn't.
 

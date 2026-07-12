@@ -1,5 +1,9 @@
 # Chapter 11 — The Journal as Mental Model
 
+<!-- BEGIN auto:navigation -->
+**Progress: 12 of 16** · [← Chapter 10](../10-cleaning-signal/) · [Ladder index](../) · [Chapter 12 →](../12-evals-and-latency/)
+<!-- END auto:navigation -->
+
 > You will not write pipeline code. You will read three bundles
 > with planted bugs and find them.
 
