@@ -176,6 +176,16 @@
 
 ## The two scripts
 
+Start with the chapter's canonical entry point. It delegates to the
+streaming version:
+
+```bash
+uv run python docs/teaching/02-transcribe/main.py
+```
+
+Then run the two named scripts directly to compare batch and streaming
+STT side by side:
+
 ```bash
 uv run python docs/teaching/02-transcribe/batch.py
 uv run python docs/teaching/02-transcribe/streaming.py

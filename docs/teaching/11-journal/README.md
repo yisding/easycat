@@ -75,7 +75,16 @@ Your job is to find the failure using only the journal.
 
 ## Your tool
 
-One tiny script:
+Start with the chapter's canonical entry point. With no arguments it
+opens the first planted-bug fixture, so this command works immediately
+after setup:
+
+```bash
+uv run python docs/teaching/11-journal/main.py
+```
+
+`main.py` delegates to `investigate.py`. Call that script directly when
+you want to choose a fixture or add filters:
 
 ```bash
 uv run python docs/teaching/11-journal/investigate.py \
