@@ -75,6 +75,33 @@ Then run `--backend smart` and check.
    Smart-turn is a speedup over the worst case, not a replacement
    for the safety net.
 
+## 4. Account for the whole fallback wait
+
+**Task.** Run the provider-free endpoint path probe:
+
+```bash
+uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
+```
+
+Before reading its JSON, calculate the total for each path. Then change
+the scripted classifier cost from 40 ms to 120 ms and predict which
+fields and totals move.
+
+**Hints**
+
+1. Baseline VAD has no classifier or pending phase: its configured
+   800 ms silence wait is its whole endpoint wait.
+2. Smart accept is early silence plus classifier inference:
+   `200 + 40 = 240 ms` in the original probe.
+3. Smart fallback adds all three components:
+   `200 + 40 + 800 = 1,040 ms`. `SMART_FALLBACK_MS` starts after
+   classification; it is not a cap on the total endpoint wait.
+4. Raising only inference cost should move
+   `classification_inference_ms` and `endpoint_wait_ms`. It must not
+   change `silence_wait_ms` or `pending_wait_ms`.
+5. In a live run, compare the recorded components. Do not infer the
+   user-visible delay from a configured timeout alone.
+
 ## Self-check
 
 You should be able to: (a) describe what input smart-turn takes
@@ -82,4 +109,5 @@ and what it outputs, (b) explain why the fallback silence
 threshold still has to be there even with smart-turn on, and (c)
 name two utterance patterns that can challenge the classifier, and
 (d) explain why STT-final → first-audio cannot measure an endpoint
-detector's latency win.
+detector's latency win, and (e) decompose a smart fallback's endpoint
+wait into early silence, inference, and pending time.
