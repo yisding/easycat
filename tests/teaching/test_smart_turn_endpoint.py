@@ -120,9 +120,11 @@ async def test_turn_gap_keeps_post_stt_and_endpoint_intervals_separate(
     async def fake_agent(_client, _text: str, _queue) -> None:
         return None
 
-    async def fake_drain(_tts, _transport, _queue, _journal, _session_id) -> float:
+    async def fake_drain(
+        _tts, _transport, _queue, _journal, _session_id
+    ) -> tuple[float, int, int]:
         clock["now"] = 2.5
-        return 2.0
+        return 2.0, 1, 0
 
     monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(chapter, "run_agent_streaming", fake_agent)
@@ -132,6 +134,8 @@ async def test_turn_gap_keeps_post_stt_and_endpoint_intervals_separate(
 
     gap = next(row["data"] for row in journal.rows if row["name"] == "turn.gap")
     assert gap["total_gap_ms"] == pytest.approx(600.0)
+    assert gap["tts_accepted_chunks"] == 1
+    assert gap["tts_rejected_chunks"] == 0
     assert gap["endpoint_to_stt_final_ms"] == pytest.approx(400.0)
     assert gap["estimated_speech_end_to_first_audio_ms"] == pytest.approx(1_000.0)
     assert gap["reply_enqueue_gap_ms"] == pytest.approx(1_100.0)

@@ -86,7 +86,7 @@
 
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -76,49 +82,110 @@
+@@ -76,49 +82,120 @@
                  self._preroll.append(chunk)
 
 
@@ -190,7 +190,7 @@
 +
 +async def drain_sentences_to_speaker(
 +    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-+) -> float | None:
++) -> tuple[float | None, int, int]:
 +    """Take one sentence at a time, synthesise, stream audio to speaker.
 +
 +    Because ``transport.send_audio`` returns as soon as the chunk is
@@ -198,23 +198,31 @@
 +    the current sentence is still audible. That is the pipeline overlap.
      """
 +    first_audio_t: float | None = None
++    accepted_chunks = rejected_chunks = 0
 +    while True:
 +        sentence = await sentence_queue.get()
 +        if sentence is None:
 +            break
 +
 +        synth_start = time.monotonic()
++        sentence_accepted = sentence_rejected = 0
 +        async for event in tts.synthesize(TTSInput(text=sentence)):
 +            if event.type == TTSEventType.AUDIO and event.audio is not None:
 +                accepted = await transport.send_audio(event.audio)
-+                if accepted and first_audio_t is None:
-+                    first_audio_t = time.monotonic()
-+                    journal.append(
-+                        kind=JournalRecordKind.EVENT,
-+                        name="tts.first_audio",
-+                        session_id=SESSION_ID,
-+                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-+                    )
++                if accepted:
++                    accepted_chunks += 1
++                    sentence_accepted += 1
++                    if first_audio_t is None:
++                        first_audio_t = time.monotonic()
++                        journal.append(
++                            kind=JournalRecordKind.EVENT,
++                            name="tts.first_audio",
++                            session_id=SESSION_ID,
++                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
++                        )
++                else:
++                    rejected_chunks += 1
++                    sentence_rejected += 1
 +        journal.append(
 +            kind=JournalRecordKind.EVENT,
 +            name="stage.tts.execute",
@@ -222,10 +230,12 @@
 +            data={
 +                "stage": "tts",
 +                "elapsed_ms": (time.monotonic() - synth_start) * 1000,
++                "accepted_chunks": sentence_accepted,
++                "rejected_chunks": sentence_rejected,
 +                "text": sentence,
 +            },
 +        )
-+    return first_audio_t
++    return first_audio_t, accepted_chunks, rejected_chunks
 +
 +
 +async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -233,7 +243,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -129,53 +196,19 @@
+@@ -129,53 +206,20 @@
      if not final_text.strip() or stt_final_t is None:
          return
 
@@ -254,7 +264,7 @@
 -        stt_final_t,
 -        at_ms=(agent_dispatch - stt_final_t) * 1000,
 +    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    _, first_audio_t = await asyncio.gather(
++    _, delivery = await asyncio.gather(
 +        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
      )
@@ -294,11 +304,12 @@
 -        rejected_chunks=rejected_chunks,
 -    )
 -
++    first_audio_t, accepted_chunks, rejected_chunks = delivery
 +    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -184,29 +217,17 @@
+@@ -184,13 +228,10 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -306,24 +317,15 @@
 -            "agent_ms": (agent_end - agent_start) * 1000,
 -            "tts_ms": tts_first_audio_ms,
 -            "tts_enqueue_ms": tts_enqueue_ms,
--            "tts_accepted_chunks": accepted_chunks,
--            "tts_rejected_chunks": rejected_chunks,
--            "text": reply,
 +            "reply_enqueue_gap_ms": reply_enqueue_gap,
+             "tts_accepted_chunks": accepted_chunks,
+             "tts_rejected_chunks": rejected_chunks,
+-            "text": reply,
 +            "text": final_text,
          },
      )
      if total_gap is None:
--        if accepted_chunks:
--            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
--        elif rejected_chunks:
--            print(
--                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
--            )
--        else:
--            print("  (turn gap unavailable — TTS produced no audio)")
-+        print("  (turn gap unavailable — TTS produced no accepted audio)")
-     else:
+@@ -206,7 +247,7 @@
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
 
 
@@ -332,7 +334,7 @@
      """Stream turns and close every per-turn STT, including on cancellation."""
      stt = None
      try:
-@@ -219,11 +240,11 @@
+@@ -219,11 +260,11 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  active_stt = stt
@@ -346,7 +348,7 @@
                      await close_if_supported(active_stt)
      finally:
          if stt is not None:
-@@ -259,10 +280,15 @@
+@@ -259,10 +300,15 @@
 
          client = AsyncOpenAI()
          resources.push_async_callback(close_if_supported, client)
@@ -490,7 +492,7 @@ async def stream_sentences_to_tts(
 ```python
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-) -> float | None:
+) -> tuple[float | None, int, int]:
     """Take one sentence at a time, synthesise, stream audio to speaker.
 
     Because ``transport.send_audio`` returns as soon as the chunk is
@@ -498,23 +500,31 @@ async def drain_sentences_to_speaker(
     the current sentence is still audible. That is the pipeline overlap.
     """
     first_audio_t: float | None = None
+    accepted_chunks = rejected_chunks = 0
     while True:
         sentence = await sentence_queue.get()
         if sentence is None:
             break
 
         synth_start = time.monotonic()
+        sentence_accepted = sentence_rejected = 0
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
                 accepted = await transport.send_audio(event.audio)
-                if accepted and first_audio_t is None:
-                    first_audio_t = time.monotonic()
-                    journal.append(
-                        kind=JournalRecordKind.EVENT,
-                        name="tts.first_audio",
-                        session_id=SESSION_ID,
-                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
-                    )
+                if accepted:
+                    accepted_chunks += 1
+                    sentence_accepted += 1
+                    if first_audio_t is None:
+                        first_audio_t = time.monotonic()
+                        journal.append(
+                            kind=JournalRecordKind.EVENT,
+                            name="tts.first_audio",
+                            session_id=SESSION_ID,
+                            data={"stage": "tts", "t_ms": first_audio_t * 1000},
+                        )
+                else:
+                    rejected_chunks += 1
+                    sentence_rejected += 1
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -522,12 +532,43 @@ async def drain_sentences_to_speaker(
             data={
                 "stage": "tts",
                 "elapsed_ms": (time.monotonic() - synth_start) * 1000,
+                "accepted_chunks": sentence_accepted,
+                "rejected_chunks": sentence_rejected,
                 "text": sentence,
             },
         )
-    return first_audio_t
+    return first_audio_t, accepted_chunks, rejected_chunks
 ```
 <!-- END auto:snippet -->
+
+### Delivery evidence survives the sentence queue
+
+Streaming creates a second aggregation problem. Each
+`stage.tts.execute` record belongs to one sentence, but the
+`turn.gap` record belongs to the whole reply. The drain therefore
+keeps accepted and rejected chunk counts at both scopes. Per-sentence
+records explain where delivery changed; the turn totals explain why a
+first-audio gap is or is not available.
+
+Run the provider-free probe:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+```
+
+It exercises rejection in both queued sentences, mixed delivery where
+the first accepted chunk may arrive in a later sentence, and an empty
+TTS stream. The outcomes stay distinct:
+
+| Outcome | Evidence |
+|---|---|
+| `first_audio_accepted` | At least one chunk was accepted and `tts.first_audio` exists. |
+| `all_chunks_rejected` | TTS produced chunks, but the transport accepted none. |
+| `no_chunks_produced` | No audio chunks reached the transport. |
+
+The first-accepted timestamp still marks audio scheduled for delivery,
+not rendered or heard. The counts add diagnosis; they do not change
+that boundary.
 
 ## Two ownership scopes
 

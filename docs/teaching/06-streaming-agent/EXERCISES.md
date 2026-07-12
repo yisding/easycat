@@ -90,11 +90,33 @@ a cancellation after `stt.start`, and a failure in `tts.close`.
    sequential `await` calls and observe which events disappear when
    `tts.close` raises.
 
+## 5. Follow delivery across sentence boundaries
+
+**Task.** Run the streamed delivery probe:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+```
+
+Then change the mixed case from `[False, True]` to `[True, False]` and
+predict which fields change before re-running it.
+
+**Hints**
+
+1. Both mixed cases keep the same reply-wide accepted and rejected
+   totals, but the per-sentence counts move.
+2. With `[False, True]`, the first accepted chunk may arrive in a later
+   sentence. The turn gap must still end at that acceptance, not at the
+   first rejected offer.
+3. Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
+   first-audio gap, but only one proves that TTS produced audio.
+
 ## Self-check
 
 You should be able to: (a) draw the architecture diagram from
 memory, (b) explain why sentences (not tokens, not paragraphs) are
 the right unit, (c) distinguish per-turn STT ownership from the
-process-wide voice stack, and (d) point at the production
+process-wide voice stack, (d) distinguish an empty streamed TTS
+response from transport rejection, and (e) point at the production
 `consume_agent_stream` and name one parameter without re-reading
 the README.
