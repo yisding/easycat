@@ -104,6 +104,31 @@ after the coordinator waits for the old bot task.
    in-flight owners—STT and the bot task—before the shared TTS/client/VAD
    stack closes.
 
+## 5. Separate cancel control from audible silence
+
+**Task.** Run the deterministic cancellation-latency probe:
+
+```bash
+uv run python docs/teaching/09-interruption/cancel_latency_probe.py
+```
+
+Then change the scripted bot return from 80 ms to 150 ms without
+changing the transport's 30 ms return. Predict the completion record
+before re-running it.
+
+**Hints**
+
+1. `cancel_to_clear_audio_return_ms` should remain 30 ms. It measures
+   when the transport's queue-clear call returns.
+2. `cancel_to_bot_task_return_ms` should become 150 ms. Cooperative
+   cancellation is not complete until the old task exits and its result
+   is observed.
+3. The triggering `speech_started` still has `event_consumed: false`;
+   cancellation latency must not discard the next user turn.
+4. A fast `clear_audio()` return does not prove acoustic silence at the
+   human ear. It is a software control milestone, not playback or
+   perception evidence.
+
 ## Self-check
 
 You should be able to: (a) name the three differences between
@@ -111,4 +136,5 @@ versions A, B, and C, (b) describe why "bytes accepted ≠ bytes heard"
 without re-reading the README—including why rejected differs from
 accepted-but-queued—and (c) explain why `CancelToken` is a token
 and not an exception, and (d) trace the triggering `speech_started`
-event into the next STT turn.
+event into the next STT turn, and (e) distinguish clear-audio return,
+bot-task return, transport playback evidence, and human hearing.

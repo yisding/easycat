@@ -25,8 +25,8 @@
 
 - **Added:** three separate scripts (`ignore.py`, `cancel.py`,
   `estimate.py`); `CancelToken` from `easycat.cancel`;
-  `transport.clear_audio()` calls; a `bytes_accepted` / sentence
-  ledger in `estimate.py` plus an interruption-estimate formula
+  `transport.clear_audio()` calls and cancellation-latency records;
+  a `bytes_accepted` / sentence ledger in `estimate.py` plus an interruption-estimate formula
   that rewrites conversation history toward what the user could
   actually have heard.
 - **Modified:** the pipeline splits into two coroutines
@@ -85,8 +85,8 @@ On barge-in:
    stops pulling tokens.
 3. `drain_to_speaker` sees it and calls `tts.cancel()` to drop
    whatever chunk it was synthesising.
-4. `transport.clear_audio()` flushes the speaker queue so the bot
-   shuts up **now**, not after the current chunk finishes.
+4. `transport.clear_audio()` requests an immediate speaker-queue
+   flush instead of waiting for the current queue to drain.
 5. The same `speech_started` event falls through to the ordinary STT
    branch, so the words that caused the interruption become the next
    user turn instead of being thrown away.
@@ -131,6 +131,28 @@ async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
     await sentence_queue.put(None)
 ```
 <!-- END auto:snippet -->
+
+### Software cancellation is measurable
+
+“Immediate” needs a clock. Versions B and C write
+`interruption.start`, then `interruption.cancel_complete` after both
+software owners have settled. The completion record preserves:
+
+- `cancel_to_clear_audio_return_ms` — trigger to `clear_audio()` returning.
+- `cancel_to_bot_task_return_ms` — trigger to the cooperative bot task exiting.
+
+Run the deterministic provider-free probe:
+
+```bash
+uv run python docs/teaching/09-interruption/cancel_latency_probe.py
+```
+
+Its scripted transport returns from queue clearing at 30 ms, and the
+bot task exits at 80 ms. That proves ordering and software control
+latency. It does not prove acoustic silence: transport/device buffers
+or sound already in the room can remain after `clear_audio()` returns.
+Playback progress evidence later in this chapter answers a different,
+stronger question.
 
 **What this still doesn't solve:** the bot's memory. The LLM
 thinks it said its whole reply. Next turn it may reference "as I
@@ -272,7 +294,9 @@ for b in Path("docs/teaching/09-interruption/runs/").glob("*.bundle"):
 Expect:
 
 - `ignore.py` bundle: only `user.barge_in.ignored` records.
-- `cancel.py` bundle: `interruption.start` at barge-in time.
+- `cancel.py` bundle: `interruption.start`, followed by
+  `interruption.cancel_complete` with clear-audio and bot-task return
+  latency.
 - `estimate.py` bundle: `interruption.estimate` with
   `{full_text, heard_text, bytes_accepted}`.
 
