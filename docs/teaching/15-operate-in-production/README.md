@@ -100,15 +100,18 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -73,144 +50,84 @@
+@@ -73,144 +50,85 @@
      )
 
 
 -def pronunciation_command(path: Path) -> str:
 -    """Inspect the scheduler's provider-ready pronunciation payloads."""
 -    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
--
--
++def debugger_command(path: Path, *, port: int = 8765) -> str:
++    """Open the maintained debugger CLI on this captured bundle."""
++    return f"uv run easycat debugger serve {_display_path(path)} --port {port}"
+
+
 -def build_output_processors() -> list[LLMOutputProcessor]:
 -    """Build the chapter's pronunciation stack from the public factory."""
 -    return [
@@ -301,13 +304,9 @@
 +    print(f"  {human_command}")
 +    print(f"  {json_command}")
 +
-+    # ── 3. The debugger one-liner ──────────────────────────────────
-+    print(
-+        "\nOpen the debugger UI on this bundle:\n"
-+        f"  uv run python -c 'from easycat.debugger import serve_bundle; "
-+        f'serve_bundle("{bundle_path}", port=8765)\'\n'
-+        "  → browse http://127.0.0.1:8765"
-+    )
++    # ── 3. The debugger CLI ────────────────────────────────────────
++    print("\nOpen the debugger UI on this bundle:")
++    print(f"  {debugger_command(bundle_path)}")
 
 
  if __name__ == "__main__":
@@ -437,7 +436,17 @@ def build_session():
 
 `src/easycat/debugger/` ships an `aiohttp` single-process web UI
 that serves a timeline + per-turn waterfall + record inspector
-over a bundle or a live session. Two entry points:
+over a bundle or a live session. For a captured bundle or SQLite
+journal, use the maintained operator CLI; it binds to loopback and
+opens the browser by default:
+
+```bash
+uv run easycat debugger serve runs/ch15-local-123.bundle --port 8765
+```
+
+The Python entry points remain available when you need to embed the
+debugger in application code; `serve_session` is the live-session
+attachment:
 
 ```python
 from easycat.debugger import serve_bundle, serve_session
@@ -451,7 +460,7 @@ thread = serve_session(session, port=8765, in_thread=True)
 
 On the browser side you get per-stage spans per turn, the journal
 record list filterable by kind and stage, and the text transcript
-reconstructed from `stt.final` / assistant deltas. For chapter 11's
+reconstructed from `stt_final` / assistant deltas. For chapter 11's
 bug-hunting, `serve_bundle` on one of the
 planted bundles is an instructive follow-up.
 
@@ -607,9 +616,9 @@ Run easycat explain json-schema for CLI JSON.
   re-emits the saved report inside that same envelope. Use
   `.easycat/validation/runs/<run_id>/report.json` for a specific older run.
 
-The debugger is intentionally *not* a CLI subcommand — it's imported
-and called from Python, because you usually want to serve it from
-inside the same process that has the live `Session`.
+`easycat debugger serve` is the offline operator surface for captured
+bundles and SQLite journals. Use `serve_session(...)` from Python when
+the debugger must stay attached to a live in-process `Session`.
 
 ## The ch 13 → ch 12 bundle translator
 

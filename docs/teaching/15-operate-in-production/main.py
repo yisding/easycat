@@ -50,6 +50,11 @@ def measurement_commands(path: Path) -> tuple[str, str]:
     )
 
 
+def debugger_command(path: Path, *, port: int = 8765) -> str:
+    """Open the maintained debugger CLI on this captured bundle."""
+    return f"uv run easycat debugger serve {_display_path(path)} --port {port}"
+
+
 def build_session():
     """Same shape as ch 13's Local cell. For a real deployment you
     would typically bump ``debug`` to ``"full"`` and swap
@@ -121,13 +126,9 @@ async def main() -> None:
     print(f"  {human_command}")
     print(f"  {json_command}")
 
-    # ── 3. The debugger one-liner ──────────────────────────────────
-    print(
-        "\nOpen the debugger UI on this bundle:\n"
-        f"  uv run python -c 'from easycat.debugger import serve_bundle; "
-        f'serve_bundle("{bundle_path}", port=8765)\'\n'
-        "  → browse http://127.0.0.1:8765"
-    )
+    # ── 3. The debugger CLI ────────────────────────────────────────
+    print("\nOpen the debugger UI on this bundle:")
+    print(f"  {debugger_command(bundle_path)}")
 
 
 if __name__ == "__main__":
