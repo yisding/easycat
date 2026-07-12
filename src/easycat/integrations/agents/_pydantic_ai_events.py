@@ -8,9 +8,88 @@ mode in ``PydanticAIBridge``.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from easycat.integrations.agents.base import AgentBridgeEvent, AgentRecorder
+
+_EventTranslator = Callable[[Any, AgentRecorder | None], AgentBridgeEvent | None]
+
+
+def _translate_delta(event: Any, recorder: AgentRecorder | None) -> AgentBridgeEvent | None:
+    delta = getattr(event, "delta", None)
+    delta_cls = type(delta).__name__
+    if delta_cls == "TextPartDelta":
+        content = getattr(delta, "content_delta", "") or ""
+        return AgentBridgeEvent(kind="text_delta", text=content) if content else None
+    if delta_cls != "ToolCallPartDelta":
+        return None
+
+    args = getattr(delta, "args_delta", "") or ""
+    if not args:
+        return None
+    text = args if isinstance(args, str) else json.dumps(args, default=str)
+    if recorder is not None:
+        recorder.record_tool_call(phase="delta", name="")
+    return AgentBridgeEvent(kind="tool_delta", text=text)
+
+
+def _translate_tool_started(
+    event: Any,
+    recorder: AgentRecorder | None,
+) -> AgentBridgeEvent:
+    part = getattr(event, "part", None)
+    name = getattr(part, "tool_name", "") or ""
+    call_id = getattr(part, "tool_call_id", "") or ""
+    if recorder is not None:
+        recorder.record_tool_call(phase="start", name=name, call_id=call_id)
+    return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
+
+
+def _translate_tool_result(
+    event: Any,
+    recorder: AgentRecorder | None,
+) -> AgentBridgeEvent:
+    part = getattr(event, "part", None)
+    name = getattr(event, "tool_name", None) or getattr(part, "tool_name", "") or ""
+    call_id = getattr(event, "tool_call_id", None) or getattr(part, "tool_call_id", "") or ""
+    result = getattr(event, "result", None)
+    if result is None:
+        result = getattr(event, "content", None)
+    if result is None:
+        result = getattr(part, "content", "")
+    result_str = "" if result is None else str(result)
+    if recorder is not None:
+        recorder.record_tool_call(phase="result", name=name, call_id=call_id)
+    return AgentBridgeEvent(
+        kind="tool_result",
+        tool_name=name,
+        call_id=call_id,
+        result=result_str,
+    )
+
+
+def _translate_final_result(
+    event: Any,
+    _recorder: AgentRecorder | None,
+) -> AgentBridgeEvent | None:
+    # PydanticAI v2's FinalResultEvent only identifies the output tool, so
+    # callers emit done later when the agent run exposes its result.
+    output = getattr(event, "result", None)
+    if output is None:
+        output = getattr(event, "output", None)
+    if output is None:
+        return None
+    return AgentBridgeEvent(kind="done", text=str(output), structured_output=output)
+
+
+_EVENT_TRANSLATORS: dict[str, _EventTranslator] = {
+    "FunctionToolCallEvent": _translate_tool_started,
+    "FunctionToolResultEvent": _translate_tool_result,
+    "OutputToolCallEvent": _translate_tool_started,
+    "OutputToolResultEvent": _translate_tool_result,
+    "FinalResultEvent": _translate_final_result,
+}
 
 
 def translate_event(
@@ -22,63 +101,9 @@ def translate_event(
     Also records tool phases to the recorder when provided.  Uses duck
     typing so this works without importing PydanticAI types directly.
     """
-    event_cls = type(event).__name__
+    translated_delta = _translate_delta(event, recorder)
+    if translated_delta is not None:
+        return translated_delta
 
-    # PartDeltaEvent → text_delta or tool_delta
-    delta = getattr(event, "delta", None)
-    if delta is not None:
-        delta_cls = type(delta).__name__
-        if delta_cls == "TextPartDelta":
-            content = getattr(delta, "content_delta", "") or ""
-            if content:
-                return AgentBridgeEvent(kind="text_delta", text=content)
-        elif delta_cls == "ToolCallPartDelta":
-            args = getattr(delta, "args_delta", "") or ""
-            if args:
-                text = args if isinstance(args, str) else json.dumps(args, default=str)
-                if recorder is not None:
-                    recorder.record_tool_call(phase="delta", name="")
-                return AgentBridgeEvent(kind="tool_delta", text=text)
-
-    # FunctionToolCallEvent / OutputToolCallEvent → tool_started
-    if event_cls in {"FunctionToolCallEvent", "OutputToolCallEvent"}:
-        part = getattr(event, "part", None)
-        name = getattr(part, "tool_name", "") or ""
-        call_id = getattr(part, "tool_call_id", "") or ""
-        if recorder is not None:
-            recorder.record_tool_call(phase="start", name=name, call_id=call_id)
-        return AgentBridgeEvent(kind="tool_started", tool_name=name, call_id=call_id)
-
-    # FunctionToolResultEvent / OutputToolResultEvent → tool_result
-    if event_cls in {"FunctionToolResultEvent", "OutputToolResultEvent"}:
-        part = getattr(event, "part", None)
-        name = getattr(event, "tool_name", None) or getattr(part, "tool_name", "") or ""
-        call_id = getattr(event, "tool_call_id", None) or getattr(part, "tool_call_id", "") or ""
-        result = getattr(event, "result", None)
-        if result is None:
-            result = getattr(event, "content", None)
-        if result is None:
-            result = getattr(part, "content", "")
-        result_str = "" if result is None else str(result)
-        if recorder is not None:
-            recorder.record_tool_call(phase="result", name=name, call_id=call_id)
-        return AgentBridgeEvent(
-            kind="tool_result",
-            tool_name=name,
-            call_id=call_id,
-            result=result_str,
-        )
-
-    # FinalResultEvent → done when the event carries output. PydanticAI v2's
-    # FinalResultEvent only identifies the output tool, so the bridge emits
-    # final done after agent_run.result is available.
-    if event_cls == "FinalResultEvent":
-        output = getattr(event, "result", None)
-        if output is None:
-            output = getattr(event, "output", None)
-        if output is None:
-            return None
-        text = str(output) if output is not None else ""
-        return AgentBridgeEvent(kind="done", text=text, structured_output=output)
-
-    return None
+    translator = _EVENT_TRANSLATORS.get(type(event).__name__)
+    return translator(event, recorder) if translator is not None else None

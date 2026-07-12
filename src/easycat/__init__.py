@@ -109,6 +109,10 @@ if TYPE_CHECKING:
         VADProvider,
     )
     from easycat.runtime import JournalRecordKind
+    from easycat.server.webrtc_routes import (
+        run_webrtc_config_server,
+        serve_webrtc_config_sessions,
+    )
     from easycat.session._session import Session
     from easycat.session._types import CallIdentity, SessionConfig
     from easycat.session.actions import SessionActions
@@ -127,8 +131,6 @@ if TYPE_CHECKING:
     from easycat.transports.webrtc import (
         ICEServer,
         WebRTCTransportConfig,
-        run_webrtc_config_server,
-        serve_webrtc_config_sessions,
     )
     from easycat.transports.websocket import (
         WebSocketConnectionTransport,

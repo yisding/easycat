@@ -558,36 +558,31 @@ class _DevDebuggerState:
 # ── HTTP API ─────────────────────────────────────────────────────
 
 
-def _make_app(
-    source: DebuggerSource,
-    *,
-    allow_remote: bool = False,
-    registry: Any | None = None,
-) -> Any:
-    """Build the aiohttp Application with all routes wired up.
-
-    When ``registry`` is a
-    :class:`~easycat.debugger.session_registry.SessionIndex`, the dev-mode
-    routes (``/api/dev/sessions``, ``/api/dev/select``) are mounted and *source*
-    is replaced by a live proxy that follows the registry session the developer
-    selects. All other routes are unchanged — they read through the proxy, so
-    switching the active session re-points the whole UI.
-    """
-    try:
-        from aiohttp import WSMsgType, web
-    except ImportError as exc:  # pragma: no cover - optional dep
-        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
-
-    static_dir = Path(__file__).parent / "static"
-
-    dev = _DevDebuggerState(registry) if registry is not None else None
-    if dev is not None:
-        # All existing routes read through ``source``; swap in the live proxy so
-        # selecting a different session re-points every panel at once.
-        source = dev.proxy_source()
+class _DebuggerRoutes:
+    """Stateful aiohttp route controller for one debugger application."""
 
     _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+    def __init__(
+        self,
+        source: DebuggerSource,
+        *,
+        web: Any,
+        ws_msg_type: Any,
+        allow_remote: bool,
+        registry: Any | None,
+    ) -> None:
+        self.web = web
+        self.ws_msg_type = ws_msg_type
+        self.allow_remote = allow_remote
+        self.static_dir = Path(__file__).parent / "static"
+        self.dev = _DevDebuggerState(registry) if registry is not None else None
+        # Every standard handler reads through the proxy, so selecting a new
+        # dev session re-points the whole route surface without rebuilding it.
+        self.source = self.dev.proxy_source() if self.dev is not None else source
+        self.websockets: set[Any] = set()
+
+    @staticmethod
     def _origin_is_safe(origin: str) -> bool:
         if not origin:
             return False
@@ -596,14 +591,14 @@ def _make_app(
             return False
         return is_loopback_host(parsed.hostname)
 
+    @staticmethod
     def _host_is_safe(host: str) -> bool:
         if not host:
             return False
         parsed = urlsplit(f"//{host}")
         return is_loopback_host(parsed.hostname)
 
-    @web.middleware
-    async def _origin_guard(request: Any, handler: Any) -> Any:
+    async def origin_guard(self, request: Any, handler: Any) -> Any:
         """Refuse cross-origin requests on the loopback default.
 
         Three checks layered for defense-in-depth:
@@ -624,18 +619,19 @@ def _make_app(
         ``allow_remote=True`` disables all three: callers who want
         network exposure are on their own.
         """
-        if allow_remote:
+        web = self.web
+        if self.allow_remote:
             return await handler(request)
         host = request.headers.get("Host", "")
         origin = request.headers.get("Origin", "")
         site = request.headers.get("Sec-Fetch-Site", "")
-        if not _host_is_safe(host):
+        if not self._host_is_safe(host):
             return web.Response(status=403, text="non-loopback host refused")
         if site and site not in ("same-origin", "same-site", "none"):
             return web.Response(status=403, text="cross-site requests refused")
-        if origin and not _origin_is_safe(origin):
+        if origin and not self._origin_is_safe(origin):
             return web.Response(status=403, text="cross-origin requests refused")
-        if request.method in _STATE_CHANGING_METHODS:
+        if request.method in self._STATE_CHANGING_METHODS:
             ctype = (request.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype and ctype != "application/json":
                 return web.Response(
@@ -652,7 +648,14 @@ def _make_app(
                 )
         return await handler(request)
 
-    async def audio_concat(request: Any) -> Any:
+    # The read-only source-inspection handlers (index, manifest, records,
+    # turns, timeline, transcript, issues, artifact) live in
+    # ``debugger._core_routes`` and are registered by the app composer via
+    # ``register_core_routes``.
+
+    async def audio_concat(self, request: Any) -> Any:
+        source = self.source
+        web = self.web
         try:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
@@ -712,13 +715,15 @@ def _make_app(
         await response.write_eof()
         return response
 
-    async def audio_waveform(request: Any) -> Any:
+    async def audio_waveform(self, request: Any) -> Any:
         """Render one turn's audio as a greyscale waveform PNG.
 
         Cheap ``<img>`` source for the Live waveform strip — the SPA Canvas
         path decodes the WAV itself, but the Live view shares one strip per
         turn and an ``<img>`` is far lighter than per-pixel JS.
         """
+        source = self.source
+        web = self.web
         try:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
@@ -781,7 +786,7 @@ def _make_app(
             headers={"Cache-Control": "no-store"},
         )
 
-    async def aec_diagnostics(request: Any) -> Any:
+    async def aec_diagnostics(self, request: Any) -> Any:
         """AEC diagnostics for one turn: ERLE, double-talk, self-echo, tracks.
 
         Reads the aligned mic-in / reference / post-AEC tracks from the journal
@@ -790,6 +795,8 @@ def _make_app(
         frames were captured, rather than 404'ing — the SPA always gets a
         well-formed shape.
         """
+        source = self.source
+        web = self.web
         try:
             turn_id = _safe_turn_id(request.match_info["turn"])
         except ValueError:
@@ -807,14 +814,16 @@ def _make_app(
             )
         return web.json_response(payload)
 
-    async def aec_vad_whatif(request: Any) -> Any:
+    async def aec_vad_whatif(self, request: Any) -> Any:
         """Re-run VAD at an alternate sensitivity over a turn's captured input.
 
         Bundle-only (mirrors replay's ``supports_replay`` 405 for live sources):
         the captured ``stage_start`` input refs only exist on a settled bundle.
-        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        ``origin_guard`` already enforces JSON content-type + a present Origin
         on this POST.  A missing VAD provider degrades to 422 rather than 500.
         """
+        source = self.source
+        web = self.web
         if source.is_live:
             return web.Response(status=405, text="vad-whatif is only supported for bundle sources")
         try:
@@ -857,7 +866,9 @@ def _make_app(
         }
     )
 
-    async def replay(request: Any) -> Any:
+    async def replay(self, request: Any) -> Any:
+        source = self.source
+        web = self.web
         if not source.manifest().get("supports_replay"):
             return web.Response(status=405, text="this source does not support replay")
         try:
@@ -866,7 +877,7 @@ def _make_app(
             return web.Response(status=400, text="body must be JSON")
         if not isinstance(payload, dict):
             return web.Response(status=400, text="body must be a JSON object")
-        unknown = set(payload) - _ALLOWED_REPLAY_KEYS
+        unknown = set(payload) - self._ALLOWED_REPLAY_KEYS
         if unknown:
             return web.json_response({"error": f"unknown keys: {sorted(unknown)}"}, status=400)
         fidelity = payload.get("fidelity", "artifact")
@@ -884,8 +895,8 @@ def _make_app(
         # against live providers and need explicit confirmation so a
         # CSRF / drive-by from another tab can't fire them silently.
         destructive = (
-            fidelity in _DESTRUCTIVE_FIDELITIES
-            or tool_policy in _DESTRUCTIVE_TOOL_POLICIES
+            fidelity in self._DESTRUCTIVE_FIDELITIES
+            or tool_policy in self._DESTRUCTIVE_TOOL_POLICIES
             or force
         )
         if destructive and not confirm:
@@ -960,7 +971,9 @@ def _make_app(
         result["destructive"] = destructive
         return web.json_response(result)
 
-    async def export(request: Any) -> Any:
+    async def export(self, request: Any) -> Any:
+        source = self.source
+        web = self.web
         if not source.manifest().get("supports_export"):
             return web.Response(status=405, text="export only supported for live sessions")
         # ``?turn=<id>`` writes a single-turn replayable slice (the SPA
@@ -1012,25 +1025,28 @@ def _make_app(
         loop.call_later(60.0, _safe_unlink, tmp_path)
         return response
 
-    async def annotations(_request: Any) -> Any:
+    async def annotations(self, _request: Any) -> Any:
         """Return the per-turn verdict sidecar map for a bundle source.
 
         Bundle-only — live sessions carry no on-disk sidecar.  A missing or
         corrupt sidecar yields an empty map (``load_annotations`` tolerates
         both) so the SPA always gets a well-formed response.
         """
-        annotate_path = source._annotate_path
+        web = self.web
+        annotate_path = self.source._annotate_path
         if annotate_path is None:
             return web.Response(status=405, text="annotations only supported for bundle sources")
         return web.json_response({"annotations": load_annotations(annotate_path)})
 
-    async def annotate(request: Any) -> Any:
+    async def annotate(self, request: Any) -> Any:
         """Persist a per-turn pass/fail verdict into the bundle's sidecar.
 
         Bundle-only; the journal and the bundle ZIP on disk are never
-        touched.  ``_origin_guard`` already enforces JSON content-type and a
+        touched.  ``origin_guard`` already enforces JSON content-type and a
         present, safe Origin on this POST, so we only validate the payload.
         """
+        source = self.source
+        web = self.web
         annotate_path = source._annotate_path
         if annotate_path is None:
             return web.Response(status=405, text="annotate only supported for bundle sources")
@@ -1088,13 +1104,13 @@ def _make_app(
             return web.Response(status=500, text="annotation write failed")
         return web.json_response({"turn_id": turn_id, "annotation": record})
 
-    async def refresh(_request: Any) -> Any:
-        return web.json_response({"snapshot_size": len(source.records())})
+    async def refresh(self, _request: Any) -> Any:
+        return self.web.json_response({"snapshot_size": len(self.source.records())})
 
-    async def healthcheck(_request: Any) -> Any:
-        return web.json_response({"ok": True, "is_live": source.is_live})
+    async def healthcheck(self, _request: Any) -> Any:
+        return self.web.json_response({"ok": True, "is_live": self.source.is_live})
 
-    async def websocket(request: Any) -> Any:
+    async def websocket(self, request: Any) -> Any:
         """Push live updates to the UI.
 
         Sends a snapshot every poll interval (live sources) or once
@@ -1104,8 +1120,13 @@ def _make_app(
         can send ``{"action": "ping"}`` to keep the connection alive; we
         respond with ``pong``.
         """
+        dev = self.dev
+        source = self.source
+        web = self.web
+        ws_msg_type = self.ws_msg_type
         ws = web.WebSocketResponse(heartbeat=15.0)
         await ws.prepare(request)
+        self.websockets.add(ws)
         last_seq = -1
         last_pushed_seq = 0
         last_epoch: int | None = None
@@ -1179,25 +1200,32 @@ def _make_app(
                 # listen for messages, so a manual refresh works too.
                 with contextlib.suppress(asyncio.TimeoutError):
                     msg = await asyncio.wait_for(ws.receive(), timeout=0.5)
-                    if msg.type == WSMsgType.TEXT:
+                    if msg.type == ws_msg_type.TEXT:
                         try:
                             req = json.loads(msg.data)
                         except json.JSONDecodeError:
                             continue
                         if req.get("action") == "ping":
                             await ws.send_json({"type": "pong"})
-                    elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                    elif msg.type in (
+                        ws_msg_type.CLOSE,
+                        ws_msg_type.CLOSED,
+                        ws_msg_type.ERROR,
+                    ):
                         break
         finally:
+            self.websockets.discard(ws)
             await ws.close()
         return ws
 
-    async def dev_sessions(_request: Any) -> Any:
+    async def dev_sessions(self, _request: Any) -> Any:
         """List the live sessions the dev registry is tracking.
 
         Powers the UI session selector. Returns the active registry id so the
         selector can highlight the session every other panel is showing.
         """
+        dev = self.dev
+        web = self.web
         if dev is None:
             return web.Response(status=404, text="dev session registry not enabled")
         return web.json_response(
@@ -1207,12 +1235,14 @@ def _make_app(
             }
         )
 
-    async def dev_select(request: Any) -> Any:
+    async def dev_select(self, request: Any) -> Any:
         """Switch the active session every panel renders against.
 
-        ``_origin_guard`` already enforces JSON content-type + a present Origin
+        ``origin_guard`` already enforces JSON content-type + a present Origin
         on this POST. A ``null``/absent ``registry_id`` clears the selection.
         """
+        dev = self.dev
+        web = self.web
         if dev is None:
             return web.Response(status=404, text="dev session registry not enabled")
         try:
@@ -1238,7 +1268,7 @@ def _make_app(
             )
         return web.json_response({"active_session": dev.active_id()})
 
-    async def dev_overview(_request: Any) -> Any:
+    async def dev_overview(self, _request: Any) -> Any:
         """Cross-session triage: per-session journal stats + an aggregate strip.
 
         At a glance: which of N concurrent live sessions is hot, idle, or
@@ -1246,6 +1276,8 @@ def _make_app(
         skipped rather than 500'ing the whole strip, and zero sessions yields an
         empty-but-200 report.
         """
+        dev = self.dev
+        web = self.web
         if dev is None:
             return web.Response(status=404, text="dev session registry not enabled")
         sessions_out: list[dict[str, Any]] = []
@@ -1286,28 +1318,80 @@ def _make_app(
             }
         )
 
-    app = web.Application(middlewares=[_origin_guard])
-    register_core_routes(app, source, static_dir=static_dir, web=web)
-    app.router.add_get("/api/audio/concat/{turn}", audio_concat)
-    app.router.add_get("/api/audio/waveform/{turn}", audio_waveform)
-    app.router.add_get("/api/aec/{turn}", aec_diagnostics)
-    app.router.add_post("/api/aec/{turn}/vad-whatif", aec_vad_whatif)
-    app.router.add_post("/api/replay", replay)
-    app.router.add_post("/api/export", export)
-    app.router.add_post("/api/annotate", annotate)
-    app.router.add_get("/api/annotations", annotations)
-    app.router.add_get("/api/refresh", refresh)
-    app.router.add_get("/api/health", healthcheck)
-    # The dev-only registry routes are mounted only when a registry is attached
-    # (EASYCAT_DEV / VoiceApp(dev=True)); a plain bundle/session app 404s them.
-    if dev is not None:
-        app.router.add_get("/api/dev/sessions", dev_sessions)
-        app.router.add_post("/api/dev/select", dev_select)
-        app.router.add_get("/api/dev/overview", dev_overview)
-    app.router.add_get("/ws", websocket)
-    # Static assets directory if we ever add JS / CSS files.
-    if static_dir.is_dir():
-        app.router.add_static("/static/", path=static_dir, show_index=False)
+    async def shutdown(self, _app: Any) -> None:
+        """Close every live WebSocket before aiohttp cancels handlers."""
+        if self.websockets:
+            await asyncio.gather(
+                *(ws.close(code=1001, message=b"server shutdown") for ws in self.websockets),
+                return_exceptions=True,
+            )
+        self.websockets.clear()
+
+    def route_table(self) -> list[Any]:
+        """Return this controller's route table.
+
+        The read-only source-inspection routes are owned by
+        ``debugger._core_routes`` and registered separately by the app
+        composer, so they are deliberately absent here.
+        """
+        web = self.web
+        routes = [
+            web.get("/api/audio/concat/{turn}", self.audio_concat),
+            web.get("/api/audio/waveform/{turn}", self.audio_waveform),
+            web.get("/api/aec/{turn}", self.aec_diagnostics),
+            web.post("/api/aec/{turn}/vad-whatif", self.aec_vad_whatif),
+            web.post("/api/replay", self.replay),
+            web.post("/api/export", self.export),
+            web.post("/api/annotate", self.annotate),
+            web.get("/api/annotations", self.annotations),
+            web.get("/api/refresh", self.refresh),
+            web.get("/api/health", self.healthcheck),
+            web.get("/ws", self.websocket),
+        ]
+        # Dev-only routes do not exist unless a registry is attached.
+        if self.dev is not None:
+            routes.extend(
+                (
+                    web.get("/api/dev/sessions", self.dev_sessions),
+                    web.post("/api/dev/select", self.dev_select),
+                    web.get("/api/dev/overview", self.dev_overview),
+                )
+            )
+        if self.static_dir.is_dir():
+            routes.append(web.static("/static/", path=self.static_dir, show_index=False))
+        return routes
+
+
+def _make_app(
+    source: DebuggerSource,
+    *,
+    allow_remote: bool = False,
+    registry: Any | None = None,
+) -> Any:
+    """Build the aiohttp application around an explicit route controller."""
+    try:
+        from aiohttp import WSMsgType, web
+    except ImportError as exc:  # pragma: no cover - optional dep
+        raise RuntimeError(DEBUGGER_INSTALL_HINT) from exc
+
+    routes = _DebuggerRoutes(
+        source,
+        web=web,
+        ws_msg_type=WSMsgType,
+        allow_remote=allow_remote,
+        registry=registry,
+    )
+
+    @web.middleware
+    async def origin_guard(request: Any, handler: Any) -> Any:
+        return await routes.origin_guard(request, handler)
+
+    app = web.Application(middlewares=[origin_guard])
+    # ``routes.source`` is the dev-registry proxy when a registry is attached,
+    # so the read-only route group re-points with dev session selection too.
+    register_core_routes(app, routes.source, static_dir=routes.static_dir, web=web)
+    app.add_routes(routes.route_table())
+    app.on_shutdown.append(routes.shutdown)
     return app
 
 

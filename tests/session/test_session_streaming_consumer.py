@@ -352,6 +352,34 @@ async def test_first_payload_holds_trailing_decimal_period_for_lookahead():
     assert "The estimate is 3." not in streaming
 
 
+async def test_first_payload_bounds_punctuation_free_opener():
+    """A run-on opener reaches TTS without waiting for final stream flush."""
+    built = await _run_streaming_payloads(
+        [
+            "This response keeps streaming words without ",
+            "reaching punctuation for quite a while",
+        ],
+        strip_md=False,
+    )
+
+    assert built[0] == ("This response keeps streaming words without ", False)
+    assert built[1] == ("reaching punctuation for quite a while", True)
+
+
+async def test_markdown_first_payload_bounds_punctuation_free_opener():
+    """The same bound applies after safely stripping closed markdown."""
+    built = await _run_streaming_payloads(
+        [
+            "**This response keeps streaming** words without ",
+            "reaching punctuation for quite a while",
+        ],
+        strip_md=True,
+    )
+
+    assert built[0] == ("This response keeps streaming words without ", False)
+    assert "**" not in "".join(text for text, _ in built)
+
+
 async def test_first_payload_does_not_ship_clipped_short_opener():
     """A short opener like "Sure," is never queued as a clipped fragment.
 
