@@ -25,6 +25,7 @@ from easycat.turn_manager import (
     TurnManagerState,
     TurnMode,
 )
+from easycat.vad._base import _VADBase
 from easycat.vad.factory import VADConfig
 
 
@@ -52,15 +53,53 @@ class EventCollector:
         return [type(e).__name__ for e in self.events]
 
 
-def test_default_fixed_endpoint_budget_is_150_ms():
+def test_default_fixed_endpoint_budget_is_150_ms() -> None:
     """VAD stop detection plus turn grace should match the low-latency target."""
     vad = VADConfig()
     turn = TurnManagerConfig()
 
     assert vad.min_silence_duration_ms == 50
+    assert vad.min_speech_duration_ms == 50
     assert turn.end_of_turn_silence_ms == 100
-    assert turn.punctuated_end_of_turn_silence_ms == 50
+    assert turn.punctuated_end_of_turn_silence_ms is None
+    assert vad.min_speech_duration_ms < turn.end_of_turn_silence_ms
     assert vad.min_silence_duration_ms + turn.end_of_turn_silence_ms == 150
+
+
+@pytest.mark.asyncio
+async def test_default_vad_restart_cancels_endpoint_before_deadline() -> None:
+    """Confirmed resumed speech must arrive before the fixed endpoint fires."""
+    bus = EventBus()
+    manager = TurnManager(bus)
+    collector = EventCollector(bus)
+    config = VADConfig()
+    vad = _VADBase()
+    vad.configure(
+        min_speech_duration_ms=config.min_speech_duration_ms,
+        min_silence_duration_ms=config.min_silence_duration_ms,
+    )
+
+    async def evaluate(probability: float, now: float) -> None:
+        for event in vad._evaluate_speech(probability, now):
+            await manager.on_vad_event(event)
+
+    try:
+        await evaluate(1.0, 0.000)
+        await evaluate(1.0, 0.051)
+        assert manager.state == TurnManagerState.USER_SPEAKING
+
+        await evaluate(0.0, 0.060)
+        await evaluate(0.0, 0.111)
+        assert manager.state == TurnManagerState.USER_PAUSED
+
+        await evaluate(1.0, 0.120)
+        await evaluate(1.0, 0.171)
+        assert manager.state == TurnManagerState.USER_SPEAKING
+
+        await asyncio.sleep(0.11)
+        assert "TurnEnded" not in collector.type_names
+    finally:
+        await manager.shutdown()
 
 
 # ── State machine transition tests ──────────────────────────────────
@@ -186,7 +225,7 @@ async def test_speech_resumes_cancels_timeout():
 
 
 @pytest.mark.asyncio
-async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout():
+async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout() -> None:
     bus = EventBus()
     tm = TurnManager(
         bus,
@@ -210,7 +249,7 @@ async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout():
 
 
 @pytest.mark.asyncio
-async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout():
+async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout() -> None:
     bus = EventBus()
     tm = TurnManager(
         bus,
@@ -327,7 +366,7 @@ async def test_none_punctuation_wait_disables_shortening(
 
 
 @pytest.mark.asyncio
-async def test_stt_final_before_pause_does_not_shorten_next_pause():
+async def test_stt_final_before_pause_does_not_shorten_next_pause() -> None:
     bus = EventBus()
     tm = TurnManager(
         bus,

@@ -43,7 +43,9 @@ class VADConfig:
     # Krisp-specific
     krisp_model_path: str | None = None
     # Shared VAD settings
-    min_speech_duration_ms: int = 250
+    # Keep the default speech-confirmation gate below the turn manager's
+    # 100 ms endpoint grace so resumed speech can cancel a pending endpoint.
+    min_speech_duration_ms: int = 50
     min_silence_duration_ms: int = 50
     sensitivity: float | None = None
 

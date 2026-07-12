@@ -67,10 +67,10 @@ value below is asserted against the code by a guard test
 | Default | Value | Where it waits | Tuning guidance |
 | --- | --- | --- | --- |
 | `TurnManagerConfig.end_of_turn_silence_ms` | `100` | After VAD reports silence, the turn stays open this long before the agent is invoked. Combined with the default VAD's 50 ms silence gate, fixed endpointing targets about 150 ms of continuous silence (plus audio-frame quantization). | Set via `EasyConfig(turn_taking=TurnManagerConfig(...))`. Raise this fallback for unusually slow speakers or noisy environments. With `smart_turn=True`, a confident endpoint can finish at the VAD boundary while an incomplete prediction still receives the full configured grace. |
-| `TurnManagerConfig.punctuated_end_of_turn_silence_ms` | `50` | Shortens the fixed timer only after STT finalizes text ending in terminal punctuation, targeting about 100 ms of total silence with the default VAD. | Set to `None` to disable. Smart-turn incomplete/error decisions retain the full fallback timer, so punctuation never overrides a semantic incomplete verdict. |
+| `TurnManagerConfig.punctuated_end_of_turn_silence_ms` | `None` | Optionally shortens the fixed timer after STT finalizes text ending in terminal punctuation. | Disabled by default so punctuation cannot outrun the speech re-start gate. If you opt in, keep this above `VADConfig.min_speech_duration_ms`. Smart-turn incomplete/error decisions retain the full fallback timer, so punctuation never overrides a semantic incomplete verdict. |
 | `TurnManagerConfig.stt_segment_silence_ms` | `0` | Extra silence budget, after VAD stop, before the current STT segment is finalized. | Already zero — the segment commits as soon as VAD pauses. Raise it only if your STT provider splits sentences too eagerly; every millisecond lands directly on the response path. |
 | `VADConfig.min_silence_duration_ms` | `50` | The VAD must observe this much continuous silence before emitting the stop-of-speech event that *starts* the end-of-turn countdown. | Adds directly in front of `end_of_turn_silence_ms`. Lowering makes endpointing twitchier on breaths and pauses; 50–200 ms is the practical range. |
-| `VADConfig.min_speech_duration_ms` | `250` | Speech must persist this long before the VAD reports start-of-speech. | Delays turn start and barge-in detection slightly. Lowering increases false triggers from coughs and background noise. |
+| `VADConfig.min_speech_duration_ms` | `50` | Speech must persist this long before the VAD reports start-of-speech. The default stays below the 100 ms turn grace so resumed speech cancels a pending endpoint before it fires. | Raise it for unusually noisy environments only together with `end_of_turn_silence_ms`; the turn grace must remain longer than this gate. |
 | `SmartTurnConfig.timeout_s` | `2.0` | Maximum wait to start or finish one smart-turn endpoint inference; on timeout the manager falls back to the silence timer. | Applies whenever smart-turn is on — which is the default for the local-microphone transport (`EasyConfig.mic()`) and off for the server/browser/telephony transports; pass `smart_turn=False`/`True` to override. The bundled quantized model classifies in tens of milliseconds on CPU, so this ceiling rarely binds; lower it if a slow ONNX runtime should fail fast to the silence timer. |
 | `AgentRunnerConfig.timeout` | `30.0` | Ceiling (seconds) on one wrapped agent run before `AgentTimeoutError`. | A safety net, not added per turn — but it bounds your worst case. If your agent should never take 30 s to speak, lower it so failures surface as errors instead of dead air. |
 | `SessionConfig.interruption_ack_stale_ms` | `500` | On barge-in, playback acks older than this are treated as stale when estimating what the user actually heard. | Affects truncation accuracy after an interruption, not response speed. Tune together with the tail cap below for transports with infrequent acks. |
@@ -109,12 +109,12 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
 ## A worked triage
 
 1. `easycat bundles show .easycat/recordings/<bundle>.zip --json | jq '.turns'`
-2. A turn shows `vad_endpoint_to_stt_final_ms: 580` — about 50 ms of VAD
-   silence confirmation plus the 500 ms end-of-turn timer plus STT
+2. A turn shows `vad_endpoint_to_stt_final_ms: 180` — about 50 ms of VAD
+   silence confirmation plus the 100 ms end-of-turn timer plus STT
    finalization. That is the configured floor, not a regression.
-3. Enable `smart_turn=True` (on by default for the local-mic transport) or
-   lower `end_of_turn_silence_ms`, then re-run; the same delta should drop to
-   roughly the STT finalization cost.
+3. Enable `smart_turn=True` (on by default for the local-mic transport), or
+   tune `end_of_turn_silence_ms` together with the VAD speech gate, then
+   re-run; the same delta should drop toward the STT finalization cost.
 4. If `agent_request_to_first_token_ms` dominates instead, the time is in
    your agent/LLM — no EasyCat default is involved; check the `agent` span
    and your model choice. (A large `stt_final_to_agent_request_ms` instead
