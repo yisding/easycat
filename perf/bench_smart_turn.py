@@ -30,15 +30,21 @@ import time
 from pathlib import Path
 from typing import Any
 
-from easycat.validation.latency import LatencyPercentileStats
-
 _RESULT_PREFIX = "EASYCAT_SMART_TURN_RESULT="
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WORKER_TIMEOUT_S = 300
 
 
 def summarize_samples(samples_ms: list[float]) -> dict[str, float | int]:
-    """Return stable latency statistics for one framework worker."""
+    """Return stable latency statistics for one framework worker.
+
+    Runs in the parent process only. Workers emit raw samples so the worker
+    subprocesses never import ``easycat`` — the Pipecat worker must run in an
+    isolated environment that contains only Pipecat (see module docstring),
+    which is why this import is deferred out of module scope.
+    """
+    from easycat.validation.latency import LatencyPercentileStats
+
     if not samples_ms:
         raise ValueError("at least one latency sample is required")
     percentiles = LatencyPercentileStats.from_values(samples_ms)
@@ -92,7 +98,7 @@ def _easycat_worker(*, warmup: int, runs: int) -> dict[str, Any]:
         "framework": "easycat",
         "model_sha256": _sha256(Path(_BUNDLED_MODEL)),
         "intra_op_threads": provider._session.get_session_options().intra_op_num_threads,
-        **summarize_samples(samples),
+        "samples_ms": samples,
     }
 
 
@@ -114,7 +120,7 @@ def _pipecat_worker(*, warmup: int, runs: int) -> dict[str, Any]:
         "framework": "pipecat",
         "model_sha256": model_sha,
         "intra_op_threads": provider._session.get_session_options().intra_op_num_threads,
-        **summarize_samples(samples),
+        "samples_ms": samples,
     }
 
 
@@ -174,7 +180,11 @@ def _run_worker(
         ) from exc
     for line in reversed(completed.stdout.splitlines()):
         if line.startswith(_RESULT_PREFIX):
-            return json.loads(line.removeprefix(_RESULT_PREFIX))
+            result: dict[str, Any] = json.loads(line.removeprefix(_RESULT_PREFIX))
+            # Summarize in the parent so worker subprocesses stay import-light:
+            # the Pipecat worker runs in an environment without easycat.
+            samples_ms = result.pop("samples_ms")
+            return {**result, **summarize_samples(samples_ms)}
     raise RuntimeError(f"{framework} worker did not emit a benchmark result")
 
 
