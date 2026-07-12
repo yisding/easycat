@@ -85,10 +85,24 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -74,35 +80,109 @@
+@@ -74,49 +80,109 @@
                  self._preroll.append(chunk)
  
  
+-class FirstAudioProbe:
+-    """Forward audio while recording when the first chunk is accepted."""
+-
+-    def __init__(self, transport) -> None:
+-        self._transport = transport
+-        self.first_audio_at: float | None = None
+-
+-    async def send_audio(self, chunk: AudioChunk) -> bool:
+-        accepted = await self._transport.send_audio(chunk)
+-        if accepted and self.first_audio_at is None:
+-            self.first_audio_at = time.monotonic()
+-        return accepted
+-
+-
 -def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
 -    """Record a closed span with start→end wall time in ms."""
 -    elapsed_ms = (time.monotonic() - t0) * 1000
@@ -218,7 +232,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -113,55 +193,26 @@
+@@ -127,71 +193,26 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -253,21 +267,34 @@
 -        reply=reply,
 -    )
 -
--    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
--    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
--    # until the whole file is enqueued on the transport. For teaching
--    # purposes we report the full synth-and-enqueue duration.
+-    # Sub-gap 3: agent response → the first TTS audio chunk is handed
+-    # to the transport. ``speak`` itself returns only after every chunk
+-    # has been enqueued, so a forwarding probe captures the earlier
+-    # first-audio milestone without changing the helper.
 -    tts_start = time.monotonic()
 -    print(f"  bot:  {reply!r}")
--    await speak(transport, reply)
--    span(journal, "stage.tts.execute", tts_start, text=reply)
+-    audio_probe = FirstAudioProbe(transport)
+-    await speak(audio_probe, reply)
+-    tts_end = time.monotonic()
+-    first_audio_t = audio_probe.first_audio_at
+-    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
+-    tts_enqueue_ms = (tts_end - tts_start) * 1000
+-    span(
+-        journal,
+-        "stage.tts.execute",
+-        tts_start,
+-        text=reply,
+-        first_audio_ms=tts_first_audio_ms,
+-        enqueue_ms=tts_enqueue_ms,
+-    )
 -
+-    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
 +    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
 +    await asyncio.gather(
 +        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
 +    )
-     total_gap = (time.monotonic() - stt_final_t) * 1000
++    total_gap = (time.monotonic() - stt_final_t) * 1000
 +    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
      journal.append(
          kind=JournalRecordKind.EVENT,
@@ -278,17 +305,21 @@
 -            "total_gap_ms": total_gap,
 -            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
 -            "agent_ms": (agent_end - agent_start) * 1000,
--            "tts_ms": (time.monotonic() - tts_start) * 1000,
+-            "tts_ms": tts_first_audio_ms,
+-            "tts_enqueue_ms": tts_enqueue_ms,
 -            "text": reply,
 -        },
 -    )
--    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
+-    if total_gap is None:
+-        print("  (turn gap unavailable — TTS produced no audio)")
+-    else:
+-        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
 +        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
 +    )
  
  
  async def main() -> None:
-@@ -173,6 +224,9 @@
+@@ -203,6 +224,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
@@ -298,7 +329,7 @@
  
      def stt_factory():
          return create_stt_provider(
-@@ -184,10 +238,9 @@
+@@ -214,10 +238,9 @@
          )
  
      await transport.connect()
@@ -310,7 +341,7 @@
          stt = None
          async for tag, chunk in detector.frames(transport.receive_audio()):
              if tag == "speech_started":
-@@ -198,7 +251,7 @@
+@@ -228,7 +251,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
