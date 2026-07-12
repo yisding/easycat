@@ -196,7 +196,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -127,13 +120,33 @@
+@@ -128,13 +121,33 @@
                  self._preroll.append(chunk)
  
  
@@ -234,7 +234,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -154,95 +167,48 @@
+@@ -155,95 +168,48 @@
      await sentence_queue.put(None)
  
  

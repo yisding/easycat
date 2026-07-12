@@ -96,7 +96,7 @@
  from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
-@@ -55,221 +57,161 @@
+@@ -55,222 +57,162 @@
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -204,9 +204,10 @@
 +
              for ev in vad_events:
                  if isinstance(ev, VADStartSpeaking):
--                    while self._preroll:
--                        yield "speech_started", self._preroll.popleft()
 -                    self._speaking = True
+-                    yield "speech_started", None
+-                    while self._preroll:
+-                        yield "frame", self._preroll.popleft()
 -                elif isinstance(ev, VADStopSpeaking):
 -                    self._speaking = False
 -                    yield "speech_ended", None
@@ -217,10 +218,11 @@
 +                        self._state = "speaking"
 +                        self._pending_since = None
 +                    else:
++                        yield "speech_started", None
 +                        while self._preroll:
 +                            buf = self._preroll.popleft()
 +                            self._turn_audio.append(buf)
-+                            yield "speech_started", buf
++                            yield "frame", buf
 +                        self._state = "speaking"
 +                elif isinstance(ev, VADStopSpeaking) and self._state == "speaking":
 +                    confirmed = await self._classify()
@@ -449,7 +451,7 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
-@@ -277,51 +219,75 @@
+@@ -278,51 +220,75 @@
          journal.append(
              kind=JournalRecordKind.EVENT,
              name="stage.tts.execute",
@@ -535,7 +537,7 @@
      client = AsyncOpenAI()
      tts = create_tts_provider(
          TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
-@@ -337,7 +303,7 @@
+@@ -338,7 +304,7 @@
          )
  
      await transport.connect()

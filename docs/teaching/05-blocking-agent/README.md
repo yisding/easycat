@@ -86,7 +86,7 @@ build movement (chapters 6-9) exists to close this gap.
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
-@@ -38,25 +42,14 @@
+@@ -38,24 +42,14 @@
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
  
@@ -102,10 +102,9 @@ build movement (chapters 6-9) exists to close this gap.
 -
 -    Consumes raw audio chunks, yields tagged events:
 -
--        ("speech_started", first_chunk)  - once per turn, at VAD-on.
--                                           Emits pre-roll chunks too.
--        ("frame",          chunk)         - while VAD says "speech."
--        ("speech_ended",   None)          - once per turn, at VAD-off.
+-        ("speech_started", None)   - once per turn, at VAD-on.
+-        ("frame",          chunk)  - cached pre-roll first, then live speech.
+-        ("speech_ended",   None)   - once per turn, at VAD-off.
 -
 -    About 40 lines of real logic. EasyCat's production ``TurnManager``
 -    (``src/easycat/turn_manager.py``) is a 5-state FSM with far more
@@ -116,18 +115,24 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -66,122 +59,157 @@
+@@ -65,127 +59,157 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
 -
              for ev in vad_events:
                  if isinstance(ev, VADStartSpeaking):
--                    # Flush the pre-roll buffer so STT sees the sounds
--                    # that arrived *before* the VAD decided to fire.
-                     while self._preroll:
-                         yield "speech_started", self._preroll.popleft()
                      self._speaking = True
+-                    # Starting the turn is a state event, independent of
+-                    # whether any pre-roll frames exist. This matters when
+-                    # ``preroll_frames=0``: STT must still start before the
+-                    # current live frame is emitted below.
+                     yield "speech_started", None
+-
+-                    # Flush cached frames in their original order so STT
+-                    # sees the sounds that arrived before VAD fired.
+                     while self._preroll:
+                         yield "frame", self._preroll.popleft()
                  elif isinstance(ev, VADStopSpeaking):
                      self._speaking = False
                      yield "speech_ended", None
@@ -161,7 +166,6 @@ build movement (chapters 6-9) exists to close this gap.
 -                    session_id=session_id,
 -                    data={"stage": "turn", "t_ms": time.monotonic() * 1000},
 -                )
--            await stt.send_audio(chunk)
 -
 -        elif tag == "frame" and stt is not None:
 -            await stt.send_audio(chunk)
@@ -329,7 +333,6 @@ build movement (chapters 6-9) exists to close this gap.
 +                if stt is None:
 +                    stt = stt_factory()
 +                    await stt.start_stream()
-+                await stt.send_audio(chunk)
 +            elif tag == "frame" and stt is not None:
 +                await stt.send_audio(chunk)
 +            elif tag == "speech_ended" and stt is not None:
@@ -375,7 +378,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L87-L96)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L88-L97)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->

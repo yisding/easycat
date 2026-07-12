@@ -81,9 +81,10 @@ class MiniTurnDetector:
         async for chunk in audio_iter:
             for ev in [e async for e in self._vad.process(chunk)]:
                 if isinstance(ev, VADStartSpeaking):
-                    while self._preroll:
-                        yield "speech_started", self._preroll.popleft()
                     self._speaking = True
+                    yield "speech_started", None
+                    while self._preroll:
+                        yield "frame", self._preroll.popleft()
                 elif isinstance(ev, VADStopSpeaking):
                     self._speaking = False
                     yield "speech_ended", None
@@ -215,7 +216,6 @@ async def coordinator(
             if stt is None:
                 stt = stt_factory()
                 await stt.start_stream()
-            await stt.send_audio(chunk)
         elif tag == "frame" and stt is not None:
             await stt.send_audio(chunk)
         elif tag == "speech_ended" and stt is not None:
