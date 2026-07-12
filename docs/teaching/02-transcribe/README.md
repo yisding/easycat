@@ -201,6 +201,28 @@ uv run python docs/teaching/02-transcribe/streaming.py
 Each records 5 seconds, sends it to STT, prints what came back,
 and writes a debug bundle to `docs/teaching/02-transcribe/runs/`.
 
+### What survives the run?
+
+The two scripts deliberately retain **text evidence, not raw microphone
+audio**:
+
+- `batch.py` records into a scoped `TemporaryDirectory`. The WAV exists
+  while `transcribe_file()` reads it and is deleted before bundle export,
+  including when transcription raises. Its `recording.complete` record keeps
+  only the filename, duration, and `retention="temporary"`—not an absolute
+  host path. A successful run also records `recording.cleaned` with
+  `deleted=true`.
+- `streaming.py` sends live chunks directly to STT and never creates a WAV.
+- Both debug bundles contain transcript hypotheses, timings, and other
+  journal data. Transcripts can contain names, account details, or other PII,
+  so the bundle is still sensitive even though these chapter scripts do not
+  attach raw audio.
+
+If an experiment needs retained audio, choose an explicit project path or
+artifact store, document consent and retention, and delete it deliberately.
+Do not rely on an abandoned system-temp file as an accidental recording
+archive.
+
 ## Architecture
 
 ```
