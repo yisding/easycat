@@ -32,6 +32,7 @@ uv run easycat doctor --env-file .env --json
 uv run --env-file .env python examples/openai_agents_voice.py
 uv run easycat console
 uv run python examples/journal_demo.py
+uv run python docs/teaching/offline_spine.py --run --jobs 4
 uv run easycat init --list-templates
 uv run easycat init my-agent
 uv run easycat docs --audience maintainers
@@ -127,6 +128,10 @@ uv run easycat doctor --env-file .env --json
 uv run easycat docs --audience learners
 uv run easycat docs --audience learners --json
 uv run python docs/teaching/00-hello-audio/main.py
+uv run python docs/teaching/offline_spine.py
+uv run python docs/teaching/offline_spine.py --json
+uv run python docs/teaching/offline_spine.py --run --jobs 4
+uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 uv run easycat validate quick
 uv run easycat validate quick --json
 uv run easycat validate report .easycat/validation/latest.json

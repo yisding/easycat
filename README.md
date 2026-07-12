@@ -94,7 +94,7 @@ Prefer exported shell variables? `uv run easycat doctor` and
 | You want to | Start here | First move |
 |---|---|---|
 | Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor`; for `.env` keys, use `uv run easycat doctor --env-file .env` and `uv run --env-file .env python examples/openai_agents_voice.py` |
-| No mic or API key yet | [Journal demo](examples/journal_demo.py) | `uv run easycat console`, then `uv run python examples/journal_demo.py` and teaching ch. [11 journal](docs/teaching/11-journal/) and [12 evals & latency](docs/teaching/12-evals-and-latency/) |
+| No mic or API key yet | [Journal demo](examples/journal_demo.py) and [hardware-free teaching spine](docs/teaching/#hardware-free-checkpoint-spine) | Run `uv run easycat console` or `uv run python examples/journal_demo.py`; use `uv run python docs/teaching/offline_spine.py --run --jobs 4` for one credential-free checkpoint from every chapter |
 | Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
 | Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
 | Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |

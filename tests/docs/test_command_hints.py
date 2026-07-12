@@ -100,6 +100,12 @@ def test_cli_docs_routes_have_useful_command_hints() -> None:
     assert "uv run python examples/journal_demo.py" in entries["README.md#choose-your-path"].get(
         "commands", ()
     )
+    assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in entries[
+        "README.md#choose-your-path"
+    ].get("commands", ())
+    assert "uv run python docs/teaching/offline_spine.py --run --jobs 4 --json" in entries[
+        "docs/teaching/"
+    ].get("commands", ())
 
 
 def test_root_path_chooser_command_hints_are_locally_valid() -> None:

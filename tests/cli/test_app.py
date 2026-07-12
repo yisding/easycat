@@ -434,6 +434,7 @@ def test_docs_command_json(cli: CliRunner) -> None:
         "uv run --env-file .env python examples/openai_agents_voice.py",
         "uv run easycat console",
         "uv run python examples/journal_demo.py",
+        "uv run python docs/teaching/offline_spine.py --run --jobs 4",
         "uv run easycat init --list-templates",
         "uv run easycat init my-agent",
         "uv run easycat docs --audience maintainers",
