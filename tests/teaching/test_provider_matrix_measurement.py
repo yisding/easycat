@@ -147,3 +147,26 @@ def test_lesson_distinguishes_pipeline_from_delivery_latency() -> None:
     assert "uv run easycat latency PATH --json" in exercises
     assert "client `getStats()` artifacts" in exercises
     assert "you will need a small translator" not in readme
+    assert "`evals.py` translator" not in exercises
+
+
+def test_exercises_name_current_provider_and_session_action_contracts() -> None:
+    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
+
+    assert '{"stt": "cartesia", "tts": "cartesia"}' in exercises
+    assert "CARTESIA_API_KEY" in exercises
+    assert "--extra cartesia" in exercises
+    assert "Cartesia is already registered on both sides" in exercises
+    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
+    assert "expanded nine-cell matrix" in readme
+
+    for name in (
+        "session_action_requested",
+        "session_action_started",
+        "session_action_completed",
+        "session_action_failed",
+    ):
+        assert f"`{name}`" in exercises
+    assert "session_action.dispatched" not in exercises
+    assert "session_action.unhandled" not in exercises
+    assert "silent no-op" in exercises
