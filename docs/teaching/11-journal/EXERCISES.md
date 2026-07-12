@@ -13,16 +13,18 @@ and for each one, name the record you'd query first.
 
 **Hints**
 
-1. "Agent stalled" → look for the gap between `agent.first_token`
-   and the first `stage.tts.execute`. Anything > 1 s is
-   suspicious.
+1. "Agent stalled" → compare `stt.final.data.t_ms` with
+   `agent.first_token.data.t_ms`. Anything > 1 s is suspicious; the
+   later first-token → audio interval belongs to downstream sentence
+   accumulation and TTS.
 2. "STT misheard" → look for short or empty `stt.final` text
    followed by a confused next turn. Pair with `stt.partial`
    sequence to see if the model wavered.
 3. "Network blip during streaming" → look for `ws.reconnect.*`
    records (chapter 11's fixture-only events; production emits
-   real ones). Gaps in record sequence numbers also flag
-   in-flight failures.
+   real ones). A filtered sequence gap is expected, and an unfiltered
+   gap can reflect bounded retention or incomplete export; verify
+   coverage before treating it as an in-flight failure.
 4. "Smart-turn fired wrong" → look for `smart_turn.classify`
    records where `confirmed=True` but the next event sequence
    shows the user continued speaking immediately after.
@@ -86,10 +88,37 @@ for r in session.journal.filter_by_turn(turn_id):
    Stage filtering scans the journal because `stage` lives inside
    record data; do not mistake the read-only surface for a lazy one.
 
+## 4. Prove an empty query means what you think
+
+**Task.** Run the query coverage probe, then compare a misspelled turn
+with a valid-but-impossible filter intersection:
+
+```bash
+uv run python docs/teaching/11-journal/query_coverage_probe.py
+
+uv run python docs/teaching/11-journal/investigate.py \
+  docs/teaching/11-journal/bundles/bug_03_ghost_interruption.bundle \
+  --turn typo --require-match
+```
+
+**Hints**
+
+1. A zero marginal count means that one filter is invalid for the
+   bundle. Non-zero marginals plus zero combined matches mean the
+   intersection—not the individual values—is empty.
+2. Leave off `--require-match` when absence itself is a legitimate
+   interactive finding. Add it in automation so a typo cannot pass.
+3. `--limit` changes presentation, not match coverage. The CLI reports
+   the full match count and only prints a truncation line when hidden
+   matches really exist.
+4. Do not infer dropped journal records from a filtered sequence gap;
+   inspect the unfiltered source and its retention/export contract.
+
 ## Self-check
 
 You should be able to: (a) open a bundle from any chapter and
 identify the dominant time-cost without reading the chapter's
 README, (b) describe in one sentence what each of the three
 planted bugs was about, and (c) name the `JournalView` query you'd
-reach for first on a multi-turn bundle.
+reach for first on a multi-turn bundle, and (d) distinguish a real
+absence from a typo or an empty filter intersection.
