@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from easycat.validation._environment import runtime_secret_values
+from easycat.validation._failure_classification import classify_latency_failure
 from easycat.validation._lane_harness import (
     LaneRunContext,
     ValidationRunResult,
@@ -20,6 +21,20 @@ from easycat.validation._lane_harness import (
     _start_lane_run,
     _write_atomic,
 )
+from easycat.validation._latency_artifacts import (
+    build_latency_artifact,
+    load_latency_samples,
+    load_reliability_samples,
+)
+from easycat.validation._latency_baseline import compare_latency_baseline
+from easycat.validation._latency_models import (
+    LatencyComparisonThresholds,
+    LatencyMode,
+    LatencySample,
+    LatencyStageDurations,
+    ReliabilitySample,
+)
+from easycat.validation._latency_selectors import latency_pytest_args
 from easycat.validation._reliability_policy import (
     load_reliability_failure,
     reliability_budget_failure,
@@ -31,19 +46,6 @@ from easycat.validation._runner_support import (
     resolve_validation_test_arg,
     run_subprocess,
     validation_exit_code_from_pytest,
-)
-from easycat.validation.latency import (
-    LatencyComparisonThresholds,
-    LatencyMode,
-    LatencySample,
-    LatencyStageDurations,
-    ReliabilitySample,
-    build_latency_artifact,
-    classify_latency_failure,
-    compare_latency_baseline,
-    latency_pytest_args,
-    load_latency_samples,
-    load_reliability_samples,
 )
 from easycat.validation.report import (
     ArtifactRef,

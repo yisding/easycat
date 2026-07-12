@@ -16,6 +16,10 @@ from easycat.validation._lane_harness import (
     _finish_lane_run,
     _start_lane_run,
 )
+from easycat.validation._latency_artifacts import (
+    build_reliability_artifact,
+    load_reliability_samples,
+)
 from easycat.validation._reliability_policy import (
     load_reliability_failure,
     reliability_budget_failure,
@@ -27,10 +31,6 @@ from easycat.validation._runner_support import (
     run_subprocess,
     validation_exit_code_from_pytest,
     validation_test_paths,
-)
-from easycat.validation.latency import (
-    build_reliability_artifact,
-    load_reliability_samples,
 )
 from easycat.validation.report import (
     ArtifactRef,

@@ -6,13 +6,13 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
-from easycat.validation.latency import (
+from easycat.validation._latency_artifacts import load_reliability_samples
+from easycat.validation._latency_budgets import (
     DEFAULT_RELIABILITY_BUDGETS,
     ReliabilityBudget,
-    ReliabilitySample,
     evaluate_reliability_budgets,
-    load_reliability_samples,
 )
+from easycat.validation._latency_models import ReliabilitySample
 from easycat.validation.report import ValidationFailure
 
 
