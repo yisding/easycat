@@ -1,24 +1,37 @@
 # Chapter 8 — Exercises
 
-## 1. Drop the threshold and feel the false-positives
+## 1. Separate threshold changes from classification errors
 
-**Task.** Set `SMART_THRESHOLD = 0.3`. Re-run. How often does the
-bot now interrupt you mid-sentence?
+**Task.** Record several ambiguous pauses once with `--backend smart`,
+then re-score the same classifier outputs without another provider run:
+
+```bash
+uv run python docs/teaching/08-smart-turn/threshold_sweep.py PATH \
+  --baseline 0.5 --candidate 0.3
+```
+
+Replace `PATH` with the emitted bundle. The report identifies
+`newly_accepted` records. Create a JSON label file mapping each
+`smart_turn.classify` sequence to `true` when you were actually done at
+that pause and `false` when you intended to continue, then rerun with
+`--labels labels.json`. How do the baseline and candidate confusion
+counts differ?
 
 **Hints**
 
-1. The classifier outputs `P(end-of-turn)` — at threshold 0.3 you
-   accept way more "you're done" calls than you should. The
-   model's confidence is bimodal on clean utterances but mushy on
-   ambiguous ones (lists, trailing intonation), so lowering the
-   threshold pulls in the mushy ones.
-2. Read the journal: every `smart_turn.classify` record has
-   `probability` and `confirmed`. Count how many records have
-   `probability > 0.3` but `< 0.5` (the default). Those are the
-   new false-positives you bought.
-3. The tradeoff is real: tighter threshold = more latency wins
-   but more user-interruption. Production tunes this per
-   deployment based on barge-in F1 (chapter 12).
+1. The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
+   just below 0.5 are newly accepted by the candidate threshold, but
+   that fact alone says nothing about whether each decision is correct.
+2. A newly accepted decision is a false positive only when its
+   `user_was_done` label is `false`. Without labels the report leaves
+   `metrics` as `null` rather than inventing an error rate.
+3. Re-scoring one bundle holds the audio and model probabilities fixed,
+   isolating the threshold policy. Re-recording after editing
+   `SMART_THRESHOLD` is still useful for experiencing the UX, but it is
+   not a controlled metric comparison.
+4. Lower thresholds usually trade fewer false negatives and earlier
+   commits for more false positives and user interruption. Tune on a
+   representative labeled set, not on probability counts alone.
 
 ## 2. Find a real misfire and keep it
 
@@ -67,6 +80,6 @@ Then run `--backend smart` and check.
 You should be able to: (a) describe what input smart-turn takes
 and what it outputs, (b) explain why the fallback silence
 threshold still has to be there even with smart-turn on, and (c)
-name two utterance patterns that will reliably misclassify, and
+name two utterance patterns that can challenge the classifier, and
 (d) explain why STT-final → first-audio cannot measure an endpoint
 detector's latency win.
