@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import time
@@ -112,10 +113,15 @@ class TTSStage:
         started = time.perf_counter()
         result_attr = "pass"
         try:
-            with observability.span(
-                "easycat.tts.synthesize",
-                {"easycat.stage": self.name, "easycat.surface": "tts"},
-            ):
+            span = (
+                observability.span(
+                    "easycat.tts.synthesize",
+                    {"easycat.stage": self.name, "easycat.surface": "tts"},
+                )
+                if observability.tracing_available()
+                else contextlib.nullcontext()
+            )
+            with span:
                 async for event in stream:
                     audio = getattr(event, "audio", None)
                     audio_bytes = getattr(audio, "data", None) if audio is not None else None
@@ -156,11 +162,12 @@ class TTSStage:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.stage.latency",
-                time.perf_counter() - started,
-                {"easycat.stage": self.name, "easycat.result": result_attr},
-            )
+            if observability.metrics_available():
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {"easycat.stage": self.name, "easycat.result": result_attr},
+                )
         state_after = self.snapshot_state()
         elapsed_ms = (time.perf_counter() - started) * 1000
         journal_append_event(

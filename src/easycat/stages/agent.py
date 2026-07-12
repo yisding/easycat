@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -211,10 +212,15 @@ class AgentStage:
         errored = False
         started = time.perf_counter()
         try:
-            with observability.span(
-                "easycat.agent.invoke",
-                {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
-            ):
+            span = (
+                observability.span(
+                    "easycat.agent.invoke",
+                    {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
+                )
+                if observability.tracing_available()
+                else contextlib.nullcontext()
+            )
+            with span:
                 stream = bridge.invoke(turn_input, recorder, cancel_token)
                 try:
                     async for event in stream:
@@ -305,14 +311,15 @@ class AgentStage:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.stage.latency",
-                time.perf_counter() - started,
-                {
-                    "easycat.stage": self.name,
-                    "easycat.result": "fail" if errored else "pass",
-                },
-            )
+            if observability.metrics_available():
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {
+                        "easycat.stage": self.name,
+                        "easycat.result": "fail" if errored else "pass",
+                    },
+                )
             # Use a finally block so shadow history is updated even when
             # the consumer breaks out of the stream early (e.g. send_text
             # stops iterating on the ``done`` event — triggering

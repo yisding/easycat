@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Any
@@ -73,12 +74,19 @@ class TransportStage:
             state_before=state_before,
             data_extra=extra,
         )
+        tracing_available = observability.tracing_available()
+        metrics_available = observability.metrics_available()
         try:
-            with observability.span(
-                "easycat.transport.send",
-                {"easycat.stage": self.name, "easycat.surface": "tts"},
-            ):
-                if isinstance(audio_bytes, (bytes, bytearray)):
+            span = (
+                observability.span(
+                    "easycat.transport.send",
+                    {"easycat.stage": self.name, "easycat.surface": "tts"},
+                )
+                if tracing_available
+                else contextlib.nullcontext()
+            )
+            with span:
+                if metrics_available and isinstance(audio_bytes, (bytes, bytearray)):
                     observability.increment_counter(
                         "easycat.audio.bytes.total",
                         value=len(audio_bytes),
@@ -112,11 +120,12 @@ class TransportStage:
             )
             raise
         finally:
-            observability.record_histogram(
-                "easycat.stage.latency",
-                time.perf_counter() - started,
-                {"easycat.stage": self.name, "easycat.result": result_attr},
-            )
+            if metrics_available:
+                observability.record_histogram(
+                    "easycat.stage.latency",
+                    time.perf_counter() - started,
+                    {"easycat.stage": self.name, "easycat.result": result_attr},
+                )
         state_after = self.snapshot_state()
         complete_extra = {
             **extra,
