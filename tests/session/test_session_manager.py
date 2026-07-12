@@ -33,6 +33,30 @@ async def test_session_manager_add_remove() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_manager_releases_key_when_start_fails() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    class FailingSession(_DummySession):
+        async def start(self) -> None:
+            self.started += 1
+            raise RuntimeError("start failed")
+
+    failed = FailingSession()
+    with pytest.raises(RuntimeError, match="start failed"):
+        await manager.add("reusable", failed)  # type: ignore[arg-type]
+
+    assert manager.get("reusable") is None
+    assert failed.started == 1
+    assert failed.stopped == 0
+
+    replacement = _DummySession()
+    await manager.add("reusable", replacement)  # type: ignore[arg-type]
+    assert manager.get("reusable") is replacement
+    await manager.remove("reusable")
+    assert replacement.stopped == 1
+
+
+@pytest.mark.asyncio
 async def test_session_manager_stop_all() -> None:
     manager: SessionManager[str] = SessionManager()
     a = _DummySession()
