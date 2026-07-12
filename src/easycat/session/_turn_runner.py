@@ -425,18 +425,18 @@ class TurnRunner:
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
 
-        caught_exc = await self._await_agent_task_recording_cancel(st, agent_task, tts_task)
-        # Lifecycle ordering is not agent execution time. Wait outside
-        # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
-        # the agent timeout after the agent has already completed.
-        await self._await_first_tts_lifecycle_ready(st, tts_task)
-        agent_error = agent_result.error if agent_result else caught_exc
-        interrupted = agent_result.interrupted if agent_result else False
-        accumulated_text = agent_result.text if agent_result else ""
-        structured_output = agent_result.structured_output if agent_result else None
-        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
-
         try:
+            caught_exc = await self._await_agent_task_recording_cancel(st, agent_task, tts_task)
+            # Lifecycle ordering is not agent execution time. Wait outside
+            # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
+            # the agent timeout after the agent has already completed.
+            await self._await_first_tts_lifecycle_ready(st, tts_task)
+            agent_error = agent_result.error if agent_result else caught_exc
+            interrupted = agent_result.interrupted if agent_result else False
+            accumulated_text = agent_result.text if agent_result else ""
+            structured_output = agent_result.structured_output if agent_result else None
+            stream_succeeded = agent_error is None and not (token and token.is_cancelled)
+
             if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
                 accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
 

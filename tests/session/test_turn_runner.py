@@ -851,6 +851,38 @@ async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_phase_failure_releases_tts_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    turn = TurnContext("turn-agent-phase-failure", CancelToken())
+    session._turn = turn
+    captured_tts_task: asyncio.Task[None] | None = None
+
+    async def _fail_lifecycle_wait(
+        _state: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        nonlocal captured_tts_task
+        captured_tts_task = tts_task
+        await asyncio.sleep(0)
+        raise RuntimeError("lifecycle wait failed")
+
+    monkeypatch.setattr(
+        session._turn_runner,
+        "_await_first_tts_lifecycle_ready",
+        _fail_lifecycle_wait,
+    )
+
+    with pytest.raises(RuntimeError, match="lifecycle wait failed"):
+        await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    assert captured_tts_task is not None
+    await asyncio.wait_for(asyncio.shield(captured_tts_task), timeout=0.5)
+    assert captured_tts_task.done()
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_records_total_latency_metric() -> None:
     journal = InMemoryRingBuffer(capacity=64)
     session = Session(
