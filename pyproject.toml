@@ -434,6 +434,7 @@ module = [
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",
+    "easycat.debugger._core_routes.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
@@ -574,4 +575,17 @@ type = "layers"
 layers = [
     "easycat.session_manager",
     "easycat.transports",
+]
+
+# The app composer owns optional-dependency loading and route assembly. Route
+# leaves depend on source/domain helpers directly and must not reach back into
+# the server facade, which would recreate the monolithic dependency direction.
+[[tool.importlinter.contracts]]
+name = "Debugger route leaves do not import the server facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debugger._core_routes",
+]
+forbidden_modules = [
+    "easycat.debugger.server",
 ]

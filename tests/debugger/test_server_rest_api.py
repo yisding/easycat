@@ -743,6 +743,19 @@ async def test_records_supports_pagination(tmp_path):
         assert page["records"][0]["sequence"] == full["records"][2]["sequence"]
 
 
+async def test_records_rejects_non_integer_range_and_pagination_values(tmp_path):
+    bundle_path = await _build_voice_bundle(tmp_path)
+    source = _bundle_source(bundle_path)
+    app = _make_app(source)
+    from aiohttp.test_utils import TestClient, TestServer
+
+    async with TestClient(TestServer(app)) as client:
+        for name in ("from", "to", "limit", "offset"):
+            resp = await client.get(f"/api/records?{name}=invalid")
+            assert resp.status == 400
+            assert await resp.text() == "from/to/limit/offset must be integers"
+
+
 async def test_records_rejects_negative_offset(tmp_path):
     bundle_path = await _build_voice_bundle(tmp_path)
     source = _bundle_source(bundle_path)
@@ -752,6 +765,7 @@ async def test_records_rejects_negative_offset(tmp_path):
     async with TestClient(TestServer(app)) as client:
         resp = await client.get("/api/records?offset=-5")
         assert resp.status == 400
+        assert await resp.text() == "invalid query parameters"
 
 
 async def test_records_rejects_zero_or_negative_limit(tmp_path):
@@ -764,6 +778,7 @@ async def test_records_rejects_zero_or_negative_limit(tmp_path):
         for bad in ("0", "-1"):
             resp = await client.get(f"/api/records?limit={bad}")
             assert resp.status == 400
+            assert await resp.text() == "invalid query parameters"
 
 
 async def test_records_search_rejects_negative_offset(tmp_path):
