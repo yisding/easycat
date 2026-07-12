@@ -232,6 +232,12 @@ class TestStripMarkdown:
             == "Use print open paren close paren and dunder init."
         )
 
+    @pytest.mark.parametrize("whitespace", ["  ", "\t", "\v", "\N{NO-BREAK SPACE}"])
+    def test_plain_inline_code_still_collapses_whitespace(self, whitespace: str) -> None:
+        text = f"say `hello{whitespace}world` now"
+
+        assert strip_markdown(text, normalize_code_spans=True) == "say hello world now"
+
     def test_long_inline_code_not_tts_normalized(self) -> None:
         text = "Use `very_long_identifier_name_for_internal_config`."
         assert (
