@@ -1,5 +1,7 @@
 # Chapter 12 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Find the budget-blower, propose a fix without coding it
 
 **Task.** Run `latency_budget.py` over each of the five turn

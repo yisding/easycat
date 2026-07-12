@@ -1,5 +1,7 @@
 # Chapter 8 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Drop the threshold and feel the false-positives
 
 **Task.** Set `SMART_THRESHOLD = 0.3`. Re-run. How often does the

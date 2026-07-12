@@ -214,6 +214,19 @@ def test_teaching_chapters_have_reader_entrypoints() -> None:
     assert not missing, "Teaching chapters missing reader entrypoints: " + ", ".join(missing)
 
 
+def test_teaching_exercise_pages_link_back_to_the_chapter_and_ladder() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
+        if "[← Back to chapter](./README.md)" not in exercises:
+            stale.append(f"{chapter_dir.name}: chapter link")
+        if "[Ladder index](../)" not in exercises:
+            stale.append(f"{chapter_dir.name}: ladder link")
+
+    assert not stale, "Teaching exercise navigation is incomplete: " + ", ".join(stale)
+
+
 def test_teaching_chapter_readmes_include_runnable_commands() -> None:
     missing: list[str] = []
 
