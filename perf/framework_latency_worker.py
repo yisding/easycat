@@ -169,35 +169,36 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
 
     session.event_bus.subscribe(BotStoppedSpeaking, _record_turn_finished)
     await session.start()
-    # Prepare a real public push-to-talk turn outside the critical path, then
-    # inject the already-accepted transcript that defines the shared start
-    # boundary. ``end_turn()`` exercises EasyCat's production voice transition:
-    # TurnEnded dispatch, transcript finalization, AgentRequestStarted dispatch,
-    # agent execution, TTS, and transport output.
-    await session.start_turn()
-    turn = session._turn
-    if turn is None:
-        raise RuntimeError("EasyCat did not create a turn")
-    turn.append_stt_segment("Hello")
-    started, gc_was_enabled = _begin_critical_path()
-    await session.end_turn()
     try:
-        first_audio = await asyncio.wait_for(transport.first_audio, timeout=5.0)
+        # Prepare a real public push-to-talk turn outside the critical path,
+        # then inject the already-accepted transcript that defines the shared
+        # start boundary. ``end_turn()`` exercises EasyCat's production voice
+        # transition through transport output.
+        await session.start_turn()
+        turn = session._turn
+        if turn is None:
+            raise RuntimeError("EasyCat did not create a turn")
+        turn.append_stt_segment("Hello")
+        started, gc_was_enabled = _begin_critical_path()
+        try:
+            await session.end_turn()
+            first_audio = await asyncio.wait_for(transport.first_audio, timeout=5.0)
+        finally:
+            _end_critical_path(gc_was_enabled)
+        await asyncio.wait_for(turn_finished, timeout=5.0)
+        request_started_in_timed_path = (
+            len(agent_request_started_at) == 1
+            and started <= agent_request_started_at[0] <= first_audio
+        )
+        return {
+            "latency_ms": (first_audio - started) * 1_000.0,
+            "provider_elapsed_ms": agent.elapsed_ms + tts.elapsed_ms,
+            "text": tts.spoken_text,
+            "audio_bytes": transport.audio_bytes,
+            "agent_request_started_in_timed_path": request_started_in_timed_path,
+        }
     finally:
-        _end_critical_path(gc_was_enabled)
-    await asyncio.wait_for(turn_finished, timeout=5.0)
-    await session.stop(force=True)
-    request_started_in_timed_path = (
-        len(agent_request_started_at) == 1
-        and started <= agent_request_started_at[0] <= first_audio
-    )
-    return {
-        "latency_ms": (first_audio - started) * 1_000.0,
-        "provider_elapsed_ms": agent.elapsed_ms + tts.elapsed_ms,
-        "text": tts.spoken_text,
-        "audio_bytes": transport.audio_bytes,
-        "agent_request_started_in_timed_path": request_started_in_timed_path,
-    }
+        await session.stop(force=True)
 
 
 async def _sample_livekit(  # noqa: C901 - self-contained adapter mirrors AgentSession
@@ -308,20 +309,22 @@ async def _sample_livekit(  # noqa: C901 - self-contained adapter mirrors AgentS
     agent = BenchmarkAgent()
     session.output.audio = output
     await session.start(agent=agent, record=False)
-    started, gc_was_enabled = _begin_critical_path()
-    result = session.run(user_input="Hello", input_modality="text")
     try:
-        first_audio = await asyncio.wait_for(output.first_audio, timeout=5.0)
+        started, gc_was_enabled = _begin_critical_path()
+        try:
+            result = session.run(user_input="Hello", input_modality="text")
+            first_audio = await asyncio.wait_for(output.first_audio, timeout=5.0)
+        finally:
+            _end_critical_path(gc_was_enabled)
+        await result
+        return {
+            "latency_ms": (first_audio - started) * 1_000.0,
+            "provider_elapsed_ms": agent.llm_elapsed_ms + agent.tts_elapsed_ms,
+            "text": agent.spoken_text,
+            "audio_bytes": output.audio_bytes,
+        }
     finally:
-        _end_critical_path(gc_was_enabled)
-    await result
-    await session.aclose()
-    return {
-        "latency_ms": (first_audio - started) * 1_000.0,
-        "provider_elapsed_ms": agent.llm_elapsed_ms + agent.tts_elapsed_ms,
-        "text": agent.spoken_text,
-        "audio_bytes": output.audio_bytes,
-    }
+        await session.aclose()
 
 
 async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors PipelineTask
@@ -417,23 +420,28 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
     )
     runner = PipelineRunner(handle_sigint=False)
     runner_task = asyncio.create_task(runner.run(task))
-    await asyncio.wait_for(sink.ready.wait(), timeout=5.0)
-    started, gc_was_enabled = _begin_critical_path()
-    await task.queue_frame(
-        TranscriptionFrame(text="Hello", user_id="benchmark", timestamp="0", finalized=True)
-    )
     try:
-        first_audio = await asyncio.wait_for(sink.first_audio, timeout=5.0)
+        await asyncio.wait_for(sink.ready.wait(), timeout=5.0)
+        started, gc_was_enabled = _begin_critical_path()
+        try:
+            await task.queue_frame(
+                TranscriptionFrame(
+                    text="Hello", user_id="benchmark", timestamp="0", finalized=True
+                )
+            )
+            first_audio = await asyncio.wait_for(sink.first_audio, timeout=5.0)
+        finally:
+            _end_critical_path(gc_was_enabled)
+        return {
+            "latency_ms": (first_audio - started) * 1_000.0,
+            "provider_elapsed_ms": llm_processor.elapsed_ms + tts_processor.elapsed_ms,
+            "text": tts_processor.spoken_text,
+            "audio_bytes": sink.audio_bytes,
+        }
     finally:
-        _end_critical_path(gc_was_enabled)
-    await task.queue_frame(EndFrame())
-    await runner_task
-    return {
-        "latency_ms": (first_audio - started) * 1_000.0,
-        "provider_elapsed_ms": llm_processor.elapsed_ms + tts_processor.elapsed_ms,
-        "text": tts_processor.spoken_text,
-        "audio_bytes": sink.audio_bytes,
-    }
+        if not runner_task.done():
+            await task.queue_frame(EndFrame())
+        await runner_task
 
 
 async def _sample(framework: Framework, request: dict[str, Any]) -> dict[str, Any]:

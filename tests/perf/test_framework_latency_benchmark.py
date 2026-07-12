@@ -184,3 +184,20 @@ def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
     assert result["comparison_metric"] == "accepted_transcript_to_first_audio_ms"
     assert result["ranking_by_latency_p50"] == ["easycat"]
     assert "not used for ranking" in result["methodology"]["framework_overhead"]
+
+
+@pytest.mark.integration_external
+@pytest.mark.parametrize("framework", ["livekit", "pipecat"])
+def test_external_framework_worker_smoke(framework: str) -> None:
+    result = run_benchmark(
+        iterations=1,
+        warmups=0,
+        llm_delay_ms=0.0,
+        tts_delay_ms=0.0,
+        frameworks=(framework,),  # type: ignore[arg-type]
+    )
+
+    measured = result["results"][framework]
+    assert measured["latency_samples_ms"]
+    assert measured["latency_p50_ms"] >= 0
+    assert measured["version"]
