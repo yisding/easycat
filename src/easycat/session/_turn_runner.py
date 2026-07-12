@@ -187,6 +187,13 @@ class TurnRunner:
         self._preemptive_transcript = ""
         self._preemptive_turn_generation = 0
         self._preemptive_attempts = 0
+        # Highest turn generation whose end-of-speech take point has passed.
+        # A trailing STTFinal for such a turn (e.g. a provider flushing a
+        # second final segment during the ``end_stream`` drain) must never
+        # spawn new speculative work: the confirmed run for that turn is
+        # already starting, and simple agents must never see overlapping
+        # ``run()`` calls.
+        self._preemptive_finalized_generation = 0
 
     # ── Introspection helpers (kept for Session shutdown paths) ──
 
@@ -278,6 +285,11 @@ class TurnRunner:
         # and drain it before invoking the same simple agent again so agents
         # never see overlapping ``run()`` calls.
         await self.cancel_preemptive_generation()
+        # The drain above can suspend; ``handle_end_of_speech`` may reach the
+        # turn's take point meanwhile. Re-check before starting a fresh
+        # attempt that could overlap the confirmed run.
+        if self._preemptive_take_passed(turn):
+            return
         if self._preemptive_turn_generation != turn.generation:
             self._preemptive_turn_generation = turn.generation
             self._preemptive_attempts = 0
@@ -311,6 +323,8 @@ class TurnRunner:
         turn = self._turn.current
         if turn is None or turn.cancel_token.is_cancelled:
             return None
+        if self._preemptive_take_passed(turn):
+            return None
         if event.turn_id is not None and event.turn_id != turn.id:
             return None
 
@@ -326,6 +340,16 @@ class TurnRunner:
             and self._preemptive_turn_generation == turn.generation
             and self._preemptive_transcript == transcript
         )
+
+    def _preemptive_take_passed(self, turn: TurnContext) -> bool:
+        """Whether this turn is already past its end-of-speech take point.
+
+        Turn generations increase monotonically, so any generation at or
+        below the recorded finalized generation belongs to a turn whose
+        prepared response was already taken (or discarded) by
+        ``handle_end_of_speech``.
+        """
+        return turn.generation <= self._preemptive_finalized_generation
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -388,6 +412,14 @@ class TurnRunner:
             turn = self._turn.current
         token = turn.cancel_token if turn else None
         turn_generation = self._turn.generation
+        if turn is not None:
+            # This turn is now past its take point: a trailing STTFinal (a
+            # provider can flush a second final segment during the
+            # ``end_stream`` drain below) must not start new speculation
+            # that would overlap the confirmed ``run()`` for this turn.
+            self._preemptive_finalized_generation = max(
+                self._preemptive_finalized_generation, turn.generation
+            )
 
         transcript = await self._finalize_turn_transcript(turn)
 
@@ -438,7 +470,15 @@ class TurnRunner:
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            # ``await task`` raises CancelledError both when the drained
+            # speculative task was cancelled (expected — swallow it) and when
+            # the *calling* task was itself cancelled during the drain window.
+            # Re-raise the latter so a cancelled host (STT event consumer,
+            # ``on_turn_ended``, ``Session.stop``) does not resume past its
+            # cancellation point and keep working on a stale turn.
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
         finally:
             self._runtime_scope.discard(task)
 
