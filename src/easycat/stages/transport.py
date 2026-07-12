@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import time
 from typing import Any
@@ -74,16 +73,11 @@ class TransportStage:
             state_before=state_before,
             data_extra=extra,
         )
-        tracing_available = observability.tracing_available()
         metrics_available = observability.metrics_available()
         try:
-            span = (
-                observability.span(
-                    "easycat.transport.send",
-                    {"easycat.stage": self.name, "easycat.surface": "tts"},
-                )
-                if tracing_available
-                else contextlib.nullcontext()
+            span = observability.span(
+                "easycat.transport.send",
+                {"easycat.stage": self.name, "easycat.surface": "tts"},
             )
             with span:
                 if metrics_available and isinstance(audio_bytes, (bytes, bytearray)):

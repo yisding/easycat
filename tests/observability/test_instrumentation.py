@@ -321,6 +321,37 @@ async def test_transport_send_span_and_audio_counters_emit(
 
 
 @pytest.mark.asyncio
+async def test_transport_send_validates_span_without_otel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from easycat.stages.transport import TransportStage
+
+    class _StubTransport:
+        async def send_audio(self, chunk):  # noqa: ANN001
+            return True
+
+    monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+    monkeypatch.setattr(observability, "_get_meter", lambda: None)
+    original_span = observability.span
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def _recording_span(name: str, attributes: dict[str, str]):
+        calls.append((name, attributes))
+        return original_span(name, attributes)
+
+    monkeypatch.setattr(observability, "span", _recording_span)
+
+    stage = TransportStage(_StubTransport())
+    assert await stage.execute(b"\x00\x00", _make_run_ctx(), _make_turn_ctx()) is True
+    assert calls == [
+        (
+            "easycat.transport.send",
+            {"easycat.stage": "transport", "easycat.surface": "tts"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_transport_send_error_increments_provider_errors_counter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
