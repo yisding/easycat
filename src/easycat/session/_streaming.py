@@ -238,10 +238,14 @@ class _SentenceStreamBuffer:
 
         stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
         ready, remaining = self._split_pending(stripped_window)
+        # Commit the split before queueing.  The first-payload handoff yields
+        # after the payload is accepted, so cancellation in that window must
+        # not leave the already-emitted prefix in the pending buffer for a
+        # later flush to duplicate.
+        self._text = remaining
         queued = False
         if ready:
             queued = await self._put_payload(ready, is_final=False)
-        self._text = remaining
         return queued
 
     async def flush(self) -> bool:
