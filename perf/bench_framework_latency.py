@@ -349,6 +349,11 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
                 "exact_framework_tts_text_nonempty_audio_and_easycat_voice_transition"
             ),
             "framework_overhead": "latency_ms_minus_measured_provider_elapsed_ms",
+            "timed_entry_points": {
+                "easycat": "Session.end_turn (AgentRequestStarted dispatched in span)",
+                "livekit": "AgentSession.run",
+                "pipecat": "PipelineTask.queue_frame",
+            },
         },
         "pins": {name: list(pins) for name, pins in PINS.items()},
         "environment_locks": _lock_metadata(),

@@ -110,6 +110,36 @@ def test_correctness_gate_requires_easycat_voice_transition() -> None:
     _validate_sample(sample)
 
 
+async def test_easycat_timed_span_covers_end_of_speech_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The measured EasyCat sample must run the voice end-of-speech transition.
+
+    Guards the boundary the cross-framework comparison depends on: the span
+    timed by ``_sample_easycat`` enters through ``end_turn()`` into
+    ``TurnRunner.handle_end_of_speech`` (not a direct ``run_streaming_agent``
+    call), and the AgentRequestStarted event-bus dispatch lands inside the
+    timed span, before first audio.
+    """
+    from easycat.session._turn_runner import TurnRunner
+    from perf.framework_latency_worker import _sample_easycat
+
+    transcripts: list[str] = []
+    original = TurnRunner.handle_end_of_speech
+
+    async def _spy(self: TurnRunner, turn=None) -> None:  # type: ignore[no-untyped-def]
+        transcripts.append(turn.transcript_text if turn is not None else "")
+        await original(self, turn=turn)
+
+    monkeypatch.setattr(TurnRunner, "handle_end_of_speech", _spy)
+
+    sample = await _sample_easycat(0.0, 0.0)
+
+    assert transcripts == ["Hello"]
+    assert sample["agent_request_started_in_timed_path"] is True
+    _validate_sample({"kind": "sample", "framework": "easycat", **sample})
+
+
 def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
     result = run_benchmark(
         iterations=2,

@@ -65,6 +65,10 @@ and Pipecat at one external boundary: an accepted transcript/text turn to the
 first audio frame accepted by the framework's transport or output sink.
 Provider behavior is normalized with the same delayed LLM and TTS doubles, so
 the result isolates framework scheduling rather than network or model speed.
+All three frameworks are timed through their input-dispatch transitions:
+LiveKit via `AgentSession.run`, Pipecat via `PipelineTask.queue_frame`, and
+EasyCat via the public `end_turn()` voice transition — every EasyCat sample
+must dispatch `AgentRequestStarted` inside the timed span to count.
 
 ```bash
 uv run python perf/bench_framework_latency.py \
