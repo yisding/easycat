@@ -133,6 +133,7 @@ class TestHasMarkdown:
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
+    @pytest.mark.stress
     def test_adversarial_brackets_detection_scales_subquadratically(
         self, build: Callable[[int], str]
     ) -> None:
@@ -291,6 +292,7 @@ class TestStripMarkdown:
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
+    @pytest.mark.stress
     def test_adversarial_brackets_stripping_scales_subquadratically(
         self, build: Callable[[int], str]
     ) -> None:
