@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -170,6 +171,167 @@ async def test_speech_resumes_cancels_timeout():
 
     # Should NOT have transitioned to Processing
     assert "TurnEnded" not in collector.type_names
+
+
+@pytest.mark.asyncio
+async def test_punctuated_stt_final_shortens_fixed_endpoint_timeout():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=120,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+    collector = EventCollector(bus)
+    reasons: list[str] = []
+    tm.bind_journal_hook(lambda _old, _new, reason, _turn_id: reasons.append(reason))
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final('That is complete."', pause_generation=tm.pause_generation)
+    await asyncio.sleep(0.05)
+
+    assert tm.state == TurnManagerState.PROCESSING
+    assert "TurnEnded" in collector.type_names
+    assert reasons[-1] == "punctuated_silence_timeout"
+
+
+@pytest.mark.asyncio
+async def test_unpunctuated_stt_final_keeps_full_endpoint_timeout():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final("still thinking", pause_generation=tm.pause_generation)
+    await asyncio.sleep(0.04)
+    assert tm.state == TurnManagerState.USER_PAUSED
+
+    await asyncio.sleep(0.09)
+    assert tm.state == TurnManagerState.PROCESSING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["Wait...", "Wait…", 'Wait..."'])
+async def test_ellipsis_does_not_shorten_endpoint_timeout(text: str) -> None:
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    tm.on_stt_final(text, pause_generation=tm.pause_generation)
+
+    assert not tm._punctuated_transcript_event.is_set()
+    await tm.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_late_punctuated_final_uses_elapsed_pause_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=500,
+            punctuated_end_of_turn_silence_ms=100,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    await tm.on_vad_event(VADStopSpeaking())
+    silence_started = tm._silence_start_time
+    assert silence_started is not None
+
+    timer = tm._silence_timer_task
+    assert timer is not None
+    timer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await timer
+    tm.on_stt_final("Complete.", pause_generation=tm.pause_generation)
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        "easycat.turn_manager.time.monotonic",
+        lambda: silence_started + 0.2,
+    )
+
+    assert await tm._wait_for_fixed_endpoint() is True
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_misconfigured_punctuation_wait_logs_disabled_shortening(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tm = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=100,
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with caplog.at_level(logging.DEBUG, logger="easycat.turn_manager"):
+        assert await tm._wait_for_fixed_endpoint() is False
+
+    sleep.assert_awaited_once_with(0.1)
+    assert "Punctuation endpoint shortening disabled" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_none_punctuation_wait_disables_shortening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tm = TurnManager(
+        EventBus(),
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=None,
+        ),
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert await tm._wait_for_fixed_endpoint() is False
+    sleep.assert_awaited_once_with(0.1)
+
+
+@pytest.mark.asyncio
+async def test_stt_final_before_pause_does_not_shorten_next_pause():
+    bus = EventBus()
+    tm = TurnManager(
+        bus,
+        config=TurnManagerConfig(
+            end_of_turn_silence_ms=100,
+            punctuated_end_of_turn_silence_ms=20,
+        ),
+    )
+
+    await tm.on_vad_event(VADStartSpeaking())
+    tm.on_stt_final("Old segment.", pause_generation=tm.pause_generation)
+    await tm.on_vad_event(VADStopSpeaking())
+    await asyncio.sleep(0.04)
+
+    assert tm.state == TurnManagerState.USER_PAUSED
+    await tm.shutdown()
 
 
 @pytest.mark.asyncio
@@ -828,7 +990,12 @@ async def test_bot_stopped_speaking_ignored_when_not_bot_speaking():
 
 @pytest.mark.parametrize(
     "field",
-    ["end_of_turn_silence_ms", "stt_segment_silence_ms", "pre_roll_ms"],
+    [
+        "end_of_turn_silence_ms",
+        "punctuated_end_of_turn_silence_ms",
+        "stt_segment_silence_ms",
+        "pre_roll_ms",
+    ],
 )
 def test_config_rejects_negative_values(field):
     """Negative timing values should fail at construction with a clear error."""

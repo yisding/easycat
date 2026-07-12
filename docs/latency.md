@@ -67,6 +67,7 @@ value below is asserted against the code by a guard test
 | Default | Value | Where it waits | Tuning guidance |
 | --- | --- | --- | --- |
 | `TurnManagerConfig.end_of_turn_silence_ms` | `500` | After VAD reports silence, the turn stays open this long before the agent is invoked. Usually the single largest fixed cost in `vad_endpoint_to_stt_final_ms`. | Set via `EasyConfig(turn_taking=TurnManagerConfig(...))`. 500–800 ms feels noticeably snappier; below ~400 ms expect mid-sentence cutoffs unless smart-turn is enabled. With `smart_turn=True` this becomes the *fallback* timer, so a confident endpoint ends the turn well before it expires. |
+| `TurnManagerConfig.punctuated_end_of_turn_silence_ms` | `200` | Shortens the fixed timer only after STT finalizes text ending in terminal punctuation. | Set to `None` to disable. Smart-turn incomplete/error decisions retain the full fallback timer, so punctuation never overrides a semantic incomplete verdict. |
 | `TurnManagerConfig.stt_segment_silence_ms` | `0` | Extra silence budget, after VAD stop, before the current STT segment is finalized. | Already zero — the segment commits as soon as VAD pauses. Raise it only if your STT provider splits sentences too eagerly; every millisecond lands directly on the response path. |
 | `VADConfig.min_silence_duration_ms` | `50` | The VAD must observe this much continuous silence before emitting the stop-of-speech event that *starts* the end-of-turn countdown. | Adds directly in front of `end_of_turn_silence_ms`. Lowering makes endpointing twitchier on breaths and pauses; 50–200 ms is the practical range. |
 | `VADConfig.min_speech_duration_ms` | `250` | Speech must persist this long before the VAD reports start-of-speech. | Delays turn start and barge-in detection slightly. Lowering increases false triggers from coughs and background noise. |
@@ -88,12 +89,25 @@ the agent may be cancelled and retried when speech resumes, so its `run()`
 implementation must be replayable and must not perform irreversible side
 effects for an unconfirmed transcript.
 
+## Provider-specific tuning
+
+- **OpenAI Realtime STT connection setup** — the provider keeps its
+  transcription WebSocket warm across turns by default, using each
+  `input_audio_buffer.commit` to delimit and clear a logical turn. Set
+  `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
+  turn. A final-transcript timeout discards the reusable socket before the
+  next turn so a late final cannot leak into the replacement transcript queue.
+
 ## What is *not* a knob
 
 - **Provider time** — STT finalization, agent tokens, and TTS synthesis are
   network calls; the waterfall attributes them (`stt`, `agent`, `tts` spans)
   but no EasyCat default adds waiting there. Choose faster providers/models
-  or stream more aggressively. The one knob here is
+  or stream more aggressively. OpenAI TTS consumes the HTTP response at its
+  native cadence, releases the first 20 ms of PCM immediately, then coalesces
+  steady-state audio into 100 ms frames; this avoids making first audio wait
+  for a full steady-state frame without increasing per-frame overhead for the
+  rest of the utterance. The one knob here is
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI

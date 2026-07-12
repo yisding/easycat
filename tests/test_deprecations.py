@@ -1,38 +1,16 @@
-"""Guard that the compatibility aliases emit machine-visible deprecation signals.
+"""Guard that retained compatibility aliases emit deprecation signals.
 
-QW8: ``Session.shutdown``/``close``/``destroy`` carry PEP 702 ``@deprecated`` and
-the provider config ``settings=`` alias raises ``DeprecationWarning`` when folded
-into ``params``. These are behavior-preserving warnings only.
+The provider config ``settings=`` alias raises ``DeprecationWarning`` when
+folded into ``params``. Session's obsolete lifecycle aliases were removed
+during the pre-release API cleanup rather than retained here.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from easycat.session._session import Session
 from easycat.stt.factory import STTProviderConfig
 from easycat.tts.factory import TTSProviderConfig
-from tests.session._session_core_helpers import FakeTransport, _full_config
-
-
-@pytest.mark.asyncio
-async def test_session_shutdown_is_deprecated() -> None:
-    session = Session(_full_config(transport=FakeTransport()))
-    await session.start()
-    with pytest.warns(DeprecationWarning):
-        await session.shutdown()
-
-
-def test_session_close_is_deprecated() -> None:
-    session = Session(_full_config(session_id="sess"))
-    with pytest.warns(DeprecationWarning):
-        session.close()
-
-
-def test_session_destroy_is_deprecated() -> None:
-    session = Session(_full_config(session_id="sess"))
-    with pytest.warns(DeprecationWarning):
-        session.destroy()
 
 
 def test_stt_provider_config_settings_alias_is_deprecated() -> None:

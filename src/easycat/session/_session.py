@@ -18,8 +18,6 @@ from re import sub
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from typing_extensions import deprecated
-
 from easycat import _observability as observability
 from easycat._bounded_queue import BoundedAudioQueue
 from easycat._health_check import PeriodicHealthChecker
@@ -854,11 +852,11 @@ class Session:
 
     @property
     def journal(self) -> JournalView | None:
-        """Read-only journal view, including after a clean stop/shutdown.
+        """Read-only journal view, including after a clean stop.
 
         Returns a stable view — callers may cache the result and it will
-        remain valid even after :meth:`stop` / :meth:`shutdown` replace
-        the underlying journal backend with a read-only snapshot.
+        remain valid after :meth:`stop` replaces the underlying journal
+        backend with a read-only snapshot.
         """
         return self._journal_view
 
@@ -1072,9 +1070,8 @@ class Session:
 
         The single public teardown verb.  ``force=False`` (the default)
         drains in-flight work gracefully; ``force=True`` aggressively
-        cancels the pipeline / TTS / outbound tasks first (the former
-        ``shutdown()`` behavior) for when a graceful stop is hung on a
-        misbehaving provider.
+        cancels the pipeline / TTS / outbound tasks first, for when a
+        graceful stop is hung on a misbehaving provider.
 
         Prefer the ``async with session:`` context manager, which calls
         this for you on exit.
@@ -1199,7 +1196,7 @@ class Session:
                 logger.debug("Error closing agent during stop", exc_info=True)
             await self._close_audio_providers()
             self._turn = None
-            self._destroy()
+            self._finalize_debug_backends()
             self._mark_closed()
         finally:
             # Clear the stopping flag FIRST so it is always reset even if a
@@ -1217,71 +1214,8 @@ class Session:
         self._session_log_token = None
         reset_session(token)
 
-    @deprecated(
-        "Session.shutdown() is deprecated; use await session.stop(force=True) "
-        "or 'async with session:'."
-    )
-    async def shutdown(self) -> None:
-        """Force-cancel in-flight work, then release backend resources.
-
-        Thin alias for ``stop(force=True)`` kept so existing callers
-        (and the ``async with`` exit path) need not change.  New code
-        should prefer ``async with session:`` or ``stop(force=...)``.
-        """
-        await self.stop(force=True)
-
-    @deprecated(
-        "Session.close() is deprecated; use await session.stop() or 'async with session:'."
-    )
-    def close(self) -> None:
-        """Finalize the session journal without tearing down backends.
-
-        Compatibility alias for the former public low-level lifecycle API.
-        Prefer :meth:`stop` or ``async with session:`` for normal teardown.
-        Only valid after the session has stopped. Safe to call multiple times.
-        """
-        if self._is_running or self._stopping:
-            raise RuntimeError(
-                "Session.close() is a low-level compatibility alias and cannot stop "
-                "a running session; call await session.stop() instead"
-            )
-        self._close()
-
-    def _close(self) -> None:
-        """Finalize the session journal without tearing down backends.
-
-        Writes the clean-close marker so the journal is marked as
-        properly shut down. This is the logical end-of-session marker,
-        not the physical resource teardown step.
-
-        Internal: the public teardown path is ``async with session:`` or
-        :meth:`stop`, which call :meth:`_destroy` (and hence this) for
-        you while preserving a read-only post-stop debug surface.  Safe
-        to call multiple times.
-        """
-        state = self._debug_backends.close()
-        self._journal = state.journal
-        self._artifact_store = state.artifact_store
-
-    @deprecated(
-        "Session.destroy() is deprecated; use await session.stop() or 'async with session:'."
-    )
-    def destroy(self) -> None:
-        """Release live debug backends while keeping post-stop inspection working.
-
-        Compatibility alias for the former public low-level lifecycle API.
-        Prefer :meth:`stop` or ``async with session:`` for normal teardown.
-        Only valid after the session has stopped. Safe to call multiple times.
-        """
-        if self._is_running or self._stopping:
-            raise RuntimeError(
-                "Session.destroy() is a low-level compatibility alias and cannot stop "
-                "a running session; call await session.stop() instead"
-            )
-        self._destroy()
-
-    def _destroy(self) -> None:
-        """Release live debug backends while keeping post-stop inspection working.
+    def _finalize_debug_backends(self) -> None:
+        """Finalize live debug backends and preserve post-stop inspection.
 
         This closes backend resources such as SQLite connections,
         Litestream sidecars, libSQL sync threads, and in-memory artifact
@@ -1289,8 +1223,8 @@ class Session:
         ``session.journal.read()`` and ``export_debug_bundle()`` continue
         to work after :meth:`stop`.
 
-        Internal: invoked by :meth:`stop` (and the ``async with`` exit
-        path).  Safe to call multiple times.
+        Invoked only by :meth:`stop` (and therefore the ``async with`` exit
+        path). Safe to call multiple times.
         """
         state = self._debug_backends.destroy()
         self._journal = state.journal

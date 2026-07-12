@@ -319,7 +319,7 @@ async def test_pause_commit_journals_segment_commit_and_final():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_runtime_scoped_stt_pause_commit() -> None:
+async def test_force_stop_cancels_runtime_scoped_stt_pause_commit() -> None:
     journal = InMemoryRingBuffer(capacity=64)
     session = Session(
         _full_config(

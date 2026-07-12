@@ -10,10 +10,6 @@ Sits between :class:`~easycat.transports.websocket.WebSocketTransport` and
 
 Public entry points:
 
-* :func:`run_webtransport_config_server` /
-  :func:`serve_webtransport_config_sessions` — recommended multi-client app
-  entry points.  Pass a config factory and the helper owns the per-client
-  Session lifecycle, runtime feedback, server teardown, and shutdown signal.
 * :class:`WebTransportServer` — multi-client aioquic server.  Pass a
   ``session_handler`` coroutine and one is invoked per client with a
   fully-wired :class:`WebTransportConnectionTransport` ready to plug into
@@ -101,7 +97,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat._audio_utils import resample_chunk
 from easycat._extras import require_module
-from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.transports._base import (
     _DEGRADED_INBOUND_QUEUE_FULL as _DEGRADED_INBOUND_QUEUE_FULL,  # re-export
@@ -1106,8 +1101,8 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     """Per-session :class:`~easycat.providers.Transport`.
 
     Normally yielded to your config factory by
-    :func:`run_webtransport_config_server` /
-    :func:`serve_webtransport_config_sessions` or to your lower-level handler
+    :func:`easycat.server.run_webtransport_config_server` /
+    :func:`easycat.server.serve_webtransport_config_sessions` or to your lower-level handler
     by :class:`WebTransportServer`.  You can also construct one directly if
     you're managing your own aioquic server — pass the H3Connection, the
     QuicConnectionProtocol, and the CONNECT stream id via the
@@ -1454,66 +1449,6 @@ class WebTransportServer:
             await self.stop()
 
 
-async def serve_webtransport_config_sessions(
-    config_factory: Callable[[WebTransportConnectionTransport], Any],
-    config: WebTransportTransportConfig,
-    *,
-    stop_event: asyncio.Event | None = None,
-    runtime_feedback: bool = True,
-    announce: bool = True,
-) -> None:
-    """Serve one EasyCat session per WebTransport client.
-
-    ``config_factory`` receives each accepted
-    :class:`WebTransportConnectionTransport` and returns the app config passed
-    to :func:`easycat.create_session`. The helper owns session start/stop,
-    optional runtime feedback, server teardown, and process shutdown.
-    """
-    from easycat.config import create_session
-    from easycat.session_manager import SessionManager
-
-    manager: SessionManager[int] = SessionManager()
-
-    async def handle_connection(transport: WebTransportConnectionTransport) -> None:
-        session = create_session(config_factory(transport))
-        async with manager.connection(id(transport), session, runtime_feedback=runtime_feedback):
-            await transport.wait_closed()
-
-    server = WebTransportServer(config, handle_connection)
-    await server.start()
-    if announce:
-        print(
-            "\nServer ready. Connect WebTransport clients to "
-            f"https://{config.host}:{config.port}{config.path}"
-        )
-        print("Press Ctrl+C to stop.\n")
-
-    event = stop_event or create_shutdown_event()
-    try:
-        await event.wait()
-    finally:
-        await server.stop()
-        await manager.stop_all()
-
-
-def run_webtransport_config_server(
-    config_factory: Callable[[WebTransportConnectionTransport], Any],
-    config: WebTransportTransportConfig,
-    *,
-    runtime_feedback: bool = True,
-    announce: bool = True,
-) -> None:
-    """Run a WebTransport server from a synchronous entry point."""
-    asyncio.run(
-        serve_webtransport_config_sessions(
-            config_factory,
-            config,
-            runtime_feedback=runtime_feedback,
-            announce=announce,
-        )
-    )
-
-
 # ── Single-client convenience wrapper ─────────────────────────────
 
 
@@ -1529,7 +1464,7 @@ class WebTransportTransport(AudioQueueMixin):
     this outer transport and the inner session.
 
     For multi-client deployments, prefer
-    :func:`serve_webtransport_config_sessions`; drop to
+    :func:`easycat.server.serve_webtransport_config_sessions`; drop to
     :class:`WebTransportServer` only when you need custom per-client
     orchestration beyond returning an ``EasyConfig``.
     """
