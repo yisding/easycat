@@ -211,10 +211,28 @@ Three properties make this kind of investigation tractable:
 
 1. **Strict ordering by sequence number.** You can say "what
    happened after sequence 14" and mean it.
-2. **Typed fields.** `data["text"]` is always a string; `data["t_ms"]`
-   is always a float. No regex parsing.
+2. **A typed envelope plus emitter-defined payload schemas.** A live
+   `JournalRecord` has stable fields such as integer `sequence`, string
+   `name`, `JournalRecordKind`, and `data: dict[str, Any]`. The checked-in
+   fixtures consistently put strings in `data["text"]` and numbers in
+   `data["t_ms"]`, but that is their emitters' contract—not validation
+   performed by the journal.
 3. **Causal grouping by turn_id.** In multi-turn bundles, all
    records for one turn share the same id and can be isolated.
+
+JSON records save you from regex-parsing prose, but structured does not
+mean schema-validated. Validate fields at the boundary where a script,
+dashboard, or SLO starts depending on their types and domain constraints:
+
+```bash
+uv run python docs/teaching/11-journal/payload_schema_probe.py
+```
+
+The provider-free probe appends two `demo.latency` records. The journal
+preserves both `125.0` and the malformed string `"125.0"`; only the probe's
+emitter-aware validator rejects the latter. A real shared record name should
+have one documented payload schema. When compatibility matters, evolve that
+schema deliberately rather than assuming `dict[str, Any]` made it safe.
 
 ### The teaching shape vs. the production shape
 
