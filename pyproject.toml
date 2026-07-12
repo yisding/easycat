@@ -263,7 +263,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "examples/twilio_app.py" = ["C901", "PLR0915"]
 # Landed in concurrent wave-4 items, grandfathered at integration time.
 "scripts/extras_smoke.py" = ["C901", "PLR0912"]
-"src/easycat/_observability.py" = ["C901"]
 "src/easycat/cli/debug/diff.py" = ["B904"]
 "src/easycat/cli/diagnose/explain.py" = ["PLR0912"]
 "src/easycat/cli/scaffold/_schema.py" = ["C901"]
