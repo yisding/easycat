@@ -25,31 +25,43 @@ input — what does the journal show for each?
 
 ## 2. Run `uv run easycat doctor` twice
 
-**Task.** Run `uv run easycat doctor` once with `OPENAI_API_KEY` unset,
-then again with it set. Which health checks change?
+**Task.** Compare two scoped, server-oriented JSON reports:
+
+```bash
+env -u OPENAI_API_KEY uv run easycat doctor \
+  --provider openai --environment production --json
+
+OPENAI_API_KEY=not-a-real-key uv run easycat doctor \
+  --provider openai --environment production --json
+```
+
+Which rows appear or change? Why does the second command test network
+liveness but not credential validity?
 
 **Hints**
 
-1. The doctor checks five things: Python version, required
-   extras (`sounddevice`, `onnxruntime`), optional extras (NR,
-   AEC), API-key *presence* (env var set or not), and provider
-   reachability — an **unauthenticated `HEAD`** probe to each
-   provider's base URL (`src/easycat/cli/diagnose/doctor.py`).
-   Any HTTP response (even 4xx) counts as reachable; only
-   timeouts and connect errors fail.
-2. With `OPENAI_API_KEY` unset: the key-presence check shows ❌
-   and the reachability probe is **skipped** for OpenAI (the
-   doctor only probes providers whose key is present). Other
-   checks unchanged.
-3. With `OPENAI_API_KEY` set but *invalid*: key presence shows ✓
-   and reachability **also** shows ✓ — because the HEAD probe
-   doesn't send the key. The doctor can tell you "key missing"
-   but **cannot** tell you "key wrong"; you only learn that by
-   making a real authenticated call (i.e. running an example).
-4. `uv run easycat doctor` is the first command to run from a
-   repo checkout on a new machine or in a CI container. It's
-   faster than debugging by running the actual app, but it's a
-   *liveness* check, not an *auth* check.
+1. Doctor's eight check families are Python version, EasyCat version
+   (including an informational list of importable integration extras),
+   provider environment variables, provider reachability,
+   `onnxruntime`, microphone, journal writability, and disk space.
+   `--environment production` omits the local-microphone row. Doctor
+   does not probe the noise-reduction or echo-cancellation extras.
+2. `--provider openai` makes the credential requirement explicit. With
+   the key unset, `env_openai` is `fail` with `EASYCAT_E203`, the command
+   exits 1, and there is no `reach_openai` row because no probe runs.
+   In an unscoped report, missing per-provider rows are `skip` and the
+   aggregate `env_any` row fails only when no provider key is configured.
+3. With the fake key set, `env_openai` is `ok` and doctor makes an
+   **unauthenticated `HEAD`** request to OpenAI's base URL. Any HTTP
+   response, including 4xx, produces an `ok` `reach_openai` row; a
+   timeout, DNS failure, or connection error produces `EASYCAT_E204`.
+   The probe never sends the key, so it cannot distinguish a valid key
+   from `not-a-real-key`.
+4. Use `--json` for CI and inspect the top-level `status`, process exit
+   code, and each check's `name` / `status` / `detail` rather than
+   scraping terminal glyphs. Use `--env-file .env` when the real keys
+   live in a project dotenv file; doctor loads only recognized provider
+   credentials and restores the process environment afterwards.
 
 ## 3. Translate a ch-13 bundle into a ch-12 eval input
 
