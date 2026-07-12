@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -84,14 +85,24 @@ class _FakeMeter:
         return gauge
 
 
-@pytest.fixture(autouse=True)
-def reset_observability_state() -> None:
+def _clear_observability_state() -> None:
     observability._COUNTERS.clear()
     observability._HISTOGRAMS.clear()
     observability._GAUGES.clear()
     observability._GAUGE_VALUES.clear()
+    observability._get_meter.cache_clear()
+    observability._get_tracer.cache_clear()
     with observability._ACTIVE_SESSIONS_LOCK:
         observability._ACTIVE_SESSIONS = 0
+
+
+@pytest.fixture(autouse=True)
+def reset_observability_state() -> Iterator[None]:
+    _clear_observability_state()
+    try:
+        yield
+    finally:
+        _clear_observability_state()
 
 
 def _make_run_ctx() -> object:

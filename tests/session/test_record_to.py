@@ -135,7 +135,7 @@ async def test_record_to_forwards_force_flag(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_record_to_exports_on_shutdown(tmp_path: Path) -> None:
+async def test_record_to_exports_on_force_stop(tmp_path: Path) -> None:
     session = create_text_session(agent=None, debug="full", record_to=tmp_path)
 
     await session.stop(force=True)
@@ -183,7 +183,7 @@ async def test_record_to_creates_missing_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_record_to_export_failure_does_not_mask_shutdown(
+async def test_record_to_export_failure_does_not_mask_stop(
     tmp_path: Path,
 ) -> None:
     """If the export raises, teardown must still complete normally."""
@@ -203,7 +203,6 @@ def test_record_to_keeps_session_teardown_methods_unpatched(tmp_path: Path) -> N
     session = create_text_session(agent=None, debug="light", record_to=tmp_path)
 
     assert "stop" not in vars(session)
-    assert "shutdown" not in vars(session)
 
 
 def test_record_to_field_accepts_path_and_str() -> None:

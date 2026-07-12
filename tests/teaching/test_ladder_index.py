@@ -357,7 +357,12 @@ def test_chapter_15_teaches_public_session_lifecycle() -> None:
     stale_public_calls: list[str] = []
 
     for name, text in files.items():
-        for term in ("session.close()", "session.destroy()", "four lifecycle methods"):
+        for term in (
+            "session.shutdown()",
+            "session.close()",
+            "session.destroy()",
+            "four lifecycle methods",
+        ):
             if term in text:
                 stale_public_calls.append(f"{name}: {term}")
 
@@ -367,7 +372,6 @@ def test_chapter_15_teaches_public_session_lifecycle() -> None:
     assert "async with session:" in readme
     assert "await session.stop()" in readme
     assert "await session.stop(force=True)" in readme
-    assert "await session.shutdown()" in readme
 
 
 def test_chapter_15_cli_section_lists_registered_commands() -> None:

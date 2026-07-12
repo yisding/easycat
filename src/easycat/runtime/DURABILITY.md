@@ -194,22 +194,19 @@ cleanly-closed journal shows `bundle`.  Inspecting an errored crash dump
 
 ## Session teardown contract
 
-EasyCat distinguishes between logical finalization and physical backend
-teardown:
+EasyCat performs logical finalization and physical backend teardown as one
+internally owned operation:
 
-- `Session._close()` (internal) writes the journal's clean-close marker
-  but keeps the live backend open. This is a low-level primitive, not a
-  public teardown entry point.
-- `Session._destroy()` (internal) closes live backend resources such as
-  SQLite connections, Litestream sidecars, libSQL sync threads, and
-  in-memory artifact stores.
+- `Session._finalize_debug_backends()` writes the journal's clean-close marker,
+  closes live resources such as SQLite connections, Litestream sidecars,
+  libSQL sync threads, and in-memory artifact stores, then installs the
+  preserved read-only postmortem view.
 - `await session.stop()` is the one public teardown verb: `force=False`
   (default) drains in-flight work gracefully, `force=True` cancels it
-  first. Both end by calling `_destroy()` — the difference is
+  first. Both end by finalizing the same backends — the difference is
   cancellation strategy, not whether resources are released.
   `async with session:` is the preferred idiom (it calls
-  `stop(force=True)` on exit); `session.shutdown()` is a thin alias for
-  `stop(force=True)`.
+  `stop(force=True)` on exit).
 
 Post-stop inspection is still supported: after a clean `stop()`,
 `session.journal.read()` and `session.export_debug_bundle(...)` continue
