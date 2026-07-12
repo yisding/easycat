@@ -31,8 +31,8 @@ judge agree with your ears?
 
 **Hints**
 
-1. The rubric lives in `llm_judge.py`. Extend the system prompt's
-   JSON schema with a `filler_appropriate: 1-5` field. The
+1. The rubric lives in `llm_judge.py`. Extend the prompt and
+   `SCORE_KEYS` with a `filler_appropriate: 1-5` field. The
    judge's evaluation prompt should ask whether filler utterances
    landed at appropriate moments and matched the tool that was
    running.
@@ -73,7 +73,31 @@ judge agree with your ears?
    numbers their filenames advertise. That's a regression test
    for the WER pipeline itself.
 
-## 4. (Bonus) Build a real eval set
+## 4. Break coverage before calculating a score
+
+**Task.** Run the provider-free coverage probe, then remove one row
+from a copy of `ground_truth.csv` and run `evals.py` against it:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/coverage_probe.py
+```
+
+Why is a hard failure better than computing latency from the remaining
+bundles?
+
+**Hints**
+
+1. Missing labels change WER and F1 denominators. Missing `turn.gap`
+   records selectively remove failed/no-audio turns from latency.
+2. A warning is easy to miss in CI; a non-zero exit prevents an
+   incomplete manifest from becoming the new baseline.
+3. Put two `stt.final` records in one fixture. The evaluator asks you
+   to split and label the turns instead of guessing which transcript
+   belongs to the bundle-level CSV row.
+4. Coverage is not a fifth quality metric. It is the precondition that
+   makes the other four interpretable.
+
+## 5. (Bonus) Build a real eval set
 
 **Task.** Record 20 of your own chapter-6 or chapter-10 turns,
 hand-type the reference transcripts into a CSV, and run
@@ -81,9 +105,10 @@ hand-type the reference transcripts into a CSV, and run
 
 **Hints**
 
-1. Real numbers feel different. P95 over 6 bundles is noisy; over
-   20+ it stabilizes. WER over 20 utterances will produce a
-   number you can actually trust to ±2%.
+1. Real numbers feel different. Twenty turns are better than six, but
+   no fixed sample count guarantees precision. Report the number of
+   turns and reference words, then estimate uncertainty—for example by
+   bootstrapping turns—before claiming a small regression.
 2. Use a mix of clean and adversarial inputs (whisper, fast
    speech, accented speech, background TV) to stress different
    stages.
@@ -98,4 +123,5 @@ You should be able to: (a) read a bundle and within 30 seconds
 say "this turn's bottleneck was X", (b) explain why F1 over
 TP/FP/FN/TN is the right shape for barge-in (rather than raw
 accuracy), and (c) describe one regression each of the four
-metrics catches that the others miss.
+metrics catches that the others miss, and (d) explain why coverage
+must be validated before any point estimate is reported.

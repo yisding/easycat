@@ -16,8 +16,9 @@
   in the chapter command you run.
 
 > **Minimum to skip the ladder:** chapter 11 (journal queries).
-> The metrics work on any bundle that follows the teaching shape
-> — you don't have to have built the pipeline.
+> The aggregate evaluator works on single-turn bundles that follow the
+> teaching shape and have matching CSV labels—you do not have to have
+> built the pipeline.
 
 ## Diff from chapter 11
 
@@ -25,7 +26,8 @@
   `evals.py` (aggregate P50/P95, WER, barge-in F1),
   `llm_judge.py` (LLM-as-judge triage); `generate_bundles.py`
   builds the eval set; `ground_truth.csv` ties each bundle to its
-  reference transcript and labels; `bundles/golden/` (added by
+  reference transcript and labels; `coverage_probe.py` makes
+  incomplete-manifest failures visible; `bundles/golden/` (added by
   this chapter's enhancement) — three bundles with controlled,
   reproducible WER values (5%, ~10%, ~25%) so the WER pipeline
   can be exercised without recording your own speech.
@@ -56,6 +58,39 @@ and whether the interruption (if any) was real.
 > `load_bundle`. Bundles are not signed or tamper-evident, so only
 > feed them bundles you generated or trust. See ch 11's README for
 > the full note.
+
+## Coverage before scores
+
+A point estimate is only honest when you know which examples were
+eligible to contribute. The chapter evaluator therefore uses a strict
+fixture contract:
+
+- every `*.bundle` has exactly one CSV row, and every CSV row names an
+  existing bundle;
+- `had_real_barge_in` is exactly `0` or `1`—a typo such as `yes` is not
+  silently interpreted as negative;
+- every bundle contains exactly one `stt.final` and one `turn.gap`;
+- missing first-audio turns fail the run instead of disappearing from
+  the latency percentile.
+
+One fixture represents one labeled turn. If you start from a multi-turn
+production bundle, split its turns into separately named fixtures and
+label each one; taking the last transcript and last gap would mix the
+wrong evidence.
+
+Run the provider-free failure probe:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/coverage_probe.py
+```
+
+A valid run of `evals.py` begins with matching coverage counts before it
+prints any metric:
+
+```text
+=== Coverage ===
+  bundles=6  labels=6  latency=6  WER=6  barge-in=6
+```
 
 ## The golden WER fixtures (`bundles/golden/`)
 
@@ -205,9 +240,11 @@ P50 so you know the median, but *target* P95.
 ### WER — word error rate for STT
 
 WER = (substitutions + deletions + insertions) / reference words.
-For casual conversation: **10% is OK, 5% is great, below 5% is
-usually the model's ceiling.** Report aggregate across bundles,
-not per-bundle, to even out small-sample noise.
+There is **no universal good WER**: acceptable error depends on
+language, domain vocabulary, acoustics, and the cost of a wrong word.
+Report aggregate edits / reference words plus stratified results for
+the conditions you care about; compare against a labeled baseline
+rather than borrowing a generic threshold.
 
 > The bundled fixtures are synthetic — the STT "hypothesis" is
 > identical to the ground-truth transcript, so WER is trivially
@@ -230,8 +267,12 @@ problem per turn:
 - **False negatives** (FN) → the user tries to barge in, bot
   plows through.
 
-F1 = 2·P·R / (P+R). Target >0.9 on realistic eval sets. Tune NR
-/ AEC / VAD threshold from there.
+F1 = 2·P·R / (P+R). Choose a target from the relative cost of false
+stops and missed interruptions, then validate it on a representative
+labeled set. A single universal threshold hides that product tradeoff.
+If the set contains no positive labels or no predicted interruptions,
+the corresponding denominator is empty; the evaluator prints `n/a`
+instead of inventing a zero-valued precision, recall, or F1 score.
 
 ## 3 — LLM as judge
 
@@ -243,20 +284,27 @@ uv run python docs/teaching/12-evals-and-latency/llm_judge.py \
 The judge reads the bundle's transcript (STT + TTS text) and
 scores 1-5 on relevance, fluency, and appropriate-length.
 
-**Not a replacement for human eval.** Research (Hamming AI,
-Braintrust) places LLM-as-judge agreement with humans around
-95% on many rubrics — a fast triage layer, nothing more. A score
-of 5 means "the judge could not find something to complain about
-from the transcript alone" — it does not mean the turn sounded
-good. Audio quality, prosody, and awkward pacing don't show up in
-text.
+**Not a replacement for human eval.** Agreement varies with the judge
+model, rubric, prompt, and dataset. Calibrate the exact setup against a
+human-labeled sample and re-check that agreement when any of those
+inputs change. Until then, use it as triage, not ground truth. A score
+of 5 means "the judge could not find something to complain about from
+the transcript alone"—it does not mean the turn sounded good. Audio
+quality, prosody, and awkward pacing do not appear in text.
+
+JSON mode guarantees an object-shaped response, not valid rubric
+scores. The script checks that every score is an integer from 1 through
+5 and that `reasoning` is text before reporting the result. Its
+caller-owned `AsyncOpenAI` client is also scoped and closed after the
+request.
 
 Use the judge to:
 
 - Triage a large eval set cheaply; hand-review the low-scoring
   tail.
-- Regression-gate a PR: require no bundle's score to drop more
-  than N points vs a baseline.
+- Flag candidate regressions against a pinned judge/rubric baseline,
+  then review them. Before turning scores into a hard gate, measure
+  repeat variance and agreement with human labels.
 
 ## Why one number is never enough
 
