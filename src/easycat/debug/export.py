@@ -47,14 +47,6 @@ class _FilesystemArtifactStore(Protocol):
     def _dir(self) -> Path: ...
 
 
-class _SessionCapture(Protocol):
-    @property
-    def _journal(self) -> _JournalReader | None: ...
-
-    @property
-    def _artifact_store(self) -> object | None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class _CapturedSessionBundle:
     manifest: Manifest
@@ -63,7 +55,7 @@ class _CapturedSessionBundle:
 
 
 def export_debug_bundle(
-    session: _SessionCapture,
+    session: object,
     path: str | Path,
     *,
     inline_artifacts: bool = False,
@@ -85,15 +77,16 @@ def export_debug_bundle(
     )
 
 
-def _resolve_journal(session: _SessionCapture) -> _JournalReader | None:
-    if session._journal is not None:
-        return session._journal
+def _resolve_journal(session: object) -> _JournalReader | None:
+    private_journal = getattr(session, "_journal", None)
+    if isinstance(private_journal, _JournalReader):
+        return private_journal
     public_journal = getattr(session, "journal", None)
     return public_journal if isinstance(public_journal, _JournalReader) else None
 
 
 def _require_debug_capture(
-    session: _SessionCapture,
+    session: object,
     journal: _JournalReader | None,
 ) -> None:
     debug_mode = getattr(session, "_debug", None) or getattr(session, "debug", None)
@@ -104,7 +97,7 @@ def _require_debug_capture(
 
 
 def _capture_session_bundle(
-    session: _SessionCapture,
+    session: object,
     journal: _JournalReader | None,
 ) -> _CapturedSessionBundle:
     artifacts = _collect_artifacts(session)
@@ -129,8 +122,8 @@ def _serialize_journal(journal: _JournalReader | None) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
-def _collect_artifacts(session: _SessionCapture) -> dict[str, bytes]:
-    artifact_store = session._artifact_store
+def _collect_artifacts(session: object) -> dict[str, bytes]:
+    artifact_store = getattr(session, "_artifact_store", None)
     if artifact_store is None:
         return {}
     if isinstance(artifact_store, _MemoryArtifactStore):

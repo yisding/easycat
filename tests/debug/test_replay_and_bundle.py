@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import types
 import zipfile
 from pathlib import Path
 
@@ -472,6 +473,24 @@ class TestBundleExport:
         with zipfile.ZipFile(path, "r") as zf:
             assert "manifest.json" in zf.namelist()
             assert "journal.ndjson" in zf.namelist()
+
+    def test_export_accepts_public_journal_only_session_stub(self, tmp_path):
+        session = types.SimpleNamespace(journal=_FakeJournal())
+        path = tmp_path / "public-journal.zip"
+
+        export_debug_bundle(session, path)
+
+        with zipfile.ZipFile(path, "r") as zf:
+            assert zf.read("journal.ndjson") == b""
+            assert not any(name.startswith("artifacts/") for name in zf.namelist())
+
+    def test_export_accepts_private_journal_without_artifact_store(self, tmp_path):
+        session = types.SimpleNamespace(_journal=_FakeJournal(), _debug="light")
+        path = tmp_path / "private-journal.zip"
+
+        export_debug_bundle(session, path)
+
+        assert path.exists()
 
     def test_debug_off_raises(self, tmp_path):
         session = _FakeSession(debug="off")
