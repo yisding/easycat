@@ -358,7 +358,8 @@ class NullAgentRecorder:
     :meth:`ExternalAgentBridge.invoke`.
     """
 
-    context: RecorderContext = RecorderContext(run_id="null", session_id="")
+    def __init__(self, context: RecorderContext | None = None) -> None:
+        self.context = context or RecorderContext(run_id="null", session_id="")
 
     def record_unit_entered(self, cursor: ExecutionCursor) -> None:
         pass

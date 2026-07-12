@@ -21,6 +21,7 @@ from easycat.integrations.agents.base import (
     AgentTurnInput,
     CancellationMode,
     ExternalAgentBridge,
+    NullAgentRecorder,
     RecorderContext,
 )
 from easycat.timeouts import AgentTimeoutError
@@ -86,6 +87,33 @@ async def test_invoke_yields_text_delta_and_done():
     assert [e.kind for e in events] == ["text_delta", "done"]
     assert events[0].text == "Echo: hello"
     assert events[1].text == "Echo: hello"
+
+
+@pytest.mark.asyncio
+async def test_null_recorder_skips_cursor_metadata(monkeypatch):
+    runner = AgentRunner(EchoAgent())
+    monkeypatch.setattr(
+        "easycat.integrations.agents._agent_runner.uuid4",
+        lambda: pytest.fail("cursor ids should not be built without recording"),
+    )
+
+    events = [
+        event
+        async for event in runner.invoke(AgentTurnInput.from_text("hello"), NullAgentRecorder())
+    ]
+
+    assert [event.kind for event in events] == ["text_delta", "done"]
+
+
+@pytest.mark.asyncio
+async def test_null_recorder_preserves_agent_failure():
+    runner = AgentRunner(FailingAgent())
+
+    with pytest.raises(ValueError, match="agent broke"):
+        async for _ in runner.invoke(AgentTurnInput.from_text("hello"), NullAgentRecorder()):
+            pass
+
+    assert runner.history == []
 
 
 @pytest.mark.asyncio
