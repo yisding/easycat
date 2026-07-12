@@ -473,14 +473,17 @@ class TestOutboundCallStateMachine:
             late_voicemail_window_s=60,
         )
         sm.start()
-        await bus.emit(CallAnswered(call_sid="CA1"))
-        await bus.emit(VoicemailDetected(result="human"))
+        try:
+            await bus.emit(CallAnswered(call_sid="CA1"))
+            await bus.emit(VoicemailDetected(result="human"))
 
-        assert not sm._timers.empty
+            assert not sm._timers.empty
 
-        sm.stop()
+            sm.stop()
 
-        assert sm._timers.empty
+            assert sm._timers.empty
+        finally:
+            sm.stop()
 
     @pytest.mark.asyncio
     async def test_sip_607_608_maps_to_ended(self) -> None:

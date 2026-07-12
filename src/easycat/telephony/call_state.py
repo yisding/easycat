@@ -130,6 +130,12 @@ class ClassificationGate:
         self._buffer_warned = False
         self._dropped_frames = 0
         self._tasks = BackgroundTaskScope()
+        self._generation = 0
+        # Keep a direct handle after the timeout detaches from the scope so a
+        # hard lifecycle reset (stop/new call/discard) can still cancel stale
+        # replay work. Ordinary release intentionally uses only the scope and
+        # therefore preserves an in-progress replay.
+        self._timeout_task: asyncio.Task[None] | None = None
         self._started = False
         self._hold_audio_playing = False
         self._on_flush_async: Callable[[list[TTSAudio]], Any] | None = None
@@ -171,7 +177,9 @@ class ClassificationGate:
     def stop(self) -> None:
         if self._started:
             self._event_bus.unsubscribe(TTSAudio, self._on_tts_audio)
+        self._generation += 1
         self._cancel_timeout()
+        self._cancel_detached_timeout()
         self._buffer.clear()
         self._closed = False
         self._started = False
@@ -181,6 +189,8 @@ class ClassificationGate:
         """Close the gate — start buffering TTS audio."""
         if not self._enabled:
             return
+        self._generation += 1
+        self._cancel_detached_timeout()
         self._closed = True
         self._buffer.clear()
         self._buffer_warned = False
@@ -249,7 +259,9 @@ class ClassificationGate:
         list) so that hold audio is cancelled even when no opener audio was
         buffered.
         """
+        self._generation += 1
         self._cancel_timeout()
+        self._cancel_detached_timeout()
         self._hold_audio_playing = False
         self._buffer.clear()
         self._closed = False
@@ -283,18 +295,39 @@ class ClassificationGate:
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._tasks.create_task(_GATE_TIMEOUT_TASK, self._timeout_coro(), replace=True)
+        generation = self._generation
+        self._timeout_task = self._tasks.create_task(
+            _GATE_TIMEOUT_TASK,
+            self._timeout_coro(generation),
+            replace=True,
+        )
 
     def _cancel_timeout(self) -> None:
         self._tasks.cancel(_GATE_TIMEOUT_TASK)
 
-    async def _timeout_coro(self) -> None:
+    def _cancel_detached_timeout(self) -> None:
+        task = self._timeout_task
+        self._timeout_task = None
+        if task is None or task.done():
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is not current:
+            task.cancel()
+
+    async def _timeout_coro(self, generation: int) -> None:
         await asyncio.sleep(self._timeout_s)
+        if generation != self._generation:
+            return
         # Once replay begins, detach this task from cancellation ownership.
         # The buffer is about to be dequeued, so a concurrent classification
         # signal must not cancel the flush and permanently drop its remainder.
         # BackgroundTaskScope recognizes the current task and only detaches it.
         self._tasks.cancel(_GATE_TIMEOUT_TASK)
+        if generation != self._generation:
+            return
         if self._closed:
             self._hold_audio_playing = False
             buffered = list(self._buffer)
@@ -303,6 +336,8 @@ class ClassificationGate:
                 self._on_flush(buffered)
             if self._on_flush_async:
                 await self._on_flush_async(buffered)
+            if generation != self._generation:
+                return
             # Open the gate after flushing so late TTS chunks cannot
             # slip past the buffer during the async replay — matching
             # the ordering in flush_and_release().

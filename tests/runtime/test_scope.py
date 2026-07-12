@@ -20,6 +20,37 @@ def test_background_scope_closes_coroutine_when_task_creation_fails() -> None:
     assert coro.cr_frame is None
 
 
+def test_background_scope_closes_coroutine_for_empty_name() -> None:
+    scope = BackgroundTaskScope()
+
+    async def work() -> None:
+        pass
+
+    coro = work()
+    with pytest.raises(ValueError, match="must be non-empty"):
+        scope.create_task("", coro)
+
+    assert coro.cr_frame is None
+
+
+@pytest.mark.asyncio
+async def test_background_scope_closes_coroutine_for_duplicate_name() -> None:
+    scope = BackgroundTaskScope()
+    release = asyncio.Event()
+    active = scope.create_task("timer", release.wait())
+
+    async def rejected_work() -> None:
+        pass
+
+    rejected = rejected_work()
+    with pytest.raises(RuntimeError, match="already active"):
+        scope.create_task("timer", rejected)
+
+    assert rejected.cr_frame is None
+    release.set()
+    await active
+
+
 @pytest.mark.asyncio
 async def test_background_scope_prunes_completed_task() -> None:
     scope = BackgroundTaskScope()
