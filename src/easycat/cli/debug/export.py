@@ -26,7 +26,7 @@ from easycat.cli.debug._common import (
     _record_stage,
     _summarise_bundle,
 )
-from easycat.debug._turn_timeline import record_wall_ns
+from easycat.cli.debug._context_projection import project_context_records
 from easycat.debug.bundle import RunBundle
 from easycat.validation.redaction import (
     REDACTION_VERSION,
@@ -37,129 +37,10 @@ from easycat.validation.redaction import (
 
 _EXPORT_TARGETS = frozenset(("claude-code", "cursor", "codex"))
 _REDACTION_POLICIES = frozenset(("development", "production", "regulated"))
-_CONTEXT_DATA_KEYS = frozenset(
-    {
-        "boundary_reason",
-        "bridge_latency_ms",
-        "call_id",
-        "cancellation_mode",
-        "cause",
-        "caused_by_signal_id",
-        "checkpoint_id",
-        "committable",
-        "direction",
-        "display_name",
-        "duration_ms",
-        "exit_reason",
-        "fidelity",
-        "format",
-        "framework",
-        "from_unit",
-        "handoff_reason",
-        "latency_ms",
-        "model",
-        "mutation_kind",
-        "observed_stage",
-        "parent_unit_id",
-        "phase",
-        "provider",
-        "provider_name",
-        "sample_rate",
-        "signal_id",
-        "signal_kind",
-        "stage",
-        "to_unit",
-        "tool_call_id",
-        "tool_name",
-        "transition_kind",
-        "unit_id",
-        "unit_kind",
-    }
-)
-_CONTEXT_TOP_LEVEL_KEYS = _CONTEXT_DATA_KEYS | frozenset(
-    {
-        "framework",
-        "direction",
-        "bridge_latency_ms",
-    }
-)
-_CONTEXT_ERROR_KEYS = frozenset(("type", "code", "status"))
 
 
 def _default_export_path(bundle_path: Path) -> Path:
     return bundle_path.with_name(f"{bundle_path.stem}-pack")
-
-
-def _context_error(error: Any) -> dict[str, Any] | None:
-    if not isinstance(error, Mapping):
-        return None
-
-    context = {
-        str(key): redact_value(error[key], str(key))
-        for key in sorted(error, key=str)
-        if str(key) in _CONTEXT_ERROR_KEYS and error[key] not in (None, "", [], {})
-    }
-    omitted = sum(
-        1
-        for key, value in error.items()
-        if str(key) not in _CONTEXT_ERROR_KEYS and value not in (None, "", [], {})
-    )
-    if omitted > 0:
-        context["omitted_error_fields"] = omitted
-    return context or None
-
-
-def _context_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    context: dict[str, Any] = {}
-    for key in ("sequence", "kind", "name", "session_id", "turn_id"):
-        value = record.get(key)
-        if value not in (None, ""):
-            context[key] = redact_value(value, key)
-
-    wall_ns = record_wall_ns(record)
-    if wall_ns is not None:
-        context["wall_ns"] = wall_ns
-
-    data = record.get("data")
-    if isinstance(data, Mapping):
-        safe_data = {
-            str(key): redact_value(data[key], str(key))
-            for key in sorted(data, key=str)
-            if str(key) in _CONTEXT_DATA_KEYS
-        }
-        if safe_data:
-            context["data"] = safe_data
-        omitted = len(data) - len(safe_data)
-        if omitted > 0:
-            context["omitted_data_fields"] = omitted
-    elif data not in (None, "", {}, []):
-        context["omitted_data_fields"] = 1
-
-    for key in sorted(_CONTEXT_TOP_LEVEL_KEYS):
-        if key in record and key not in context:
-            context[key] = redact_value(record[key], key)
-
-    refs: dict[str, Any] = {}
-    for key in ("input_ref", "output_ref"):
-        value = record.get(key)
-        if value:
-            refs[key] = redact_value(value, key)
-    if refs:
-        context["refs"] = refs
-
-    error = _context_error(record.get("error"))
-    if error:
-        context["error"] = error
-
-    tags = record.get("tags")
-    if isinstance(tags, list | tuple | set | frozenset) and tags:
-        context["tags"] = redact_value(sorted(tags, key=str), "tags")
-
-    return context
-
-
-def _context_records(bundle: RunBundle) -> list[dict[str, Any]]:
-    return [_context_record(record) for record in bundle.records()]
 
 
 def _markdown_cell(value: Any) -> str:
@@ -336,7 +217,7 @@ def _write_context_pack(
     summary = redact_value(_summarise_bundle(bundle))
     if not isinstance(summary, dict):
         summary = {}
-    records = _context_records(bundle)
+    records = project_context_records(bundle.records())
     source_path = redact_text(str(bundle_path))
     # Context-pack export always applies the conservative production redaction
     # boundary regardless of the requested policy; durable journals are on by

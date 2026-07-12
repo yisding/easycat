@@ -11,7 +11,12 @@ import pytest
 
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.events import Error, ErrorStage, EventBus, TTSEventType
-from easycat.tts.openai_tts import OpenAITTS, OpenAITTSConfig
+from easycat.tts.openai_tts import (
+    _FIRST_AUDIO_CHUNK_BYTES,
+    _STEADY_AUDIO_CHUNK_BYTES,
+    OpenAITTS,
+    OpenAITTSConfig,
+)
 from tests.tts._harness import extract_audio_chunks, verify_pcm16_audio
 
 
@@ -27,6 +32,8 @@ class FakeStreamResponse:
         self._chunks = chunks
         self.status_code = status_code
         self.is_closed = False
+        self.aiter_bytes_chunk_size: int | None = -1
+        self.chunks_read = 0
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -35,8 +42,10 @@ class FakeStreamResponse:
             response.text = "error"
             raise httpx.HTTPStatusError("error", request=MagicMock(), response=response)
 
-    async def aiter_bytes(self, chunk_size: int = 4096):
+    async def aiter_bytes(self, chunk_size: int | None = None):
+        self.aiter_bytes_chunk_size = chunk_size
         for chunk in self._chunks:
+            self.chunks_read += 1
             yield chunk
 
     async def aclose(self):
@@ -47,6 +56,30 @@ class FakeStreamResponse:
 
     async def __aexit__(self, *args):
         await self.aclose()
+
+
+class StreamClosedResponse(FakeStreamResponse):
+    """Yield one frame, then model a close racing the next stream read."""
+
+    async def aiter_bytes(self, chunk_size: int | None = None):
+        self.aiter_bytes_chunk_size = chunk_size
+        self.chunks_read += 1
+        yield _pcm16_bytes(480)
+        raise httpx.StreamClosed()
+
+
+class ChunkedAsyncByteStream(httpx.AsyncByteStream):
+    """Exercise the provider through httpx's real response byte iterator."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        pass
 
 
 class TestOpenAITTSConfig:
@@ -83,13 +116,74 @@ class TestOpenAITTS:
             async for event in provider.synthesize("Hello world"):
                 events.append(event)
 
-        assert len(events) == 2
+        assert len(events) == 1
         for e in events:
             assert e.type == TTSEventType.AUDIO
             assert e.audio is not None
 
         chunks = extract_audio_chunks(events)
         assert verify_pcm16_audio(chunks)
+        assert chunks[0].data == b"".join(pcm_data)
+        assert fake_response.aiter_bytes_chunk_size is None
+
+    async def test_synthesize_releases_small_first_frame_then_steady_frames(self):
+        provider = self._make_provider()
+        source = b"".join(bytes([index]) * 480 for index in range(13))
+        fake_response = FakeStreamResponse(
+            [source[index : index + 480] for index in range(0, len(source), 480)]
+        )
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            events = [event async for event in provider.synthesize("Hello world")]
+
+        chunks = extract_audio_chunks(events)
+        assert [len(chunk.data) for chunk in chunks] == [
+            _FIRST_AUDIO_CHUNK_BYTES,
+            _STEADY_AUDIO_CHUNK_BYTES,
+            480,
+        ]
+        assert b"".join(chunk.data for chunk in chunks) == source
+        assert fake_response.aiter_bytes_chunk_size is None
+
+    async def test_synthesize_uses_httpx_native_response_cadence(self):
+        source = b"".join(bytes([index]) * 480 for index in range(13))
+        stream = ChunkedAsyncByteStream(
+            [source[index : index + 480] for index in range(0, len(source), 480)]
+        )
+
+        def handle(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=stream)
+
+        provider = self._make_provider()
+        original_client = provider._client
+        provider._client = httpx.AsyncClient(
+            base_url="https://example.test",
+            transport=httpx.MockTransport(handle),
+        )
+        await original_client.aclose()
+        try:
+            events = [event async for event in provider.synthesize("Hello world")]
+        finally:
+            await provider.close()
+
+        chunks = extract_audio_chunks(events)
+        assert [len(chunk.data) for chunk in chunks] == [
+            _FIRST_AUDIO_CHUNK_BYTES,
+            _STEADY_AUDIO_CHUNK_BYTES,
+            480,
+        ]
+        assert b"".join(chunk.data for chunk in chunks) == source
+
+    async def test_synthesize_ignores_empty_network_chunks(self):
+        provider = self._make_provider()
+        source = _pcm16_bytes(480)
+        fake_response = FakeStreamResponse([b"", source[:480], b"", source[480:], b""])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            events = [event async for event in provider.synthesize("Hello world")]
+
+        chunks = extract_audio_chunks(events)
+        assert [chunk.data for chunk in chunks] == [source]
 
     async def test_synthesize_sends_correct_request(self):
         provider = OpenAITTS(
@@ -130,7 +224,7 @@ class TestOpenAITTS:
 
     async def test_cancel_stops_iteration(self):
         provider = self._make_provider()
-        pcm_data = [_pcm16_bytes(100)] * 10
+        pcm_data = [_pcm16_bytes(480)] * 20
         fake_response = FakeStreamResponse(pcm_data)
 
         with patch.object(provider._client, "stream", return_value=fake_response):
@@ -142,6 +236,27 @@ class TestOpenAITTS:
 
         assert len(events) == 2
         assert provider.is_cancelled
+        assert fake_response.chunks_read == 6
+
+    async def test_cancel_suppresses_stream_closed_race(self):
+        provider = self._make_provider()
+        fake_response = StreamClosedResponse([])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            async for _event in provider.synthesize("long text"):
+                await provider.cancel()
+
+        assert provider.is_cancelled
+        assert fake_response.chunks_read == 1
+
+    async def test_stream_closed_without_cancel_propagates(self):
+        provider = self._make_provider()
+        fake_response = StreamClosedResponse([])
+
+        with patch.object(provider._client, "stream", return_value=fake_response):
+            with pytest.raises(httpx.StreamClosed):
+                async for _event in provider.synthesize("long text"):
+                    pass
 
     async def test_stop_sets_inactive(self):
         provider = self._make_provider()

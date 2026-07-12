@@ -13,7 +13,8 @@ content.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 
 # ── Detection patterns ─────────────────────────────────────────────
 
@@ -201,44 +202,19 @@ def _is_escaped(text: str, idx: int) -> bool:
     return backslashes % 2 == 1
 
 
-def _find_balanced_close(text: str, start: int, opener: str, closer: str) -> int | None:
-    """Find matching closing delimiter for *opener* at *start*."""
-    if start >= len(text) or text[start] != opener:
-        return None
+class _DelimiterScanner:
+    """Index balanced delimiters and malformed-input recovery in linear time."""
 
-    depth = 1
-    i = start + 1
-    while i < len(text):
-        ch = text[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch == opener:
-            depth += 1
-        elif ch == closer:
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return None
-
-
-class _LabelScanner:
-    """Resolve the matching ``]`` for every ``[`` in *text* in linear time.
-
-    The former "rescan from the next opener" strategy was O(n^2) on adversarial
-    inputs such as ``"[" * n``, ``"[" * n + ")"``, or ``"[" * n + "]"`` because
-    every unmatched ``[`` triggered a fresh bracket walk to the end of the
-    string. Instead we make a single left-to-right pass with a stack, recording
-    the matching close index for each opener (and ``None`` for openers that
-    never balance). Subsequent lookups are O(1), so total work is O(n).
-
-    Escaped brackets (preceded by an odd run of backslashes) are ignored, and a
-    ``\\`` escapes the following character — matching ``_find_balanced_close``.
-    """
-
-    def __init__(self, text: str) -> None:
+    def __init__(
+        self,
+        text: str,
+        opener: str,
+        closer: str,
+        *,
+        track_recovery: bool = False,
+    ) -> None:
         self._matches: dict[int, int | None] = {}
+        self._next_closes: dict[int, int | None] | None = None
         stack: list[int] = []
         i = 0
         length = len(text)
@@ -247,22 +223,42 @@ class _LabelScanner:
             if ch == "\\":
                 i += 2
                 continue
-            if ch == "[":
+            if ch == opener:
                 stack.append(i)
-            elif ch == "]" and stack:
-                self._matches[stack.pop()] = i
+            elif ch == closer:
+                if stack:
+                    self._matches[stack.pop()] = i
             i += 1
-        # Any opener still on the stack never found a matching close.
+
         for unmatched in stack:
             self._matches[unmatched] = None
 
-    def find_close(self, start: int) -> int | None:
-        """Return the matching ``]`` index for the ``[`` at *start*, or ``None``.
+        if track_recovery:
+            self._next_closes = self._index_next_closes(text, closer)
 
-        ``None`` means the label never balances within the rest of the string;
-        callers can treat the bracket as a literal and continue past it.
-        """
+    def _index_next_closes(self, text: str, closer: str) -> dict[int, int | None]:
+        """Index literal recovery closers for malformed references."""
+        next_closes: dict[int, int | None] = {}
+        next_close: int | None = None
+        for i in range(len(text) - 1, -1, -1):
+            # Malformed-reference recovery historically advanced to the next
+            # literal closer, including an escaped one. Keep that policy while
+            # balanced matching above continues to honor escapes.
+            if text[i] == closer:
+                next_close = i
+            if i in self._matches:
+                next_closes[i] = next_close
+        return next_closes
+
+    def find_close(self, start: int) -> int | None:
+        """Return the balanced close for the opener at *start*, if any."""
         return self._matches.get(start)
+
+    def find_next_close(self, start: int) -> int | None:
+        """Return the first literal closer after the opener at *start*."""
+        if self._next_closes is None:
+            raise RuntimeError("recovery indexing is disabled")
+        return self._next_closes.get(start)
 
 
 def _extract_markdown_destination_url(destination: str) -> str:
@@ -288,93 +284,118 @@ def _extract_markdown_destination_url(destination: str) -> str:
     return token[:i].strip()
 
 
+@dataclass(frozen=True, slots=True)
+class _MarkdownReference:
+    start: int
+    end: int
+    label: str
+    destination_url: str
+    is_image: bool
+
+
+class _MarkdownReferenceScanner:
+    """Yield balanced inline links/images and own malformed-input recovery."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._length = len(text)
+        self._labels = _DelimiterScanner(text, "[", "]")
+        self._destinations = _DelimiterScanner(text, "(", ")", track_recovery=True)
+
+    def __iter__(self) -> Iterator[_MarkdownReference]:
+        index = 0
+        while index < self._length:
+            candidate = self._candidate_at(index)
+            if candidate is None:
+                index += 1
+                continue
+
+            label_start, is_image = candidate
+            reference, next_index = self._parse_candidate(
+                start=index,
+                label_start=label_start,
+                is_image=is_image,
+            )
+            if reference is not None:
+                yield reference
+            if next_index is None:
+                return
+            index = next_index
+
+    def _candidate_at(self, index: int) -> tuple[int, bool] | None:
+        char = self._text[index]
+        if (
+            char == "!"
+            and index + 1 < self._length
+            and self._text[index + 1] == "["
+            and not _is_escaped(self._text, index)
+        ):
+            return index + 1, True
+        if char == "[" and not _is_escaped(self._text, index):
+            return index, False
+        return None
+
+    def _parse_candidate(
+        self,
+        *,
+        start: int,
+        label_start: int,
+        is_image: bool,
+    ) -> tuple[_MarkdownReference | None, int | None]:
+        label_end = self._labels.find_close(label_start)
+        if label_end is None:
+            return None, start + 1
+
+        destination_start = self._destination_start(label_end + 1)
+        if destination_start is None:
+            return None, start + 1
+
+        destination_end = self._destinations.find_close(destination_start)
+        if destination_end is None:
+            recovery_close = self._destinations.find_next_close(destination_start)
+            return None, recovery_close + 1 if recovery_close is not None else None
+
+        label = self._text[label_start + 1 : label_end].strip()
+        destination = self._text[destination_start + 1 : destination_end]
+        return (
+            _MarkdownReference(
+                start=start,
+                end=destination_end + 1,
+                label=label,
+                destination_url=_extract_markdown_destination_url(destination),
+                is_image=is_image,
+            ),
+            destination_end + 1,
+        )
+
+    def _destination_start(self, index: int) -> int | None:
+        while index < self._length and self._text[index].isspace():
+            index += 1
+        if index >= self._length or self._text[index] != "(":
+            return None
+        return index
+
+
 def _replace_markdown_links_and_images(text: str) -> str:
-    """Resolve markdown links/images with balanced delimiters.
-
-    Links preserve both label and URL for TTS context. Images preserve alt text
-    only and remove destination URLs.
-    """
+    """Render links as label+URL and images as alt text for voice output."""
     out: list[str] = []
-    i = 0
-    length = len(text)
-    scanner = _LabelScanner(text)
-
-    while i < length:
-        ch = text[i]
-
-        if ch == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
-            label_start = i + 1
-            label_end = scanner.find_close(label_start)
-            if label_end is None:
-                out.append(ch)
-                i += 1
-                continue
-
-            j = label_end + 1
-            while j < length and text[j].isspace():
-                j += 1
-            if j >= length or text[j] != "(":
-                out.append(ch)
-                i += 1
-                continue
-
-            destination_end = _find_balanced_close(text, j, "(", ")")
-            if destination_end is None:
-                next_close = text.find(")", j + 1)
-                if next_close == -1:
-                    out.append(text[i:])
-                    break
-                out.append(text[i : next_close + 1])
-                i = next_close + 1
-                continue
-
-            alt_text = text[label_start + 1 : label_end].strip()
-            if alt_text:
-                out.append(alt_text)
-            i = destination_end + 1
-            continue
-
-        if ch == "[" and not _is_escaped(text, i):
-            label_end = scanner.find_close(i)
-            if label_end is None:
-                out.append(ch)
-                i += 1
-                continue
-
-            j = label_end + 1
-            while j < length and text[j].isspace():
-                j += 1
-            if j >= length or text[j] != "(":
-                out.append(ch)
-                i += 1
-                continue
-
-            destination_end = _find_balanced_close(text, j, "(", ")")
-            if destination_end is None:
-                next_close = text.find(")", j + 1)
-                if next_close == -1:
-                    out.append(text[i:])
-                    break
-                out.append(text[i : next_close + 1])
-                i = next_close + 1
-                continue
-
-            label = text[i + 1 : label_end].strip()
-            destination = text[j + 1 : destination_end]
-            destination_url = _extract_markdown_destination_url(destination)
-            if label and destination_url:
-                out.append(f"{label} {destination_url}")
-            elif label:
-                out.append(label)
-            elif destination_url:
-                out.append(destination_url)
-            i = destination_end + 1
-            continue
-
-        out.append(ch)
-        i += 1
-
+    cursor = 0
+    changed = False
+    for reference in _MarkdownReferenceScanner(text):
+        out.append(text[cursor : reference.start])
+        out.append(_render_markdown_reference(reference))
+        cursor = reference.end
+        changed = True
+    if not changed:
+        return text
+    out.append(text[cursor:])
     return "".join(out)
+
+
+def _render_markdown_reference(reference: _MarkdownReference) -> str:
+    if reference.is_image:
+        return reference.label
+    return " ".join(part for part in (reference.label, reference.destination_url) if part)
 
 
 def _has_markdown_link_or_image(text: str) -> bool:
@@ -382,43 +403,10 @@ def _has_markdown_link_or_image(text: str) -> bool:
 
     This avoids the formerly regex-based ``[label](destination)`` detection,
     which could repeatedly rescan malformed fragments such as ``[x](``. Label
-    matching is resolved once in linear time via :class:`_LabelScanner`, keeping
-    detection O(n) on adversarial inputs such as ``"[" * n + ")"``.
+    matching is resolved once in linear time via :class:`_DelimiterScanner`,
+    keeping detection O(n) on adversarial inputs such as ``"[" * n + ")"``.
     """
-    i = 0
-    length = len(text)
-    scanner = _LabelScanner(text)
-
-    while i < length:
-        if text[i] == "!" and (i + 1) < length and text[i + 1] == "[" and not _is_escaped(text, i):
-            label_start = i + 1
-        elif text[i] == "[" and not _is_escaped(text, i):
-            label_start = i
-        else:
-            i += 1
-            continue
-
-        label_end = scanner.find_close(label_start)
-        if label_end is None:
-            i += 1
-            continue
-
-        j = label_end + 1
-        while j < length and text[j].isspace():
-            j += 1
-        if j >= length or text[j] != "(":
-            i += 1
-            continue
-
-        destination_end = _find_balanced_close(text, j, "(", ")")
-        if destination_end is not None:
-            return True
-        next_close = text.find(")", j + 1)
-        if next_close == -1:
-            return False
-        i = next_close + 1
-
-    return False
+    return next(iter(_MarkdownReferenceScanner(text)), None) is not None
 
 
 def strip_markdown(text: str, *, trim: bool = True, normalize_code_spans: bool = False) -> str:

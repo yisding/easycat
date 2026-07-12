@@ -95,7 +95,7 @@ class ProviderErrorEmitter:
 
         Keeps teardown from leaving emit tasks dangling into interpreter
         shutdown ("Task was destroyed but it is pending"). Late emits are
-        already safe (the journal sink no-ops after ``Session._destroy``), so
+        already safe (the journal sink no-ops after Session finalization), so
         this is lifecycle tidiness, not correctness.
         """
         if not self._emit_tasks:
