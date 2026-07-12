@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from easycat._log_context import CorrelationFilter, bind_turn
+from easycat._tts_synthesizer import TTSSynthResult
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -771,6 +772,63 @@ async def test_first_tts_lifecycle_wait_is_outside_agent_timeout(
         release_lifecycle.set()
 
     await asyncio.wait_for(run_task, timeout=0.5)
+
+
+@pytest.mark.asyncio
+async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_started = asyncio.Event()
+    provider_finalized = asyncio.Event()
+    never_release = asyncio.Event()
+    provider_tasks: list[asyncio.Task[TTSSynthResult]] = []
+    session = Session(_config())
+    turn = TurnContext("turn-owned-first-synthesis", CancelToken())
+    session._turn = turn
+    state = _StreamingTtsState(
+        turn=turn,
+        turn_gen=session._turn.generation,
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.queue.put_nowait(TTSInput("Reply."))
+
+    async def _begin_synthesis(
+        _payload: TTSInput,
+        _token: CancelToken | None,
+        *,
+        is_active: object,
+    ) -> asyncio.Task[TTSSynthResult]:
+        _ = is_active
+
+        async def _blocked_provider() -> TTSSynthResult:
+            provider_started.set()
+            try:
+                await never_release.wait()
+                return TTSSynthResult()
+            finally:
+                provider_finalized.set()
+
+        task = asyncio.create_task(_blocked_provider())
+        provider_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(
+        session._tts_scheduler,
+        "begin_synthesis_with_bot_start",
+        _begin_synthesis,
+    )
+
+    consumer = asyncio.create_task(session._turn_runner._synthesize_queued_payloads(state))
+    await asyncio.wait_for(provider_started.wait(), timeout=0.5)
+    consumer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    assert provider_finalized.is_set()
+    assert len(provider_tasks) == 1
+    assert provider_tasks[0].cancelled()
 
 
 @pytest.mark.asyncio

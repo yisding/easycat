@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._log_context import bind_turn, reset_turn
+from easycat._tts_synthesizer import TTSSynthResult
 from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -546,7 +547,7 @@ class TurnRunner:
                     st.first_tts_lifecycle_ready.set()
 
             if first_synthesis_task is not None:
-                result = await first_synthesis_task
+                result = await self._await_owned_first_synthesis(first_synthesis_task)
             else:
                 result = await self._tts.synthesizer.synthesize(
                     payload,
@@ -566,6 +567,19 @@ class TurnRunner:
             )
             if result.first_audio_time is not None and st.turn.first_tts_audio_time is None:
                 st.turn.first_tts_audio_time = result.first_audio_time
+
+    @staticmethod
+    async def _await_owned_first_synthesis(
+        task: asyncio.Task[TTSSynthResult],
+    ) -> TTSSynthResult:
+        """Propagate consumer cancellation and drain provider cleanup."""
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def _settle_turn_after_tts(self, st: _StreamingTtsState) -> None:
         """Return the TurnManager toward IDLE (or keep the gated turn alive)."""
