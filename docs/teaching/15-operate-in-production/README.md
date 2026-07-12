@@ -99,7 +99,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -73,146 +50,85 @@
+@@ -73,163 +50,85 @@
      )
 
 
@@ -202,6 +202,23 @@
 -                # No assistant output was generated for this turn. Do not
 -                # rewrite the previous turn's already-committed response.
 -                return
+-
+-    def snapshot_state(self) -> dict[str, object]:
+-        """Allowlist privacy-safe workflow metadata for debug artifacts."""
+-        last_assistant = next(
+-            (
+-                str(message["content"])
+-                for message in reversed(self._history)
+-                if message["role"] == "assistant"
+-            ),
+-            "",
+-        )
+-        return {
+-            "message_count": len(self._history),
+-            "history_roles": [str(message["role"]) for message in self._history],
+-            "last_assistant_chars": len(last_assistant),
+-            "session_action_pending": self._actions.has_pending,
+-        }
 +    config = EasyConfig(
 +        agent=Agent(
 +            name="assistant",
