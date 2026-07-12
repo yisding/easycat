@@ -61,7 +61,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -18,176 +19,188 @@
+@@ -18,253 +19,188 @@
 
  from __future__ import annotations
 
@@ -78,7 +78,7 @@
 -from easycat.audio_format import PCM16_MONO_24K
 +from easycat.audio_format import PCM16_MONO_24K, AudioChunk
  from easycat.debug.export import export_debug_bundle
--from easycat.events import EventBus, STTEventType
+-from easycat.events import EventBus, STTEvent, STTEventType
 +from easycat.events import EventBus, STTEventType, VADStartSpeaking, VADStopSpeaking
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
@@ -93,9 +93,10 @@
 +PREROLL_FRAMES = 15  # 15 × 20 ms = 300 ms of audio *before* VAD fires
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch03-parrot-{int(time.time())}"
+-STTQueueItem = tuple[int, STTEvent, float] | None
 -
 -
--def record_delivery(
+-def record_stt_received(
 +
 +
 +class MiniTurnDetector:
@@ -151,12 +152,63 @@
 +    detector: MiniTurnDetector,
      journal: InMemoryRingBuffer,
 -    *,
+-    event_id: int,
+-    event: STTEvent,
+-    offset_ms: float,
+-    queue_depth: int,
++    session_id: str,
+ ) -> None:
+-    """Record provider ingress before the consumer can be blocked by TTS."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="stt.received",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "stt",
+-            "event_id": event_id,
+-            "event_type": event.type.value,
+-            "text": event.text,
+-            "offset_ms": offset_ms,
+-            "queue_depth_before_put": queue_depth,
+-        },
+-    )
+-
+-
+-def record_stt_consumed(
+-    journal: InMemoryRingBuffer,
+-    *,
+-    event_id: int,
+-    event: STTEvent,
+-    received_offset_ms: float,
+-    consumed_offset_ms: float,
+-    queue_depth: int,
+-) -> None:
+-    """Record when the parrot finally dequeues one provider event."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name=f"stt.{event.type.value}",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "stt",
+-            "event_id": event_id,
+-            "event_type": event.type.value,
+-            "text": event.text,
+-            "offset_ms": consumed_offset_ms,
+-            "received_offset_ms": received_offset_ms,
+-            "consumer_lag_ms": consumed_offset_ms - received_offset_ms,
+-            "queue_depth_after_get": queue_depth,
+-        },
+-    )
+-
+-
+-def record_delivery(
+-    journal: InMemoryRingBuffer,
+-    *,
 -    text: str,
 -    accepted_chunks: int,
 -    rejected_chunks: int,
 -    offset_ms: float,
-+    session_id: str,
- ) -> None:
+-) -> None:
 -    """Record transport acceptance without claiming speaker playback."""
 -    journal.append(
 -        kind=JournalRecordKind.EVENT,
@@ -169,11 +221,85 @@
 -            "rejected_chunks": rejected_chunks,
 -            "offset_ms": offset_ms,
 -        },
+-    )
+-    if rejected_chunks:
+-        print(
+-            "  transport rejected "
+-            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+-        )
+-
+-
+-async def speak_and_record(
+-    transport, journal: InMemoryRingBuffer, text: str, start: float
+-) -> None:
+-    """Speak once, then preserve every transport acceptance result."""
+-    accepted_chunks, rejected_chunks = await speak(transport, text)
+-    record_delivery(
+-        journal,
+-        text=text,
+-        accepted_chunks=accepted_chunks,
+-        rejected_chunks=rejected_chunks,
+-        offset_ms=(time.monotonic() - start) * 1000,
+-    )
+-
+-
+-async def shutdown(stt, transport) -> None:
+-    """End the logical STT stream, close its provider, then disconnect."""
 +    """On each VAD turn, stream audio into STT, wait for final, speak it."""
 +    stt = None
 +    collected_final = ""
 +
-+    try:
+     try:
+-        await stt.end_stream()
+-    finally:
+-        try:
+-            await close_if_supported(stt)
+-        finally:
+-            await transport.disconnect()
+-
+-
+-async def feed_audio(stt, transport) -> None:
+-    async for chunk in transport.receive_audio():
+-        await stt.send_audio(chunk)
+-
+-
+-async def listen_stt(
+-    stt,
+-    ev_queue: asyncio.Queue[STTQueueItem],
+-    journal: InMemoryRingBuffer,
+-    start: float,
+-) -> None:
+-    event_id = 0
+-    async for event in stt.events():
+-        event_id += 1
+-        received_offset_ms = (time.monotonic() - start) * 1000
+-        record_stt_received(
+-            journal,
+-            event_id=event_id,
+-            event=event,
+-            offset_ms=received_offset_ms,
+-            queue_depth=ev_queue.qsize(),
+-        )
+-        await ev_queue.put((event_id, event, received_offset_ms))
+-    await ev_queue.put(None)
+-
+-
+-async def parrot_events(
+-    transport,
+-    ev_queue: asyncio.Queue[STTQueueItem],
+-    journal: InMemoryRingBuffer,
+-    start: float,
+-) -> None:
+-    last_text = ""
+-    while True:
+-        try:
+-            # If no new event arrives within SILENCE_TIMEOUT_S, we
+-            # interpret silence as "user is done" — the whole bug.
+-            item = await asyncio.wait_for(ev_queue.get(), timeout=SILENCE_TIMEOUT_S)
+-        except TimeoutError:
+-            if last_text:
+-                offset_ms = (time.monotonic() - start) * 1000
+-                print(f"  t+{offset_ms:6.0f}ms  PARROT → {last_text!r}")
 +        async for tag, chunk in detector.frames(transport.receive_audio()):
 +            if tag == "speech_started":
 +                if stt is None:
@@ -204,16 +330,43 @@
 +                    stt = None
 +                    await close_if_supported(active_stt)
 +
-+                journal.append(
-+                    kind=JournalRecordKind.EVENT,
+                 journal.append(
+                     kind=JournalRecordKind.EVENT,
+-                    name="parrot.fire",
+-                    session_id=SESSION_ID,
 +                    name="turn.ended",
 +                    session_id=session_id,
-+                    data={
+                     data={
+-                        "stage": "parrot",
+-                        "committed_text": last_text,
+-                        "silence_timeout_s": SILENCE_TIMEOUT_S,
+-                        "offset_ms": offset_ms,
 +                        "stage": "turn",
 +                        "t_ms": time.monotonic() * 1000,
 +                        "text": collected_final,
-+                    },
-+                )
+                     },
+                 )
+-                await speak_and_record(transport, journal, last_text, start)
+-                last_text = ""
+-            continue
+-        if item is None:
+-            break
+-        event_id, event, received_offset_ms = item
+-        # Deliberately acting on partials — chapter 2's rule, broken
+-        # on purpose. Chapter 4 restores it by waiting for a real
+-        # turn boundary from the VAD.
+-        last_text = event.text
+-        kind = "FINAL" if event.type == STTEventType.FINAL else "part "
+-        offset_ms = (time.monotonic() - start) * 1000
+-        print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
+-        record_stt_consumed(
+-            journal,
+-            event_id=event_id,
+-            event=event,
+-            received_offset_ms=received_offset_ms,
+-            consumed_offset_ms=offset_ms,
+-            queue_depth=ev_queue.qsize(),
+-        )
 +
 +                if collected_final.strip():
 +                    print(f"  → parrot: {collected_final!r}")
@@ -224,48 +377,15 @@
 +                await stt.end_stream()
 +            finally:
 +                await close_if_supported(stt)
-+
-+
-+async def main() -> None:
+
+
+ async def main() -> None:
 +    parser = argparse.ArgumentParser()
 +    parser.add_argument(
 +        "--no-preroll",
 +        action="store_true",
 +        help="Disable pre-roll; start-of-utterance will be clipped.",
-     )
--    if rejected_chunks:
--        print(
--            "  transport rejected "
--            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
--        )
--
--
--async def speak_and_record(
--    transport, journal: InMemoryRingBuffer, text: str, start: float
--) -> None:
--    """Speak once, then preserve every transport acceptance result."""
--    accepted_chunks, rejected_chunks = await speak(transport, text)
--    record_delivery(
--        journal,
--        text=text,
--        accepted_chunks=accepted_chunks,
--        rejected_chunks=rejected_chunks,
--        offset_ms=(time.monotonic() - start) * 1000,
--    )
--
--
--async def shutdown(stt, transport) -> None:
--    """End the logical STT stream, close its provider, then disconnect."""
--    try:
--        await stt.end_stream()
--    finally:
--        try:
--            await close_if_supported(stt)
--        finally:
--            await transport.disconnect()
--
--
--async def main() -> None:
++    )
 +    args = parser.parse_args()
 +
      oai_key = os.getenv("OPENAI_API_KEY")
@@ -309,65 +429,14 @@
 -
 -    # Bridge STT events into an asyncio.Queue so the parrot loop can use
 -    # ``asyncio.wait_for`` to implement "silence timeout since last event."
--    ev_queue: asyncio.Queue = asyncio.Queue()
--
--    async def feed_audio() -> None:
--        async for chunk in transport.receive_audio():
--            await stt.send_audio(chunk)
--
--    async def listen_stt() -> None:
--        async for event in stt.events():
--            await ev_queue.put(event)
--        await ev_queue.put(None)
--
--    async def parrot() -> None:
--        last_text = ""
--        while True:
--            try:
--                # If no new event arrives within SILENCE_TIMEOUT_S, we
--                # interpret silence as "user is done" — the whole bug.
--                event = await asyncio.wait_for(ev_queue.get(), timeout=SILENCE_TIMEOUT_S)
--            except TimeoutError:
--                if last_text:
--                    offset_ms = (time.monotonic() - start) * 1000
--                    print(f"  t+{offset_ms:6.0f}ms  PARROT → {last_text!r}")
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="parrot.fire",
--                        session_id=SESSION_ID,
--                        data={
--                            "stage": "parrot",
--                            "committed_text": last_text,
--                            "silence_timeout_s": SILENCE_TIMEOUT_S,
--                            "offset_ms": offset_ms,
--                        },
--                    )
--                    await speak_and_record(transport, journal, last_text, start)
--                    last_text = ""
--                continue
--            if event is None:
--                break
--            # Deliberately acting on partials — chapter 2's rule, broken
--            # on purpose. Chapter 4 restores it by waiting for a real
--            # turn boundary from the VAD.
--            last_text = event.text
--            kind = "FINAL" if event.type == STTEventType.FINAL else "part "
--            offset_ms = (time.monotonic() - start) * 1000
--            print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
--            journal.append(
--                kind=JournalRecordKind.EVENT,
--                name=f"stt.{event.type.value}",
--                session_id=SESSION_ID,
--                data={
--                    "stage": "stt",
--                    "event_type": event.type.value,
--                    "text": event.text,
--                    "offset_ms": offset_ms,
--                },
--            )
+-    ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
 -
 -    try:
--        await asyncio.gather(feed_audio(), listen_stt(), parrot())
+-        await asyncio.gather(
+-            feed_audio(stt, transport),
+-            listen_stt(stt, ev_queue, journal, start),
+-            parrot_events(transport, ev_queue, journal, start),
+-        )
 -    except (KeyboardInterrupt, asyncio.CancelledError):
 -        pass
 -    finally:

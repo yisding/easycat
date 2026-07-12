@@ -30,7 +30,30 @@ def test_timeout_inspector_uses_latest_stt_event_and_reports_overshoot(tmp_path:
                 "offset_ms": 655.0,
             },
         ),
-        ("stt.partial", {"stage": "stt", "text": "Paris", "offset_ms": 950.0}),
+        (
+            "stt.received",
+            {
+                "stage": "stt",
+                "event_id": 3,
+                "event_type": "partial",
+                "text": "Paris",
+                "offset_ms": 700.0,
+                "queue_depth_before_put": 0,
+            },
+        ),
+        (
+            "stt.partial",
+            {
+                "stage": "stt",
+                "event_id": 3,
+                "event_type": "partial",
+                "text": "Paris",
+                "offset_ms": 950.0,
+                "received_offset_ms": 700.0,
+                "consumer_lag_ms": 250.0,
+                "queue_depth_after_get": 0,
+            },
+        ),
     ):
         journal.append(
             kind=JournalRecordKind.EVENT,
@@ -53,6 +76,7 @@ def test_timeout_inspector_uses_latest_stt_event_and_reports_overshoot(tmp_path:
     assert payload["fires"] == [
         {
             "configured_timeout_ms": 500.0,
+            "consumer_backlog_ms": 250.0,
             "fire": {
                 "name": "parrot.fire",
                 "offset_ms": 655.0,
@@ -62,11 +86,18 @@ def test_timeout_inspector_uses_latest_stt_event_and_reports_overshoot(tmp_path:
             "next_partial": {
                 "name": "stt.partial",
                 "offset_ms": 950.0,
+                "sequence": 5,
+                "text": "Paris",
+            },
+            "next_partial_ingress": {
+                "name": "stt.received",
+                "offset_ms": 700.0,
                 "sequence": 4,
                 "text": "Paris",
             },
             "observed_silence_ms": 505.0,
             "post_fire_consumer_gap_ms": 295.0,
+            "post_fire_ingress_gap_ms": 45.0,
             "scheduler_overshoot_ms": 5.0,
             "trigger_record": {
                 "name": "stt.final",
@@ -87,4 +118,6 @@ def test_timeout_lesson_rejects_exact_deadline_claim() -> None:
     assert "last-partial timestamp plus 500 ms" not in readme
     assert "It should be exactly" not in exercises
     assert "latest `stt.partial` or `stt.final`" in exercises
-    assert "not the provider-side arrival latency" in exercises
+    assert "post_fire_ingress_gap_ms" in exercises
+    assert "post_fire_consumer_gap_ms" in exercises
+    assert "consumer_backlog_ms" in exercises

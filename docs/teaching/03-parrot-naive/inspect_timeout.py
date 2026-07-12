@@ -18,6 +18,11 @@ def _offset_ms(record: dict[str, Any]) -> float | None:
     return float(value) if isinstance(value, (int, float)) else None
 
 
+def _data_number(record: dict[str, Any] | None, key: str) -> float | None:
+    value = ((record or {}).get("data") or {}).get(key)
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def _summary(record: dict[str, Any] | None) -> dict[str, Any] | None:
     if record is None:
         return None
@@ -51,9 +56,27 @@ def analyze_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             (record for record in ordered[index + 1 :] if record.get("name") == "stt.partial"),
             None,
         )
+        next_event_id = ((next_partial or {}).get("data") or {}).get("event_id")
+        next_partial_ingress = None
+        if isinstance(next_event_id, int):
+            next_partial_ingress = next(
+                (
+                    record
+                    for record in ordered
+                    if record.get("name") == "stt.received"
+                    and ((record.get("data") or {}).get("event_id") == next_event_id)
+                ),
+                None,
+            )
         fire_offset = _offset_ms(fire)
         trigger_offset = _offset_ms(trigger) if trigger is not None else None
         next_offset = _offset_ms(next_partial) if next_partial is not None else None
+        ingress_offset = _offset_ms(next_partial_ingress)
+        if ingress_offset is None:
+            ingress_offset = _data_number(next_partial, "received_offset_ms")
+        consumer_backlog_ms = _data_number(next_partial, "consumer_lag_ms")
+        if consumer_backlog_ms is None and next_offset is not None and ingress_offset is not None:
+            consumer_backlog_ms = next_offset - ingress_offset
         timeout_s = (fire.get("data") or {}).get("silence_timeout_s")
         timeout_ms = float(timeout_s) * 1000 if isinstance(timeout_s, (int, float)) else None
         observed_silence_ms = (
@@ -67,6 +90,7 @@ def analyze_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                 "fire": _summary(fire),
                 "trigger_record": _summary(trigger),
                 "next_partial": _summary(next_partial),
+                "next_partial_ingress": _summary(next_partial_ingress),
                 "configured_timeout_ms": timeout_ms,
                 "observed_silence_ms": observed_silence_ms,
                 "scheduler_overshoot_ms": (
@@ -79,6 +103,12 @@ def analyze_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
                     if next_offset is not None and fire_offset is not None
                     else None
                 ),
+                "post_fire_ingress_gap_ms": (
+                    ingress_offset - fire_offset
+                    if ingress_offset is not None and fire_offset is not None
+                    else None
+                ),
+                "consumer_backlog_ms": consumer_backlog_ms,
             }
         )
 
