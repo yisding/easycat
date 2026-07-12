@@ -12,6 +12,8 @@
   wants `OPENAI_API_KEY`; before running it, run
   `uv run easycat doctor` from the repo root. If the key lives in `.env`, run
   `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
+- The optional LLM judge makes a live provider call that may incur charges.
+  Review your provider billing and usage limits before running it.
 - If the key lives in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
 

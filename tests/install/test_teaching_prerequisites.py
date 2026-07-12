@@ -40,6 +40,35 @@ def test_teaching_chapter_key_prerequisites_run_doctor() -> None:
     )
 
 
+def test_teaching_provider_prerequisites_warn_about_live_usage_costs() -> None:
+    """Provider-backed lessons should set billing expectations before learners run them."""
+    teaching_root = REPO_ROOT / "docs" / "teaching"
+    overview = (teaching_root / "README.md").read_text(encoding="utf-8")
+    overview_prerequisites = overview.split("## Prerequisites", 1)[1].split("## Conventions", 1)[0]
+    missing: list[str] = []
+
+    if "may incur charges" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: charge warning")
+    if "billing and usage limits" not in overview_prerequisites:
+        missing.append("docs/teaching/README.md: billing limits")
+
+    for path in sorted(teaching_root.glob("[0-9][0-9]-*/README.md")):
+        text = path.read_text(encoding="utf-8")
+        match = MARKDOWN_PREREQS_RE.search(text)
+        if match is None:
+            continue
+        section = match.group("body")
+        if "API_KEY" not in section:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if "may incur charges" not in section:
+            missing.append(f"{rel}: charge warning")
+        if "billing and usage limits" not in section:
+            missing.append(f"{rel}: billing limits")
+
+    assert not missing, "Teaching provider cost guidance is incomplete:\n" + "\n".join(missing)
+
+
 def test_teaching_provider_key_setup_names_required_extras() -> None:
     """Provider-key setup snippets should include the matching optional extra."""
     missing: list[str] = []
