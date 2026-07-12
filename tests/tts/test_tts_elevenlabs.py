@@ -794,6 +794,17 @@ class TestElevenLabsPersistent:
         assert factory.call_count == 1
         await provider.close()
 
+    async def test_warmup_suppresses_connect_failure(self):
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        provider = self._make_provider()
+        with patch.object(provider, "_build_multi_ws", return_value=FailingConnectWS()):
+            await provider.warmup()
+
+        await provider.close()
+
     async def test_synthesize_yields_audio(self):
         provider = self._make_provider()
         fake = FakePersistentWS()
