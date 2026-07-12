@@ -160,6 +160,7 @@ def _build_scheduler(
     strip_markdown_enabled: bool = False,
     is_gated: bool = False,
     drain_should_stop: bool = False,
+    is_running: bool = False,
     session_actions: SessionActions | None = None,
     drain_session_actions: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[TTSScheduler, dict[str, object]]:
@@ -194,6 +195,7 @@ def _build_scheduler(
 
     outbound_queue = BoundedAudioQueue(max_size=200, name="outbound")
     current_turn_ref: dict[str, TurnContext | None] = {"turn": None}
+    running_ref = {"value": is_running}
 
     audio_emissions: list[TTSAudio] = []
     bus.subscribe(TTSAudio, audio_emissions.append)
@@ -207,7 +209,7 @@ def _build_scheduler(
     wiring = make_wiring(
         tts=lambda: tts,
         emit=bus.emit,
-        is_running=lambda: False,
+        is_running=lambda: running_ref["value"],
         current_turn=lambda: current_turn_ref["turn"],
         correlation_ids=lambda: (session_id, None),
         is_gated=lambda: is_gated,
@@ -256,6 +258,7 @@ def _build_scheduler(
         "outbound_queue": outbound_queue,
         "audio_emissions": audio_emissions,
         "current_turn_ref": current_turn_ref,
+        "running_ref": running_ref,
         "turn_manager": turn_manager,
         "transport": transport,
     }
@@ -367,14 +370,26 @@ async def test_synthesize_bypass_emits_chunks() -> None:
 @pytest.mark.asyncio
 async def test_synthesize_sends_only_first_uncontended_chunk_inline() -> None:
     tts = _RecordingTTS(chunks=2)
-    scheduler, ctx = _build_scheduler(tts=tts)
+    scheduler, ctx = _build_scheduler(tts=tts, is_running=True)
+    router = ctx["router"]
+    assert isinstance(router, AudioRouter)
+    hold_active = asyncio.Event()
+    active_task = asyncio.create_task(hold_active.wait())
+    router._outbound_task = active_task
 
-    await scheduler.synthesize_bypass("greeting")
+    try:
+        await scheduler.synthesize_bypass("greeting")
 
-    assert len(ctx["transport"].sent) == 1
-    assert ctx["outbound_queue"].qsize() == 1
-    await ctx["router"]._drain_outbound_audio()
-    assert len(ctx["transport"].sent) == 2
+        assert len(ctx["transport"].sent) == 1
+        assert ctx["outbound_queue"].qsize() == 1
+        ctx["running_ref"]["value"] = False
+        await router._drain_outbound_audio()
+        assert len(ctx["transport"].sent) == 2
+    finally:
+        active_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active_task
+        router._outbound_task = None
 
 
 @pytest.mark.asyncio

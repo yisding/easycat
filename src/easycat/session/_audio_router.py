@@ -133,6 +133,7 @@ class AudioRouter:
     _MAX_CONSECUTIVE_CHUNK_ERRORS = 10
     _INGRESS_TASK_NAME = "audio_ingress_pipeline"
     _OUTBOUND_TASK_NAME = "audio_outbound_drain"
+    _INLINE_SEND_TASK_NAME = "audio_inline_send"
 
     def __init__(
         self,
@@ -388,20 +389,53 @@ class AudioRouter:
 
     async def try_send_first_audio_inline(self, chunk: AudioChunk) -> bool:
         """Send an uncontended first TTS frame without a queue/task handoff."""
+        outbound_task = self._outbound_task
         if (
-            self._outbound_in_flight != 0
+            not self._is_running()
+            or outbound_task is None
+            or outbound_task.done()
+            or self._outbound_in_flight != 0
             or self._outbound_send_lock.locked()
             or not self._outbound_queue.empty()
         ):
             return False
-        async with self._outbound_send_lock:
-            # A contending producer cannot run between the checks and an
-            # immediately available Lock acquisition, but re-check to keep the
-            # ordering invariant explicit if the implementation changes.
-            if not self._outbound_queue.empty():
-                return False
-            await self._send_outbound_chunk(chunk, replayed_chunk=False)
-        return True
+        self._claim_outbound_send()
+        try:
+            async with self._outbound_send_lock:
+                # A contending producer cannot run between the checks and an
+                # immediately available Lock acquisition, but re-check the
+                # lifecycle and queue before bypassing the drain.
+                if (
+                    not self._is_running()
+                    or self._outbound_task is not outbound_task
+                    or outbound_task.done()
+                    or not self._outbound_queue.empty()
+                ):
+                    return False
+                send_task = asyncio.create_task(
+                    self._send_outbound_chunk(chunk),
+                    name=self._INLINE_SEND_TASK_NAME,
+                )
+                await self._await_non_cancellable_send(send_task)
+                return True
+        finally:
+            await self._finish_outbound_send(replayed_chunk=False)
+
+    @staticmethod
+    async def _await_non_cancellable_send(task: asyncio.Task[None]) -> None:
+        """Delay caller cancellation until an owned transport send completes."""
+        cancellation: asyncio.CancelledError | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                current = asyncio.current_task()
+                if current is None or not current.cancelling():
+                    raise
+                cancellation = cancellation or exc
+        task.result()
+        if cancellation is not None:
+            raise cancellation
 
     def reset_speech_detection(self) -> None:
         """Reset the auto-turn speech-energy counter.
@@ -768,17 +802,27 @@ class AudioRouter:
                 self._replay_chunks_pending > 0
                 and getattr(chunk, "_easycat_replay_chunk", False) is True
             )
-            async with self._outbound_send_lock:
-                await self._send_outbound_chunk(chunk, replayed_chunk=replayed_chunk)
+            # Claim before waiting for the send lock. Otherwise a contended
+            # dequeued chunk disappears from both queue depth and in-flight
+            # accounting, allowing await_drain() to report a false idle gap.
+            self._claim_outbound_send()
+            try:
+                async with self._outbound_send_lock:
+                    await self._send_outbound_chunk(chunk)
+            finally:
+                await self._finish_outbound_send(replayed_chunk=replayed_chunk)
 
         await self.flush_trailing_playback_mark()
 
-    async def _send_outbound_chunk(self, chunk: AudioChunk, *, replayed_chunk: bool) -> None:
+    def _claim_outbound_send(self) -> None:
+        """Count a dequeued or inline chunk before its first ownership await."""
+        self._outbound_in_flight += 1
+        self._update_outbound_idle()
+
+    async def _send_outbound_chunk(self, chunk: AudioChunk) -> None:
         """Deliver one claimed chunk and apply shared accounting/error policy."""
         turn = self._current_turn()
         bind_turn(turn.id if turn is not None else None)
-        self._outbound_in_flight += 1
-        self._update_outbound_idle()
         try:
             self._stamp_outbound_chunk(chunk, turn)
             delivered = await self._transport_stage.execute(
@@ -798,23 +842,22 @@ class AudioRouter:
                     await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
                 except Exception:
                     logger.debug("Failed to emit outbound send Error", exc_info=True)
-        finally:
-            self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
-            self._update_outbound_idle()
-            replay_pending_finished = False
-            if replayed_chunk:
-                self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
-                replay_pending_finished = self._replay_chunks_pending == 0
-            if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
-                # DROP_OLDEST can evict replay chunks before the drain sees
-                # them; once the real queue empties, reconcile the tally.
-                self._replay_chunks_pending = 0
-                replay_pending_finished = True
-            if (
-                replay_pending_finished
-                and self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-            ):
-                await self._turn_manager.bot_stopped_speaking()
+
+    async def _finish_outbound_send(self, *, replayed_chunk: bool) -> None:
+        """Release one claimed chunk after send and delivery accounting finish."""
+        self._outbound_in_flight = max(0, self._outbound_in_flight - 1)
+        self._update_outbound_idle()
+        replay_pending_finished = False
+        if replayed_chunk:
+            self._replay_chunks_pending = max(0, self._replay_chunks_pending - 1)
+            replay_pending_finished = self._replay_chunks_pending == 0
+        if self._replay_chunks_pending > 0 and self._outbound_queue.empty():
+            # DROP_OLDEST can evict replay chunks before the drain sees
+            # them; once the real queue empties, reconcile the tally.
+            self._replay_chunks_pending = 0
+            replay_pending_finished = True
+        if replay_pending_finished and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
+            await self._turn_manager.bot_stopped_speaking()
 
     async def flush_trailing_playback_mark(self, turn: TurnContext | None = None) -> None:
         """Emit a playback mark for queued tail bytes that missed the throttle interval."""

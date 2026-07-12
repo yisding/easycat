@@ -321,13 +321,120 @@ async def test_first_audio_sends_inline_only_when_outbound_path_is_idle():
     first = _make_chunk(byte_value=5)
     queued = _make_chunk(byte_value=6)
 
-    assert await router.try_send_first_audio_inline(first) is True
-    assert transport.sent == [first]
+    # A live session without its outbound drain is not a valid direct-send
+    # path (before Session.start or after outbound teardown).
+    assert await router.try_send_first_audio_inline(first) is False
 
-    await router.queue_outbound(queued)
-    assert await router.try_send_first_audio_inline(_make_chunk(byte_value=7)) is False
-    assert transport.sent == [first]
-    assert state["queue"].qsize() == 1
+    hold_active = asyncio.Event()
+    active_task = asyncio.create_task(hold_active.wait())
+    router._outbound_task = active_task
+    try:
+        assert await router.try_send_first_audio_inline(first) is True
+        assert transport.sent == [first]
+
+        await router.queue_outbound(queued)
+        assert await router.try_send_first_audio_inline(_make_chunk(byte_value=7)) is False
+        assert transport.sent == [first]
+        assert state["queue"].qsize() == 1
+    finally:
+        active_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active_task
+        router._outbound_task = None
+
+
+@pytest.mark.asyncio
+async def test_inline_send_defers_caller_cancellation_until_transport_finishes():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    transport_cancelled = False
+
+    class _SlowTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            nonlocal transport_cancelled
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                transport_cancelled = True
+                raise
+            self.sent.append(chunk)
+            return True
+
+    transport = _SlowTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    inline.cancel()
+    await asyncio.sleep(0)
+
+    assert not inline.done()
+    assert not transport_cancelled
+    assert router._outbound_in_flight == 1
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert not transport_cancelled
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    class _ContendedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            if not self.sent:
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_started.set()
+                await release_second.wait()
+            self.sent.append(chunk)
+            return True
+
+    transport = _ContendedTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk(byte_value=1)))
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    await router.queue_outbound(_make_chunk(byte_value=2))
+    for _ in range(20):
+        if state["queue"].empty() and router._outbound_in_flight == 2:
+            break
+        await asyncio.sleep(0)
+
+    # The inline send holds the lock; the drain has dequeued the second chunk.
+    # Both must count as in flight before either transport send completes.
+    assert state["queue"].empty()
+    assert router._outbound_in_flight == 2
+    assert not router._outbound_idle.is_set()
+
+    release_first.set()
+    assert await asyncio.wait_for(inline, timeout=1) is True
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    assert router._outbound_in_flight == 1
+    assert not router._outbound_idle.is_set()
+
+    release_second.set()
+    await router.await_drain(timeout=1)
+    assert len(transport.sent) == 2
+
+    state["running"] = False
+    await router.stop_outbound()
 
 
 @pytest.mark.asyncio
