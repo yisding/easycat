@@ -93,7 +93,24 @@ def test_correctness_gate_rejects_invalid_samples(sample: dict[str, object]) -> 
         _validate_sample(sample)
 
 
-def test_easycat_worker_smoke() -> None:
+def test_correctness_gate_requires_easycat_voice_transition() -> None:
+    sample = {
+        "latency_ms": 1.0,
+        "provider_elapsed_ms": 0.5,
+        "framework": "easycat",
+        "text": "Hello there.",
+        "audio_bytes": 320,
+        "agent_request_started_in_timed_path": False,
+    }
+
+    with pytest.raises(ValueError, match="voice-turn agent request transition"):
+        _validate_sample(sample)
+
+    sample["agent_request_started_in_timed_path"] = True
+    _validate_sample(sample)
+
+
+def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
     result = run_benchmark(
         iterations=2,
         warmups=1,
@@ -107,3 +124,7 @@ def test_easycat_worker_smoke() -> None:
     assert len(easycat["latency_samples_ms"]) == 2
     assert len(easycat["framework_overhead_samples_ms"]) == 2
     assert easycat["latency_p50_ms"] > 2.0
+    assert (
+        result["methodology"]["correctness_gate"]
+        == "exact_framework_tts_text_nonempty_audio_and_easycat_voice_transition"
+    )

@@ -206,6 +206,8 @@ def _validate_sample(sample: dict[str, Any]) -> None:
     audio_bytes = sample.get("audio_bytes")
     if not isinstance(audio_bytes, int) or isinstance(audio_bytes, bool) or audio_bytes <= 0:
         raise ValueError(f"invalid first response audio: {audio_bytes!r}")
+    if framework == "easycat" and sample.get("agent_request_started_in_timed_path") is not True:
+        raise ValueError("EasyCat sample bypassed the voice-turn agent request transition")
 
 
 def percentile(samples: Sequence[float], quantile: float) -> float:
@@ -343,7 +345,9 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
             "isolated_competitor_environments": True,
             "gc_disabled_during_critical_path": True,
             "percentile_method": "linear_interpolation",
-            "correctness_gate": "exact_framework_tts_text_and_nonempty_audio",
+            "correctness_gate": (
+                "exact_framework_tts_text_nonempty_audio_and_easycat_voice_transition"
+            ),
             "framework_overhead": "latency_ms_minus_measured_provider_elapsed_ms",
         },
         "pins": {name: list(pins) for name, pins in PINS.items()},

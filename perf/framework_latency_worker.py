@@ -49,10 +49,15 @@ def _end_critical_path(was_enabled: bool) -> float:
 async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real Session
     llm_delay_s: float, tts_delay_s: float
 ) -> dict[str, Any]:
-    from easycat._turn_context import TurnContext
     from easycat.audio_format import PCM16_MONO_16K, AudioChunk
-    from easycat.cancel import CancelToken
-    from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
+    from easycat.events import (
+        AgentRequestStarted,
+        BotStoppedSpeaking,
+        STTEvent,
+        STTEventType,
+        TTSEvent,
+        TTSEventType,
+    )
     from easycat.integrations.agents import AgentRunner
     from easycat.session._session import Session
     from easycat.session._types import SessionConfig
@@ -139,6 +144,9 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
     transport = Transport()
     agent = Agent()
     tts = TTS()
+    loop = asyncio.get_running_loop()
+    agent_request_started_at: list[float] = []
+    turn_finished: asyncio.Future[None] = loop.create_future()
     session = Session(
         SessionConfig(
             transport=transport,
@@ -150,21 +158,45 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
             turn_manager_config=TurnManagerConfig(end_of_turn_silence_ms=1),
         )
     )
+    session.event_bus.subscribe(
+        AgentRequestStarted,
+        lambda _event: agent_request_started_at.append(time.perf_counter()),
+    )
+
+    def _record_turn_finished(_event: BotStoppedSpeaking) -> None:
+        if not turn_finished.done():
+            turn_finished.set_result(None)
+
+    session.event_bus.subscribe(BotStoppedSpeaking, _record_turn_finished)
     await session.start()
-    session._turn = TurnContext("framework-latency", CancelToken())
+    # Prepare a real public push-to-talk turn outside the critical path, then
+    # inject the already-accepted transcript that defines the shared start
+    # boundary. ``end_turn()`` exercises EasyCat's production voice transition:
+    # TurnEnded dispatch, transcript finalization, AgentRequestStarted dispatch,
+    # agent execution, TTS, and transport output.
+    await session.start_turn()
+    turn = session._turn
+    if turn is None:
+        raise RuntimeError("EasyCat did not create a turn")
+    turn.append_stt_segment("Hello")
     started, gc_was_enabled = _begin_critical_path()
-    turn_task = asyncio.create_task(session._turn_runner.run_streaming_agent("Hello", token=None))
+    await session.end_turn()
     try:
         first_audio = await asyncio.wait_for(transport.first_audio, timeout=5.0)
     finally:
         _end_critical_path(gc_was_enabled)
-    await turn_task
+    await asyncio.wait_for(turn_finished, timeout=5.0)
     await session.stop(force=True)
+    request_started_in_timed_path = (
+        len(agent_request_started_at) == 1
+        and started <= agent_request_started_at[0] <= first_audio
+    )
     return {
         "latency_ms": (first_audio - started) * 1_000.0,
         "provider_elapsed_ms": agent.elapsed_ms + tts.elapsed_ms,
         "text": tts.spoken_text,
         "audio_bytes": transport.audio_bytes,
+        "agent_request_started_in_timed_path": request_started_in_timed_path,
     }
 
 
