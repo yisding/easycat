@@ -8,14 +8,16 @@ from typing import Any
 import pytest
 import websockets
 
-import easycat.transports.websocket as websocket_module
+import easycat.server.websocket as websocket_module
+from easycat.server.websocket import (
+    run_websocket_config_server,
+    serve_websocket_config_sessions,
+    serve_websocket_sessions,
+)
 from easycat.transports.websocket import (
     WebSocketConnectionTransport,
     WebSocketSessionServerConfig,
     WebSocketTransportConfig,
-    run_websocket_config_server,
-    serve_websocket_config_sessions,
-    serve_websocket_sessions,
 )
 
 

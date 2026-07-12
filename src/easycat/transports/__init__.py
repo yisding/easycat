@@ -36,22 +36,15 @@ _LAZY_ATTR: dict[str, str] = {
     "WebRTCTransportConfig": "easycat.transports.webrtc",
     "webrtc_ice_servers_from_env": "easycat.transports.webrtc",
     "webrtc_transport_config_from_env": "easycat.transports.webrtc",
-    "run_webrtc_config_server": "easycat.transports.webrtc",
-    "serve_webrtc_config_sessions": "easycat.transports.webrtc",
     "WebSocketTransport": "easycat.transports.websocket",
     "WebSocketTransportConfig": "easycat.transports.websocket",
     "WebSocketConnectionTransport": "easycat.transports.websocket",
     "WebSocketSessionServerConfig": "easycat.transports.websocket",
-    "run_websocket_config_server": "easycat.transports.websocket",
-    "serve_websocket_config_sessions": "easycat.transports.websocket",
-    "serve_websocket_sessions": "easycat.transports.websocket",
     "websocket_session_server_config_from_env": "easycat.transports.websocket",
     "WebTransportTransport": "easycat.transports.webtransport",
     "WebTransportTransportConfig": "easycat.transports.webtransport",
     "WebTransportConnectionTransport": "easycat.transports.webtransport",
     "WebTransportServer": "easycat.transports.webtransport",
-    "run_webtransport_config_server": "easycat.transports.webtransport",
-    "serve_webtransport_config_sessions": "easycat.transports.webtransport",
 }
 
 __all__ = sorted(_LAZY_ATTR)
@@ -72,8 +65,6 @@ if TYPE_CHECKING:
         ICEServer,
         WebRTCTransport,
         WebRTCTransportConfig,
-        run_webrtc_config_server,
-        serve_webrtc_config_sessions,
         webrtc_ice_servers_from_env,
         webrtc_transport_config_from_env,
     )
@@ -82,9 +73,6 @@ if TYPE_CHECKING:
         WebSocketSessionServerConfig,
         WebSocketTransport,
         WebSocketTransportConfig,
-        run_websocket_config_server,
-        serve_websocket_config_sessions,
-        serve_websocket_sessions,
         websocket_session_server_config_from_env,
     )
     from easycat.transports.webtransport import (
@@ -92,8 +80,6 @@ if TYPE_CHECKING:
         WebTransportServer,
         WebTransportTransport,
         WebTransportTransportConfig,
-        run_webtransport_config_server,
-        serve_webtransport_config_sessions,
     )
 
 

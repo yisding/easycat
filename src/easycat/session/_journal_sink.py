@@ -22,6 +22,7 @@ from easycat.events import (
     BotStartedSpeaking,
     BotStoppedSpeaking,
     Error,
+    Event,
     EventBus,
     EventHandler,
     Interruption,
@@ -96,6 +97,68 @@ _SESSION_ACTION_SENSITIVE_KEYS = frozenset(
         "to",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _EventRecordSpec:
+    event_type: type[Event]
+    kind: JournalRecordKind
+    name: str
+
+
+_SIMPLE_EVENT_RECORDS = (
+    _EventRecordSpec(TurnStarted, JournalRecordKind.EVENT, "turn_started"),
+    _EventRecordSpec(TurnEnded, JournalRecordKind.EVENT, "turn_ended"),
+    _EventRecordSpec(VADStartSpeaking, JournalRecordKind.EVENT, "vad_start_speaking"),
+    _EventRecordSpec(VADStopSpeaking, JournalRecordKind.EVENT, "vad_stop_speaking"),
+    _EventRecordSpec(STTPartial, JournalRecordKind.EVENT, "stt_partial"),
+    _EventRecordSpec(STTFinal, JournalRecordKind.EVENT, "stt_final"),
+    _EventRecordSpec(AgentRequestStarted, JournalRecordKind.EVENT, "agent_request_started"),
+    _EventRecordSpec(AgentDelta, JournalRecordKind.EVENT, "agent_delta"),
+    _EventRecordSpec(AgentFinal, JournalRecordKind.EVENT, "agent_final"),
+    _EventRecordSpec(BotStartedSpeaking, JournalRecordKind.EVENT, "bot_started_speaking"),
+    _EventRecordSpec(BotStoppedSpeaking, JournalRecordKind.EVENT, "bot_stopped_speaking"),
+    _EventRecordSpec(Error, JournalRecordKind.EVENT, "error"),
+    _EventRecordSpec(ToolCallStarted, JournalRecordKind.EVENT, "tool_call_started"),
+    _EventRecordSpec(ToolCallDelta, JournalRecordKind.EVENT, "tool_call_delta"),
+    _EventRecordSpec(ToolCallResult, JournalRecordKind.EVENT, "tool_call_result"),
+    _EventRecordSpec(SessionActionRequested, JournalRecordKind.EVENT, "session_action_requested"),
+    _EventRecordSpec(SessionActionStarted, JournalRecordKind.EVENT, "session_action_started"),
+    _EventRecordSpec(SessionActionCompleted, JournalRecordKind.EVENT, "session_action_completed"),
+    _EventRecordSpec(SessionActionFailed, JournalRecordKind.EVENT, "session_action_failed"),
+    # Retry and listener lifecycle records make reconnect/audit timelines
+    # visible in exported bundles without bespoke handlers.
+    _EventRecordSpec(ReconnectAttempt, JournalRecordKind.EVENT, "ws_reconnect_attempt"),
+    _EventRecordSpec(ReconnectSuccess, JournalRecordKind.EVENT, "ws_reconnect_success"),
+    _EventRecordSpec(ReconnectFailure, JournalRecordKind.EVENT, "ws_reconnect_failure"),
+    _EventRecordSpec(
+        SupervisorListenerAttached,
+        JournalRecordKind.EVENT,
+        "supervisor_listener_attached",
+    ),
+    _EventRecordSpec(
+        SupervisorListenerDetached,
+        JournalRecordKind.EVENT,
+        "supervisor_listener_detached",
+    ),
+    _EventRecordSpec(PlaybackMarkAck, JournalRecordKind.EVENT, "playback_mark_ack"),
+)
+
+_ERROR_NONEMPTY_ATTRS = (
+    ("provider", "provider"),
+    ("code", "code"),
+    ("record_key", "record_ref"),
+)
+_ERROR_OPTIONAL_ATTRS = (
+    ("elapsed_ms", "elapsed_ms"),
+    ("sequence", "sequence"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _JournalEventProjection:
+    data: dict[str, Any] | None
+    error: ErrorInfo | None
 
 
 def _truncate_transport_degraded_detail(detail: str) -> str:
@@ -189,6 +252,43 @@ def _journal_attr_value(attr: str, value: Any) -> Any:
     return jsonable
 
 
+def _event_attributes(event: Event) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for attr in _JOURNAL_ATTRS:
+        value = getattr(event, attr, None)
+        if value is not None:
+            data[attr] = _journal_attr_value(attr, value)
+    return data
+
+
+def _exception_attributes(event: Event) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    stage = getattr(event, "stage", None)
+    if stage is not None and hasattr(stage, "value"):
+        data["stage"] = stage.value
+    for source, target in _ERROR_NONEMPTY_ATTRS:
+        value = getattr(event, source, None)
+        if value:
+            data[target] = value
+    for source, target in _ERROR_OPTIONAL_ATTRS:
+        value = getattr(event, source, None)
+        if value is not None:
+            data[target] = value
+    return data
+
+
+def _project_journal_event(event: Event) -> _JournalEventProjection:
+    data = _event_attributes(event)
+    exception = getattr(event, "exception", None)
+    if exception is None:
+        return _JournalEventProjection(data=data or None, error=None)
+    data.update(_exception_attributes(event))
+    return _JournalEventProjection(
+        data=data or None,
+        error=ErrorInfo.from_exception(exception),
+    )
+
+
 class TurnIdResolver(Protocol):
     """Resolve the turn id to record, defaulting to the active turn.
 
@@ -218,74 +318,15 @@ class SessionJournalSink:
             return
         self._subscribed = True
 
-        evt = JournalRecordKind.EVENT
-        ctl = JournalRecordKind.CONTROL
+        for spec in _SIMPLE_EVENT_RECORDS:
+            self._subscribe(spec.event_type, self._make_event_handler(spec.kind, spec.name))
 
-        self._subscribe(TurnStarted, self._make_event_handler(evt, "turn_started"))
-        self._subscribe(TurnEnded, self._make_event_handler(evt, "turn_ended"))
-        self._subscribe(VADStartSpeaking, self._make_event_handler(evt, "vad_start_speaking"))
-        self._subscribe(VADStopSpeaking, self._make_event_handler(evt, "vad_stop_speaking"))
-        self._subscribe(STTPartial, self._make_event_handler(evt, "stt_partial"))
-        self._subscribe(STTFinal, self._make_event_handler(evt, "stt_final"))
-        self._subscribe(
-            AgentRequestStarted,
-            self._make_event_handler(evt, "agent_request_started"),
-        )
-        self._subscribe(AgentDelta, self._make_event_handler(evt, "agent_delta"))
-        self._subscribe(AgentFinal, self._make_event_handler(evt, "agent_final"))
         self._subscribe(TTSAudio, self._handle_tts_audio)
         self._subscribe(TTSMarkers, self._handle_tts_markers)
         self._subscribe(
-            BotStartedSpeaking,
-            self._make_event_handler(evt, "bot_started_speaking"),
+            Interruption,
+            self._handle_interruption(JournalRecordKind.CONTROL),
         )
-        self._subscribe(
-            BotStoppedSpeaking,
-            self._make_event_handler(evt, "bot_stopped_speaking"),
-        )
-        self._subscribe(Interruption, self._handle_interruption(ctl))
-        self._subscribe(Error, self._make_event_handler(evt, "error"))
-        self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))
-        self._subscribe(ToolCallDelta, self._make_event_handler(evt, "tool_call_delta"))
-        self._subscribe(ToolCallResult, self._make_event_handler(evt, "tool_call_result"))
-        self._subscribe(
-            SessionActionRequested,
-            self._make_event_handler(evt, "session_action_requested"),
-        )
-        self._subscribe(
-            SessionActionStarted,
-            self._make_event_handler(evt, "session_action_started"),
-        )
-        self._subscribe(
-            SessionActionCompleted,
-            self._make_event_handler(evt, "session_action_completed"),
-        )
-        self._subscribe(
-            SessionActionFailed,
-            self._make_event_handler(evt, "session_action_failed"),
-        )
-        # ReconnectingWebSocket emits these on the bus; journal records make
-        # the retry timeline visible in exported bundles.
-        self._subscribe(ReconnectAttempt, self._make_event_handler(evt, "ws_reconnect_attempt"))
-        self._subscribe(ReconnectSuccess, self._make_event_handler(evt, "ws_reconnect_success"))
-        self._subscribe(ReconnectFailure, self._make_event_handler(evt, "ws_reconnect_failure"))
-        # Passive supervisor listener lifecycle is audit-relevant: these
-        # records show who attached to a session's audio fan-out and whether
-        # slow listeners dropped frames before detaching.
-        self._subscribe(
-            SupervisorListenerAttached,
-            self._make_event_handler(evt, "supervisor_listener_attached"),
-        )
-        self._subscribe(
-            SupervisorListenerDetached,
-            self._make_event_handler(evt, "supervisor_listener_detached"),
-        )
-        # PlaybackMarkAck is also consumed by Session state tracking; keep a
-        # separate journal timeline of what the client rendered when.
-        self._subscribe(PlaybackMarkAck, self._make_event_handler(evt, "playback_mark_ack"))
-        # Transports emit these for drop/poison/abort conditions that would
-        # otherwise only reach the debug log; recording them keeps the
-        # journal the single source of truth for observability.
         self._subscribe(TransportDegraded, self._handle_transport_degraded)
 
     def replace_backends(
@@ -344,50 +385,22 @@ class SessionJournalSink:
             output_ref=output_ref,
         )
 
-    def _subscribe(self, event_type: type, handler: EventHandler) -> None:
+    def _subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         self.event_bus.subscribe(event_type, handler)
 
     def _make_event_handler(self, kind: JournalRecordKind, name: str) -> EventHandler:
-        def _handler(event: Any) -> None:
-            if self.journal is None:
+        def _handler(event: Event) -> None:
+            journal = self.journal
+            if journal is None:
                 return
-            data: dict[str, Any] = {}
-            for attr in _JOURNAL_ATTRS:
-                val = getattr(event, attr, None)
-                if val is not None:
-                    data[attr] = _journal_attr_value(attr, val)
-            error = None
-            exc = getattr(event, "exception", None)
-            if exc is not None:
-                stage = getattr(event, "stage", None)
-                if stage is not None and hasattr(stage, "value"):
-                    data["stage"] = stage.value
-                provider = getattr(event, "provider", None)
-                if provider:
-                    data["provider"] = provider
-                code = getattr(event, "code", None)
-                if code:
-                    # Stable EASYCAT_Exxx code from the Error event; keep it in
-                    # ``data`` so exported journals stay machine-correlatable
-                    # (ErrorInfo has no dedicated field for it).
-                    data["code"] = code
-                elapsed_ms = getattr(event, "elapsed_ms", None)
-                if elapsed_ms is not None:
-                    data["elapsed_ms"] = elapsed_ms
-                sequence = getattr(event, "sequence", None)
-                if sequence is not None:
-                    data["sequence"] = sequence
-                record_key = getattr(event, "record_key", None)
-                if record_key:
-                    data["record_ref"] = record_key
-                error = ErrorInfo.from_exception(exc)
-            self.journal.append(
+            projection = _project_journal_event(event)
+            journal.append(
                 kind=kind,
                 name=name,
                 session_id=getattr(event, "session_id", None) or self.session_id,
                 turn_id=getattr(event, "turn_id", None),
-                data=data or None,
-                error=error,
+                data=projection.data,
+                error=projection.error,
             )
 
         return _handler

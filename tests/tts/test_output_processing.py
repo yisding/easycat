@@ -1,5 +1,7 @@
 """Tests for LLM output processor helpers."""
 
+import pytest
+
 from easycat.llm_output_processing import (
     MAX_SSML_BREAK_MS,
     PauseProcessor,
@@ -147,3 +149,46 @@ def test_pause_processor_clamps_ssml_break_duration() -> None:
     assert payload.format == "ssml"
     assert f'<break time="{MAX_SSML_BREAK_MS}ms"/>' in payload.text
     assert '<break time="99999ms"/>' not in payload.text
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"style": "comma"}, "pause style"),
+        ({"minimum_units": 0}, "minimum_units"),
+        ({"minimum_units": True}, "minimum_units"),
+        ({"style": "ellipsis", "ellipsis_count": 0}, "ellipsis_count"),
+        ({"style": "ellipsis", "ellipsis_count": True}, "ellipsis_count"),
+        ({"pattern": "["}, "invalid pattern"),
+        ({"unit_pattern": "["}, "invalid unit_pattern"),
+    ],
+)
+def test_pause_processor_rejects_invalid_policy(kwargs, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        PauseProcessor(**({"pattern": r"\d+"} | kwargs))
+
+
+def test_pause_processor_no_match_preserves_original_payload() -> None:
+    payload = TTSInput('<speak>Keep <break time="50ms"/> this.</speak>', format="ssml")
+    processor = PauseProcessor(pattern=r"ticket\s+#?\d+", unit_pattern=r"\d")
+
+    result = processor.process(payload, is_final=True, is_streaming=False)
+
+    assert result is payload
+
+
+def test_pause_processor_unit_capture_groups_select_full_match() -> None:
+    processor = PauseProcessor(
+        pattern=r"ticket\s+#?\d+",
+        unit_pattern=r"(\d)",
+        minimum_units=2,
+        style="ellipsis",
+    )
+
+    result = processor.process(
+        TTSInput("ticket #482"),
+        is_final=True,
+        is_streaming=False,
+    )
+
+    assert result.text == "4 ... 8 ... 2"

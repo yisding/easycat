@@ -44,7 +44,8 @@ reverse proxy (e.g. nginx or Caddy with a TLS certificate).
 from __future__ import annotations
 
 from easycat import EasyConfig, require_env
-from easycat.transports import run_webrtc_config_server, webrtc_transport_config_from_env
+from easycat.server import run_webrtc_config_server
+from easycat.transports import webrtc_transport_config_from_env
 
 
 def main() -> None:

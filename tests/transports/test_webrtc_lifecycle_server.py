@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import easycat.transports.webrtc as webrtc_mod
 from easycat.audio_format import AudioChunk
 from easycat.events import EventBus, TransportDegraded
+from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 from easycat.transports.webrtc import (
     _DEGRADED_INBOUND_CONSUME_ERROR,
     _DEGRADED_NEGOTIATION_FAILED,
@@ -18,7 +23,6 @@ from easycat.transports.webrtc import (
     ICEServer,
     WebRTCTransport,
     WebRTCTransportConfig,
-    serve_webrtc_config_sessions,
 )
 
 from ._webrtc_fakes import (
@@ -988,6 +992,102 @@ class _FakeSession:
         self.stopped.set()
 
 
+def _fake_serve_web(
+    *,
+    start_error: Exception | None = None,
+) -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+    router = SimpleNamespace(
+        add_post=Mock(),
+        add_get=Mock(),
+        add_options=Mock(),
+        add_static=Mock(),
+    )
+    app = SimpleNamespace(router=router)
+    runner = SimpleNamespace(setup=AsyncMock(), cleanup=AsyncMock())
+    site = SimpleNamespace(
+        start=AsyncMock(side_effect=start_error),
+        stop=AsyncMock(),
+    )
+    web = SimpleNamespace(
+        Application=Mock(return_value=app),
+        AppRunner=Mock(return_value=runner),
+        TCPSite=Mock(return_value=site),
+    )
+    return web, runner, site
+
+
+@pytest.mark.asyncio
+async def test_serve_webrtc_config_sessions_cleans_runner_on_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat._extras as extras_module
+
+    web, runner, site = _fake_serve_web(start_error=RuntimeError("port busy"))
+    monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
+
+    with pytest.raises(RuntimeError, match="port busy"):
+        await serve_webrtc_config_sessions(
+            lambda _transport: {},
+            WebRTCTransportConfig(static_dir=None),
+            announce=False,
+        )
+
+    runner.setup.assert_awaited_once()
+    site.start.assert_awaited_once()
+    site.stop.assert_not_awaited()
+    runner.cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_serve_webrtc_config_sessions_bounds_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import easycat._extras as extras_module
+    import easycat.server.transports as transports_module
+    import easycat.session_manager as manager_module
+
+    web, runner, site = _fake_serve_web()
+    monkeypatch.setattr(extras_module, "require_module", lambda *_args, **_kwargs: web)
+    drain_calls: list[tuple[float, bool, float | None]] = []
+
+    async def record_drain(
+        self: object,
+        sessions_for_keys: Callable[[], Iterable[tuple[object, object]]],
+        *,
+        drain_timeout_s: float,
+        force_after: bool,
+        force_timeout_s: float | None,
+    ) -> None:
+        assert tuple(sessions_for_keys()) == ()
+        drain_calls.append((drain_timeout_s, force_after, force_timeout_s))
+
+    async def hanging_stop_all(_self: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(transports_module.CapacityGate, "drain", record_drain)
+    monkeypatch.setattr(manager_module.SessionManager, "stop_all", hanging_stop_all)
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    with caplog.at_level(logging.WARNING):
+        await serve_webrtc_config_sessions(
+            lambda _transport: {},
+            WebRTCTransportConfig(static_dir=None),
+            stop_event=stop_event,
+            announce=False,
+            drain_timeout_s=0.25,
+            force_shutdown_timeout_s=0.01,
+        )
+
+    assert drain_calls == [(0.25, True, 0.01)]
+    runner.setup.assert_awaited_once()
+    site.start.assert_awaited_once()
+    site.stop.assert_awaited_once()
+    runner.cleanup.assert_awaited_once()
+    assert "abandoning final sweep" in caplog.text
+
+
 @pytest.mark.integration_socket
 @pytest.mark.skipif(not _HAS_AIOHTTP, reason="aiohttp not installed")
 class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
@@ -1006,11 +1106,12 @@ class TestWebRTCConfigServer(_UsesPytestTcpPortFactory):
     ) -> None:
         """``unsafe_allow_no_auth=True`` lets a non-loopback unauthenticated bind
         get past the guard (proven by reaching the telephony-extra import seam)."""
+        import easycat._extras as extras_module
 
         def _reached(*_args: object, **_kwargs: object) -> object:
             raise RuntimeError("reached require_module past the auth guard")
 
-        monkeypatch.setattr(webrtc_mod, "require_module", _reached)
+        monkeypatch.setattr(extras_module, "require_module", _reached)
         with pytest.raises(RuntimeError, match="reached require_module"):
             await serve_webrtc_config_sessions(
                 lambda transport: {},

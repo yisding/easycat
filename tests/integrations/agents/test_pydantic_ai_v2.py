@@ -47,6 +47,10 @@ class OutputToolCallEvent:
     part = _ToolCallPart()
 
 
+class FunctionToolCallEvent:
+    part = _ToolCallPart()
+
+
 class OutputToolResultEvent:
     def __init__(
         self,
@@ -167,12 +171,22 @@ def _recorder(journal: InMemoryRingBuffer | None = None) -> JournalAgentRecorder
     )
 
 
-def test_v2_output_tool_events_translate_to_tool_phases() -> None:
+@pytest.mark.parametrize(
+    ("call_event_cls", "result_event_cls"),
+    [
+        (FunctionToolCallEvent, FunctionToolResultEvent),
+        (OutputToolCallEvent, OutputToolResultEvent),
+    ],
+)
+def test_v2_tool_events_translate_to_tool_phases(
+    call_event_cls: type[Any],
+    result_event_cls: type[Any],
+) -> None:
     journal = InMemoryRingBuffer(capacity=1000)
     rec = _recorder(journal)
 
-    started = translate_event(OutputToolCallEvent(), rec)
-    result = translate_event(OutputToolResultEvent(), rec)
+    started = translate_event(call_event_cls(), rec)
+    result = translate_event(result_event_cls(), rec)
 
     assert started is not None
     assert started.kind == "tool_started"

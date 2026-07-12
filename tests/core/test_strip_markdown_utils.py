@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from statistics import median
 from time import perf_counter
 
 import pytest
 
-from easycat.strip_markdown import has_markdown, strip_markdown
+from easycat.strip_markdown import _MarkdownReferenceScanner, has_markdown, strip_markdown
 
 # ── Adversarial DoS payloads ───────────────────────────────────────
 #
@@ -25,18 +24,16 @@ _ADVERSARIAL_PAYLOADS: tuple[tuple[str, Callable[[int], str]], ...] = (
 )
 
 
-def _min_runtime(fn: Callable[[str], object], payload: str, *, repeats: int = 5) -> float:
-    """Return the fastest of *repeats* runs of *fn* on *payload* (seconds).
+def _malformed_destinations(count: int) -> str:
+    return " ".join("[label](()" for _ in range(count))
 
-    Taking the minimum filters out scheduler/GC noise so the size-vs-size
-    ratio reflects algorithmic scaling rather than one-off jitter.
-    """
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
+
+def _batched_runtime(fn: Callable[[str], object], payload: str, *, iterations: int = 3) -> float:
+    """Return per-call runtime across a short batch to reduce timer noise."""
+    start = perf_counter()
+    for _ in range(iterations):
         fn(payload)
-        best = min(best, time.perf_counter() - start)
-    return best
+    return (perf_counter() - start) / iterations
 
 
 def _assert_subquadratic(
@@ -46,25 +43,21 @@ def _assert_subquadratic(
 
     A quadratic algorithm yields a time(2n)/time(n) ratio near 4; a linear one
     near 2. We require the ratio to stay comfortably below 3 so the assertion
-    still catches a regression to O(n^2).
-
-    Timing on shared runners is noisy, so aggregate several independent ratios
-    by their median. This filters isolated scheduler spikes without allowing a
-    single unusually favorable measurement to hide quadratic behavior.
+    is robust to noise while still catching a regression to O(n^2).
     """
     small_payload = build(n)
     large_payload = build(2 * n)
+    fn(small_payload)
+    fn(large_payload)
     ratios: list[float] = []
     for _ in range(5):
-        small = _min_runtime(fn, small_payload)
-        large = _min_runtime(fn, large_payload)
-        # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
-        if small <= 0:
-            continue
-        ratios.append(large / small)
+        small = _batched_runtime(fn, small_payload)
+        large = _batched_runtime(fn, large_payload)
+        if small > 0:
+            ratios.append(large / small)
     assert ratios, "timing resolution produced no usable scaling samples"
-    median_ratio = median(ratios)
-    assert median_ratio < 3.0, f"scaling ratio {median_ratio:.2f} suggests quadratic blowup"
+    ratio = median(ratios)
+    assert ratio < 3.0, f"scaling ratio {ratio:.2f} suggests quadratic blowup"
 
 
 # ── has_markdown detection ─────────────────────────────────────────
@@ -138,14 +131,64 @@ class TestHasMarkdown:
     def test_adversarial_brackets_not_detected(self, build: Callable[[int], str]) -> None:
         assert has_markdown(build(2000)) is False
 
-    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
+    @pytest.mark.stress
     def test_adversarial_brackets_detection_scales_subquadratically(
         self, build: Callable[[int], str]
     ) -> None:
         _assert_subquadratic(has_markdown, build)
+
+    def test_malformed_destinations_detection_scales_subquadratically(self) -> None:
+        _assert_subquadratic(has_markdown, _malformed_destinations, n=1000)
+
+
+class TestMarkdownReferenceScanner:
+    @pytest.mark.parametrize(
+        ("text", "detected", "expected"),
+        [
+            (
+                "broken [x](a(b) then [ok](url)",
+                True,
+                "broken [x](a(b) then ok url",
+            ),
+            (
+                "broken [x](a(b then [ok](url)",
+                False,
+                "broken [x](a(b then [ok](url)",
+            ),
+            (
+                r"broken [x](a(b\) then [ok](url)",
+                True,
+                r"broken [x](a(b\) then ok url",
+            ),
+            ("![one](img) and [two](url)", True, "one and two url"),
+            ("[label]   (url)", True, "label url"),
+            ("[outer [inner]](url)", True, "outer [inner] url"),
+            ('[Docs](https://example.test "title")', True, "Docs https://example.test"),
+        ],
+    )
+    def test_detection_and_rendering_share_reference_policy(
+        self,
+        text: str,
+        detected: bool,
+        expected: str,
+    ) -> None:
+        assert has_markdown(text) is detected
+        assert strip_markdown(text) == expected
+
+    def test_scanner_yields_consecutive_typed_references(self) -> None:
+        references = list(
+            _MarkdownReferenceScanner('![diagram](image.png) [Docs](https://example.test "title")')
+        )
+
+        assert [reference.is_image for reference in references] == [True, False]
+        assert [reference.label for reference in references] == ["diagram", "Docs"]
+        assert [reference.destination_url for reference in references] == [
+            "image.png",
+            "https://example.test",
+        ]
 
 
 # ── strip_markdown ─────────────────────────────────────────────────
@@ -247,14 +290,19 @@ class TestStripMarkdown:
         payload = build(2000)
         assert strip_markdown(payload) == payload
 
-    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
+    @pytest.mark.stress
     def test_adversarial_brackets_stripping_scales_subquadratically(
         self, build: Callable[[int], str]
     ) -> None:
         _assert_subquadratic(strip_markdown, build)
+
+    def test_malformed_destinations_stripping_scales_subquadratically(self) -> None:
+        payload = _malformed_destinations(1000)
+        assert strip_markdown(payload) == payload
+        _assert_subquadratic(strip_markdown, _malformed_destinations, n=1000)
 
     def test_heading_h1(self) -> None:
         assert strip_markdown("# Main Title") == "Main Title"
