@@ -774,7 +774,6 @@ async def test_first_tts_lifecycle_wait_is_outside_agent_timeout(
     await asyncio.wait_for(run_task, timeout=0.5)
 
 
-@pytest.mark.asyncio
 async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -850,7 +849,6 @@ async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
     assert order == ["agent_final", "bot_stopped"]
 
 
-@pytest.mark.asyncio
 async def test_agent_phase_failure_releases_tts_settlement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
