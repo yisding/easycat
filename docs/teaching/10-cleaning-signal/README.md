@@ -662,19 +662,25 @@ fallback.
 
 ## Half-duplex vs. full-duplex
 
-A regular telephone speakerphone is half-duplex by hardware: only
-one direction transmits at a time. That's why older speakerphones
-"clip" when both people talk — the device is literally throwing
-one direction away.
+Speakerphone hardware is not inherently half-duplex. Hands-free
+terminals can have full-, partial-, or no-duplex capability; the
+[ITU-T P.340](https://www.itu.int/rec/T-REC-P.340/en) categories are
+based on what happens during double-talk. Older or weaker systems may
+switch gain or heavily attenuate one direction, producing the familiar
+clipped, walkie-talkie behavior even when the network carries both
+directions.
 
-AEC is the technique that lets a modern speakerphone *feel*
-full-duplex. The speaker's output is subtracted from the mic so
-both can be live at once. When AEC is the only thing making a
-device feel modern, disabling it in software is the same as
-downgrading to 1980s phone hardware.
+AEC is a key enabler of usable full-duplex hands-free audio. It models
+the acoustic path from speaker output to microphone input and suppresses
+that echo while preserving the near-end talker. Real systems also need
+delay alignment, double-talk handling, and often nonlinear suppression;
+“subtract the speaker” is the useful mental model, not the whole
+implementation. Disabling AEC on a speakerphone can therefore make a
+full-duplex path unusable, but it does not change the network into a
+half-duplex transport.
 
-Headsets sidestep the whole problem: no acoustic path from
-speaker to mic.
+Headsets reduce the acoustic path dramatically; they do not prove it is
+zero, which is why platforms may still expose echo-control settings.
 
 ## Double-talk: the AEC failure mode
 
