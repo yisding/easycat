@@ -76,5 +76,5 @@ on the Twilio preset? What does a user on the phone hear?
 
 You should be able to: (a) name two axes the matrix attacks, (b)
 draw the "one code change per axis" diagram from memory, and (c)
-explain why some providers receive an `EventBus` at construction
-and others don't.
+explain the structural `event_bus` opt-in and distinguish reconnect
+telemetry from HTTP provider-error telemetry.
