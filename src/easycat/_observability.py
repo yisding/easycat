@@ -8,8 +8,9 @@ OTel SDK/exporter get spans and metrics through the standard API.
 from __future__ import annotations
 
 import contextlib
+import functools
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import Any, Literal
 
 MetricKind = Literal["counter", "histogram", "observable_gauge"]
@@ -146,18 +147,22 @@ _ACTIVE_SESSIONS = 0
 _ACTIVE_SESSIONS_LOCK = threading.Lock()
 
 
-@contextlib.contextmanager
-def span(name: str, attributes: Mapping[str, Any] | None = None) -> Iterator[None]:
+_NOOP_SPAN = contextlib.nullcontext()
+
+
+def span(
+    name: str,
+    attributes: Mapping[str, Any] | None = None,
+) -> contextlib.AbstractContextManager[Any]:
     """Start an OTel span when tracing is configured; otherwise no-op."""
     if name not in SPAN_NAMES:
         raise ValueError(f"unknown EasyCat span name: {name}")
-    safe_attributes = sanitize_attributes(attributes, allowed_keys=SPAN_ATTRIBUTE_KEYS)
     tracer = _get_tracer()
     if tracer is None:
-        yield
-        return
-    with tracer.start_as_current_span(name, attributes=safe_attributes):
-        yield
+        _validate_attribute_keys(attributes, allowed_keys=SPAN_ATTRIBUTE_KEYS)
+        return _NOOP_SPAN
+    safe_attributes = sanitize_attributes(attributes, allowed_keys=SPAN_ATTRIBUTE_KEYS)
+    return tracer.start_as_current_span(name, attributes=safe_attributes)
 
 
 def record_histogram(
@@ -211,17 +216,33 @@ def sanitize_attributes(
     sanitized: dict[str, Any] = {}
     for key, value in attributes.items():
         normalized = str(key)
-        if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        # Allow-list membership bypasses only the substring guard below.
-        if normalized in allowed_keys:
-            sanitized[normalized] = _safe_attribute_value(value)
-            continue
-        low = normalized.lower()
-        if any(substring in low for substring in _FORBIDDEN_SUBSTRINGS):
-            raise ValueError(f"forbidden observability attribute: {normalized}")
-        raise ValueError(f"unsupported observability attribute: {normalized}")
+        _validate_attribute_key(normalized, allowed_keys)
+        sanitized[normalized] = _safe_attribute_value(value)
     return sanitized
+
+
+def _validate_attribute_key(normalized: str, allowed_keys: frozenset[str]) -> None:
+    if normalized in FORBIDDEN_ATTRIBUTE_KEYS:
+        raise ValueError(f"forbidden observability attribute: {normalized}")
+    # Allow-list membership bypasses only the substring guard below.
+    if normalized in allowed_keys:
+        return
+    lowered = normalized.lower()
+    if any(substring in lowered for substring in _FORBIDDEN_SUBSTRINGS):
+        raise ValueError(f"forbidden observability attribute: {normalized}")
+    raise ValueError(f"unsupported observability attribute: {normalized}")
+
+
+def _validate_attribute_keys(
+    attributes: Mapping[str, Any] | None,
+    *,
+    allowed_keys: frozenset[str] = ALLOWED_ATTRIBUTE_KEYS,
+) -> None:
+    """Validate attribute names without materializing an exporter payload."""
+    if not attributes:
+        return
+    for key in attributes:
+        _validate_attribute_key(str(key), allowed_keys)
 
 
 def _record_metric(
@@ -232,12 +253,13 @@ def _record_metric(
 ) -> None:
     if METRIC_DEFINITIONS.get(name) != expected_kind:
         raise ValueError(f"metric {name!r} is not a {expected_kind}")
+    meter = _get_meter()
+    if meter is None:
+        _validate_attribute_keys(attributes)
+        return
     safe_attributes = sanitize_attributes(attributes)
     if expected_kind == "observable_gauge":
         _update_gauge_value(name, value, safe_attributes)
-        meter = _get_meter()
-        if meter is None:
-            return
         instrument = _GAUGES.get(name)
         if instrument is None and hasattr(meter, "create_observable_gauge"):
             instrument = _create_observable_gauge(meter, name)
@@ -248,9 +270,6 @@ def _record_metric(
             instrument.observe(value, attributes=safe_attributes)
         return
 
-    meter = _get_meter()
-    if meter is None:
-        return
     if expected_kind == "counter":
         instrument = _COUNTERS.get(name)
         if instrument is None:
@@ -303,7 +322,14 @@ def _make_observation(value: int | float, attributes: dict[str, Any]) -> Any:
     return Observation(value, attributes=attributes)
 
 
+@functools.cache
 def _get_tracer() -> Any | None:
+    """Return the process-wide tracer without repeating import discovery.
+
+    OpenTelemetry returns a proxy tracer before an SDK provider is configured,
+    so retaining this handle preserves its supported late-configuration
+    behavior while keeping import machinery off every span's hot path.
+    """
     try:
         from opentelemetry import trace
     except ImportError:
@@ -311,7 +337,14 @@ def _get_tracer() -> Any | None:
     return trace.get_tracer(INSTRUMENTATION_NAME)
 
 
+@functools.cache
 def _get_meter() -> Any | None:
+    """Return the process-wide meter without repeating import discovery.
+
+    Like tracers, OpenTelemetry meters are proxy objects that pick up a
+    provider configured later in process startup.  Caching the proxy avoids a
+    costly package lookup for every audio frame and journal append.
+    """
     try:
         from opentelemetry import metrics
     except ImportError:

@@ -219,8 +219,28 @@ def test_transport_extension_surface_is_public_and_documented() -> None:
     assert "extending/" in section
 
 
+def test_server_package_owns_standalone_transport_orchestration() -> None:
+    """Process lifecycle helpers belong to ``easycat.server``, not providers."""
+    import easycat.server as server
+    import easycat.transports as transports
+
+    helpers = {
+        "run_webrtc_config_server",
+        "run_websocket_config_server",
+        "run_webtransport_config_server",
+        "serve_webrtc_config_sessions",
+        "serve_websocket_config_sessions",
+        "serve_websocket_sessions",
+        "serve_webtransport_config_sessions",
+    }
+    for name in helpers:
+        assert name in server.__all__
+        assert name not in transports.__all__
+        assert callable(getattr(server, name))
+
+
 def test_public_api_documents_deprecation_and_removal_policy() -> None:
-    """The public-API contract must name the `@deprecated` aliases and removal window."""
+    """The public-API contract must explain pre-release removal policy."""
     doc = Path("docs/public-api.md").read_text(encoding="utf-8")
     try:
         section = doc.split("## Deprecation & Removal Policy", 1)[1]
@@ -229,10 +249,11 @@ def test_public_api_documents_deprecation_and_removal_policy() -> None:
             "docs/public-api.md is missing the Deprecation & Removal Policy section"
         ) from exc
 
-    assert "`@deprecated`" in section
-    assert "`Session.shutdown()`" in section
     assert "`settings=`" in section
-    assert "minor release" in section
+    assert "machine-visible deprecation signal" in section
+    assert "pre-release" in section
+    assert "ownership ambiguity" in section
+    assert "`params=`" in section
 
 
 def test_curated_public_api_lazy_imports() -> None:
@@ -287,14 +308,19 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
     outbound manager, screening, number health, retries, twiml, session
     actions, compliance) must stay lazy.
     """
+    import json
     import subprocess
     import sys
 
     code = (
-        "import sys, easycat\n"
+        "import json, sys, easycat\n"
         "easycat.EasyConfig\n"
         "tele = sorted(m for m in sys.modules if m.startswith('easycat.telephony'))\n"
-        "print('\\n'.join(tele))\n"
+        "import easycat.config._telephony_wiring\n"
+        "print(json.dumps({\n"
+        "    'telephony_modules': tele,\n"
+        "    'outbound_builder_loaded': 'easycat.config._outbound_helpers' in sys.modules,\n"
+        "}))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -302,7 +328,9 @@ def test_touching_easyconfig_does_not_eager_load_telephony_stack() -> None:
         text=True,
         check=True,
     )
-    loaded = {line for line in result.stdout.splitlines() if line}
+    import_state = json.loads(result.stdout)
+    loaded = set(import_state["telephony_modules"])
+    assert import_state["outbound_builder_loaded"] is False
     # Only the package and the two config-only submodules are allowed.
     allowed = {
         "easycat.telephony",
