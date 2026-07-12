@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Literal, TypeAlias
 
+from easycat.providers import VADProvider
 from easycat.vad._base import (
     _DEFAULT_VAD_SENSITIVITY,
     VADBackend,
@@ -21,8 +23,10 @@ from easycat.vad.ten import _TEN_DEFAULT_SENSITIVITY, TenVAD
 
 logger = logging.getLogger(__name__)
 
+_ConcreteVADBackend: TypeAlias = Literal["silero", "funasr", "ten", "krisp"]
 
-@dataclass
+
+@dataclass(slots=True)
 class VADConfig:
     """Configuration for VAD factory."""
 
@@ -53,7 +57,55 @@ class VADConfig:
             _validate_vad_sensitivity(self.sensitivity)
 
 
-def create_vad(config: VADConfig | None = None) -> Any:
+@dataclass(frozen=True, slots=True)
+class _VADBackendSpec:
+    name: _ConcreteVADBackend
+    label: str
+    factory: Callable[[VADConfig], VADProvider]
+    default_sensitivity: float = _DEFAULT_VAD_SENSITIVITY
+
+
+@dataclass(frozen=True, slots=True)
+class _VADBackendFailure:
+    backend: _VADBackendSpec
+    error: RuntimeError | ImportError
+
+
+def _build_silero(_config: VADConfig) -> VADProvider:
+    return SileroVAD()
+
+
+def _build_funasr(config: VADConfig) -> VADProvider:
+    return FunASROnnxVAD(
+        model_dir=config.funasr_model_dir,
+        chunk_size_ms=config.funasr_chunk_size_ms,
+        device_id=config.funasr_device_id,
+        quantize=config.funasr_quantize,
+        intra_op_num_threads=config.funasr_intra_op_num_threads,
+        cache_dir=config.funasr_cache_dir,
+    )
+
+
+def _build_ten(_config: VADConfig) -> VADProvider:
+    return TenVAD()
+
+
+def _build_krisp(config: VADConfig) -> VADProvider:
+    return KrispVAD(model_path=config.krisp_model_path)
+
+
+_AUTO_BACKENDS: tuple[_VADBackendSpec, ...] = (
+    _VADBackendSpec("silero", "Silero", _build_silero),
+    _VADBackendSpec("funasr", "FunASR", _build_funasr),
+    _VADBackendSpec("ten", "TEN", _build_ten, _TEN_DEFAULT_SENSITIVITY),
+    _VADBackendSpec("krisp", "Krisp", _build_krisp),
+)
+_BACKEND_BY_NAME: dict[_ConcreteVADBackend, _VADBackendSpec] = {
+    backend.name: backend for backend in _AUTO_BACKENDS
+}
+
+
+def create_vad(config: VADConfig | None = None) -> VADProvider:
     """Create the best available VAD provider.
 
     Selection order:
@@ -69,83 +121,57 @@ def create_vad(config: VADConfig | None = None) -> Any:
 
     Returns an object satisfying the VADProvider protocol.
     """
-    cfg = config or VADConfig()
-    cfg.backend = _validate_vad_backend(cfg.backend)
+    cfg = config if config is not None else VADConfig()
+    backend = _validate_vad_backend(cfg.backend)
+    if backend == "auto":
+        return _create_first_available(cfg)
+    return _create_backend(_BACKEND_BY_NAME[backend], cfg)
 
-    def _default_sensitivity(backend: str) -> float:
-        if backend == "ten":
-            return _TEN_DEFAULT_SENSITIVITY
-        return _DEFAULT_VAD_SENSITIVITY
 
-    def _configure(vad: Any, *, backend: str) -> Any:
-        sensitivity = cfg.sensitivity
-        if sensitivity is None:
-            sensitivity = _default_sensitivity(backend)
-        vad.configure(
-            min_speech_duration_ms=cfg.min_speech_duration_ms,
-            min_silence_duration_ms=cfg.min_silence_duration_ms,
-            sensitivity=sensitivity,
-        )
-        return vad
+def _create_backend(backend: _VADBackendSpec, config: VADConfig) -> VADProvider:
+    provider = backend.factory(config)
+    sensitivity = (
+        config.sensitivity if config.sensitivity is not None else backend.default_sensitivity
+    )
+    provider.configure(
+        min_speech_duration_ms=config.min_speech_duration_ms,
+        min_silence_duration_ms=config.min_silence_duration_ms,
+        sensitivity=sensitivity,
+    )
+    return provider
 
-    if cfg.backend == "silero":
-        return _configure(SileroVAD(), backend="silero")
 
-    if cfg.backend == "ten":
-        return _configure(TenVAD(), backend="ten")
+def _create_first_available(config: VADConfig) -> VADProvider:
+    failures: list[_VADBackendFailure] = []
+    for index, backend in enumerate(_AUTO_BACKENDS):
+        try:
+            return _create_backend(backend, config)
+        except (RuntimeError, ImportError) as exc:
+            failures.append(_VADBackendFailure(backend, exc))
+            next_backend = _AUTO_BACKENDS[index + 1] if index + 1 < len(_AUTO_BACKENDS) else None
+            if next_backend is None:
+                logger.info("%s VAD not available either", backend.label)
+            else:
+                logger.info(
+                    "%s VAD not available, trying %s fallback",
+                    backend.label,
+                    next_backend.label,
+                )
 
-    if cfg.backend == "krisp":
-        return _configure(KrispVAD(model_path=cfg.krisp_model_path), backend="krisp")
+    cause = failures[-1].error if failures else None
+    raise _no_backend_available(failures) from cause
 
-    if cfg.backend == "funasr":
-        return _configure(
-            FunASROnnxVAD(
-                model_dir=cfg.funasr_model_dir,
-                chunk_size_ms=cfg.funasr_chunk_size_ms,
-                device_id=cfg.funasr_device_id,
-                quantize=cfg.funasr_quantize,
-                intra_op_num_threads=cfg.funasr_intra_op_num_threads,
-                cache_dir=cfg.funasr_cache_dir,
-            ),
-            backend="funasr",
-        )
 
-    # Auto mode: try Silero -> FunASR -> TEN -> Krisp.
-    try:
-        return _configure(SileroVAD(), backend="silero")
-    except (RuntimeError, ImportError):
-        logger.info("Silero VAD not available, trying FunASR fallback")
-
-    try:
-        return _configure(
-            FunASROnnxVAD(
-                model_dir=cfg.funasr_model_dir,
-                chunk_size_ms=cfg.funasr_chunk_size_ms,
-                device_id=cfg.funasr_device_id,
-                quantize=cfg.funasr_quantize,
-                intra_op_num_threads=cfg.funasr_intra_op_num_threads,
-                cache_dir=cfg.funasr_cache_dir,
-            ),
-            backend="funasr",
-        )
-    except (RuntimeError, ImportError):
-        logger.info("FunASR VAD not available, trying TEN fallback")
-
-    try:
-        return _configure(TenVAD(), backend="ten")
-    except (RuntimeError, ImportError):
-        logger.info("TEN VAD not available, trying Krisp fallback")
-
-    try:
-        return _configure(KrispVAD(model_path=cfg.krisp_model_path), backend="krisp")
-    except (RuntimeError, ImportError):
-        logger.info("Krisp VAD not available either")
-        raise RuntimeError(
-            "No VAD backend available. Install Silero VAD with: "
-            "uv add 'easycat[silero-vad]' (repo: uv sync --extra silero-vad --group dev), "
-            "TEN VAD with: uv add 'easycat[ten-vad]' "
-            "(repo: uv sync --extra ten-vad --group dev), or FunASR VAD with "
-            "backend='funasr' and uv add 'easycat[funasr-vad]' "
-            "(repo: uv sync --extra funasr-vad --group dev). Krisp users can configure "
-            "krisp-audio."
-        )
+def _no_backend_available(failures: list[_VADBackendFailure]) -> RuntimeError:
+    error = RuntimeError(
+        "No VAD backend available. Install Silero VAD with: "
+        "uv add 'easycat[silero-vad]' (repo: uv sync --extra silero-vad --group dev), "
+        "TEN VAD with: uv add 'easycat[ten-vad]' "
+        "(repo: uv sync --extra ten-vad --group dev), or FunASR VAD with "
+        "backend='funasr' and uv add 'easycat[funasr-vad]' "
+        "(repo: uv sync --extra funasr-vad --group dev). Krisp users can configure "
+        "krisp-audio."
+    )
+    for failure in failures:
+        error.add_note(f"{failure.backend.label}: {type(failure.error).__name__}: {failure.error}")
+    return error

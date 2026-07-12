@@ -83,6 +83,11 @@ class TestBoundedAudioQueueBasic:
         with pytest.raises(ValueError, match="max_size"):
             BoundedAudioQueue(max_size=max_size)
 
+    @pytest.mark.parametrize("policy", ["drop_oldest", None, object()])
+    def test_rejects_invalid_policy(self, policy):
+        with pytest.raises(ValueError, match="policy"):
+            BoundedAudioQueue(policy=policy)
+
 
 # ── Drop policies (Task 8.6) ──────────────────────────────────────
 
@@ -177,6 +182,43 @@ class TestBlock:
         assert result is False
         # The chunk must not have landed in the closed queue.
         assert q.qsize() == 1
+
+    async def test_only_one_woken_producer_claims_available_slot(self, monkeypatch):
+        drops: list[tuple[str, str, int, int]] = []
+        q = BoundedAudioQueue(
+            max_size=1,
+            policy=DropPolicy.BLOCK,
+            block_timeout=1.0,
+            name="race",
+            on_drop=lambda *args: drops.append(args),
+        )
+        await q.put(_chunk(b"\x01"))
+
+        waiting = 0
+        both_waiting = asyncio.Event()
+        original_wait = q._not_full.wait
+
+        async def wait_for_space():
+            nonlocal waiting
+            waiting += 1
+            if waiting == 2:
+                both_waiting.set()
+            return await original_wait()
+
+        monkeypatch.setattr(q._not_full, "wait", wait_for_space)
+        producers = [
+            asyncio.create_task(q.put(_chunk(b"\x02"))),
+            asyncio.create_task(q.put(_chunk(b"\x03"))),
+        ]
+        await asyncio.wait_for(both_waiting.wait(), timeout=0.5)
+
+        await q.get()
+        results = await asyncio.gather(*producers)
+
+        assert sorted(results) == [False, True]
+        assert q.qsize() == 1
+        assert q.drops == 1
+        assert drops == [("race", "block_lost_race", 1, 1)]
 
 
 # ── Flush / stale audio (Task 8.7) ────────────────────────────────

@@ -10,12 +10,13 @@ import asyncio
 import enum
 import logging
 from collections import deque
-from typing import Any
+from collections.abc import Callable
 
 from easycat import _observability as observability
 from easycat.audio_format import AudioChunk
 
 logger = logging.getLogger(__name__)
+DropCallback = Callable[[str, str, int, int], None]
 
 
 class DropPolicy(enum.Enum):
@@ -40,10 +41,12 @@ class BoundedAudioQueue:
         policy: DropPolicy = DropPolicy.DROP_OLDEST,
         block_timeout: float = 5.0,
         name: str = "audio_queue",
-        on_drop: Any = None,
+        on_drop: DropCallback | None = None,
     ) -> None:
         if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size <= 0:
             raise ValueError("max_size must be a positive integer")
+        if not isinstance(policy, DropPolicy):
+            raise ValueError("policy must be a DropPolicy")
         self._max_size = max_size
         self._policy = policy
         self._block_timeout = block_timeout
@@ -117,65 +120,56 @@ class BoundedAudioQueue:
             return False
 
         if not self.full():
-            self._queue.append(chunk)
-            self._not_empty.set()
-            if self.full():
-                self._not_full.clear()
-            self._observe_depth()
-            return True
+            return self._append(chunk)
 
         if self._policy == DropPolicy.DROP_OLDEST:
-            self._queue.popleft()
-            self._queue.append(chunk)
-            self._note_drop("drop_oldest")
-            logger.debug(
-                "Queue '%s' dropped oldest chunk (total drops: %d)",
-                self._name,
-                self._drops,
-            )
-            self._not_empty.set()
-            return True
+            return self._replace_oldest(chunk)
+        if self._policy == DropPolicy.DROP_NEWEST:
+            return self._reject("drop_newest", "dropped newest chunk")
+        if self._policy == DropPolicy.BLOCK:
+            return await self._put_after_wait(chunk)
 
-        elif self._policy == DropPolicy.DROP_NEWEST:
-            self._note_drop("drop_newest")
-            logger.debug(
-                "Queue '%s' dropped newest chunk (total drops: %d)", self._name, self._drops
-            )
-            return False
+        raise AssertionError("unreachable DropPolicy")  # pragma: no cover
 
-        elif self._policy == DropPolicy.BLOCK:
-            try:
-                await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
-            except TimeoutError:
-                self._note_drop("block_timeout")
-                logger.debug(
-                    "Queue '%s' block timed out, dropping (total drops: %d)",
-                    self._name,
-                    self._drops,
-                )
+    def _append(self, chunk: AudioChunk) -> bool:
+        self._queue.append(chunk)
+        self._not_empty.set()
+        if self.full():
+            self._not_full.clear()
+        self._observe_depth()
+        return True
+
+    def _replace_oldest(self, chunk: AudioChunk) -> bool:
+        self._queue.popleft()
+        self._queue.append(chunk)
+        self._note_drop("drop_oldest")
+        logger.debug(
+            "Queue '%s' dropped oldest chunk (total drops: %d)",
+            self._name,
+            self._drops,
+        )
+        self._not_empty.set()
+        return True
+
+    def _reject(self, kind: str, detail: str) -> bool:
+        self._note_drop(kind)
+        logger.debug("Queue '%s' %s (total drops: %d)", self._name, detail, self._drops)
+        return False
+
+    async def _put_after_wait(self, chunk: AudioChunk) -> bool:
+        try:
+            await asyncio.wait_for(self._not_full.wait(), timeout=self._block_timeout)
+        except TimeoutError:
+            return self._reject("block_timeout", "block timed out, dropping")
+
+        # A get wakes every producer. Serialize the re-check so only one may
+        # claim each newly available slot.
+        async with self._put_lock:
+            if self._closed:
                 return False
-            # Serialize the append under a lock and re-check fullness:
-            # multiple producers may have been woken by a single get(),
-            # so only the first to acquire the lock should append.
-            async with self._put_lock:
-                if self._closed:
-                    return False
-                if self.full():
-                    self._note_drop("block_lost_race")
-                    logger.debug(
-                        "Queue '%s' lost race after BLOCK wait, dropping (total drops: %d)",
-                        self._name,
-                        self._drops,
-                    )
-                    return False
-                self._queue.append(chunk)
-                self._not_empty.set()
-                if self.full():
-                    self._not_full.clear()
-                self._observe_depth()
-                return True
-
-        return False  # pragma: no cover
+            if self.full():
+                return self._reject("block_lost_race", "lost race after BLOCK wait, dropping")
+            return self._append(chunk)
 
     async def get(self) -> AudioChunk:
         """Remove and return a chunk from the queue. Blocks until available."""

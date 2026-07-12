@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -151,9 +151,9 @@ class RemoteResponsesAPIBridge:
 
                     # Accumulate output items for potential replay.
                     if event_type == "response.output_item.done":
-                        item = data.get("item", {})
-                        if item:
-                            accumulated_items.append(item)
+                        item = data.get("item")
+                        if isinstance(item, Mapping):
+                            accumulated_items.append(dict(item))
 
                     # Handle cancellation.
                     if cancel_token and cancel_token.is_cancelled:
@@ -328,6 +328,8 @@ class RemoteResponsesAPIBridge:
 
         # Add completed tool calls from interrupted turn.
         for item in accumulated_items:
+            if not isinstance(item, Mapping):
+                continue
             item_type = item.get("type", "")
             if item_type == "function_call":
                 replay.append(
