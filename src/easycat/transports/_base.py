@@ -202,7 +202,7 @@ class AudioQueueMixin:
         Called from ``disconnect`` so a transport torn down with emit tasks
         still pending does not leave them dangling into interpreter shutdown
         ("Task was destroyed but it is pending"). Late emits are already safe
-        (the journal sink no-ops after :meth:`Session._destroy`), so this is
+        (the journal sink no-ops after Session finalization), so this is
         lifecycle tidiness, not correctness.
         """
         if not self._emit_tasks:

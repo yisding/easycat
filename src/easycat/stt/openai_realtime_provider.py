@@ -87,15 +87,21 @@ class OpenAIRealtimeSTTConfig:
     ws_connect: Any = field(default=None, repr=False)
     # Optional EventBus for reconnect observability
     event_bus: Any = field(default=None, repr=False)
+    # Keep one transcription WebSocket across logical voice turns. Appended
+    # after the original public fields to preserve positional construction.
+    # OpenAI's commit event clears the input buffer, so a single session can
+    # accept the next turn without another connection/session.update handshake.
+    persistent_ws: bool = True
 
 
 class OpenAIRealtimeSTT(WebSocketSTTBase):
     """Streaming STT using the OpenAI Realtime API WebSocket.
 
-    Opens a WebSocket on ``start_stream``, forwards audio chunks in
-    real time via ``send_audio``, and parses incoming transcription
-    events in a background receive loop.  Audio is sent as base64-
-    encoded PCM in ``input_audio_buffer.append`` messages.
+    Keeps one warmed WebSocket across logical turns by default, forwards audio
+    chunks in real time via ``send_audio``, and parses incoming transcription
+    events in a background receive loop. Audio is sent as base64-encoded PCM
+    in ``input_audio_buffer.append`` messages; commits delimit turns and clear
+    the server buffer.
 
     The session is configured with ``turn_detection: null`` so that
     EasyCat's own VAD controls turn boundaries, and with
@@ -106,6 +112,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         super().__init__(
             provider_name="openai_realtime_stt",
             provider_error_name="openai-realtime",
+            dynamic_event_queue=config.persistent_ws,
         )
         self._config = config
         self._close_task: asyncio.Task[None] | None = None
@@ -126,17 +133,33 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         # ``.completed`` to be dropped instead of producing a second
         # ``STTFinal`` for the same turn.  Cleared on the next commit.
         self._dropping_pending_final: bool = False
+        self._commit_pending: bool = False
+        self._final_wait_timed_out: bool = False
+
+    def _persistent_enabled(self) -> bool:
+        return self._config.persistent_ws
 
     async def warmup(self) -> None:
-        """Prime DNS/TLS/connection pool with a connect-handshake-close cycle.
+        """Best-effort prime the Realtime connection before user audio.
 
-        Opens the realtime WebSocket, completes the ``session.update``
-        handshake, then closes immediately — no persistent socket is held
-        across turns, so the lifecycle guards stay intact.  This keeps the
-        cold-connection cost off the first real turn.  All failures are
-        swallowed — ``WarmupRunner`` re-raises, so an auth/timeout error here
-        must not abort ``Session.start()``.
+        Persistent mode (the default) keeps the completed handshake alive for
+        the first and subsequent turns. One-shot mode retains the historical
+        connect-handshake-close warmup. Failures are swallowed because warmup
+        must not make ``Session.start()`` fail.
         """
+        if self._persistent_enabled():
+            try:
+                async with self._lifecycle_lock:
+                    await self._ensure_persistent_connection()
+            except Exception as exc:
+                logger.debug("OpenAI Realtime warmup skipped: %s", exc)
+                try:
+                    await self._discard_connection()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug("OpenAI Realtime warmup cleanup failed", exc_info=True)
+            return
         try:
             await self.start_stream()
         except Exception as exc:
@@ -161,11 +184,51 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _on_start(self) -> None:
         if self._close_task is not None:
+            # ``start_stream`` installs this turn's queue before entering the
+            # provider hook. The old persistent receive loop may terminate
+            # that queue while its close task drains, so replace it only after
+            # the task has fully completed.
             try:
                 await self._close_task
             except Exception:
                 pass
             self._close_task = None
+            if self._persistent_enabled():
+                self._event_queue = asyncio.Queue()
+        self._reset_logical_turn_state()
+        if self._persistent_enabled():
+            await self._ensure_persistent_connection()
+            return
+        await self._connect_new_websocket()
+
+    def _reset_logical_turn_state(self) -> None:
+        """Reset state that belongs to one EasyCat voice turn."""
+        self._partial_text = ""
+        self._audio_pending_commit = False
+        self._bytes_since_last_commit = 0
+        self._final_received = None
+        self._dropping_pending_final = False
+        self._commit_pending = False
+        self._final_wait_timed_out = False
+
+    async def _ensure_persistent_connection(self) -> None:
+        ws = self._ws
+        if (
+            ws is not None
+            and ws.is_connected
+            and self._receive_task is not None
+            and not self._receive_task.done()
+        ):
+            return
+        if ws is not None:
+            await self._discard_connection()
+            # A persistent receive loop signals the current logical queue when
+            # it exits. Replace that just-terminated queue before this turn
+            # starts consuming events from the new socket.
+            self._event_queue = asyncio.Queue()
+        await self._connect_new_websocket()
+
+    async def _connect_new_websocket(self) -> None:
         url = self._websocket_url()
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
@@ -173,14 +236,6 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
         loop = asyncio.get_running_loop()
         self._session_ready = loop.create_future()
-        # Reset per-stream state BEFORE the receive loop starts so early
-        # messages on the new socket (including any late ``.completed``
-        # from the previous stream that slipped through before close)
-        # can't observe stale flags from the prior run.
-        self._partial_text = ""
-        self._audio_pending_commit = False
-        self._final_received = None
-        self._dropping_pending_final = False
         await self._connect_websocket(
             url=url,
             headers=headers,
@@ -199,6 +254,21 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             self._schedule_close()
             self._session_ready = None
             raise
+
+    async def _discard_connection(self) -> None:
+        """Close a socket that cannot be safely reused by another turn."""
+        close_task = self._close_task
+        if close_task is not None and close_task is not asyncio.current_task():
+            try:
+                await close_task
+            except Exception:
+                logger.debug("OpenAI Realtime background close failed", exc_info=True)
+            finally:
+                if self._close_task is close_task:
+                    self._close_task = None
+        await self._close_active_websocket(close_before_drain=True)
+        self._session_ready = None
+        self._reset_logical_turn_state()
 
     def _schedule_close(self) -> None:
         """Tear down the active socket in the background after a failed start.
@@ -234,6 +304,10 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._partial_text = ""
         self._audio_pending_commit = False
         self._bytes_since_last_commit = 0
+        self._final_received = None
+        self._dropping_pending_final = False
+        self._commit_pending = False
+        self._final_wait_timed_out = False
         transcription: dict[str, Any] = {"model": self._config.model}
         if self._config.language:
             transcription["language"] = self._config.language
@@ -287,10 +361,22 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _on_end(self) -> None:
         if self._ws is not None and self._audio_pending_commit:
-            await self._send_commit(wait_for_final=True)
+            committed = await self._send_commit(wait_for_final=True)
+            if not committed and self._audio_pending_commit:
+                if not await self._clear_input_buffer():
+                    self._final_wait_timed_out = True
+        elif self._commit_pending and self._final_received is not None:
+            # ``commit_segment()`` deliberately does not wait, but a direct
+            # caller may end the logical stream before its completed event
+            # arrives. Wait here so a late prior-turn final cannot enter the
+            # replacement event queue on the next start.
+            await self._await_final(self._final_received)
 
         self._final_received = None
         self._session_ready = None
+        if self._persistent_enabled() and not self._final_wait_timed_out:
+            self._partial_text = ""
+            return
         try:
             # OpenAI keeps the realtime socket open after delivering the
             # final transcript, so draining first would block in the receive
@@ -302,7 +388,18 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         except Exception:
             logger.debug("OpenAI Realtime close failed during end", exc_info=True)
         finally:
-            self._partial_text = ""
+            self._reset_logical_turn_state()
+
+    async def _clear_input_buffer(self) -> bool:
+        """Discard an uncommittable short tail before reusing the session."""
+        cleared = await self._send_json_control(
+            {"type": "input_audio_buffer.clear"},
+            label="OpenAI input audio buffer clear",
+        )
+        if cleared:
+            self._audio_pending_commit = False
+            self._bytes_since_last_commit = 0
+        return cleared
 
     # OpenAI Realtime requires commits to have at least 100ms of audio.
     # At 24 kHz mono 16-bit that is 4800 bytes.  Skip the commit when
@@ -313,7 +410,23 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
     async def _send_commit(self, *, wait_for_final: bool) -> bool:
         ws = self._ws
-        if ws is None or not self._audio_pending_commit:
+        if ws is None:
+            return False
+
+        # The protocol does not let the client attach an identifier to a
+        # commit request. Serialize requests so one completion event can never
+        # acknowledge a later logical segment or escape into the next turn.
+        if self._commit_pending:
+            if self._final_wait_timed_out:
+                return False
+            previous_final = self._final_received
+            if previous_final is None:
+                return False
+            await self._await_final(previous_final)
+            if self._commit_pending:
+                return False
+
+        if not self._audio_pending_commit:
             return False
         if self._bytes_since_last_commit < self._COMMIT_MIN_BYTES:
             # Tail too short — skip the server round-trip (the server
@@ -331,6 +444,8 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
 
         final_received = asyncio.Event()
         self._final_received = final_received
+        self._commit_pending = True
+        self._final_wait_timed_out = False
         # Each fresh commit starts a clean slate — any stale drop flag
         # from a previous commit (e.g. one whose timed-out ``.completed``
         # never arrived) should not suppress this commit's final.
@@ -339,6 +454,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
         except Exception:
             logger.debug("Error sending input_audio_buffer.commit", exc_info=True)
+            self._commit_pending = False
             if self._final_received is final_received:
                 self._final_received = None
             return False
@@ -346,27 +462,30 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
         self._audio_pending_commit = False
         self._bytes_since_last_commit = 0
         if wait_for_final:
-            timeout_s = self._config.final_transcript_timeout_s
-            try:
-                await asyncio.wait_for(final_received.wait(), timeout=timeout_s)
-            except TimeoutError:
-                # Give up on OpenAI's final and promote whatever we've
-                # streamed via ``...transcription.delta`` so the session
-                # can drive the LLM with the best partial.  When a
-                # fallback FINAL is emitted, the real ``.completed`` is
-                # dropped later via ``_dropping_pending_final`` so the
-                # turn doesn't receive two ``STTFinal`` events.
-                logger.warning(
-                    "Timed out after %.1fs waiting for OpenAI Realtime final; "
-                    "promoting %d-char partial to FINAL",
-                    timeout_s,
-                    len(self._partial_text),
-                )
-                if self._partial_text:
-                    self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
-                    self._partial_text = ""
-                    self._dropping_pending_final = True
+            await self._await_final(final_received)
         return True
+
+    async def _await_final(self, final_received: asyncio.Event) -> None:
+        """Bound the final wait and mark the socket unsafe after a timeout."""
+        timeout_s = self._config.final_transcript_timeout_s
+        try:
+            await asyncio.wait_for(final_received.wait(), timeout=timeout_s)
+        except TimeoutError:
+            # Give up on OpenAI's final and promote whatever streamed through
+            # deltas. Persistent mode drops this socket afterward: even if a
+            # fallback was available, a late completion must never race into
+            # the next turn's replacement event queue.
+            self._final_wait_timed_out = True
+            logger.warning(
+                "Timed out after %.1fs waiting for OpenAI Realtime final; "
+                "promoting %d-char partial and reconnecting",
+                timeout_s,
+                len(self._partial_text),
+            )
+            if self._partial_text:
+                self._emit_event(STTEvent(type=STTEventType.FINAL, text=self._partial_text))
+                self._partial_text = ""
+                self._dropping_pending_final = True
 
     def _on_receive_loop_end(self) -> None:
         """Fail-fast a pending handshake when the receive loop exits.
@@ -392,6 +511,7 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
                 self._emit_event(STTEvent(type=STTEventType.PARTIAL, text=self._partial_text))
 
         elif msg_type == "conversation.item.input_audio_transcription.completed":
+            self._commit_pending = False
             if self._dropping_pending_final:
                 # A previous ``_send_commit`` already gave up on this
                 # ``.completed`` and promoted the accumulated partial to
@@ -439,6 +559,19 @@ class OpenAIRealtimeSTT(WebSocketSTTBase):
             if msg_type in ("session.updated", "transcription_session.updated"):
                 if self._session_ready is not None and not self._session_ready.done():
                     self._session_ready.set_result(None)
+
+    async def aclose(self) -> None:
+        """Close a persistent Realtime socket during Session teardown."""
+        close_task = self._close_task
+        self._close_task = None
+        if close_task is not None:
+            try:
+                await close_task
+            except Exception:
+                logger.debug("OpenAI Realtime background close failed", exc_info=True)
+        await self._close_active_websocket(close_before_drain=True)
+        self._session_ready = None
+        self._reset_logical_turn_state()
 
     def version_info(self) -> dict[str, str]:
         return {

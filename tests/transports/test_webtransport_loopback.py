@@ -27,15 +27,13 @@ def test_top_level_lazy_exports() -> None:
     assert hasattr(easycat, "WebTransportTransportConfig")
     assert hasattr(easycat, "WebTransportConnectionTransport")
     assert hasattr(easycat, "WebTransportServer")
-    from easycat.transports import (
-        WebTransportTransport as _Wt,
-    )
-    from easycat.transports import (
+    from easycat.server import (
         run_webtransport_config_server as _RunWt,
     )
-    from easycat.transports import (
+    from easycat.server import (
         serve_webtransport_config_sessions as _ServeWt,
     )
+    from easycat.transports import WebTransportTransport as _Wt
 
     assert _Wt
     assert _RunWt
