@@ -290,6 +290,11 @@ class ClassificationGate:
 
     async def _timeout_coro(self) -> None:
         await asyncio.sleep(self._timeout_s)
+        # Once replay begins, detach this task from cancellation ownership.
+        # The buffer is about to be dequeued, so a concurrent classification
+        # signal must not cancel the flush and permanently drop its remainder.
+        # BackgroundTaskScope recognizes the current task and only detaches it.
+        self._tasks.cancel(_GATE_TIMEOUT_TASK)
         if self._closed:
             self._hold_audio_playing = False
             buffered = list(self._buffer)
