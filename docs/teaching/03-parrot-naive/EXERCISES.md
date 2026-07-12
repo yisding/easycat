@@ -34,24 +34,41 @@ after you finish).
 ## 2. Find the broken moment in the journal
 
 **Task.** Pick a recording where the parrot fired during an "um."
-Open the bundle. Find:
+Inspect the bundle with:
 
-- The last `stt.partial` before the parrot fired.
+```bash
+uv run python docs/teaching/03-parrot-naive/inspect_timeout.py PATH
+```
+
+Replace `PATH` with the emitted bundle path. For the relevant fire,
+find:
+
+- The `trigger_record`: the last `stt.partial` **or** `stt.final`
+  before the parrot fired.
 - The `parrot.fire` record itself.
 - The first `stt.partial` *after* the parrot fired (the "Paris"
   the parrot ignored).
 
-How far apart in time are records 1 and 2? (It should be exactly
-your `SILENCE_TIMEOUT_S`.) How far apart are 2 and 3? (This is
-the latency the parrot *added* by firing early.)
+Compare `observed_silence_ms` with `configured_timeout_ms`. Why is
+the former at least the latter rather than exactly equal? How large is
+`post_fire_consumer_gap_ms`, and what work was the parrot loop doing
+during that gap?
 
 **Hints**
 
-1. Filter records by `name` starting with `"stt."` or `"parrot."`.
-2. `offset_ms` on each record is monotonic — subtracting them
-   gives real elapsed time.
-3. The "Paris" partial that landed after the parrot's fire is
-   evidence the user was *not done speaking*. Production
+1. Every STT event resets `asyncio.wait_for`, including a final. The
+   trigger is therefore the latest `stt.partial` or `stt.final`, not
+   necessarily the latest partial.
+2. `asyncio.wait_for(..., timeout=SILENCE_TIMEOUT_S)` resumes no
+   earlier than the deadline. Event-loop scheduling adds the reported
+   `scheduler_overshoot_ms`, so an exact equality is not a valid
+   invariant.
+3. The parrot awaits `speak()` before it consumes another queued STT
+   event. `post_fire_consumer_gap_ms` therefore includes that blocked
+   consumer time; it is not the provider-side arrival latency of the
+   next partial.
+4. The "Paris" partial consumed after the parrot's fire is evidence
+   the user was *not done speaking*. Production
    pipelines (chapter 9) preserve that audio across barge-in;
    this naive one drops it on the floor.
 

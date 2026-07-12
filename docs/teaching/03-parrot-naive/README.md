@@ -286,9 +286,18 @@ for r in b.records():
               r["data"].get("text") or r["data"].get("committed_text"))
 ```
 
-Find the exact moment the parrot committed. The `parrot.fire`
-record's `offset_ms` is the last-partial timestamp plus 500 ms —
-precisely.
+Find the moment the parrot committed with the maintained analyzer:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/inspect_timeout.py \
+  docs/teaching/03-parrot-naive/runs/<file>.bundle
+```
+
+The timeout starts after the latest STT event, which can be a partial
+or a final. The `parrot.fire` offset will be **at least** 500 ms after
+that trigger; event-loop scheduling contributes the reported
+`scheduler_overshoot_ms`. The analyzer also separates that silence gap
+from the consumer stall while the parrot awaits `speak()`.
 
 ## Try breaking it
 
