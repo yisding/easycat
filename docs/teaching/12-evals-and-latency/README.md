@@ -188,15 +188,19 @@ Three blocks of output:
 
 ### Latency percentiles
 
-Sort every bundle's first-audio `turn.gap`, then report P50 and P95. **P95 is
-the number you report.** Voice users remember the bad turns, not
-the good ones; a single stumble poisons an otherwise-fast bot's
-reputation. Track P50 so you know the median, but *target* P95.
+Sort every bundle's first-audio `turn.gap`, then report P50 and P95. The script
+uses the same `LatencyPercentileStats.from_values` helper as EasyCat's latency
+validation and debug CLI, so the lesson and the operator tooling agree.
+**P95 is the number you report.** Voice users remember the bad turns, not the
+good ones; a single stumble poisons an otherwise-fast bot's reputation. Track
+P50 so you know the median, but *target* P95.
 
-> With only five bundles, P95 is approximated by the fourth-
-> slowest — noisy. Real eval sets need dozens of turns for P95 to
-> be stable; re-run this against a directory full of your own
-> chapter-6 or chapter-10 runs for a number you can trend.
+> With only six bundles, the maintained clamped-exclusive calculation puts P95
+> at the slowest observed turn: 2420 ms. That makes the deliberate slow-agent
+> fixture visible, but it is still a noisy estimate of real tail latency. Real
+> eval sets need dozens of turns for P95 to stabilize; re-run this against a
+> directory full of your own chapter-6 or chapter-10 runs for a number you can
+> trend.
 
 ### WER — word error rate for STT
 

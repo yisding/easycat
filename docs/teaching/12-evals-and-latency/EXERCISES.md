@@ -49,24 +49,26 @@ judge agree with your ears?
 
 ## 3. Wire a latency regression test
 
-**Task.** Write a pytest test that fails if any bundle's P95
-exceeds 1200 ms. That's the seed of a latency regression suite.
+**Task.** Write a pytest test that fails if the fixture set's P95 exceeds
+1200 ms. That's the seed of a latency regression suite.
 
 **Hints**
 
-1. Start in `tests/teaching/` with a focused test file, for
-   example `test_latency_budget.py`. Use
-   `easycat.debug.testing.load_bundle` to load each fixture and
-   the same `turn.gap` extraction as `evals.py`.
+1. Start in `tests/teaching/` with a focused test file, for example
+   `test_latency_budget.py`. Use `easycat.debug.testing.load_bundle` to load
+   each fixture, the same `turn.gap` extraction as `evals.py`, and
+   `easycat.validation.latency.LatencyPercentileStats.from_values` for the
+   percentile. Reusing the maintained helper keeps the test aligned with the
+   debug CLI.
 2. Hard-coded thresholds are fine for the teaching version. For
    production, you'd compare against a baseline file checked into
    the repo and require N standard deviations of regression
    before failing.
-3. The six chapter-12 fixtures include `turn_02_slow_agent`
-   which is *deliberately* 2420 ms to first audio — your test
-   should flag it.
-   That's the right behavior: the test catches the slowdown the
-   fixture was built to represent.
+3. The six chapter-12 fixtures include `turn_02_slow_agent`, which is
+   *deliberately* 2420 ms to first audio. With this small sample, the maintained
+   clamped-exclusive P95 is the observed maximum, so your test should flag it.
+   That's the right behavior: the test catches the slowdown the fixture was
+   built to represent.
 4. Bonus: also test that the golden WER bundles produce the
    numbers their filenames advertise. That's a regression test
    for the WER pipeline itself.

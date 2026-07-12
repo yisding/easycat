@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import argparse
 import csv
-import statistics
 import sys
 from pathlib import Path
 
 from easycat.debug.testing import load_bundle
+from easycat.validation.latency import LatencyPercentileStats
 
 
 def _wer_words(ref: str, hyp: str) -> tuple[int, int]:
@@ -102,8 +102,10 @@ def main() -> None:
             print(f"  {b.name:38}  {val:>6.0f} ms")
     if lat_ms:
         lat_ms.sort()
-        p50 = statistics.median(lat_ms)
-        p95 = lat_ms[max(0, int(0.95 * len(lat_ms)) - 1)] if len(lat_ms) > 1 else lat_ms[0]
+        latency = LatencyPercentileStats.from_values(lat_ms)
+        assert latency.p50 is not None and latency.p95 is not None
+        p50 = latency.p50
+        p95 = latency.p95
         print(f"  {'P50':38}  {p50:>6.0f} ms")
         print(f"  {'P95':38}  {p95:>6.0f} ms")
         print(f"  {'P95 / P50 ratio':38}  {p95 / p50:>6.2f}")
