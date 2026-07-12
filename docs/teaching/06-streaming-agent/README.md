@@ -26,7 +26,7 @@
 - **Modified:** `blocking_agent` becomes `stream_sentences_to_tts`
   — the LLM stream and TTS synth now overlap.
 - **Sidebar adds:** SSML / pronunciation, backpressure, and a
-  reprise of "partials can flap; act on FINAL only."
+  reprise of "partials can flap; commit spoken output on FINAL only."
 
 <!-- BEGIN auto:diff prev=05-blocking-agent src=main.py -->
 <details>

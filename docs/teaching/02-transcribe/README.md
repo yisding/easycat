@@ -22,7 +22,8 @@
 
 - **Added:** STT provider via `create_stt_provider`; the first
   `RunBundle` written to `runs/`; the partial-vs-final event shape
-  (`stt.partial`, `stt.final`).
+  (`stt.partial`, `stt.final`); `partial_policy_probe.py` for the
+  reversible-speculation boundary.
 - **Modified:** the pipeline forks — audio still flows out of the
   transport, but it now goes to STT instead of back to the speaker.
 - **Removed:** the speaker output (no echo in this chapter; this is
@@ -255,16 +256,34 @@ the speech. For Deepgram (mid-speech partials) the same sequence
 spreads across the utterance. The *shape* is what matters: the
 provider revises its guess until it is confident, then commits.
 
-The **final** is the provider's commitment. Anything downstream
-(your agent, your logic, your database write) should wait for the
-final. **Never act on a partial.**
+The **final** is the provider's commitment. The safe rule is narrower than
+"ignore partials": **never commit irreversible work from a partial.** A partial
+may update captions, inform endpointing, or start cancellable speculation, but
+each newer hypothesis supersedes the previous one.
 
-This rule matters. A naive agent that pre-fetches on partials
-commits to a guess that may evaporate two partials later, wasting
-LLM tokens and producing audio for a sentence the user didn't
-actually say. This is the single most common source of "my voice
-bot is weirdly confident about things I didn't say." Chapter 6
-reinforces the rule when it wires the agent in.
+| Consumer | Partial is useful? | Safe policy |
+|---|:---:|---|
+| Live transcript UI | Yes | Replace the tentative text. |
+| Endpoint/smart-turn signal | Yes | Treat it as evidence, not a committed user turn. |
+| Cache lookup or prefetch | Yes | Key it to the hypothesis; cancel or discard stale work. |
+| Agent turn, tool side effect, database write, TTS | No commitment | Wait for `FINAL`. |
+
+A naive consumer that starts a timer, writes state, or speaks for every partial
+commits to guesses that may evaporate moments later. Cancellable prefetch is
+different: it may spend some work early, but it must never leak a stale result
+into user-visible state.
+
+Run the provider-free probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/partial_policy_probe.py
+```
+
+It revises "fifteen minutes" to "fifty minutes." The unsafe policy produces
+three irreversible actions. The revision-aware policy cancels the stale
+fifteen-minute speculation and commits exactly one fifty-minute action on the
+final. Chapter 6 applies the same boundary to the most visible side effect:
+spoken bot audio.
 
 ## Why streaming exists
 

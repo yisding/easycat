@@ -227,9 +227,10 @@ Talk. It repeats. Ctrl-C to stop.
 > If no new STT partial has arrived in **500 ms**, the user is
 > done. Take the last partial text, hand it to TTS, play it.
 
-Reasonable-sounding. Chapter 2's rule was "never act on partials
-— wait for `STTFinal`." We are **deliberately** breaking it here
-so you can feel why the rule exists.
+Reasonable-sounding. Chapter 2's boundary was "partials may drive
+reversible observation or speculation, but irreversible output waits for
+`STTFinal`." We are **deliberately** crossing that boundary here by speaking
+a partial so you can feel why it exists.
 
 ## Architecture
 
