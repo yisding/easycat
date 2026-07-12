@@ -159,6 +159,10 @@ def _as_optional_string(payload: Mapping[str, Any], key: str) -> str | None:
     if key not in payload:
         return None
     value = payload[key]
+    # Schema v1 has always treated an explicit JSON null like an omitted
+    # optional field. Preserve that machine-generated payload contract.
+    if value is None:
+        return None
     if not isinstance(value, str):
         _reject(f"{key!r} must be a string")
     return value

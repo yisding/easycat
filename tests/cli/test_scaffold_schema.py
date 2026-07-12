@@ -96,13 +96,29 @@ def test_parse_config_rejects_blank_required_strings(template: str) -> None:
         "easycat_source",
     ],
 )
-@pytest.mark.parametrize("value", [42, None])
+@pytest.mark.parametrize("value", [42, True, []])
 def test_parse_config_rejects_present_non_string_optional_fields(
     field_name: str,
     value: object,
 ) -> None:
     with pytest.raises(EasyCatError, match=rf"{field_name!r} must be a string"):
         parse_config(_config_json(**{field_name: value}))
+
+
+def test_parse_config_accepts_explicit_null_for_optional_strings() -> None:
+    config = parse_config(
+        _config_json(
+            stt=None,
+            tts=None,
+            llm=None,
+            transport=None,
+            agent_name=None,
+            agent_instructions=None,
+            easycat_source=None,
+        )
+    )
+
+    assert config == InitConfig(template="text-chat")
 
 
 @pytest.mark.parametrize("field_name", ["tools", "mcp_servers"])
