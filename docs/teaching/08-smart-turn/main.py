@@ -82,6 +82,10 @@ class MiniTurnDetector:
       ``VADStartSpeaking`` resumes the turn (the user was just
       thinking). A hard ``fallback_ms`` fallback commits if neither
       happens.
+
+    ``speech_ended`` carries the estimated monotonic time of the
+    user's last speech frame so downstream timing includes endpoint
+    detection instead of starting only after STT finalises.
     """
 
     def __init__(
@@ -91,6 +95,7 @@ class MiniTurnDetector:
         smart_turn=None,
         threshold: float = SMART_THRESHOLD,
         fallback_ms: int = SMART_FALLBACK_MS,
+        silence_wait_ms: int = VAD_BASELINE_SILENCE_MS,
         journal: InMemoryRingBuffer | None = None,
         session_id: str = "",
         preroll_frames: int = PREROLL_FRAMES,
@@ -99,11 +104,13 @@ class MiniTurnDetector:
         self._smart = smart_turn
         self._threshold = threshold
         self._fallback_ms = fallback_ms
+        self._silence_wait_ms = silence_wait_ms
         self._journal = journal
         self._session_id = session_id
         self._preroll: collections.deque[AudioChunk] = collections.deque(maxlen=preroll_frames)
         self._state: str = "idle"  # idle | speaking | pending
         self._pending_since: float | None = None
+        self._candidate_speech_end_t: float | None = None
         self._turn_audio: list[AudioChunk] = []
 
     async def frames(self, audio_iter):
@@ -117,7 +124,9 @@ class MiniTurnDetector:
                         # new speech_started boundary.
                         self._state = "speaking"
                         self._pending_since = None
+                        self._candidate_speech_end_t = None
                     else:
+                        self._candidate_speech_end_t = None
                         yield "speech_started", None
                         while self._preroll:
                             buf = self._preroll.popleft()
@@ -125,11 +134,18 @@ class MiniTurnDetector:
                             yield "frame", buf
                         self._state = "speaking"
                 elif isinstance(ev, VADStopSpeaking) and self._state == "speaking":
+                    detected_at = time.monotonic()
+                    # VADStop arrives only after the configured silence
+                    # window. Subtract that known wait to estimate when the
+                    # user's last speech frame ended.
+                    self._candidate_speech_end_t = detected_at - self._silence_wait_ms / 1000
                     confirmed = await self._classify()
                     if self._smart is None or confirmed:
+                        reason = "vad_timeout" if self._smart is None else "smart_turn"
+                        speech_end_t = self._commit_endpoint(reason)
                         self._state = "idle"
                         self._turn_audio = []
-                        yield "speech_ended", None
+                        yield "speech_ended", speech_end_t
                     else:
                         self._state = "pending"
                         self._pending_since = time.monotonic()
@@ -141,10 +157,11 @@ class MiniTurnDetector:
                 and self._pending_since is not None
                 and (time.monotonic() - self._pending_since) * 1000 >= self._fallback_ms
             ):
+                speech_end_t = self._commit_endpoint("fallback")
                 self._state = "idle"
                 self._pending_since = None
                 self._turn_audio = []
-                yield "speech_ended", None
+                yield "speech_ended", speech_end_t
 
             if self._state == "speaking":
                 self._turn_audio.append(chunk)
@@ -153,6 +170,30 @@ class MiniTurnDetector:
                 self._turn_audio.append(chunk)
             else:
                 self._preroll.append(chunk)
+
+    def _commit_endpoint(self, reason: str) -> float:
+        committed_at = time.monotonic()
+        estimated_speech_end_t = self._candidate_speech_end_t
+        if estimated_speech_end_t is None:
+            estimated_speech_end_t = committed_at - self._silence_wait_ms / 1000
+        self._candidate_speech_end_t = None
+
+        if self._journal is not None:
+            self._journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="turn.endpoint_commit",
+                session_id=self._session_id,
+                data={
+                    "stage": "turn",
+                    "mode": "smart" if self._smart is not None else "vad",
+                    "reason": reason,
+                    "silence_wait_ms": self._silence_wait_ms,
+                    "estimated_speech_end_ms": estimated_speech_end_t * 1000,
+                    "committed_at_ms": committed_at * 1000,
+                    "endpoint_wait_ms": (committed_at - estimated_speech_end_t) * 1000,
+                },
+            )
+        return estimated_speech_end_t
 
     async def _classify(self) -> bool:
         """Return True if smart-turn confirms the turn is over."""
@@ -241,7 +282,7 @@ async def drain_sentences_to_speaker(
     return first_audio_t
 
 
-async def run_turn(transport, stt, client, tts, journal, session_id):
+async def run_turn(transport, stt, client, tts, journal, session_id, estimated_speech_end_t=None):
     final_text = ""
     stt_final_t = None
     async for event in stt.events():
@@ -259,6 +300,14 @@ async def run_turn(transport, stt, client, tts, journal, session_id):
     )
     reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
+    speech_end_to_first_audio = (
+        None
+        if first_audio_t is None or estimated_speech_end_t is None
+        else (first_audio_t - estimated_speech_end_t) * 1000
+    )
+    endpoint_to_stt_final = (
+        None if estimated_speech_end_t is None else (stt_final_t - estimated_speech_end_t) * 1000
+    )
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="turn.gap",
@@ -266,6 +315,8 @@ async def run_turn(transport, stt, client, tts, journal, session_id):
         data={
             "stage": "turn",
             "total_gap_ms": total_gap,
+            "estimated_speech_end_to_first_audio_ms": speech_end_to_first_audio,
+            "endpoint_to_stt_final_ms": endpoint_to_stt_final,
             "reply_enqueue_gap_ms": reply_enqueue_gap,
             "text": final_text,
         },
@@ -274,6 +325,10 @@ async def run_turn(transport, stt, client, tts, journal, session_id):
         print("  (turn gap unavailable — TTS produced no accepted audio)")
     else:
         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
+        if speech_end_to_first_audio is not None:
+            print(
+                f"  (estimated user speech end → first audio: {speech_end_to_first_audio:.0f} ms)"
+            )
 
 
 async def main() -> None:
@@ -307,6 +362,7 @@ async def main() -> None:
         vad,
         smart_turn=smart_turn,
         threshold=SMART_THRESHOLD,
+        silence_wait_ms=silence_ms,
         journal=journal,
         session_id=session_id,
     )
@@ -338,7 +394,15 @@ async def main() -> None:
                 await stt.send_audio(chunk)
             elif tag == "speech_ended" and stt is not None:
                 await stt.end_stream()
-                await run_turn(transport, stt, client, tts, journal, session_id)
+                await run_turn(
+                    transport,
+                    stt,
+                    client,
+                    tts,
+                    journal,
+                    session_id,
+                    estimated_speech_end_t=chunk,
+                )
                 stt = None
 
     try:
