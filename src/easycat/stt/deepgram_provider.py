@@ -51,8 +51,10 @@ class DeepgramSTTConfig:
     # Deepgram closes an idle streaming socket after 10 seconds. Its documented
     # recommendation is one text-frame KeepAlive every 3-5 seconds.
     keepalive_interval_s: float = 4.0
-    # Bound the wait for the Finalize-triggered result before falling back to
-    # the latest interim transcript and reconnecting on the next turn.
+    # Bound the wait for the Finalize-triggered result. On timeout the socket
+    # is discarded (draining any result already buffered in the close window)
+    # and the latest interim transcript is promoted only if no final arrived
+    # during that drain; the next turn reconnects transparently.
     final_transcript_timeout_s: float = 2.0
     # Optional WebSocket factory override for testing.
     # Signature: async (url, **kwargs) -> connection
@@ -110,6 +112,11 @@ class DeepgramSTT(WebSocketSTTBase):
         self._pending_finalizes: deque[tuple[int, int]] = deque()
         self._finalized_epoch = 0
         self._final_wait_sequence: int | None = None
+        # Set when a bare ``{"from_finalize": true}`` ack (no Results body)
+        # confirmed a Finalize that covered unflushed audio: the transcript
+        # for that audio has not arrived yet, so the socket must not be
+        # reused by the next turn until it is contained.
+        self._bare_finalize_ack_pending = False
 
     def _persistent_enabled(self) -> bool:
         return bool(self._config.persistent_ws and not self._config.is_flux)
@@ -129,6 +136,7 @@ class DeepgramSTT(WebSocketSTTBase):
         self._partial_text = ""
         self._final_received = None
         self._final_wait_sequence = None
+        self._bare_finalize_ack_pending = False
         if self._persistent_enabled():
             await self._ensure_persistent_connection()
             return
@@ -157,9 +165,10 @@ class DeepgramSTT(WebSocketSTTBase):
             return
         if ws is not None:
             await self._discard_connection()
-            # Closing the stale receive loop terminates the queue that was
-            # current at that instant. Start/re-warm on a fresh queue so its
-            # sentinel cannot make the replacement stream appear exhausted.
+            # Draining the stale socket may parse leftover frames (or, when
+            # the loop died on its own, a terminal sentinel) into the queue
+            # that was current at that instant. Start/re-warm on a fresh
+            # queue so stale events cannot pollute the replacement stream.
             self._event_queue = asyncio.Queue()
         await self._connect_new_websocket()
         self._ensure_keepalive_task()
@@ -196,8 +205,18 @@ class DeepgramSTT(WebSocketSTTBase):
 
     async def _discard_connection(self) -> None:
         await self._cancel_keepalive()
-        await self._close_active_websocket(close_before_drain=True)
+        # Frames already buffered on the closing socket are still parsed while
+        # the receive loop drains, so a late Finalize-triggered final is
+        # emitted into the current turn's queue. Suppress the loop's terminal
+        # sentinel during this deliberate discard so an event emitted after
+        # the drain (e.g. a promoted interim) cannot land behind it.
+        self._suppress_terminal_sentinel = True
+        try:
+            await self._close_active_websocket(close_before_drain=True)
+        finally:
+            self._suppress_terminal_sentinel = False
         self._pending_finalizes.clear()
+        self._bare_finalize_ack_pending = False
         # A discarded socket cannot deliver any more results. Treat its audio
         # epochs as closed so only fresh audio on the replacement connection
         # needs a future Finalize.
@@ -261,8 +280,7 @@ class DeepgramSTT(WebSocketSTTBase):
             wait_sequence = await self._send_finalize(wait_for_ack=True)
             if wait_sequence is None:
                 self._final_received = None
-                self._promote_partial_to_final()
-                await self._discard_connection()
+                await self._contain_unflushed_turn()
                 return
             try:
                 await asyncio.wait_for(
@@ -271,19 +289,41 @@ class DeepgramSTT(WebSocketSTTBase):
             except TimeoutError:
                 logger.warning(
                     "Timed out after %.1fs waiting for Deepgram Finalize; "
-                    "promoting %d-char interim transcript and reconnecting",
+                    "draining the stale socket and reconnecting next turn",
                     self._config.final_transcript_timeout_s,
-                    len(self._partial_text),
                 )
-                self._promote_partial_to_final()
-                # Prevent a late result from this turn entering the next turn's
-                # replacement queue. The next start reconnects transparently.
-                await self._discard_connection()
+                await self._contain_unflushed_turn()
                 return
             finally:
                 if self._final_received is final_received:
                     self._final_received = None
                     self._final_wait_sequence = None
+        if self._bare_finalize_ack_pending:
+            # A bare ``{"from_finalize": true}`` ack confirmed this turn's
+            # audio without carrying its transcript, and Deepgram acks have no
+            # request id. A warm socket could deliver that transcript into the
+            # next turn's queue (or into this turn's closed queue, silently
+            # losing it). Contain it exactly like a Finalize timeout.
+            logger.warning(
+                "Deepgram acknowledged Finalize without a transcript; draining "
+                "the socket and reconnecting so the late final cannot cross "
+                "the turn boundary"
+            )
+            await self._contain_unflushed_turn()
+
+    async def _contain_unflushed_turn(self) -> None:
+        """Discard the socket first, then emit whichever transcript survived.
+
+        Frames already buffered on the closing socket are parsed while
+        ``_discard_connection`` drains the receive loop (with the terminal
+        sentinel suppressed), so a Finalize-triggered final that arrives
+        inside the close window is emitted normally into this turn's queue
+        and clears the interim. Promoting afterwards therefore yields exactly
+        one FINAL for the turn: the real drained final when it made it, the
+        latest interim otherwise — never both.
+        """
+        await self._discard_connection()
+        self._promote_partial_to_final()
 
     def _promote_partial_to_final(self) -> None:
         """Emit the latest interim transcript when Finalize cannot complete."""
@@ -311,7 +351,7 @@ class DeepgramSTT(WebSocketSTTBase):
         # before any type/channel/transcript guards. A Results-shaped ack then
         # continues below so its transcript is still emitted normally.
         if msg.get("from_finalize") is True:
-            self._handle_finalize_ack()
+            self._handle_finalize_ack(results_shaped=msg.get("type") == "Results")
         msg_type = msg.get("type", "")
         if msg_type == "Error":
             # Deepgram error frames carry the human-readable text under
@@ -330,11 +370,24 @@ class DeepgramSTT(WebSocketSTTBase):
         if msg_type == "Results":
             self._handle_results_message(msg)
 
-    def _handle_finalize_ack(self) -> None:
+    def _handle_finalize_ack(self, *, results_shaped: bool) -> None:
         """Advance the oldest pending Finalize and release its matching waiter."""
+        if results_shaped and self._bare_finalize_ack_pending:
+            # Acks are FIFO on one socket, so this Results frame is the late
+            # transcript for the Finalize that a bare ack already confirmed.
+            # Resolve that bare ack instead of consuming the entry for a
+            # still-outstanding Finalize.
+            self._bare_finalize_ack_pending = False
+            return
         if not self._pending_finalizes:
             return
         sequence, finalize_epoch = self._pending_finalizes.popleft()
+        if not results_shaped and finalize_epoch > self._finalized_epoch:
+            # A bare ack (no Results body) confirmed audio whose transcript
+            # has not arrived. ``_finish_persistent_turn`` must not keep this
+            # socket warm: the real ``from_finalize`` Results frame may still
+            # be in flight and would bleed into the next turn's stream.
+            self._bare_finalize_ack_pending = True
         self._finalized_epoch = max(self._finalized_epoch, finalize_epoch)
         if (
             self._final_received is not None

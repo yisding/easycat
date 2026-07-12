@@ -114,9 +114,10 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   worst-case end-of-turn pause; lower it to trade a little tail correction for
   snappier handoff, raise it if you see truncated end-of-turn transcripts.
   `DeepgramSTTConfig.final_transcript_timeout_s` similarly defaults to `2.0`
-  seconds for a persistent Nova `Finalize`; on timeout EasyCat promotes the
-  latest interim transcript, drops the stale socket, and reconnects next turn
-  so late text cannot leak across the turn boundary.
+  seconds for a persistent Nova `Finalize`; on timeout EasyCat drops the stale
+  socket (a final already buffered in the close window is still delivered to
+  the ending turn), promotes the latest interim only when no final arrived,
+  and reconnects next turn so late text cannot leak across the turn boundary.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
