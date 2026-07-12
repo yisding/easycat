@@ -80,29 +80,43 @@ liveness but not credential validity?
    live in a project dotenv file; doctor loads only recognized provider
    credentials and restores the process environment afterwards.
 
-## 3. Translate a ch-13 bundle into a ch-12 eval input
+## 3. Gate a production bundle directly
 
-**Task.** Run `translate.py` against a ch-13 bundle; pipe the
-output into `evals.py` via a small adapter. Do the P50/P95 numbers
-look right?
+**Task.** Record at least five voice turns in chapter 13 or 15, replace
+`PATH` with the emitted bundle path, and run:
+
+```bash
+uv run easycat latency PATH --json \
+  | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
+      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
+```
+
+Then lower `--max-ms` until the gate fails. Finally raise
+`--min-samples` above the bundle's count. Why are those two failures
+different?
 
 **Hints**
 
-1. `translate.py` reads a ch-13 production-shape bundle (`stage_start`
-   / `stage_complete` pairs) and emits NDJSON of teaching-shape
-   composite records (`stage.X.execute` with `elapsed_ms`).
-2. `evals.py` consumes `.bundle` files, not NDJSON. You'll need a
-   small wrapper: build a fresh `InMemoryRingBuffer`, append each
-   NDJSON record, then `export_debug_bundle` to a temp file, then
-   point `evals.py` at the directory.
-3. The numbers won't match chapter 12's hand-tuned fixtures
-   exactly (your ch-13 turns are real, not synthetic), but the
-   shape will: `agent` dominates, `tts_synth` is sub-second,
-   `total_gap` is in the 800-2000 ms range.
-4. This pipeline (production-shape bundle → translator →
-   teaching-shape evals) is also how you'd build a CI gate:
-   record N production turns nightly, translate, run evals,
-   alert if P95 regresses.
+1. `easycat latency` reads production `stage_start` /
+   `stage_complete` spans and milestone records directly. Its JSON
+   envelope contains one `turns` entry per turn plus `count`, `p50`,
+   `p90`, `p95`, and `p99` for five critical-path metrics. Do not
+   translate production records into chapter 12's synthetic fixture
+   shape before measuring them.
+2. `latency_gate.py` consumes that maintained JSON envelope. It exits 0
+   only when the selected percentile is at or below your budget *and*
+   the selected metric has at least `--min-samples` observations. A
+   one-turn "P95" is just that one turn, not useful tail evidence.
+3. `--max-ms 2000` is an example policy, not an EasyCat guarantee.
+   Choose a threshold from your product SLO and a representative
+   baseline. The output distinguishes `over_budget` from
+   `insufficient_samples`, so CI tells you whether latency regressed or
+   the run simply failed to collect enough evidence.
+4. For a live multi-condition provider sweep and stored-baseline drift
+   detection, use
+   `uv run easycat validate latency --sweep --baseline PATH`. The
+   captured-bundle gate here is for replayable call samples you already
+   recorded; the validation command owns live canaries.
 
 ## Self-check
 

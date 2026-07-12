@@ -29,9 +29,8 @@
   unchanged from earlier chapters; the
   debugger entry points (`serve_bundle`,
   `serve_session`); the `easycat` CLI (`init`, `doctor`,
-  `explain`, `bundles`, `inspect`, `validate`); `translate.py` —
-  the ch 13 (production-shape) → ch 12 (teaching-shape) bundle
-  translator.
+  `explain`, `bundles`, `inspect`, `validate`); `latency_gate.py` —
+  a captured production-bundle percentile and sample-count gate.
 - **Modified:** the demo runs through `SessionManager.connection`
   instead of `await session.start()` / `stop()` directly.
 
@@ -632,30 +631,26 @@ Run easycat explain json-schema for CLI JSON.
 bundles and SQLite journals. Use `serve_session(...)` from Python when
 the debugger must stay attached to a live in-process `Session`.
 
-## The ch 13 → ch 12 bundle translator
+## Gate captured production latency directly
 
-Ch 13 emits the real runtime's **production shape**: paired
-`stage_start` / `stage_complete` records. Ch 12's eval scripts
-key on the **teaching shape**: composite `stage.<name>.execute`
-records with an `elapsed_ms` field baked in. The gap is bridged
-by pairing on `(turn_id, stage)` and emitting one composite per
-pair.
+Chapters 2–12 use compact synthetic records to teach one concept at a
+time. Chapters 13–15 emit the real runtime's **production shape**:
+paired `stage_start` / `stage_complete` spans plus explicit critical-path
+milestones. Do not translate production records back into the synthetic
+fixture shape for evaluation. The maintained `easycat latency` command
+already reconstructs the waterfall and percentile distribution directly.
 
 ```bash
-# 1. Run ch 13 for a few turns.
-uv run python docs/teaching/13-swap-providers-and-transports/main.py \
-    --provider-mix openai --transport local
-
-# 2. Translate the resulting bundle.
-uv run python docs/teaching/15-operate-in-production/translate.py \
-    docs/teaching/13-swap-providers-and-transports/runs/ch13-openai-local-*.bundle \
-    runs/translated.ndjson
+uv run easycat latency PATH --json \
+  | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
+      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
 ```
 
-`translate.py` is ~50 lines of state machine. Read it top to
-bottom — it's the smallest possible thing that explains why
-ch 2-12 used the teaching shape (denser to query) and why ch 13
-uses the production shape (partial-span visibility on crash).
+The gate fails separately for an exceeded budget and an insufficient
+sample count; both produce JSON that CI can archive. The 2000 ms value is
+only an example—set it from your deployment's SLO and baseline. When CI
+should collect fresh live samples across provider conditions instead,
+use `uv run easycat validate latency --sweep --baseline PATH`.
 
 ## Telephony deep-cuts, briefly
 
@@ -672,9 +667,9 @@ the same `Session` you've run since chapter 5.
 2. Compare scoped production JSON reports from
    `uv run easycat doctor --provider openai --environment production --json`
    with `OPENAI_API_KEY` unset and set. Which rows appear or change?
-3. Run `translate.py` against a ch 13 bundle; pipe the output into
-   `evals.py` via a small adapter. Do the P50/P95 numbers look
-   right?
+3. Pipe a production bundle's `easycat latency --json` report into
+   `latency_gate.py`. Trigger both `over_budget` and
+   `insufficient_samples`; why should CI distinguish them?
 
 ## The ladder, complete (really)
 
