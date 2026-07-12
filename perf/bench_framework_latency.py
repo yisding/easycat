@@ -226,6 +226,25 @@ def percentile(samples: Sequence[float], quantile: float) -> float:
     return float(ordered[lower] * (1.0 - weight) + ordered[upper] * weight)
 
 
+def rank_by_latency(
+    results: dict[str, dict[str, Any]],
+    frameworks: Sequence[Framework],
+) -> tuple[list[Framework], dict[str, bool]]:
+    """Rank user-visible latency without using provider-adjusted diagnostics."""
+    ranking = sorted(frameworks, key=lambda name: results[name]["latency_p50_ms"])
+    p50 = "easycat" in results and all(
+        results["easycat"]["latency_p50_ms"] < results[name]["latency_p50_ms"]
+        for name in frameworks
+        if name != "easycat"
+    )
+    p95 = "easycat" in results and all(
+        results["easycat"]["latency_p95_ms"] < results[name]["latency_p95_ms"]
+        for name in frameworks
+        if name != "easycat"
+    )
+    return ranking, {"p50": p50, "p95": p95, "all": p50 and p95}
+
+
 def _revision() -> dict[str, Any]:
     try:
         sha = subprocess.run(  # noqa: S603, S607 - fixed local git query
@@ -311,24 +330,16 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
             "framework_overhead_p95_ms": percentile(overhead_values, 0.95),
             "framework_overhead_p99_ms": percentile(overhead_values, 0.99),
         }
-    ranking = sorted(frameworks, key=lambda name: results[name]["framework_overhead_p50_ms"])
-    easycat_fastest_p50 = "easycat" in results and all(
-        results["easycat"]["framework_overhead_p50_ms"]
-        < results[name]["framework_overhead_p50_ms"]
-        for name in frameworks
-        if name != "easycat"
-    )
-    easycat_fastest_p95 = "easycat" in results and all(
-        results["easycat"]["framework_overhead_p95_ms"]
-        < results[name]["framework_overhead_p95_ms"]
-        for name in frameworks
-        if name != "easycat"
-    )
+    # Rank the user-visible boundary directly. Provider-adjusted latency is a
+    # useful diagnostic, but overlapping runtimes can execute framework work
+    # under the fake-provider delay, so subtracting that delay is not a
+    # framework-only scheduling measure and must not decide the winner.
+    ranking, easycat_fastest = rank_by_latency(results, frameworks)
     return {
         "schema_version": 1,
         "kind": "framework_latency_benchmark",
         "metric": "accepted_transcript_to_first_audio_ms",
-        "comparison_metric": "framework_overhead_ms",
+        "comparison_metric": "accepted_transcript_to_first_audio_ms",
         "easycat_revision": _revision(),
         "workload": {
             "iterations": iterations,
@@ -348,7 +359,10 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
             "correctness_gate": (
                 "exact_framework_tts_text_nonempty_audio_and_easycat_voice_transition"
             ),
-            "framework_overhead": "latency_ms_minus_measured_provider_elapsed_ms",
+            "framework_overhead": (
+                "diagnostic_latency_ms_minus_measured_provider_elapsed_ms; "
+                "credits_work_overlapped_with_provider_delay and is not used for ranking"
+            ),
             "timed_entry_points": {
                 "easycat": "Session.end_turn (AgentRequestStarted dispatched in span)",
                 "livekit": "AgentSession.run",
@@ -358,12 +372,8 @@ def run_benchmark(  # noqa: C901, PLR0912 - orchestration keeps cleanup and orde
         "pins": {name: list(pins) for name, pins in PINS.items()},
         "environment_locks": _lock_metadata(),
         "results": results,
-        "ranking_by_framework_overhead_p50": ranking,
-        "easycat_fastest": {
-            "p50": easycat_fastest_p50,
-            "p95": easycat_fastest_p95,
-            "all": easycat_fastest_p50 and easycat_fastest_p95,
-        },
+        "ranking_by_latency_p50": ranking,
+        "easycat_fastest": easycat_fastest,
     }
 
 

@@ -64,7 +64,9 @@ The deterministic cross-framework harness compares EasyCat, LiveKit Agents,
 and Pipecat at one external boundary: an accepted transcript/text turn to the
 first audio frame accepted by the framework's transport or output sink.
 Provider behavior is normalized with the same delayed LLM and TTS doubles, so
-the result isolates framework scheduling rather than network or model speed.
+the raw latency comparison includes each framework's scheduling and its ability
+to overlap that work with otherwise-identical provider delays, without network
+or model variability.
 All three frameworks are timed through their input-dispatch transitions:
 LiveKit via `AgentSession.run`, Pipecat via `PipelineTask.queue_frame`, and
 EasyCat via the public `end_turn()` voice transition — every EasyCat sample
@@ -85,19 +87,21 @@ process startup and dependency installation are outside the metric. Every
 sample must deliver its framework-specific expected TTS payload plus nonempty
 audio before it is eligible. (The expectation records punctuation normalization,
 such as LiveKit omitting terminal punctuation from its TTS chunk.) The JSON
-artifact includes raw transcript-to-audio latency and a
-framework-overhead value that subtracts each fake provider's measured elapsed
-time, with P50/P95/P99 for both. It also records pins, revision state, and the
-random seed, plus SHA-256 hashes of both environment locks. Rankings and the
-`easycat_fastest` result use framework overhead,
-so host sleep drift cannot masquerade as framework work. Add
+artifact includes raw transcript-to-audio latency and a diagnostic
+provider-adjusted value that subtracts each fake provider's measured elapsed
+time, with P50/P95/P99 for both. The adjusted value is not a pure scheduling
+metric for frameworks that overlap dispatch work with provider execution; it
+intentionally receives no ranking or gating role. The artifact also records
+pins, revision state, the random seed, and SHA-256 hashes of both environment
+locks. Rankings and the `easycat_fastest` result use raw accepted-transcript to
+first-audio latency, where overlap is a real user-visible benefit. Add
 `--require-easycat-fastest` when a comparison should return a nonzero status
-unless EasyCat wins overhead at both P50 and P95.
+unless EasyCat wins raw latency at both P50 and P95.
 
-This is a framework-overhead benchmark, not a provider leaderboard or a claim
-about full microphone-to-speaker latency. Use the live validation lane and the
-per-turn waterfall for provider, endpointing, transport, and deployment
-comparisons.
+This is a normalized framework-pipeline benchmark, not a provider leaderboard
+or a claim about full microphone-to-speaker latency. Use the live validation
+lane and the per-turn waterfall for provider, endpointing, transport, and
+deployment comparisons.
 
 ## Latency-adding defaults
 

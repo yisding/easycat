@@ -11,9 +11,32 @@ from perf.bench_framework_latency import (
     _lock_metadata,
     _validate_sample,
     percentile,
+    rank_by_latency,
     run_benchmark,
     worker_specs,
 )
+
+
+def test_ranking_uses_raw_latency_not_overlap_adjusted_diagnostic() -> None:
+    results = {
+        "easycat": {
+            "latency_p50_ms": 21.0,
+            "latency_p95_ms": 23.0,
+            "framework_overhead_p50_ms": 1.0,
+            "framework_overhead_p95_ms": 1.5,
+        },
+        "livekit": {
+            "latency_p50_ms": 20.0,
+            "latency_p95_ms": 22.0,
+            "framework_overhead_p50_ms": 2.0,
+            "framework_overhead_p95_ms": 2.5,
+        },
+    }
+
+    ranking, fastest = rank_by_latency(results, ("easycat", "livekit"))
+
+    assert ranking == ["livekit", "easycat"]
+    assert fastest == {"p50": False, "p95": False, "all": False}
 
 
 def test_worker_specs_pin_competitors_in_isolated_environments(tmp_path: Path) -> None:
@@ -158,3 +181,6 @@ def test_easycat_worker_smoke_includes_public_voice_transition() -> None:
         result["methodology"]["correctness_gate"]
         == "exact_framework_tts_text_nonempty_audio_and_easycat_voice_transition"
     )
+    assert result["comparison_metric"] == "accepted_transcript_to_first_audio_ms"
+    assert result["ranking_by_latency_p50"] == ["easycat"]
+    assert "not used for ranking" in result["methodology"]["framework_overhead"]
