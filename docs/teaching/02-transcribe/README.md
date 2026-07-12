@@ -35,7 +35,7 @@
 ```diff
 --- docs/teaching/01-echo/main.py
 +++ docs/teaching/02-transcribe/streaming.py
-@@ -1,50 +1,104 @@
+@@ -1,57 +1,104 @@
 -"""Chapter 1 — Echo.
 +"""Chapter 2 — streaming transcription.
  
@@ -73,22 +73,28 @@
  from easycat.transports.local import LocalTransport
  
 -
--async def echo(transport) -> None:
+-async def echo(transport) -> tuple[int, int]:
 -    """Pipe every inbound audio chunk straight to the outbound side.
 -
 -    ``transport`` is deliberately untyped. Any object that matches
--    the ``Transport`` protocol (the four methods in
--    ``easycat.providers.Transport``) will work — that is the whole
--    point of duck-typed protocols. Chapter 13 swaps in a different
--    transport without changing this function.
+-    the inbound/outbound audio shape of ``easycat.providers.Transport``
+-    will work — that is the whole point of duck-typed protocols.
+-    Chapter 13 swaps in a different transport without changing this
+-    function.
 -
 -    ``transport.receive_audio()`` is an *async generator* of audio
--    chunks. ``await transport.send_audio(chunk)`` hands the chunk to
--    the speaker. No buffer, no turn detection, no STT — the point
--    of this chapter is the shape of the loop itself.
+-    chunks. ``await transport.send_audio(chunk)`` returns whether the
+-    transport accepted each chunk for delivery; it does not prove speaker
+-    playback. No turn detection or STT — the point of this chapter is the
+-    shape of the loop itself.
 -    """
+-    accepted = rejected = 0
 -    async for chunk in transport.receive_audio():
--        await transport.send_audio(chunk)
+-        if await transport.send_audio(chunk):
+-            accepted += 1
+-        else:
+-            rejected += 1
+-    return accepted, rejected
 +DURATION_S = 5
 +RUNS_DIR = Path(__file__).parent / "runs"
 +SESSION_ID = f"ch02-streaming-{int(time.time())}"
@@ -151,7 +157,8 @@
 +            )
 +
      try:
--        await echo(transport)
+-        accepted, rejected = await echo(transport)
+-        print(f"Echo stream ended: accepted={accepted}, rejected={rejected}")
 +        await asyncio.gather(feed_audio(), consume_events())
      finally:
          await transport.disconnect()
