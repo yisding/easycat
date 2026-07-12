@@ -319,7 +319,7 @@ async def test_chapter_10_replay_closes_offline_audio_stages(monkeypatch) -> Non
     monkeypatch.setattr(module, "export_debug_bundle", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(module, "RUNS_DIR", ROOT)
 
-    await module.run(Path("mic.wav"), None, "on", "on")
+    await module.run(Path("mic.wav"), Path("ref.wav"), "on", "on")
     assert closed == ["vad.close", "aec.close", "nr.close"]
 
 

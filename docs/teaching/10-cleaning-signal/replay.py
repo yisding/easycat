@@ -18,11 +18,15 @@ and an ``audio.config`` record of which backends are live.
 from __future__ import annotations
 
 import argparse
+import array
 import asyncio
+import math
+import sys
 import time
 import types
 import wave
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 from easycat.audio_format import AudioChunk, AudioFormat
@@ -72,15 +76,106 @@ def _chunks(data: bytes, fmt: AudioFormat):
         yield AudioChunk(data=data[offset : offset + frame_bytes], format=fmt)
 
 
-async def run(mic_path: Path, ref_path: Path | None, nr_flag: str, aec_flag: str) -> None:
+def _pcm16_power(data: bytes) -> tuple[int, int]:
+    """Return sum-of-squares and sample count for little-endian PCM16."""
+    if len(data) % 2:
+        raise ValueError("PCM16 data must contain whole samples")
+    samples = array.array("h")
+    samples.frombytes(data)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    return sum(sample * sample for sample in samples), len(samples)
+
+
+def _rms(power: int, sample_count: int) -> float:
+    return 0.0 if sample_count == 0 else math.sqrt(power / sample_count)
+
+
+def _rms_change_db(input_rms: float, cleaned_rms: float) -> float | None:
+    if input_rms <= 0 or cleaned_rms <= 0:
+        return None
+    return 20 * math.log10(cleaned_rms / input_rms)
+
+
+def _validate_reference(
+    mic_data: bytes,
+    ref_data: bytes,
+    audio_format: AudioFormat,
+    ref_path: Path | None,
+    aec_flag: str,
+) -> None:
+    frame_bytes = audio_format.sample_rate * FRAME_MS // 1000 * audio_format.frame_size
+    mic_frame_count = len(mic_data) // frame_bytes
+    ref_frame_count = len(ref_data) // frame_bytes
+    if aec_flag == "on" and ref_path is None:
+        raise SystemExit("--ref is required when --aec on")
+    if aec_flag == "on" and ref_frame_count != mic_frame_count:
+        raise SystemExit(
+            f"mic and ref frame counts differ for AEC: {mic_frame_count} vs {ref_frame_count}"
+        )
+
+
+@dataclass
+class ReplayMetrics:
+    vad_starts: int = 0
+    processed_frames: int = 0
+    reference_frames_fed: int = 0
+    input_power: int = 0
+    input_samples: int = 0
+    cleaned_power: int = 0
+    cleaned_samples: int = 0
+
+    async def measure_frame(self, mic_chunk, cleaned, ref_fed: bool, vad) -> dict[str, object]:
+        self.processed_frames += 1
+        self.reference_frames_fed += int(ref_fed)
+        frame_input_power, frame_input_samples = _pcm16_power(mic_chunk.data)
+        frame_cleaned_power, frame_cleaned_samples = _pcm16_power(cleaned.data)
+        self.input_power += frame_input_power
+        self.input_samples += frame_input_samples
+        self.cleaned_power += frame_cleaned_power
+        self.cleaned_samples += frame_cleaned_samples
+        frame_vad_starts = 0
+        async for event in vad.process(cleaned):
+            if isinstance(event, VADStartSpeaking):
+                frame_vad_starts += 1
+        self.vad_starts += frame_vad_starts
+        return {
+            "stage": "audio",
+            "frame_index": self.processed_frames,
+            "input_rms": round(_rms(frame_input_power, frame_input_samples), 3),
+            "cleaned_rms": round(_rms(frame_cleaned_power, frame_cleaned_samples), 3),
+            "reference_fed": ref_fed,
+            "vad_starts": frame_vad_starts,
+        }
+
+    def summary(self) -> dict[str, object]:
+        input_rms = _rms(self.input_power, self.input_samples)
+        cleaned_rms = _rms(self.cleaned_power, self.cleaned_samples)
+        change_db = _rms_change_db(input_rms, cleaned_rms)
+        return {
+            "stage": "audio",
+            "vad_starts": self.vad_starts,
+            "mic_frames": self.processed_frames,
+            "reference_frames_fed": self.reference_frames_fed,
+            "input_rms": round(input_rms, 3),
+            "cleaned_rms": round(cleaned_rms, 3),
+            "rms_change_db": None if change_db is None else round(change_db, 3),
+        }
+
+
+async def run(
+    mic_path: Path, ref_path: Path | None, nr_flag: str, aec_flag: str
+) -> dict[str, object]:
     mic_data, mic_fmt = _read_wav(mic_path)
     ref_data, ref_fmt = _read_wav(ref_path) if ref_path else (b"", mic_fmt)
     if ref_path and mic_fmt != ref_fmt:
         raise SystemExit(f"mic and ref formats differ: {mic_fmt} vs {ref_fmt}")
 
+    _validate_reference(mic_data, ref_data, mic_fmt, ref_path, aec_flag)
+
     journal = InMemoryRingBuffer(capacity=10_000)
     session_id = f"ch10-replay-{mic_path.stem}-nr{nr_flag}-aec{aec_flag}-{int(time.time())}"
-    vad_starts = 0
+    metrics = ReplayMetrics()
 
     async with AsyncExitStack() as resources:
         nr = create_noise_reducer(NoiseReducerConfig()) if nr_flag == "on" else _Passthrough()
@@ -115,28 +210,32 @@ async def run(mic_path: Path, ref_path: Path | None, nr_flag: str, aec_flag: str
                 aec.feed_reference(ref_chunk)
             cleaned = await nr.process(mic_chunk)
             cleaned = await aec.process(cleaned)
-            async for ev in vad.process(cleaned):
-                if isinstance(ev, VADStartSpeaking):
-                    vad_starts += 1
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="replay.frame",
+                session_id=session_id,
+                data=await metrics.measure_frame(mic_chunk, cleaned, ref_chunk is not None, vad),
+            )
 
-    frame_bytes = mic_fmt.sample_rate * FRAME_MS // 1000 * mic_fmt.frame_size
+    summary = metrics.summary()
     journal.append(
         kind=JournalRecordKind.EVENT,
         name="replay.summary",
         session_id=session_id,
-        data={
-            "stage": "audio",
-            "vad_starts": vad_starts,
-            "mic_frames": len(mic_data) // frame_bytes,
-        },
+        data=summary,
     )
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{session_id}.bundle"
     shim = types.SimpleNamespace(journal=journal)
     export_debug_bundle(shim, bundle_path, overwrite=True)
-    print(f"VAD speech-starts: {vad_starts}")
+    print(f"VAD speech-starts: {metrics.vad_starts}")
+    print(
+        f"RMS input → cleaned: {summary['input_rms']} → {summary['cleaned_rms']} "
+        f"({summary['rms_change_db']} dB)"
+    )
     print(f"Wrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    return summary
 
 
 def main() -> None:
@@ -148,6 +247,8 @@ def main() -> None:
     args = ap.parse_args()
     if not args.mic.exists():
         raise SystemExit(f"{args.mic} does not exist. Run generate_fixtures.py first.")
+    if args.ref is not None and not args.ref.exists():
+        raise SystemExit(f"{args.ref} does not exist. Run generate_fixtures.py first.")
     asyncio.run(run(args.mic, args.ref, args.nr, args.aec))
 
 

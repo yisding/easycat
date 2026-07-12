@@ -579,6 +579,30 @@ compare. They are **not** a substitute for a real speech test
 set. Replace the WAV pairs with your own recordings for a real
 eval.
 
+The replay fails closed when `--aec on` has no `--ref`, or when the
+mic and reference contain different numbers of complete 20 ms frames.
+Silently running an adaptive echo canceller with a missing or exhausted
+reference would recreate `wrong_order.py --mode aec-no-reference` while
+pretending to be the correct path.
+
+Run the provider-free metrics probe to exercise that contract and the
+successful aligned path without native NR/AEC backends:
+
+```bash
+uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+```
+
+The aligned case writes one `replay.frame` record per mic frame with
+input/cleaned RMS, reference-feed presence, and VAD starts. Its
+`replay.summary` adds aggregate `input_rms`, `cleaned_rms`,
+`rms_change_db`, and `reference_frames_fed`.
+
+**RMS is not a quality score.** A lower cleaned RMS proves that signal
+energy changed; it does not prove noise or echo was removed correctly.
+An over-aggressive filter can achieve a large reduction by deleting the
+near-end speaker too. Pair these measurements with VAD/STT outcomes and
+representative listening or perceptual metrics.
+
 The replay path owns the same native-backed stages even though it has
 no microphone or network connection. Its `AsyncExitStack` closes VAD,
 AEC, and NR in reverse construction order after the last frame—or if
@@ -663,14 +687,15 @@ from easycat.debug.testing import load_bundle
 for b in Path("docs/teaching/10-cleaning-signal/runs/").glob("*.bundle"):
     bundle = load_bundle(b)
     for r in bundle.records():
-        if r["name"] == "audio.config":
+        if r["name"] in ("audio.config", "replay.summary"):
             print(b.name, r["data"])
 ```
 
-Expect entries like `{"stage": "audio", "nr": "rnnoise", "aec": "livekit"}`
+Expect config entries like `{"stage": "audio", "nr": "rnnoise", "aec": "livekit"}`
 or `{"stage": "audio", "nr": "passthrough", "aec": "off"}` if the
 extras weren't installed — *that* is where you catch the silent
-fallback.
+backend fallback. The summary separately proves how many reference
+frames were fed and how signal energy changed.
 
 ## Half-duplex vs. full-duplex
 
