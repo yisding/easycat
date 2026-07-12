@@ -890,6 +890,42 @@ async def test_first_tts_provider_overlaps_agent_delta_handler() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_tts_provider_starts_before_terminal_agent_event() -> None:
+    class StartSignalingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(payload):
+                yield event
+
+    tts = StartSignalingTTS()
+    provider_started_before_done = False
+
+    class OrderingAgent(_SimpleStreamingAgent):
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            nonlocal provider_started_before_done
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="text_delta", text="Reply.")
+            provider_started_before_done = tts.started.is_set()
+            yield AgentBridgeEvent(kind="done", text="Reply.")
+
+    session = Session(_config(tts=tts, agent=OrderingAgent()))
+    session._turn = TurnContext("turn-prioritize-tts", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert provider_started_before_done is True
+
+
+@pytest.mark.asyncio
 async def test_agent_delta_handler_failure_rejects_speculative_tts() -> None:
     class StartSignalingTTS(FakeTTS):
         def __init__(self) -> None:

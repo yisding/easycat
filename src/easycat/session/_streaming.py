@@ -178,6 +178,7 @@ class _SentenceStreamBuffer:
         # non-space, non-``(`` continuation disambiguates that case, so we
         # recheck eagerly rather than waiting for a markdown-closer character.
         self._awaiting_link_dest = False
+        self._payload_count = 0
 
     def replace(self, text: str) -> None:
         """Replace the pending buffer wholesale (used by the ``done`` event)."""
@@ -279,6 +280,16 @@ class _SentenceStreamBuffer:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)
         if payload.text.strip():
             await self._tts_queue.put(payload)
+            first_payload = self._payload_count == 0
+            self._payload_count += 1
+            if first_payload:
+                # Two turns are intentional. The first wakes the waiting TTS
+                # consumer; that consumer creates the synthesis task and yields
+                # once to start it. The second lets the new task enter the TTS
+                # provider before this agent task consumes a terminal/done event.
+                # Public lifecycle/audio remains held by first_tts_payload_ready.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
             return True
         return False
 
