@@ -2,9 +2,15 @@
 
 ## 1. Probe the over-/under-shoot of `heard_text`
 
-**Task.** Run `estimate.py`. Interrupt the bot **exactly after one
-word**. Open the bundle — does `heard_text` end at that word, or
-does it over- or under-shoot?
+**Task.** Run `estimate.py`. Interrupt the bot as close as you can
+after hearing one word; repeat several times because a human reaction
+is not an exact clock. Open each bundle — does `heard_text` end at that
+word, or does it over- or under-shoot? Then inspect the production
+transport capabilities without opening audio devices:
+
+```bash
+uv run python docs/teaching/09-interruption/playback_evidence.py
+```
 
 **Hints**
 
@@ -20,10 +26,15 @@ does it over- or under-shoot?
    corrected toy does not count it at all.
 3. Net effect: `heard_text` *usually* overshoots by 0-2 words. On
    a *slow* word at the start of a sentence it can undershoot.
-4. Production `easycat.session.interruption` uses playback-ack
-   marks (from `LocalTransport`) to ground-truth the buffer
-   correction. The toy doesn't — read the production code once
-   you understand why.
+4. Production uses the strongest progress evidence each transport
+   exposes. `LocalTransport` and WebRTC emit `TransportAudioDelivered`
+   when their output callback/track consumes a chunk. Twilio sends
+   playback marks and emits `PlaybackMarkAck` when Twilio acknowledges
+   reaching them. Other transports fall back to a serial-playout timing
+   estimate from the send log.
+5. These signals are stronger than `send_audio=True`, but none is
+   literal ground truth at the human ear: device, network, and acoustic
+   delays can remain after the transport milestone.
 
 ## 2. Make markdown break the estimator
 
