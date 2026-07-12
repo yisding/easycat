@@ -227,6 +227,25 @@ def test_teaching_exercise_pages_link_back_to_the_chapter_and_ladder() -> None:
     assert not stale, "Teaching exercise navigation is incomplete: " + ", ".join(stale)
 
 
+def test_teaching_solution_keys_are_linked_into_the_lesson_flow() -> None:
+    stale: list[str] = []
+    solution_paths = sorted(TEACHING_DIR.glob("[0-9][0-9]-*/solutions.md"))
+
+    assert solution_paths, "Teaching ladder has no discoverable solution keys"
+    for solutions_path in solution_paths:
+        chapter_dir = solutions_path.parent
+        readme = (chapter_dir / "README.md").read_text(encoding="utf-8")
+        solutions = solutions_path.read_text(encoding="utf-8")
+        if "[`solutions.md`](./solutions.md)" not in readme:
+            stale.append(f"{chapter_dir.name}: README link")
+        if "[← Back to chapter](./README.md)" not in solutions:
+            stale.append(f"{chapter_dir.name}: chapter return link")
+        if "[Ladder index](../)" not in solutions:
+            stale.append(f"{chapter_dir.name}: ladder return link")
+
+    assert not stale, "Teaching solution-key navigation is incomplete: " + ", ".join(stale)
+
+
 def test_teaching_chapter_readmes_include_runnable_commands() -> None:
     missing: list[str] = []
 

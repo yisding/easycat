@@ -124,7 +124,8 @@ Now look for the agent:
 Nothing. The agent stage never ran.
 
 Write down your hypothesis — *why did STT commit an empty final?*
-— in a single sentence before opening `solutions.md`.
+— in a single sentence before opening
+[`solutions.md`](./solutions.md).
 
 ## Investigation 2 — semi-guided
 
@@ -157,7 +158,7 @@ for:
 - What setting in the journal explains why the bot self-triggered?
 
 Write your hypothesis in one sentence before peeking at
-`solutions.md`.
+[`solutions.md`](./solutions.md).
 
 ## Why the journal has to be structured
 
