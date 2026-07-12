@@ -43,7 +43,7 @@ hearing.
   chapter isolates the NR/AEC axis. Merge them yourself in
   exercise 4 if you want both at once.
 
-<!-- BEGIN auto:diff prev=09-interruption prev_src=estimate.py src=main.py -->
+<!-- BEGIN auto:diff prev=09-interruption prev_src=estimate.py src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>09-interruption/estimate.py</code> (auto-generated)</summary>
 
@@ -86,7 +86,7 @@ hearing.
 +it needs both the mic *and* the far-end reference (the TTS audio
 +we sent to the speaker). We feed the reference every time we
 +emit a TTS chunk.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
 +    RNNoise is included in quickstart; Krisp requires its own SDK.
@@ -97,21 +97,22 @@ hearing.
      export OPENAI_API_KEY=...
      export DEEPGRAM_API_KEY=...
      uv run easycat doctor
-@@ -24,19 +38,23 @@
- 
+@@ -24,20 +38,24 @@
+
  from __future__ import annotations
- 
+
 +import argparse
  import asyncio
  import collections
  import os
  import time
  import types
+ from contextlib import AsyncExitStack
 -from dataclasses import dataclass, field
  from pathlib import Path
- 
+
  from openai import AsyncOpenAI
- 
+
 -from easycat import CancelToken, LocalTransportConfig
 +from easycat import (
 +    CancelToken,
@@ -123,15 +124,15 @@ hearing.
  from easycat.events import (
      EventBus,
      STTEventType,
-@@ -44,6 +62,7 @@
+@@ -45,6 +63,7 @@
      VADStartSpeaking,
      VADStopSpeaking,
  )
 +from easycat.noise_reduction import NoiseReducerConfig, create_noise_reducer
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
  from easycat.session import split_at_sentence_boundaries
- from easycat.strip_markdown import strip_markdown
-@@ -57,48 +76,23 @@
+@@ -59,48 +78,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -158,7 +159,7 @@ hearing.
 +    Matches ``replay.py``'s passthrough so both entry points take the
 +    same shape when a stage is disabled.
      """
- 
+
 -    sentences_sent: list[str] = field(default_factory=list)
 -    bytes_accepted: int = 0
 -
@@ -192,13 +193,13 @@ hearing.
 +
 +    def version_info(self):
 +        return {"provider": "off"}
- 
- 
+
+
  class MiniTurnDetector:
-@@ -127,13 +121,33 @@
+@@ -129,13 +123,33 @@
                  self._preroll.append(chunk)
- 
- 
+
+
 -async def mic_producer(detector, transport, queue: asyncio.Queue) -> None:
 -    async for tag, chunk in detector.frames(transport.receive_audio()):
 +async def clean_audio_pipeline(transport, nr, aec):
@@ -217,8 +218,8 @@ hearing.
 +async def mic_producer(detector, cleaned_audio, queue: asyncio.Queue) -> None:
 +    async for tag, chunk in detector.frames(cleaned_audio):
          await queue.put((tag, chunk))
- 
- 
+
+
 -async def run_agent(client, history, sentence_queue, cancel: CancelToken):
 -    stream = await client.chat.completions.create(model=MODEL, messages=history, stream=True)
 +async def run_agent(client, user_text, sentence_queue, cancel: CancelToken):
@@ -233,10 +234,10 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -154,96 +168,48 @@
+@@ -156,41 +170,38 @@
      await sentence_queue.put(None)
- 
- 
+
+
 -async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journal):
 +async def drain_to_speaker(tts, transport, aec, sentence_queue, cancel, session_id, journal):
 +    """Emit TTS audio to the speaker AND feed it to AEC as the far-end reference."""
@@ -268,11 +269,92 @@ hearing.
 -                "bytes_accepted_so_far": ledger.bytes_accepted,
 -                "cancelled": cancel.is_cancelled,
 -            },
+-        )
+-
+-
+-async def observe_bot_task(bot_task: asyncio.Task, journal) -> None:
 +            session_id=session_id,
 +            data={"stage": "tts", "text": sentence},
++        )
++
++
++async def observe_bot_task(bot_task: asyncio.Task, journal, session_id: str) -> None:
+     """Retrieve a background result so failures never become orphan warnings."""
+     (result,) = await asyncio.gather(bot_task, return_exceptions=True)
+     if isinstance(result, Exception):
+         journal.append(
+             kind=JournalRecordKind.EVENT,
+             name="bot_task.error",
+-            session_id=SESSION_ID,
++            session_id=session_id,
+             data={"stage": "coordinator", "error": repr(result)},
          )
- 
- 
+
+@@ -216,7 +227,7 @@
+         await close_if_supported(stt)
+
+
+-async def shutdown_coordinator(stt, bot_task, active_cancel, journal) -> None:
++async def shutdown_coordinator(stt, bot_task, active_cancel, journal, session_id) -> None:
+     """Release both possible in-flight owners before shared providers close."""
+     try:
+         if stt is not None:
+@@ -227,76 +238,42 @@
+                 active_cancel.cancel()
+             if not bot_task.done():
+                 bot_task.cancel()
+-            await observe_bot_task(bot_task, journal)
+-
+-
+-async def route_barge_in(tag, bot_task, active_cancel, active_ledger, transport, journal, history):
+-    """Cancel output, rewrite history, and preserve speech_started for STT."""
++            await observe_bot_task(bot_task, journal, session_id)
++
++
++async def route_barge_in(tag, bot_task, active_cancel, transport, journal, session_id):
++    """Cancel active output while preserving speech_started for STT below."""
+     if bot_task is None:
+-        return bot_task, active_cancel, active_ledger, False
++        return bot_task, active_cancel, False
+     if bot_task.done():
+-        await observe_bot_task(bot_task, journal)
+-        return None, None, None, False
+-    if tag != "speech_started" or active_cancel is None or active_ledger is None:
+-        return bot_task, active_cancel, active_ledger, True
++        await observe_bot_task(bot_task, journal, session_id)
++        return None, None, False
++    if tag != "speech_started" or active_cancel is None:
++        return bot_task, active_cancel, True
+
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="interruption.start",
+-        session_id=SESSION_ID,
++        session_id=session_id,
+         data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+     )
+     active_cancel.cancel()
+     await transport.clear_audio()
+-    await observe_bot_task(bot_task, journal)
+-
+-    heard = active_ledger.heard_text()
+-    full = " ".join(active_ledger.sentences_sent)
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="interruption.estimate",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "interruption",
+-            "full_text": full,
+-            "heard_text": heard,
+-            "bytes_accepted": active_ledger.bytes_accepted,
+-        },
+-    )
+-    history.append({"role": "assistant", "content": heard})
+-    print(f"  bot (cut): {heard!r}")
+-    return None, None, None, False
+-
+-
 -async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 -    """Maintain a multi-turn history and rewrite it on cancel."""
 -    history: list[dict] = [
@@ -284,94 +366,67 @@ hearing.
 -            ),
 -        }
 -    ]
++    await observe_bot_task(bot_task, journal, session_id)
++    return None, None, False
++
++
 +async def coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal):
      stt = None
      bot_task: asyncio.Task | None = None
      active_cancel: CancelToken | None = None
 -    active_ledger: TurnLedger | None = None
- 
-     while True:
-         tag, chunk = await mic_queue.get()
- 
--        # Barge-in during bot speech → cancel AND rewrite history.
-         if bot_task is not None and not bot_task.done():
--            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
-+            if tag == "speech_started" and active_cancel is not None:
-                 journal.append(
-                     kind=JournalRecordKind.EVENT,
-                     name="interruption.start",
--                    session_id=SESSION_ID,
-+                    session_id=session_id,
-                     data={"stage": "vad", "t_ms": time.monotonic() * 1000},
-                 )
-                 active_cancel.cancel()
-                 await transport.clear_audio()
--
--                # Let the bot task unwind so the ledger is final. A
--                # transient agent/TTS error here shouldn't take the
--                # whole session down mid-barge-in; log it and move on.
--                try:
--                    await bot_task
--                except Exception as exc:
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="bot_task.error",
--                        session_id=SESSION_ID,
--                        data={"stage": "coordinator", "error": repr(exc)},
--                    )
--
--                heard = active_ledger.heard_text()
--                full = " ".join(active_ledger.sentences_sent)
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="interruption.estimate",
--                    session_id=SESSION_ID,
--                    data={
--                        "stage": "interruption",
--                        "full_text": full,
--                        "heard_text": heard,
--                        "bytes_accepted": active_ledger.bytes_accepted,
--                    },
--                )
--                # Rewrite history to the best prefix this toy can estimate.
--                history.append({"role": "assistant", "content": heard})
--                print(f"  bot (cut): {heard!r}")
--                active_cancel = None
--                active_ledger = None
--                bot_task = None
-             continue
- 
-         if tag == "speech_started":
-@@ -262,33 +228,56 @@
-             if not final_text.strip():
+
+     try:
+         while True:
+             tag, chunk = await mic_queue.get()
+
+-            # Cancel output, but fall through with speech_started intact.
+-            bot_task, active_cancel, active_ledger, consumed = await route_barge_in(
+-                tag,
+-                bot_task,
+-                active_cancel,
+-                active_ledger,
+-                transport,
+-                journal,
+-                history,
++            bot_task, active_cancel, consumed = await route_barge_in(
++                tag, bot_task, active_cancel, transport, journal, session_id
+             )
+             if consumed:
                  continue
-             print(f"  user: {final_text!r}")
--            history.append({"role": "user", "content": final_text})
- 
-             cancel = CancelToken()
--            ledger = TurnLedger()
-             active_cancel = cancel
--            active_ledger = ledger
+@@ -314,34 +291,32 @@
+                 if not final_text.strip():
+                     continue
+                 print(f"  user: {final_text!r}")
+-                history.append({"role": "user", "content": final_text})
+
+                 cancel = CancelToken()
+-                ledger = TurnLedger()
+                 active_cancel = cancel
+-                active_ledger = ledger
 -
--            async def _bot(hist=list(history), ct=cancel, led=ledger):
+-                async def _bot(hist=list(history), ct=cancel, led=ledger):
 +
-+            async def _bot(text=final_text, ct=cancel):
-                 q: asyncio.Queue = asyncio.Queue()
-                 await asyncio.gather(
--                    run_agent(client, hist, q, ct),
--                    drain_to_speaker(tts, transport, q, ct, led, journal),
-+                    run_agent(client, text, q, ct),
-+                    drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
-                 )
--                if not ct.is_cancelled:
--                    # Clean completion: record the full reply in history.
--                    full = " ".join(led.sentences_sent)
--                    history.append({"role": "assistant", "content": full})
--                    print(f"  bot: {full!r}")
- 
-             bot_task = asyncio.create_task(_bot())
- 
- 
++                async def _bot(text=final_text, ct=cancel):
+                     q: asyncio.Queue = asyncio.Queue()
+                     await asyncio.gather(
+-                        run_agent(client, hist, q, ct),
+-                        drain_to_speaker(tts, transport, q, ct, led, journal),
++                        run_agent(client, text, q, ct),
++                        drain_to_speaker(tts, transport, aec, q, ct, session_id, journal),
+                     )
+-                    if not ct.is_cancelled:
+-                        # Clean completion: record the full reply in history.
+-                        full = " ".join(led.sentences_sent)
+-                        history.append({"role": "assistant", "content": full})
+-                        print(f"  bot: {full!r}")
+
+                 bot_task = asyncio.create_task(_bot())
+     finally:
+-        await shutdown_coordinator(stt, bot_task, active_cancel, journal)
++        await shutdown_coordinator(stt, bot_task, active_cancel, journal, session_id)
+
+
  async def main() -> None:
 +    ap = argparse.ArgumentParser()
 +    ap.add_argument("--nr", choices=("on", "off"), default="off")
@@ -380,58 +435,65 @@ hearing.
 +
      if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
          raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
- 
+
 +    session_id = f"ch10-nr{args.nr}-aec{args.aec}-{int(time.time())}"
      journal = InMemoryRingBuffer(capacity=10_000)
-+
-+    # Factory-wired stages. NR/AEC both fall back to passthrough if the
-+    # optional deps aren't installed; the journal records which one is live.
-+    if args.nr == "on":
-+        nr = create_noise_reducer(NoiseReducerConfig())
-+        nr_backend = nr.version_info().get("provider", "unknown")
-+    else:
-+        nr = _Passthrough()
-+        nr_backend = "off"
-+
-+    if args.aec == "on":
-+        aec = create_echo_canceller(EchoCancellationConfig(enabled=True))
-+        aec_backend = aec.version_info().get("provider", "unknown")
-+    else:
-+        aec = _Passthrough()
-+        aec_backend = "off"
-+
-+    print(f"NR backend: {nr_backend}    AEC backend: {aec_backend}")
-+    journal.append(
-+        kind=JournalRecordKind.EVENT,
-+        name="audio.config",
-+        session_id=session_id,
-+        data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
-+    )
-+
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-     vad = create_vad(VADConfig())
-     detector = MiniTurnDetector(vad)
-@@ -307,13 +296,14 @@
+
+@@ -358,6 +333,32 @@
+         resources.push_async_callback(transport.disconnect)
+         await transport.connect()
+
++        # Factory-wired stages. NR/AEC both fall back to passthrough if the
++        # optional deps aren't installed; the journal records which one is live.
++        if args.nr == "on":
++            nr = create_noise_reducer(NoiseReducerConfig())
++            nr_backend = nr.version_info().get("provider", "unknown")
++        else:
++            nr = _Passthrough()
++            nr_backend = "off"
++        resources.push_async_callback(close_if_supported, nr)
++
++        if args.aec == "on":
++            aec = create_echo_canceller(EchoCancellationConfig(enabled=True))
++            aec_backend = aec.version_info().get("provider", "unknown")
++        else:
++            aec = _Passthrough()
++            aec_backend = "off"
++        resources.push_async_callback(close_if_supported, aec)
++
++        print(f"NR backend: {nr_backend}    AEC backend: {aec_backend}")
++        journal.append(
++            kind=JournalRecordKind.EVENT,
++            name="audio.config",
++            session_id=session_id,
++            data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
++        )
++
+         vad = create_vad(VADConfig())
+         resources.push_async_callback(close_if_supported, vad)
+         detector = MiniTurnDetector(vad)
+@@ -369,19 +370,22 @@
          )
- 
-     await transport.connect()
--    print("Cancel + history rewrite. Interrupt freely. Ctrl-C to stop.\n")
-+    print("Talk. Ctrl-C to stop.\n")
- 
-     mic_queue: asyncio.Queue = asyncio.Queue()
-+    cleaned = clean_audio_pipeline(transport, nr, aec)
-     try:
-         await asyncio.gather(
--            mic_producer(detector, transport, mic_queue),
--            coordinator(mic_queue, stt_factory, client, tts, transport, journal),
-+            mic_producer(detector, cleaned, mic_queue),
-+            coordinator(mic_queue, stt_factory, client, tts, transport, aec, session_id, journal),
-         )
-     except (KeyboardInterrupt, asyncio.CancelledError):
-         pass
-@@ -321,7 +311,7 @@
-         await transport.disconnect()
- 
+         resources.push_async_callback(close_if_supported, tts)
+
+-        print("Cancel + history rewrite. Interrupt freely. Ctrl-C to stop.\n")
++        print("Talk. Ctrl-C to stop.\n")
+
+         mic_queue: asyncio.Queue = asyncio.Queue()
++        cleaned = clean_audio_pipeline(transport, nr, aec)
+         try:
+             await asyncio.gather(
+-                mic_producer(detector, transport, mic_queue),
+-                coordinator(mic_queue, stt_factory, client, tts, transport, journal),
++                mic_producer(detector, cleaned, mic_queue),
++                coordinator(
++                    mic_queue, stt_factory, client, tts, transport, aec, session_id, journal
++                ),
+             )
+         except (KeyboardInterrupt, asyncio.CancelledError):
+             pass
+
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
 +    bundle_path = RUNS_DIR / f"{session_id}.bundle"
@@ -504,6 +566,12 @@ lockstep `feed_reference` path and dump bundles the journal can
 compare. They are **not** a substitute for a real speech test
 set. Replace the WAV pairs with your own recordings for a real
 eval.
+
+The replay path owns the same native-backed stages even though it has
+no microphone or network connection. Its `AsyncExitStack` closes VAD,
+AEC, and NR in reverse construction order after the last frame—or if
+processing raises halfway through a fixture. Offline does not mean
+resource-free.
 
 ## The pipeline
 
