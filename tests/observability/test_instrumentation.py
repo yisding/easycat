@@ -320,7 +320,6 @@ async def test_transport_send_span_and_audio_counters_emit(
     assert frames_counter.adds == [(1, {"easycat.surface": "tts"})]
 
 
-@pytest.mark.asyncio
 async def test_transport_send_validates_span_without_otel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -332,6 +331,16 @@ async def test_transport_send_validates_span_without_otel(
 
     monkeypatch.setattr(observability, "_get_tracer", lambda: None)
     monkeypatch.setattr(observability, "_get_meter", lambda: None)
+    monkeypatch.setattr(
+        observability,
+        "increment_counter",
+        lambda *args, **kwargs: pytest.fail("unavailable metrics must be skipped"),
+    )
+    monkeypatch.setattr(
+        observability,
+        "record_histogram",
+        lambda *args, **kwargs: pytest.fail("unavailable metrics must be skipped"),
+    )
     original_span = observability.span
     calls: list[tuple[str, dict[str, str]]] = []
 
