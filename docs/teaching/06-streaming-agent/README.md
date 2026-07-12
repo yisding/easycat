@@ -28,7 +28,7 @@
 - **Sidebar adds:** SSML / pronunciation, backpressure, and a
   reprise of "partials can flap; commit spoken output on FINAL only."
 
-<!-- BEGIN auto:diff prev=05-blocking-agent src=main.py -->
+<!-- BEGIN auto:diff prev=05-blocking-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>05-blocking-agent/main.py</code> (auto-generated)</summary>
 
@@ -50,10 +50,10 @@
 +sentence N is still playing.
 +
 +First-audio latency drops by ~3× versus chapter 5.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
-@@ -32,24 +34,28 @@
+@@ -32,25 +34,28 @@
  from easycat.events import (
      EventBus,
      STTEventType,
@@ -63,6 +63,7 @@
  )
 -from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+-from easycat.runtime.capabilities import close_if_supported
 +from easycat.session import split_at_sentence_boundaries
 +from easycat.strip_markdown import strip_markdown
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -71,24 +72,24 @@
 +from easycat.tts.input import TTSInput
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
- 
+
  PREROLL_FRAMES = 15
  MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch05-blocking-{int(time.time())}"
 +SESSION_ID = f"ch06-streaming-{int(time.time())}"
- 
- 
+
+
  class MiniTurnDetector:
 -    """Same as chapter 4."""
 +    """Same as chapters 4 & 5."""
- 
+
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -74,49 +80,110 @@
+@@ -75,49 +80,110 @@
                  self._preroll.append(chunk)
- 
- 
+
+
 -class FirstAudioProbe:
 -    """Forward audio while recording when the first chunk is accepted."""
 -
@@ -233,10 +234,10 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -127,51 +194,19 @@
+@@ -128,51 +194,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
 +    journal.append(
 +        kind=JournalRecordKind.EVENT,
 +        name="stt.final",
@@ -297,7 +298,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -180,15 +215,12 @@
+@@ -181,23 +215,43 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -315,38 +316,91 @@
 +        print("  (turn gap unavailable — TTS produced no accepted audio)")
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
- 
-@@ -202,6 +234,9 @@
-     vad = create_vad(VADConfig())
-     detector = MiniTurnDetector(vad)
-     client = AsyncOpenAI()
+
+
+-async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
+-    """Stream turns and close every per-turn STT, including on cancellation."""
+-    stt = None
+-    try:
++async def main() -> None:
++    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
++        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
++
++    journal = InMemoryRingBuffer(capacity=10_000)
++    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
++    vad = create_vad(VADConfig())
++    detector = MiniTurnDetector(vad)
++    client = AsyncOpenAI()
 +    tts = create_tts_provider(
 +        TTSProviderConfig(provider="openai", api_key=os.environ["OPENAI_API_KEY"])
 +    )
- 
-     def stt_factory():
-         return create_stt_provider(
-@@ -213,10 +248,9 @@
-         )
- 
-     await transport.connect()
--    print("Talk. Each turn will feel slow. That is the lesson.\n")
++
++    def stt_factory():
++        return create_stt_provider(
++            STTProviderConfig(
++                provider="deepgram",
++                api_key=os.environ["DEEPGRAM_API_KEY"],
++                params={"sample_rate": 24000, "event_bus": EventBus()},
++            )
++        )
++
++    await transport.connect()
 +    print("Streaming agent. Ctrl-C to stop.\n")
- 
-     async def collect_turns():
--        """Same shape as chapter 4: stream live into STT per turn."""
-         stt = None
++
++    async def collect_turns():
++        stt = None
          async for tag, chunk in detector.frames(transport.receive_audio()):
              if tag == "speech_started":
-@@ -227,7 +261,7 @@
+                 if stt is None:
+@@ -206,45 +260,12 @@
+             elif tag == "frame" and stt is not None:
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
+-                active_stt = stt
+-                try:
+-                    await active_stt.end_stream()
+-                    await run_turn(transport, active_stt, client, journal)
+-                finally:
+-                    stt = None
+-                    await close_if_supported(active_stt)
+-    finally:
+-        if stt is not None:
+-            try:
                  await stt.end_stream()
--                await run_turn(transport, stt, client, journal)
+-            finally:
+-                await close_if_supported(stt)
+-
+-
+-async def main() -> None:
+-    if not (os.getenv("OPENAI_API_KEY") and os.getenv("DEEPGRAM_API_KEY")):
+-        raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
+-
+-    journal = InMemoryRingBuffer(capacity=10_000)
+-    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+-    vad = create_vad(VADConfig())
+-    detector = MiniTurnDetector(vad)
+-    client = AsyncOpenAI()
+-
+-    def stt_factory():
+-        return create_stt_provider(
+-            STTProviderConfig(
+-                provider="deepgram",
+-                api_key=os.environ["DEEPGRAM_API_KEY"],
+-                params={"sample_rate": 24000, "event_bus": EventBus()},
+-            )
+-        )
+-
+-    await transport.connect()
+-    print("Talk. Each turn will feel slow. That is the lesson.\n")
 +                await run_turn(transport, stt, client, tts, journal)
-                 stt = None
- 
++                stt = None
+
      try:
+-        await collect_turns(transport, detector, stt_factory, client, journal)
++        await collect_turns()
+     except (KeyboardInterrupt, asyncio.CancelledError):
+         pass
+     finally:
 ```
 
 </details>

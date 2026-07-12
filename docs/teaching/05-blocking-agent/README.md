@@ -85,8 +85,8 @@ build movement (chapters 6-9) exists to close this gap.
 +)
  from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
- from easycat.stt.factory import STTProviderConfig, create_stt_provider
-@@ -38,24 +42,14 @@
+ from easycat.runtime.capabilities import close_if_supported
+@@ -39,24 +43,14 @@
  from easycat.vad import VADConfig
  from easycat.vad.factory import create_vad
  
@@ -115,7 +115,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -65,127 +59,186 @@
+@@ -66,86 +60,159 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -151,49 +151,6 @@ build movement (chapters 6-9) exists to close this gap.
 -    session_id: str,
 -) -> None:
 -    """On each VAD turn, stream audio into STT, wait for final, speak it."""
--    stt = None
--    collected_final = ""
--
--    async for tag, chunk in detector.frames(transport.receive_audio()):
--        if tag == "speech_started":
--            if stt is None:
--                stt = stt_factory()
--                await stt.start_stream()
--                collected_final = ""
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="turn.started",
--                    session_id=session_id,
--                    data={"stage": "turn", "t_ms": time.monotonic() * 1000},
--                )
--
--        elif tag == "frame" and stt is not None:
--            await stt.send_audio(chunk)
--
--        elif tag == "speech_ended" and stt is not None:
--            # Drain the event queue until the sentinel from end_stream().
--            # A VADStop before STT saw any speech is harmless — we just
--            # close an empty stream and get no FINAL back.
--            await stt.end_stream()
--            async for event in stt.events():
--                if event.type == STTEventType.FINAL:
--                    collected_final = event.text
--            stt = None
--
--            journal.append(
--                kind=JournalRecordKind.EVENT,
--                name="turn.ended",
--                session_id=session_id,
--                data={
--                    "stage": "turn",
--                    "t_ms": time.monotonic() * 1000,
--                    "text": collected_final,
--                },
--            )
--
--            if collected_final.strip():
--                print(f"  → parrot: {collected_final!r}")
--                await speak(transport, collected_final)
 +class FirstAudioProbe:
 +    """Forward audio while recording when the first chunk is accepted."""
 +
@@ -311,6 +268,63 @@ build movement (chapters 6-9) exists to close this gap.
 +        print("  (turn gap unavailable — TTS produced no audio)")
 +    else:
 +        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
++
++
++async def collect_turns(transport, detector, stt_factory, client, journal) -> None:
++    """Stream turns and close every per-turn STT, including on cancellation."""
+     stt = None
+-    collected_final = ""
+-
+     try:
+         async for tag, chunk in detector.frames(transport.receive_audio()):
+             if tag == "speech_started":
+                 if stt is None:
+                     stt = stt_factory()
+                     await stt.start_stream()
+-                    collected_final = ""
+-                    journal.append(
+-                        kind=JournalRecordKind.EVENT,
+-                        name="turn.started",
+-                        session_id=session_id,
+-                        data={"stage": "turn", "t_ms": time.monotonic() * 1000},
+-                    )
+-
+             elif tag == "frame" and stt is not None:
+                 await stt.send_audio(chunk)
+-
+             elif tag == "speech_ended" and stt is not None:
+-                # Drain the event queue until the sentinel from end_stream().
+-                # A VADStop before STT saw any speech is harmless — we just
+-                # close an empty stream and get no FINAL back.
+                 active_stt = stt
+                 try:
+                     await active_stt.end_stream()
+-                    async for event in active_stt.events():
+-                        if event.type == STTEventType.FINAL:
+-                            collected_final = event.text
++                    await run_turn(transport, active_stt, client, journal)
+                 finally:
+                     stt = None
+                     await close_if_supported(active_stt)
+-
+-                journal.append(
+-                    kind=JournalRecordKind.EVENT,
+-                    name="turn.ended",
+-                    session_id=session_id,
+-                    data={
+-                        "stage": "turn",
+-                        "t_ms": time.monotonic() * 1000,
+-                        "text": collected_final,
+-                    },
+-                )
+-
+-                if collected_final.strip():
+-                    print(f"  → parrot: {collected_final!r}")
+-                    await speak(transport, collected_final)
+     finally:
+         if stt is not None:
+             try:
+@@ -155,49 +222,36 @@
  
  
  async def main() -> None:
@@ -353,25 +367,10 @@ build movement (chapters 6-9) exists to close this gap.
      await transport.connect()
 -    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
 +    print("Talk. Each turn will feel slow. That is the lesson.\n")
-+
-+    async def collect_turns():
-+        """Same shape as chapter 4: stream live into STT per turn."""
-+        stt = None
-+        async for tag, chunk in detector.frames(transport.receive_audio()):
-+            if tag == "speech_started":
-+                if stt is None:
-+                    stt = stt_factory()
-+                    await stt.start_stream()
-+            elif tag == "frame" and stt is not None:
-+                await stt.send_audio(chunk)
-+            elif tag == "speech_ended" and stt is not None:
-+                await stt.end_stream()
-+                await run_turn(transport, stt, client, journal)
-+                stt = None
  
      try:
 -        await parrot(transport, stt_factory, detector, journal, session_id)
-+        await collect_turns()
++        await collect_turns(transport, detector, stt_factory, client, journal)
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
      finally:
@@ -407,7 +406,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L102-L111)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L103-L112)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->

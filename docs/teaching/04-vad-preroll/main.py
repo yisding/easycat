@@ -33,6 +33,7 @@ from easycat.debug.export import export_debug_bundle
 from easycat.events import EventBus, STTEventType, VADStartSpeaking, VADStopSpeaking
 from easycat.recipes import speak
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
 from easycat.transports.local import LocalTransport
 from easycat.vad import VADConfig
@@ -100,46 +101,57 @@ async def parrot(
     stt = None
     collected_final = ""
 
-    async for tag, chunk in detector.frames(transport.receive_audio()):
-        if tag == "speech_started":
-            if stt is None:
-                stt = stt_factory()
-                await stt.start_stream()
-                collected_final = ""
+    try:
+        async for tag, chunk in detector.frames(transport.receive_audio()):
+            if tag == "speech_started":
+                if stt is None:
+                    stt = stt_factory()
+                    await stt.start_stream()
+                    collected_final = ""
+                    journal.append(
+                        kind=JournalRecordKind.EVENT,
+                        name="turn.started",
+                        session_id=session_id,
+                        data={"stage": "turn", "t_ms": time.monotonic() * 1000},
+                    )
+
+            elif tag == "frame" and stt is not None:
+                await stt.send_audio(chunk)
+
+            elif tag == "speech_ended" and stt is not None:
+                # Drain the event queue until the sentinel from end_stream().
+                # A VADStop before STT saw any speech is harmless — we just
+                # close an empty stream and get no FINAL back.
+                active_stt = stt
+                try:
+                    await active_stt.end_stream()
+                    async for event in active_stt.events():
+                        if event.type == STTEventType.FINAL:
+                            collected_final = event.text
+                finally:
+                    stt = None
+                    await close_if_supported(active_stt)
+
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="turn.started",
+                    name="turn.ended",
                     session_id=session_id,
-                    data={"stage": "turn", "t_ms": time.monotonic() * 1000},
+                    data={
+                        "stage": "turn",
+                        "t_ms": time.monotonic() * 1000,
+                        "text": collected_final,
+                    },
                 )
 
-        elif tag == "frame" and stt is not None:
-            await stt.send_audio(chunk)
-
-        elif tag == "speech_ended" and stt is not None:
-            # Drain the event queue until the sentinel from end_stream().
-            # A VADStop before STT saw any speech is harmless — we just
-            # close an empty stream and get no FINAL back.
-            await stt.end_stream()
-            async for event in stt.events():
-                if event.type == STTEventType.FINAL:
-                    collected_final = event.text
-            stt = None
-
-            journal.append(
-                kind=JournalRecordKind.EVENT,
-                name="turn.ended",
-                session_id=session_id,
-                data={
-                    "stage": "turn",
-                    "t_ms": time.monotonic() * 1000,
-                    "text": collected_final,
-                },
-            )
-
-            if collected_final.strip():
-                print(f"  → parrot: {collected_final!r}")
-                await speak(transport, collected_final)
+                if collected_final.strip():
+                    print(f"  → parrot: {collected_final!r}")
+                    await speak(transport, collected_final)
+    finally:
+        if stt is not None:
+            try:
+                await stt.end_stream()
+            finally:
+                await close_if_supported(stt)
 
 
 async def main() -> None:

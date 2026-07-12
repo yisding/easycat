@@ -42,11 +42,12 @@ personally heard this fail on your own voice.
 +++ docs/teaching/03-parrot-naive/main.py
 @@ -1,12 +1,15 @@
 -"""Chapter 2 — streaming transcription.
-+"""Chapter 3 — Parrot, the naive way.
- 
+-
 -Open a mic transport, stream audio into an STT provider, and print
 -partial + final transcripts with timestamps as they arrive. Writes a
 -debug bundle to ``runs/``.
++"""Chapter 3 — Parrot, the naive way.
++
 +A bot that parrots whatever it thinks you just said. Turn detection
 +is a fixed silence timeout on STT partials. Deliberately broken.
 +
@@ -62,7 +63,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -24,53 +27,133 @@
+@@ -24,54 +27,145 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -70,6 +71,7 @@ personally heard this fail on your own voice.
 +from easycat.events import EventBus, STTEventType
 +from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+ from easycat.runtime.capabilities import close_if_supported
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
  
@@ -120,6 +122,17 @@ personally heard this fail on your own voice.
 +        rejected_chunks=rejected_chunks,
 +        offset_ms=(time.monotonic() - start) * 1000,
 +    )
++
++
++async def shutdown(stt, transport) -> None:
++    """End the logical STT stream, close its provider, then disconnect."""
++    try:
++        await stt.end_stream()
++    finally:
++        try:
++            await close_if_supported(stt)
++        finally:
++            await transport.disconnect()
  
  
  async def main() -> None:
@@ -136,11 +149,11 @@ personally heard this fail on your own voice.
 -    # instead of calling the `transcribe_file` shortcut. No consumer
 -    # code would change if we swapped "openai" for "deepgram".
 -    stt = create_stt_provider(STTProviderConfig(provider="openai", api_key=api_key))
-+    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
- 
+-
 -    # LocalTransport's default 24 kHz matches chapters 3+. OpenAI STT
 -    # ingests WAV at whatever sample rate it's given, so this is fine.
--    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
++
 +    # Deepgram emits partials mid-speech, which is what this chapter needs
 +    # to feel break. Its STT factory config takes provider-specific args via
 +    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -222,7 +235,7 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -81,16 +164,15 @@
+@@ -82,23 +176,15 @@
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -239,11 +252,18 @@ personally heard this fail on your own voice.
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
      finally:
-+        await stt.end_stream()
-         await transport.disconnect()
+-        try:
+-            await stt.end_stream()
+-        finally:
+-            try:
+-                await close_if_supported(stt)
+-            finally:
+-                await transport.disconnect()
++        await shutdown(stt, transport)
  
      RUNS_DIR.mkdir(exist_ok=True)
-@@ -101,4 +183,7 @@
+     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
+@@ -108,4 +194,7 @@
  
  
  if __name__ == "__main__":

@@ -26,6 +26,7 @@ from easycat.audio_format import PCM16_MONO_24K
 from easycat.debug.export import export_debug_bundle
 from easycat.events import STTEventType
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
+from easycat.runtime.capabilities import close_if_supported
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
 from easycat.transports.local import LocalTransport
 
@@ -91,7 +92,13 @@ async def main() -> None:
     try:
         await asyncio.gather(feed_audio(), consume_events())
     finally:
-        await transport.disconnect()
+        try:
+            await stt.end_stream()
+        finally:
+            try:
+                await close_if_supported(stt)
+            finally:
+                await transport.disconnect()
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

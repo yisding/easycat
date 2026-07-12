@@ -96,8 +96,29 @@ defends against that your `MiniTurnDetector` can't handle.
    chapter 4's `MiniTurnDetector` only has 4 transitions. The
    production FSM has ~15.
 
+## 4. Cancel before speech ends
+
+**Task.** Run the provider-free cleanup probe:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/stt_cleanup_probe.py
+```
+
+Remove the outer `finally` in `parrot()` and rerun. Which counter changes on
+the cancelled path? Restore it and explain why `end_stream()` and final
+provider cleanup are separate operations.
+
+**Hints**
+
+1. The normal path ends and closes exactly once after draining STT events.
+2. The cancelled path never receives `speech_ended`, so only the outer
+   `finally` can end and close its active provider.
+3. `close_if_supported()` is capability-based: providers without a cleanup
+   hook remain valid, while persistent providers release their resources.
+
 ## Self-check
 
 You should be able to look at a VAD-based pipeline and predict
 which utterances will break it (lists, soft talkers, leading
-quiet syllables) without running them.
+quiet syllables) without running them, and explain who ends and closes each
+per-turn STT provider.
