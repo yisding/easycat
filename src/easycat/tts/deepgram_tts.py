@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,7 +77,7 @@ class DeepgramTTS(_WSTTSBase):
         self._config = config
         self._stream_lock = asyncio.Lock()
         self._synthesis_owner: asyncio.Task[Any] | None = None
-        self._clear_ack: asyncio.Event | None = None
+        self._cycle_done: asyncio.Event | None = None
         self._flush_times: deque[float] = deque()
         # Text of the in-flight utterance, replayed by the on_reconnect hook
         # so a mid-stream drop restarts the utterance from the top instead of
@@ -243,15 +244,19 @@ class DeepgramTTS(_WSTTSBase):
         # one recv_iter consumer and one outstanding Flush cycle on the shared
         # connection, matching the provider's sequential streaming contract.
         async with self._stream_lock:
-            async for event in self._synthesize_locked(text):
-                yield event
+            # async-for does not close a delegated async generator when this
+            # outer generator is closed. Own it explicitly so caller early
+            # exit deterministically runs the socket/cycle cleanup below.
+            async with contextlib.aclosing(self._synthesize_locked(text)) as stream:
+                async for event in stream:
+                    yield event
 
-    async def _synthesize_locked(self, text: str) -> AsyncIterator[TTSEvent]:
+    async def _synthesize_locked(self, text: str) -> AsyncGenerator[TTSEvent, None]:
         """Run one serialized Speak/Flush cycle."""
         self._start_synthesis()
         self._synthesis_owner = asyncio.current_task()
-        clear_ack = asyncio.Event()
-        self._clear_ack = clear_ack
+        cycle_done = asyncio.Event()
+        self._cycle_done = cycle_done
         cycle_completed = False
         if not self._config.persistent_ws:
             self._ws = self._create_ws()
@@ -288,7 +293,6 @@ class DeepgramTTS(_WSTTSBase):
                         "Error",
                     }:
                         cycle_completed = True
-                        clear_ack.set()
                         break
                     continue
 
@@ -306,16 +310,25 @@ class DeepgramTTS(_WSTTSBase):
                 self._emit_provider_error(exc, ws_close_code=getattr(exc, "code", None))
                 raise
         finally:
+            await self._finish_cycle(cycle_done, completed=cycle_completed)
+
+    async def _finish_cycle(self, cycle_done: asyncio.Event, *, completed: bool) -> None:
+        """Publish cycle completion after protocol or socket cleanup finishes."""
+        try:
             # An abandoned/cancelled cycle without its protocol boundary would
             # leave unscoped frames queued on the context-free socket. Closing
             # is the only safe recovery in that case.
-            if not self._config.persistent_ws or not cycle_completed:
+            if not self._config.persistent_ws or not completed:
                 await self._close_ws()
+        finally:
             self._pending_text = None
-            if self._clear_ack is clear_ack:
-                self._clear_ack = None
+            if self._cycle_done is cycle_done:
+                self._cycle_done = None
             self._synthesis_owner = None
             self._end_synthesis()
+            # Wake cancel() only after protocol completion or dirty-socket
+            # recovery and all provider state teardown have finished.
+            cycle_done.set()
 
     async def stop(self) -> None:
         """Gracefully stop synthesis.
@@ -335,7 +348,7 @@ class DeepgramTTS(_WSTTSBase):
         ws = self._ws
         if self._config.persistent_ws and was_active and ws is not None:
             owner = self._synthesis_owner
-            clear_ack = self._clear_ack
+            cycle_done = self._cycle_done
             try:
                 await ws.send(json.dumps({"type": "Clear"}))
             except Exception:
@@ -345,12 +358,12 @@ class DeepgramTTS(_WSTTSBase):
                 # synthesis owner drains Cleared. A direct caller may invoke
                 # cancel() inside the async-for body, where that same task
                 # cannot concurrently drain; close immediately in that shape.
-                if asyncio.current_task() is owner or clear_ack is None:
+                if asyncio.current_task() is owner or cycle_done is None:
                     await self._close_ws()
                 else:
                     try:
                         await asyncio.wait_for(
-                            clear_ack.wait(), timeout=self._config.clear_timeout_s
+                            cycle_done.wait(), timeout=self._config.clear_timeout_s
                         )
                     except TimeoutError:
                         logger.debug("Deepgram Clear acknowledgement timed out; closing socket")

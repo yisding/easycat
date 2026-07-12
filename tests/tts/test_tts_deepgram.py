@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import struct
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -157,6 +158,62 @@ class TestDeepgramPersistent:
 
         assert fake._closed
         assert provider._ws is None
+
+    async def test_early_exit_closes_inner_cycle_before_next_synthesis(self):
+        provider = self._make_provider()
+        abandoned = QueueDeepgramSocket(audio=_pcm16_bytes(120), hold_first_flush=True)
+        next_socket = QueueDeepgramSocket(audio=_pcm16_bytes(120))
+        factory = MagicMock(side_effect=[abandoned, next_socket])
+
+        with patch.object(provider, "_create_ws", factory):
+            stream = provider.synthesize("abandoned")
+            async with contextlib.aclosing(stream):
+                first = await anext(stream)
+                assert first.type == TTSEventType.AUDIO
+
+            assert abandoned._closed
+            assert provider._ws is None
+            assert not provider.is_active
+
+            next_events = [event async for event in provider.synthesize("next")]
+
+        assert next_events
+        assert factory.call_count == 2
+        assert not next_socket._closed
+        await provider.close()
+
+    async def test_cancel_finishes_when_consumer_exits_before_cleared(self):
+        provider = DeepgramTTS(DeepgramTTSConfig(api_key="test-key", clear_timeout_s=1.0))
+        fake = QueueDeepgramSocket(
+            audio=_pcm16_bytes(120),
+            acknowledge_clear=False,
+            hold_first_flush=True,
+        )
+        first_audio = asyncio.Event()
+        release_consumer = asyncio.Event()
+
+        async def _consume() -> None:
+            stream = provider.synthesize("cancel promptly")
+            async with contextlib.aclosing(stream):
+                async for _event in stream:
+                    first_audio.set()
+                    await release_consumer.wait()
+                    break
+
+        with patch.object(provider, "_create_ws", return_value=fake):
+            synthesis_task = asyncio.create_task(_consume())
+            await first_audio.wait()
+            cancel_task = asyncio.create_task(provider.cancel())
+            await asyncio.sleep(0)
+            assert not cancel_task.done()
+
+            release_consumer.set()
+            await asyncio.wait_for(cancel_task, timeout=0.1)
+            await synthesis_task
+
+        assert fake._closed
+        assert provider._ws is None
+        assert not provider.is_active
 
     async def test_rotates_before_exceeding_flush_window_limit(self):
         provider = self._make_provider()
