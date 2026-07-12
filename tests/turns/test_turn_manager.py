@@ -1,6 +1,7 @@
 """TurnManager tests: state machine, push-to-talk, barge-in, pre-roll."""
 
 import asyncio
+import contextlib
 import logging
 from unittest.mock import AsyncMock
 
@@ -53,25 +54,39 @@ class EventCollector:
         return [type(e).__name__ for e in self.events]
 
 
-def test_default_fixed_endpoint_budget_is_150_ms() -> None:
-    """VAD stop detection plus turn grace should match the low-latency target."""
+def test_default_endpointing_outlasts_vad_restart_confirmation() -> None:
+    """The default turn grace must stay above the VAD restart-confirmation gate.
+
+    On the plain-VAD path (no smart-turn) the only event that can cancel a
+    pending fixed endpoint is a *confirmed* ``VADStartSpeaking``, which the
+    default VAD emits only after ``min_speech_duration_ms`` of continuous
+    resumed speech plus frame quantization.  If the grace period were at or
+    below that gate, ordinary mid-sentence pauses would be split/truncated.
+    """
     vad = VADConfig()
     turn = TurnManagerConfig()
 
     assert vad.min_silence_duration_ms == 50
-    assert vad.min_speech_duration_ms == 50
-    assert turn.end_of_turn_silence_ms == 100
-    assert turn.punctuated_end_of_turn_silence_ms is None
-    assert vad.min_speech_duration_ms < turn.end_of_turn_silence_ms
-    assert vad.min_silence_duration_ms + turn.end_of_turn_silence_ms == 150
+    assert vad.min_speech_duration_ms == 250
+    assert turn.end_of_turn_silence_ms == 500
+    assert turn.punctuated_end_of_turn_silence_ms == 200
+    # Leave the restart confirmation (250 ms gate + frame quantization)
+    # real headroom before the endpoint fires.
+    assert turn.end_of_turn_silence_ms >= vad.min_speech_duration_ms + 100
 
 
 @pytest.mark.asyncio
-async def test_default_vad_restart_cancels_endpoint_before_deadline() -> None:
-    """Confirmed resumed speech must arrive before the fixed endpoint fires."""
+async def test_confirmed_vad_restart_cancels_pending_endpoint() -> None:
+    """Only a *confirmed* VAD restart cancels the pending fixed endpoint.
+
+    The VAD is driven with simulated timestamps and the endpoint timer is set
+    far in the future, so this is a deterministic event-path test (no
+    wall-clock race): resumed speech is invisible to the TurnManager until
+    the ``min_speech_duration_ms`` confirmation gate has elapsed, and the
+    confirmed restart is what cancels the silence timer.
+    """
     bus = EventBus()
-    manager = TurnManager(bus)
-    collector = EventCollector(bus)
+    manager = TurnManager(bus, config=TurnManagerConfig(end_of_turn_silence_ms=60_000))
     config = VADConfig()
     vad = _VADBase()
     vad.configure(
@@ -85,19 +100,31 @@ async def test_default_vad_restart_cancels_endpoint_before_deadline() -> None:
 
     try:
         await evaluate(1.0, 0.000)
-        await evaluate(1.0, 0.051)
+        await evaluate(1.0, 0.251)
         assert manager.state == TurnManagerState.USER_SPEAKING
 
-        await evaluate(0.0, 0.060)
-        await evaluate(0.0, 0.111)
+        await evaluate(0.0, 0.300)
+        await evaluate(0.0, 0.351)
         assert manager.state == TurnManagerState.USER_PAUSED
+        timer = manager._silence_timer_task
+        assert timer is not None and not timer.done()
 
-        await evaluate(1.0, 0.120)
-        await evaluate(1.0, 0.171)
+        # Resumed speech shorter than the confirmation gate stays invisible:
+        # no VADStartSpeaking is emitted, so the endpoint is still pending.
+        await evaluate(1.0, 0.400)
+        await evaluate(1.0, 0.500)
+        assert manager.state == TurnManagerState.USER_PAUSED
+        assert manager._silence_timer_task is timer
+
+        # Once the gate elapses, the confirmed restart cancels the endpoint.
+        await evaluate(1.0, 0.651)
         assert manager.state == TurnManagerState.USER_SPEAKING
-
-        await asyncio.sleep(0.11)
-        assert "TurnEnded" not in collector.type_names
+        assert manager._silence_timer_task is None
+        # The timer task swallows CancelledError internally; awaiting it
+        # proves the 60 s sleep was cancelled rather than run to completion.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(timer, timeout=1.0)
+        assert timer.done()
     finally:
         await manager.shutdown()
 

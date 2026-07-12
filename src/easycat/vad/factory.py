@@ -43,9 +43,11 @@ class VADConfig:
     # Krisp-specific
     krisp_model_path: str | None = None
     # Shared VAD settings
-    # Keep the default speech-confirmation gate below the turn manager's
-    # 100 ms endpoint grace so resumed speech can cancel a pending endpoint.
-    min_speech_duration_ms: int = 50
+    # min_speech_duration_ms doubles as the only barge-in debounce: a
+    # confirmed VADStartSpeaking during bot playback cancels in-flight
+    # TTS/agent work, so keep it high enough to reject residual echo,
+    # coughs, and brief background noise.
+    min_speech_duration_ms: int = 250
     min_silence_duration_ms: int = 50
     sensitivity: float | None = None
 

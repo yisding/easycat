@@ -272,7 +272,7 @@ def _safe_config_ns(config: EasyConfig) -> object:
         if val is None:
             continue
         # Shallow-copy dataclass values so later mutation of the original
-        # config (e.g. turn_taking.end_of_turn_silence_ms = 100) doesn't
+        # config (e.g. turn_taking.end_of_turn_silence_ms = 500) doesn't
         # retroactively change the snapshot.
         attrs[name] = copy.copy(val) if hasattr(val, "__dataclass_fields__") else val
     return SimpleNamespace(**attrs)
