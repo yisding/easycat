@@ -31,6 +31,14 @@ music? (Try humming a song while the recording window is open.)
   you debug "my STT is fine on my laptop but worse on the phone."
 - A higher sample rate is not always better — it's pure bandwidth
   cost for no intelligibility gain on speech.
+- Why does the script call the first timing
+  `time-to-first-write-return`, not `time-to-first-sound`? Returning
+  from `OutputStream.write()` proves that the host accepted the buffer,
+  not that a physical speaker played it. Later transports preserve the
+  same acceptance-versus-delivery distinction.
+- Why is `OutputStream` inside a `with` block? The context starts the
+  stream on entry and guarantees stop + close on normal exit, a failed
+  write, or Ctrl-C.
 
 ## Self-check
 

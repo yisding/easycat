@@ -72,21 +72,32 @@ the less scheduling overhead. Change the chunk size in `main.py`
 and you are making exactly the same tradeoff every voice framework
 makes every day.
 
-The script prints two numbers per chunk size: *time-to-first-sound*
-(how long after `stream.start()` the first sample actually plays)
-and *total* wall-clock (which should match the recording length).
-The first number is the one your ears feel:
+Because this recording is already in memory, the script deliberately
+waits one chunk duration before opening playback. That models a live
+microphone or provider accumulating its first complete chunk; without
+the wait, every pre-recorded variant would have data ready immediately
+and would not demonstrate source-side chunking latency.
 
-- **10ms chunks** — first sound within a few milliseconds. Feels
-  instant.
-- **200ms chunks** — a perceptible hesitation before the first
+The script prints *time-to-first-write-return* and total wall-clock.
+The first number runs from “start collecting a live-sized chunk” until
+PortAudio returns from the first `write()`. It is an observable enqueue
+boundary, **not proof that the speaker played the sample**—there is no
+playback acknowledgement in this small demo. Use your ears for the
+actual onset comparison:
+
+- **10ms chunks** — one short source wait plus host latency. Feels
+  effectively instant.
+- **200ms chunks** — at least a 200ms source wait before the first
   syllable, then smooth playback. Feels slow-start.
 
 We pass `latency='low'` and a matching `blocksize` to
-`sd.OutputStream`. The default `latency='high'` has PortAudio
-pre-buffer hundreds of milliseconds of silence before playback
-starts, which would flatten the difference we are trying to
-hear — the host buffer, not the chunk size, would dominate.
+`sd.OutputStream`. The default `latency='high'` can let the host buffer
+dominate the delay and flatten the difference we are trying to hear.
+
+The stream is also a context manager. Entering starts it; leaving stops
+and closes it even if `write()` raises or you press Ctrl-C. The ladder
+keeps this ownership rule from its first hardware handle onward: the
+scope that opens a resource also guarantees its teardown.
 
 This is the whole justification for streaming the rest of the
 ladder.
