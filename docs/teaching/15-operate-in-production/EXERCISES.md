@@ -127,13 +127,41 @@ different?
    captured-bundle gate here is for replayable call samples you already
    recorded; the validation command owns live canaries.
 
+## 4. Prove the stable postmortem view
+
+**Task.** Run the provider-free full-SQLite probe:
+
+```bash
+uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
+```
+
+Explain why `same_object_after_stop` and `records_preserved` are true,
+why `append_exposed_before_stop` was already false, and why the backend
+type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
+
+**Hints**
+
+1. `session.journal` exposes `JournalView`, not the writable runtime
+   backend. It supports read, slice, lookup, filtering, and follow; it does
+   not expose `append()` at any lifecycle phase.
+2. The runtime owns the writable backend while the session is live. Clean
+   stop finalizes and closes that backend, then retargets the existing view
+   to a preserved read-only backend. Cached view references remain valid.
+3. The probe uses `debug="full"` and SQLite so the backend transition is
+   visible. A `debug="light"` session follows the same public invariant but
+   transitions from `InMemoryRingBuffer` to `FrozenJournalSnapshot`.
+4. `session.export_debug_bundle(...)` reads the preserved backend after
+   stop. Reloading the emitted bundle and matching its record names proves
+   the export is not merely an empty ZIP created after teardown.
+
 ## Self-check
 
 You should be able to: (a) explain when to use `async with
 session:`, `await session.stop()`, `await session.stop(force=True)`,
 (b) explain why `session.journal.read()` still works after `stop()`,
-and (c) sketch the `SessionManager` usage pattern for a WebSocket
-server in 10 lines without looking at the file.
+including why the cached view keeps its identity, and (c) sketch the
+`SessionManager` usage pattern for a WebSocket server in 10 lines
+without looking at the file.
 
 ## The teaching ladder, complete
 
