@@ -85,7 +85,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -74,49 +80,109 @@
+@@ -74,49 +80,110 @@
                  self._preroll.append(chunk)
  
  
@@ -190,7 +190,7 @@
 +
 +async def drain_sentences_to_speaker(
 +    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-+) -> None:
++) -> float | None:
 +    """Take one sentence at a time, synthesise, stream audio to speaker.
 +
 +    Because ``transport.send_audio`` returns as soon as the chunk is
@@ -206,7 +206,8 @@
 +        synth_start = time.monotonic()
 +        async for event in tts.synthesize(TTSInput(text=sentence)):
 +            if event.type == TTSEventType.AUDIO and event.audio is not None:
-+                if first_audio_t is None:
++                accepted = await transport.send_audio(event.audio)
++                if accepted and first_audio_t is None:
 +                    first_audio_t = time.monotonic()
 +                    journal.append(
 +                        kind=JournalRecordKind.EVENT,
@@ -214,7 +215,6 @@
 +                        session_id=SESSION_ID,
 +                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
 +                    )
-+                await transport.send_audio(event.audio)
 +        journal.append(
 +            kind=JournalRecordKind.EVENT,
 +            name="stage.tts.execute",
@@ -225,6 +225,7 @@
 +                "text": sentence,
 +            },
 +        )
++    return first_audio_t
 +
 +
 +async def run_turn(transport, stt, client, tts, journal) -> None:
@@ -232,7 +233,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -127,71 +193,26 @@
+@@ -127,52 +194,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -288,38 +289,35 @@
 -        enqueue_ms=tts_enqueue_ms,
 -    )
 -
--    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
 +    sentence_queue: asyncio.Queue[str | None] = asyncio.Queue()
-+    await asyncio.gather(
++    _, first_audio_t = await asyncio.gather(
 +        stream_sentences_to_tts(client, final_text, sentence_queue, journal),
 +        drain_sentences_to_speaker(tts, transport, sentence_queue, journal),
 +    )
-+    total_gap = (time.monotonic() - stt_final_t) * 1000
-+    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
++    reply_enqueue_gap = (time.monotonic() - stt_final_t) * 1000
+     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-         name="turn.gap",
-         session_id=SESSION_ID,
--        data={
--            "stage": "turn",
--            "total_gap_ms": total_gap,
+@@ -181,15 +215,12 @@
+         data={
+             "stage": "turn",
+             "total_gap_ms": total_gap,
 -            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
 -            "agent_ms": (agent_end - agent_start) * 1000,
 -            "tts_ms": tts_first_audio_ms,
 -            "tts_enqueue_ms": tts_enqueue_ms,
 -            "text": reply,
--        },
--    )
--    if total_gap is None:
++            "reply_enqueue_gap_ms": reply_enqueue_gap,
++            "text": final_text,
+         },
+     )
+     if total_gap is None:
 -        print("  (turn gap unavailable — TTS produced no audio)")
--    else:
--        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
-+        data={"stage": "turn", "total_gap_ms": total_gap, "text": final_text},
-+    )
++        print("  (turn gap unavailable — TTS produced no accepted audio)")
+     else:
+         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
  
- 
- async def main() -> None:
-@@ -203,6 +224,9 @@
+@@ -203,6 +234,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
@@ -329,7 +327,7 @@
  
      def stt_factory():
          return create_stt_provider(
-@@ -214,10 +238,9 @@
+@@ -214,10 +248,9 @@
          )
  
      await transport.connect()
@@ -341,7 +339,7 @@
          stt = None
          async for tag, chunk in detector.frames(transport.receive_audio()):
              if tag == "speech_started":
-@@ -228,7 +251,7 @@
+@@ -228,7 +261,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()
@@ -476,7 +474,7 @@ async def stream_sentences_to_tts(
 ```python
 async def drain_sentences_to_speaker(
     tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
-) -> None:
+) -> float | None:
     """Take one sentence at a time, synthesise, stream audio to speaker.
 
     Because ``transport.send_audio`` returns as soon as the chunk is
@@ -492,7 +490,8 @@ async def drain_sentences_to_speaker(
         synth_start = time.monotonic()
         async for event in tts.synthesize(TTSInput(text=sentence)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                if first_audio_t is None:
+                accepted = await transport.send_audio(event.audio)
+                if accepted and first_audio_t is None:
                     first_audio_t = time.monotonic()
                     journal.append(
                         kind=JournalRecordKind.EVENT,
@@ -500,7 +499,6 @@ async def drain_sentences_to_speaker(
                         session_id=SESSION_ID,
                         data={"stage": "tts", "t_ms": first_audio_t * 1000},
                     )
-                await transport.send_audio(event.audio)
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -511,6 +509,7 @@ async def drain_sentences_to_speaker(
                 "text": sentence,
             },
         )
+    return first_audio_t
 ```
 <!-- END auto:snippet -->
 
@@ -552,6 +551,13 @@ def first_audio_gap_ms(bundle_path):
 for b in Path("docs/teaching/06-streaming-agent/runs/").glob("*.bundle"):
     print(b.name, f"first-audio gap = {first_audio_gap_ms(b):.0f} ms")
 ```
+
+The bundle's `turn.gap.data["total_gap_ms"]` stores that same
+STT-final → first-accepted-audio interval. The drain continues after
+that milestone; `reply_enqueue_gap_ms` preserves the later time when
+the complete reply has been synthesized and handed to the transport.
+Neither value is acoustic playback time — measuring that needs a
+loopback, as chapter 5 explains.
 
 On a typical 3-sentence reply with `gpt-4o-mini`, expect
 first-audio to drop from ~3000 ms (blocking) to ~800-1200 ms
