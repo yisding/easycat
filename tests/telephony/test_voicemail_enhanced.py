@@ -153,6 +153,40 @@ class TestSITToneDetection:
 
         assert detect_sit_tones(audio, min_tone_duration_ms=275) is False
 
+    def test_sit_sequence_followed_by_in_band_beep_stays_detected(self) -> None:
+        # A ~1000 Hz voicemail beep falls inside the first SIT band (900-1000 Hz).
+        # In-band audio after the full sequence must never un-detect it.
+        audio = (
+            _generate_tone(950, 0.3)
+            + _generate_tone(1400, 0.3)
+            + _generate_tone(1800, 0.3)
+            + _generate_silence(0.5)
+            + _generate_tone(1000, 0.5)
+        )
+
+        assert detect_sit_tones(audio) is True
+
+    def test_looped_sit_recording_stays_detected(self) -> None:
+        # Intercept recordings loop the SIT sequence; a buffer spanning two
+        # cycles must still detect it.
+        cycle = _generate_tone(950, 0.3) + _generate_tone(1400, 0.3) + _generate_tone(1800, 0.3)
+        audio = cycle + _generate_silence(0.5) + cycle
+
+        assert detect_sit_tones(audio) is True
+
+    def test_tone_split_by_energy_dropout_still_detects(self) -> None:
+        # A first tone split into two duration-qualified runs by a brief
+        # dropout must not invalidate the sequence.
+        audio = (
+            _generate_tone(950, 0.25)
+            + _generate_silence(0.1)
+            + _generate_tone(950, 0.25)
+            + _generate_tone(1400, 0.3)
+            + _generate_tone(1800, 0.3)
+        )
+
+        assert detect_sit_tones(audio) is True
+
     def test_sit_tones_out_of_order_are_rejected(self) -> None:
         audio = _generate_tone(1400, 0.3) + _generate_tone(950, 0.3) + _generate_tone(1800, 0.3)
 

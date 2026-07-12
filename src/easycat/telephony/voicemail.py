@@ -578,7 +578,15 @@ def _sit_frequency_index(
 
 @dataclass
 class _SITSequenceTracker:
-    """Track duration-qualified SIT bands in their required ascending order."""
+    """Track duration-qualified SIT bands in their required ascending order.
+
+    A qualified tone advances the sequence when it is the next expected band.
+    A repeat of the most recently committed band is tolerated (a tone split
+    into two qualified runs by a brief energy dropout). Any other qualified
+    band before the sequence completes marks the ordering invalid. Once the
+    full 950→1400→1800 sequence has been detected, later in-band audio (a
+    ~1000 Hz voicemail beep, a looped SIT recording) can never un-detect it.
+    """
 
     min_windows: int
     detected_tones: list[int] = field(default_factory=list)
@@ -597,15 +605,24 @@ class _SITSequenceTracker:
 
     def complete(self) -> bool:
         self._commit_current()
-        return not self.invalid_order and self.detected_tones == list(range(len(_SIT_FREQUENCIES)))
+        return self._sequence_detected()
+
+    def _sequence_detected(self) -> bool:
+        return self.detected_tones == list(range(len(_SIT_FREQUENCIES)))
 
     def _commit_current(self) -> None:
         if self.current_tone is None or self.current_windows < self.min_windows:
             return
-        if self.current_tone != len(self.detected_tones):
-            self.invalid_order = True
+        if self._sequence_detected():
             return
-        self.detected_tones.append(self.current_tone)
+        if self.invalid_order:
+            return
+        if self.current_tone == len(self.detected_tones):
+            self.detected_tones.append(self.current_tone)
+            return
+        if self.detected_tones and self.current_tone == self.detected_tones[-1]:
+            return
+        self.invalid_order = True
 
 
 def detect_sit_tones(
