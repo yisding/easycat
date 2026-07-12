@@ -70,12 +70,37 @@ path—sample rate alone is not a quality guarantee.
 
 A few common sample rates you will meet later in the ladder:
 
-| Format | Used by |
+| Boundary | Current EasyCat default |
 |---|---|
-| 8 kHz | Telephony (G.711) |
-| 16 kHz | Most STT providers (Deepgram, OpenAI Realtime, ElevenLabs) |
-| 24 kHz | Many TTS providers (OpenAI default) |
-| 48 kHz | WebRTC, pro audio |
+| Twilio wire | 8 kHz μ-law |
+| Deepgram / Cartesia / ElevenLabs realtime STT target | 16 kHz PCM |
+| WebSocket / WebRTC / Twilio pipeline target | 16 kHz PCM |
+| Local capture + playback | 24 kHz PCM |
+| OpenAI Realtime STT input | 24 kHz PCM |
+| Bundled TTS output | 24 kHz PCM by default |
+| WebRTC media frames | 48 kHz before Opus encode / after decode |
+
+These are **boundaries and defaults**, not one rate per provider or
+session. Configurable providers can choose other supported rates, batch
+OpenAI STT accepts the WAV rate it receives, transports may negotiate or
+resample, and a single turn can cross several rates in each direction:
+
+```text
+WebRTC peer 48 kHz ──resample──► pipeline 16 kHz ──► Deepgram STT 16 kHz
+OpenAI TTS 24 kHz  ──resample──► WebRTC media 48 kHz ──Opus──► peer
+```
+
+Run the provider-free catalog to read the maintained runtime defaults
+without opening hardware or making an API request:
+
+```bash
+uv run python docs/teaching/00-hello-audio/format_boundaries.py
+```
+
+Resampling makes formats compatible; it cannot recreate spectrum that an
+earlier capture, filter, or codec already removed. Name the boundary when
+you discuss a rate—wire, capture, pipeline, provider input, or provider
+output—so “16 kHz” is an actionable fact rather than an ambiguous label.
 
 ## The chunk-size demo
 

@@ -43,8 +43,34 @@ music? (Try humming a song while the recording window is open.)
   stream on entry and guarantees stop + close on normal exit, a failed
   write, or Ctrl-C.
 
+## 2. Trace every format boundary
+
+**Task.** Run the provider-free format catalog and find two resampling
+boundaries whose input and output are both mono PCM:
+
+```bash
+uv run python docs/teaching/00-hello-audio/format_boundaries.py
+```
+
+**Hints**
+
+1. Local capture defaults to 24 kHz, while Deepgram's streaming STT target
+   defaults to 16 kHz. The provider adapter resamples at that input boundary.
+2. WebRTC receives and sends 48 kHz media frames, but its default pipeline
+   target is 16 kHz. Those are two boundaries of one transport, not a
+   contradiction.
+3. OpenAI TTS defaults to 24 kHz. A WebRTC session resamples that output to
+   48 kHz for media; a Local session already has a matching 24 kHz target.
+4. Twilio's wire is 8 kHz μ-law while EasyCat's default internal pipeline
+   target is 16 kHz PCM. Decoding and upsampling make the representation
+   compatible but do not restore telephone-band frequencies.
+5. Change `DeepgramSTTConfig(sample_rate=...)` in a scratch copy of the
+   probe. You changed one provider-input boundary, not the capture, TTS, or
+   transport wire formats.
+
 ## Self-check
 
 You should now be able to predict — without running the code —
 roughly how an utterance will sound at 4 kHz, 8 kHz, 16 kHz, and
-44.1 kHz, and explain the difference in one sentence each.
+44.1 kHz, explain the difference in one sentence each, and identify
+the boundary meant by any sample rate you quote.
