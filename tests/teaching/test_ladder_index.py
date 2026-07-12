@@ -547,3 +547,18 @@ def test_teaching_docs_do_not_claim_teaching_tests_are_missing() -> None:
     assert not stale_mentions, "Teaching docs claim tests/teaching/ is missing: " + ", ".join(
         stale_mentions
     )
+
+
+def test_teaching_exercise_pages_include_one_mastery_self_check() -> None:
+    stale: list[str] = []
+
+    for chapter_dir in _chapter_dirs():
+        exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
+        if exercises.count("## Self-check") != 1:
+            stale.append(f"{chapter_dir.name}: expected one Self-check heading")
+            continue
+        self_check = exercises.split("## Self-check", 1)[1]
+        if "You should" not in self_check:
+            stale.append(f"{chapter_dir.name}: missing learner outcome")
+
+    assert not stale, "Teaching exercise mastery checks are incomplete: " + ", ".join(stale)
