@@ -233,7 +233,7 @@
      final_text = ""
      stt_final_t = None
      async for event in stt.events():
-@@ -127,52 +194,19 @@
+@@ -127,51 +194,19 @@
      if not final_text.strip() or stt_final_t is None:
          return
  
@@ -268,10 +268,9 @@
 -        reply=reply,
 -    )
 -
--    # Sub-gap 3: agent response → the first TTS audio chunk is handed
--    # to the transport. ``speak`` itself returns only after every chunk
--    # has been enqueued, so a forwarding probe captures the earlier
--    # first-audio milestone without changing the helper.
+-    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+-    # accepts. ``speak`` returns after every produced chunk has been offered,
+-    # so a forwarding probe captures the earlier first-accepted milestone.
 -    tts_start = time.monotonic()
 -    print(f"  bot:  {reply!r}")
 -    audio_probe = FirstAudioProbe(transport)
@@ -298,7 +297,7 @@
      total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
      journal.append(
          kind=JournalRecordKind.EVENT,
-@@ -181,15 +215,12 @@
+@@ -180,15 +215,12 @@
          data={
              "stage": "turn",
              "total_gap_ms": total_gap,
@@ -317,7 +316,7 @@
      else:
          print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
  
-@@ -203,6 +234,9 @@
+@@ -202,6 +234,9 @@
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
      client = AsyncOpenAI()
@@ -327,7 +326,7 @@
  
      def stt_factory():
          return create_stt_provider(
-@@ -214,10 +248,9 @@
+@@ -213,10 +248,9 @@
          )
  
      await transport.connect()
@@ -339,7 +338,7 @@
          stt = None
          async for tag, chunk in detector.frames(transport.receive_audio()):
              if tag == "speech_started":
-@@ -228,7 +261,7 @@
+@@ -227,7 +261,7 @@
                  await stt.send_audio(chunk)
              elif tag == "speech_ended" and stt is not None:
                  await stt.end_stream()

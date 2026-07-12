@@ -74,11 +74,13 @@ class _FakeTTS:
 
 
 class _FakeTransport:
-    def __init__(self) -> None:
+    def __init__(self, *, accepted: bool = True) -> None:
         self.received: list[AudioChunk] = []
+        self.accepted = accepted
 
-    async def send_audio(self, audio: AudioChunk) -> None:
+    async def send_audio(self, audio: AudioChunk) -> bool:
         self.received.append(audio)
+        return self.accepted
 
 
 class TestSpeakResourceOwnership:
@@ -91,10 +93,11 @@ class TestSpeakResourceOwnership:
         monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
         transport = _FakeTransport()
 
-        await speak(transport, "hello")
+        result = await speak(transport, "hello")
 
         assert fake.closed is True
         assert transport.received  # audio was forwarded
+        assert result == (1, 0)
 
     @pytest.mark.asyncio
     async def test_caller_supplied_tts_is_not_closed(self):
@@ -102,9 +105,20 @@ class TestSpeakResourceOwnership:
         fake = _FakeTTS()
         transport = _FakeTransport()
 
-        await speak(transport, "hello", tts=fake)
+        result = await speak(transport, "hello", tts=fake)
 
         assert fake.closed is False
+        assert transport.received
+        assert result == (1, 0)
+
+    @pytest.mark.asyncio
+    async def test_rejected_transport_chunks_are_reported(self):
+        fake = _FakeTTS()
+        transport = _FakeTransport(accepted=False)
+
+        result = await speak(transport, "hello", tts=fake)
+
+        assert result == (0, 1)
         assert transport.received
 
     @pytest.mark.asyncio
@@ -114,7 +128,7 @@ class TestSpeakResourceOwnership:
         monkeypatch.setattr(recipes, "create_tts_provider", lambda _config: fake)
 
         class _BoomTransport:
-            async def send_audio(self, _audio: AudioChunk) -> None:
+            async def send_audio(self, _audio: AudioChunk) -> bool:
                 raise RuntimeError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):

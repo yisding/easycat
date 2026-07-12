@@ -38,6 +38,48 @@ RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch03-parrot-{int(time.time())}"
 
 
+def record_delivery(
+    journal: InMemoryRingBuffer,
+    *,
+    text: str,
+    accepted_chunks: int,
+    rejected_chunks: int,
+    offset_ms: float,
+) -> None:
+    """Record transport acceptance without claiming speaker playback."""
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="parrot.delivery",
+        session_id=SESSION_ID,
+        data={
+            "stage": "parrot",
+            "committed_text": text,
+            "accepted_chunks": accepted_chunks,
+            "rejected_chunks": rejected_chunks,
+            "offset_ms": offset_ms,
+        },
+    )
+    if rejected_chunks:
+        print(
+            "  transport rejected "
+            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+        )
+
+
+async def speak_and_record(
+    transport, journal: InMemoryRingBuffer, text: str, start: float
+) -> None:
+    """Speak once, then preserve every transport acceptance result."""
+    accepted_chunks, rejected_chunks = await speak(transport, text)
+    record_delivery(
+        journal,
+        text=text,
+        accepted_chunks=accepted_chunks,
+        rejected_chunks=rejected_chunks,
+        offset_ms=(time.monotonic() - start) * 1000,
+    )
+
+
 async def main() -> None:
     oai_key = os.getenv("OPENAI_API_KEY")
     dg_key = os.getenv("DEEPGRAM_API_KEY")
@@ -101,7 +143,7 @@ async def main() -> None:
                             "offset_ms": offset_ms,
                         },
                     )
-                    await speak(transport, last_text)
+                    await speak_and_record(transport, journal, last_text, start)
                     last_text = ""
                 continue
             if event is None:

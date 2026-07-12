@@ -115,7 +115,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -65,127 +59,187 @@
+@@ -65,127 +59,186 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -272,10 +272,9 @@ build movement (chapters 6-9) exists to close this gap.
 +        reply=reply,
 +    )
 +
-+    # Sub-gap 3: agent response → the first TTS audio chunk is handed
-+    # to the transport. ``speak`` itself returns only after every chunk
-+    # has been enqueued, so a forwarding probe captures the earlier
-+    # first-audio milestone without changing the helper.
++    # Sub-gap 3: agent response → the first TTS audio chunk the transport
++    # accepts. ``speak`` returns after every produced chunk has been offered,
++    # so a forwarding probe captures the earlier first-accepted milestone.
 +    tts_start = time.monotonic()
 +    print(f"  bot:  {reply!r}")
 +    audio_probe = FirstAudioProbe(transport)

@@ -152,10 +152,9 @@ async def run_turn(transport, stt, client, journal) -> None:
         reply=reply,
     )
 
-    # Sub-gap 3: agent response → the first TTS audio chunk is handed
-    # to the transport. ``speak`` itself returns only after every chunk
-    # has been enqueued, so a forwarding probe captures the earlier
-    # first-audio milestone without changing the helper.
+    # Sub-gap 3: agent response → the first TTS audio chunk the transport
+    # accepts. ``speak`` returns after every produced chunk has been offered,
+    # so a forwarding probe captures the earlier first-accepted milestone.
     tts_start = time.monotonic()
     print(f"  bot:  {reply!r}")
     audio_probe = FirstAudioProbe(transport)

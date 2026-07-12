@@ -29,7 +29,7 @@
   fixed-timeout absence of STT partials.
 - **Removed:** the silence-timeout turn detector from chapter 3.
 
-<!-- BEGIN auto:diff prev=03-parrot-naive src=main.py -->
+<!-- BEGIN auto:diff prev=03-parrot-naive src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>03-parrot-naive/main.py</code> (auto-generated)</summary>
 
@@ -39,18 +39,18 @@
 @@ -1,15 +1,16 @@
 -"""Chapter 3 — Parrot, the naive way.
 +"""Chapter 4 — VAD + pre-roll.
- 
+
 -A bot that parrots whatever it thinks you just said. Turn detection
 -is a fixed silence timeout on STT partials. Deliberately broken.
 +Replace chapter 3's fixed silence timeout with a real voice-activity
 +detector plus a pre-roll ring buffer. The same parrot loop, now gated
 +on VAD turn boundaries instead of "500 ms since the last STT event."
- 
+
 -Run it and break it — "The capital of France is... uh... Paris" is
 -the canonical killer. Chapter 4 replaces this with a real VAD.
 +Run with ``--no-preroll`` to hear the start-of-utterance truncation
 +this chapter was designed to fix.
- 
+
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
      export OPENAI_API_KEY=...      # OpenAI TTS
@@ -59,10 +59,10 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -18,123 +19,173 @@
- 
+@@ -18,165 +19,173 @@
+
  from __future__ import annotations
- 
+
 +import argparse
  import asyncio
 +import collections
@@ -70,7 +70,7 @@
  import time
  import types
  from pathlib import Path
- 
+
  from easycat import LocalTransportConfig
 -from easycat.audio_format import PCM16_MONO_24K
 +from easycat.audio_format import PCM16_MONO_24K, AudioChunk
@@ -83,13 +83,39 @@
  from easycat.transports.local import LocalTransport
 +from easycat.vad import VADConfig
 +from easycat.vad.factory import create_vad
- 
+
 -SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
 +PREROLL_FRAMES = 15  # 15 × 20 ms = 300 ms of audio *before* VAD fires
  RUNS_DIR = Path(__file__).parent / "runs"
 -SESSION_ID = f"ch03-parrot-{int(time.time())}"
-+
-+
+
+
+-def record_delivery(
+-    journal: InMemoryRingBuffer,
+-    *,
+-    text: str,
+-    accepted_chunks: int,
+-    rejected_chunks: int,
+-    offset_ms: float,
+-) -> None:
+-    """Record transport acceptance without claiming speaker playback."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="parrot.delivery",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "parrot",
+-            "committed_text": text,
+-            "accepted_chunks": accepted_chunks,
+-            "rejected_chunks": rejected_chunks,
+-            "offset_ms": offset_ms,
+-        },
+-    )
+-    if rejected_chunks:
+-        print(
+-            "  transport rejected "
+-            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+-        )
 +class MiniTurnDetector:
 +    """Tiny turn detector: VAD + pre-roll buffer.
 +
@@ -135,15 +161,26 @@
 +                yield "frame", chunk
 +            else:
 +                self._preroll.append(chunk)
-+
-+
+
+
+-async def speak_and_record(
+-    transport, journal: InMemoryRingBuffer, text: str, start: float
 +async def parrot(
 +    transport,
 +    stt_factory,
 +    detector: MiniTurnDetector,
 +    journal: InMemoryRingBuffer,
 +    session_id: str,
-+) -> None:
+ ) -> None:
+-    """Speak once, then preserve every transport acceptance result."""
+-    accepted_chunks, rejected_chunks = await speak(transport, text)
+-    record_delivery(
+-        journal,
+-        text=text,
+-        accepted_chunks=accepted_chunks,
+-        rejected_chunks=rejected_chunks,
+-        offset_ms=(time.monotonic() - start) * 1000,
+-    )
 +    """On each VAD turn, stream audio into STT, wait for final, speak it."""
 +    stt = None
 +    collected_final = ""
@@ -188,8 +225,8 @@
 +            if collected_final.strip():
 +                print(f"  → parrot: {collected_final!r}")
 +                await speak(transport, collected_final)
- 
- 
+
+
  async def main() -> None:
 +    parser = argparse.ArgumentParser()
 +    parser.add_argument(
@@ -208,12 +245,12 @@
 +    preroll = 0 if args.no_preroll else PREROLL_FRAMES
 +    session_id = f"ch04-vad-{'nopreroll' if args.no_preroll else 'preroll'}-{int(time.time())}"
 +    print(f"Pre-roll: {preroll * 20} ms" if preroll else "Pre-roll: OFF")
- 
+
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
 +    vad = create_vad(VADConfig())
 +    detector = MiniTurnDetector(vad, preroll_frames=preroll)
- 
+
 -    # Deepgram emits partials mid-speech, which is what this chapter needs
 -    # to feel break. Its STT factory config takes provider-specific args via
 -    # ``params``. ``sample_rate=24000`` matches our LocalTransport's mic
@@ -234,7 +271,7 @@
 +            )
          )
 -    )
- 
+
      await transport.connect()
 -    await stt.start_stream()
 -    start = time.monotonic()
@@ -275,7 +312,7 @@
 -                            "offset_ms": offset_ms,
 -                        },
 -                    )
--                    await speak(transport, last_text)
+-                    await speak_and_record(transport, journal, last_text, start)
 -                    last_text = ""
 -                continue
 -            if event is None:
@@ -299,7 +336,7 @@
 -                },
 -            )
 +    print("Speak. The bot parrots back after each VAD turn. Ctrl-C to stop.")
- 
+
      try:
 -        await asyncio.gather(feed_audio(), listen_stt(), parrot())
 +        await parrot(transport, stt_factory, detector, journal, session_id)
@@ -308,7 +345,7 @@
      finally:
 -        await stt.end_stream()
          await transport.disconnect()
- 
+
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
 +    bundle_path = RUNS_DIR / f"{session_id}.bundle"

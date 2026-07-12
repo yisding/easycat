@@ -46,6 +46,7 @@ find:
 - The `trigger_record`: the last `stt.partial` **or** `stt.final`
   before the parrot fired.
 - The `parrot.fire` record itself.
+- The following `parrot.delivery` record and its accepted/rejected counts.
 - The first `stt.partial` *after* the parrot fired (the "Paris"
   the parrot ignored).
 
@@ -72,9 +73,27 @@ during that gap?
    pipelines (chapter 9) preserve that audio across barge-in;
    this naive one drops it on the floor.
 
+## 3. Reject one synthesized chunk
+
+**Task.** Run the provider-free output probe:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/speak_acceptance_probe.py
+```
+
+Change the acceptance sequence to reject all three chunks, then accept all
+three. Predict the counts each time. Which result proves that a speaker played
+the audio?
+
+**Hints**
+
+1. `recipes.speak()` preserves every `send_audio()` acceptance result instead
+   of treating a completed coroutine as delivery.
+2. Rejection is actionable drop evidence. Acceptance means scheduled for
+   delivery, not rendered by a device or heard by a person.
+
 ## Self-check
 
-You should be unable to defend the silence-timeout architecture
-for a serious voice product, and you should be actively reaching
-for "is the microphone currently carrying speech?" — which is
-exactly what chapter 4 hands you.
+You should be unable to defend the silence-timeout architecture for a serious
+voice product, actively reaching for "is the microphone currently carrying
+speech?", and able to distinguish synthesized, accepted, and played audio.

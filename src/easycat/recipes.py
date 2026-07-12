@@ -103,7 +103,7 @@ async def speak(
     tts: TTSProvider | None = None,
     provider: str = "openai",
     api_key: str | None = None,
-) -> None:
+) -> tuple[int, int]:
     """Synthesize *text* via TTS and stream audio chunks to *transport*.
 
     If *tts* is ``None``, constructs an OpenAI TTS provider (or the
@@ -115,6 +115,10 @@ async def speak(
     that resource, so it closes it in a ``finally`` to avoid leaking the
     connection pool. A caller-supplied *tts* is never closed here; its
     lifecycle belongs to the caller.
+
+    Returns ``(accepted_chunks, rejected_chunks)`` from the transport's
+    ``send_audio`` results. Acceptance means scheduled for delivery, not
+    confirmed speaker playback.
     """
     owned_tts: TTSProvider | None = None
     if tts is None:
@@ -122,10 +126,15 @@ async def speak(
         tts = create_tts_provider(TTSProviderConfig(provider=provider, api_key=resolved_key))
         owned_tts = tts
 
+    accepted_chunks = rejected_chunks = 0
     try:
         async for event in tts.synthesize(TTSInput(text=text)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                await transport.send_audio(event.audio)
+                if await transport.send_audio(event.audio):
+                    accepted_chunks += 1
+                else:
+                    rejected_chunks += 1
+        return accepted_chunks, rejected_chunks
     finally:
         if owned_tts is not None:
             await close_if_supported(owned_tts)
