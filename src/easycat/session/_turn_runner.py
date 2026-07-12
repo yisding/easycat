@@ -591,6 +591,11 @@ class TurnRunner:
         current_task = asyncio.current_task()
         if current_task is None or current_task.cancelling() == 0:
             await st.agent_output_settled.wait()
+        # Cancellation can unwind this old consumer while barge-in has already
+        # installed a successor turn. Never finalize or reset shared turn state
+        # on behalf of a stale generation.
+        if self._turn.current is not st.turn or self._turn.generation != st.turn_gen:
+            return
         if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             st.should_stop = await self._tts.finalize_speaking_turn(
                 st.turn, turn_generation=st.turn_gen

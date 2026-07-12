@@ -403,6 +403,35 @@ async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
 
 
 @pytest.mark.asyncio
+async def test_stale_tts_settlement_preserves_successor_turn() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    old_turn = TurnContext("turn-before-barge-in", CancelToken())
+    runner._turn.set(old_turn)
+    state = _StreamingTtsState(
+        turn=old_turn,
+        turn_gen=old_turn.generation,
+        token=old_turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.gated = False
+    state.agent_output_settled.set()
+
+    successor = TurnContext("turn-after-barge-in", CancelToken())
+    runner._turn.set(successor)
+    session._turn_manager._state = TurnManagerState.USER_SPEAKING
+
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is successor
+    assert session._turn_generation == successor.generation
+    assert not successor.cancel_token.is_cancelled
+    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     """A drained EndCallAction must call ``session.stop()`` once."""
     actions = SessionActions()
