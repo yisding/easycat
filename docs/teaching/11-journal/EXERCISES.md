@@ -36,7 +36,8 @@ and for each one, name the record you'd query first.
 bug — your choice. Possible bugs:
 
 - Forget to call `await transport.clear_audio()` on barge-in.
-- Use `bytes_received` instead of `bytes_sent` in the estimator.
+- Ignore `send_audio()`'s return value and increment
+  `bytes_accepted` for rejected chunks too.
 - Set the chars-per-second constant to 50 (way too high).
 - Skip the `cancel.cancel()` call so the agent keeps streaming
   text the user never hears.
@@ -57,17 +58,20 @@ tomorrow morning) find the bug by reading only the bundle?
    this: the audio sounds off, the logs are silent, only the
    journal tells you what actually happened.
 
-## 3. (Sidebar) Try `JournalView` queries
+## 3. Compare bundle and live-journal queries
 
-**Task.** Rewrite `investigate.py` to use `JournalView` instead of
-linear iteration:
+**Task.** Use `investigate.py --turn ch11-bug03-turn-1`, then write
+the equivalent query for a live session's `JournalView`. This is an
+API-shape comparison on paper; the chapter remains fully offline.
 
 ```python
-view = bundle.view  # JournalView
-for r in view.filter_by_stage("stt"):
-    ...
-for r in view.filter_by_turn(turn_id):
-    ...
+# Offline: load_bundle(...) returns a RunBundle; records are dicts.
+for r in bundle.filter_by_turn("ch11-bug03-turn-1"):
+    print(r["name"])
+
+# Live: session.journal is a JournalView; records are JournalRecord objects.
+for r in session.journal.filter_by_turn(turn_id):
+    print(r.name)
 ```
 
 **Hints**
@@ -75,10 +79,12 @@ for r in view.filter_by_turn(turn_id):
 1. `filter_by_stage` is convenient for "show me everything in one
    stage". `filter_by_turn` groups records causally — important
    on multi-turn bundles.
-2. `lookup_by_sequence(N)` is the random-access primitive — useful
-   when one record references another by sequence number.
-3. The view is read-only and lazy — it doesn't materialize the
-   whole record list into memory. On a long bundle this matters.
+2. `lookup_by_sequence(N)` is the bounded random-access primitive
+   on a live journal backend — useful when one record references
+   another by sequence number.
+3. `filter_by_stage` and `filter_by_turn` return materialized lists.
+   Stage filtering scans the journal because `stage` lives inside
+   record data; do not mistake the read-only surface for a lazy one.
 
 ## Self-check
 
