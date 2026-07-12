@@ -34,6 +34,22 @@ from easycat import (
 RUNS_DIR = Path(__file__).parent / "runs"
 
 
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def measurement_commands(path: Path) -> tuple[str, str]:
+    """Commands that read this production-shaped bundle directly."""
+    display_path = _display_path(path)
+    return (
+        f"uv run easycat latency {display_path}",
+        f"uv run easycat latency {display_path} --json",
+    )
+
+
 def build_session():
     """Same shape as ch 13's Local cell. For a real deployment you
     would typically bump ``debug`` to ``"full"`` and swap
@@ -99,7 +115,11 @@ async def main() -> None:
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
     export_debug_bundle(session, bundle_path, overwrite=True)
-    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    print(f"\nWrote bundle → {_display_path(bundle_path)}")
+    human_command, json_command = measurement_commands(bundle_path)
+    print("Measure this production-shaped bundle directly:")
+    print(f"  {human_command}")
+    print(f"  {json_command}")
 
     # ── 3. The debugger one-liner ──────────────────────────────────
     print(

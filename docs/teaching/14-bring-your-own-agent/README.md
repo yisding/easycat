@@ -36,7 +36,7 @@
   surface. (It still works — chapter 13 used it — but this
   chapter shows you don't need any framework at all.)
 
-<!-- BEGIN auto:diff prev=13-swap-providers-and-transports src=main.py -->
+<!-- BEGIN auto:diff prev=13-swap-providers-and-transports src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>13-swap-providers-and-transports/main.py</code> (auto-generated)</summary>
 
@@ -46,19 +46,19 @@
 @@ -1,37 +1,26 @@
 -"""Chapter 13 — swap providers AND transports.
 +"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
- 
+
 -One driver. Two orthogonal axes. Six combinations:
 +Chapter 13 handed ``agents.Agent(...)`` to ``EasyConfig(agent=...)``.
 +Under the hood, ``create_session`` wrapped it in an
 +``OpenAIAgentsBridge`` so the runtime could drive it. This chapter
 +drops the OpenAI Agents SDK and plugs in a plain async class — the
 +same Session code, a different brain.
- 
+
 -                Local     WebRTC     Twilio
 -  openai         ✓          ✓         ✓
 -  deepgram-eleven ✓         ✓         ✓
 +Three things this script demonstrates:
- 
+
 -Only the **two Local cells** run out of the box — WebRTC and
 -Twilio need a connected client (browser or phone call) and are
 -covered by the respective examples. The *code shape* is the
@@ -85,7 +85,7 @@
 +3. Output processors: a three-item pronunciation chain (strip
 +   markdown, fix one name, pause on phone numbers) that runs on
 +   every committed assistant utterance before it reaches TTS.
- 
+
  Dependencies:
      uv sync --extra quickstart --group dev
 -    For deepgram-eleven: --extra deepgram --extra elevenlabs
@@ -98,10 +98,10 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,99 +29,131 @@
- 
+@@ -40,21 +29,30 @@
+
  from __future__ import annotations
- 
+
 -import argparse
  import asyncio
  import os
@@ -110,7 +110,7 @@
  from pathlib import Path
 +
 +from openai import AsyncOpenAI
- 
+
  from easycat import (
      EasyConfig,
      LocalTransportConfig,
@@ -125,18 +125,22 @@
 +from easycat.cancel import CancelToken
 +from easycat.integrations.agents import GenericWorkflowBridge
 +from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
- 
+
 +MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
- 
- 
+
+
+@@ -74,85 +72,105 @@
+     )
+
+
 -def build_agent() -> object:
 -    """Simple OpenAI-Agents-SDK agent. Provider-agnostic — the agent
 -    doesn't know or care which STT/TTS/transport is wired."""
 -    from agents import Agent  # type: ignore[import-untyped]
 +class MyWorkflow:
 +    """Our brain. No framework — just async + OpenAI chat completions.
- 
+
 -    return Agent(
 -        name="assistant",
 -        instructions="You are a helpful voice assistant. Keep replies brief.",
@@ -147,7 +151,7 @@
 +    actually need the recorder here (we aren't journalling tool
 +    calls), but naming it is the switch.
 +    """
- 
+
 +    def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
 +        self._client = client
 +        self._actions = actions
@@ -161,7 +165,7 @@
 +                ),
 +            }
 +        ]
- 
+
 -def transport_config(name: str):
 -    if name == "local":
 -        return LocalTransportConfig()
@@ -178,7 +182,7 @@
 +        cancel_token: CancelToken | None,
 +    ) -> AsyncIterator[str]:
 +        self._history.append({"role": "user", "content": text})
- 
+
 -        return WebRTCTransportConfig()
 -    if name == "twilio":
 -        # Requires `uv sync --extra telephony --group dev`. A live phone call connects
@@ -193,7 +197,7 @@
 +            self._history.append({"role": "assistant", "content": reply})
 +            yield reply
 +            return
- 
+
 -        return TwilioTransportConfig()
 -    raise SystemExit(f"Unknown transport: {name}")
 -
@@ -225,8 +229,8 @@
 +            yield delta  # the bridge wraps each chunk as a text_delta event
 +        if full:
 +            self._history.append({"role": "assistant", "content": full})
- 
- 
+
+
  async def main() -> None:
 -    ap = argparse.ArgumentParser()
 -    ap.add_argument("--provider-mix", choices=("openai", "deepgram-eleven"), default="openai")
@@ -235,7 +239,7 @@
 -
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
- 
+
 -    tag = f"{args.provider_mix}-{args.transport}"
 -    print(f"=== {tag} ===")
 +    client = AsyncOpenAI()
@@ -243,7 +247,7 @@
 +    workflow = MyWorkflow(client, actions)
 +    bridge = GenericWorkflowBridge(workflow)
 +    assert bridge.deep_mode, "deep mode required for mid-turn interruption"
- 
+
 -    mix = provider_mix(args.provider_mix)
 +    # A tiny pronunciation pipeline. Processors run serially on every
 +    # committed assistant utterance before the text reaches TTS; a
@@ -271,22 +275,26 @@
      )
      session = create_session(config)
      attach_runtime_feedback(session)
- 
+
      await session.start()
 -    print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
 +    print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
      try:
          await wait_for_shutdown_signal(session)
      finally:
+-        # The helper stops gracefully on its normal signal path. This
+-        # idempotent force-stop also covers cancellation by an outer loop,
+-        # so the exported bundle always observes a clean postmortem session.
+         await session.stop(force=True)
          RUNS_DIR.mkdir(exist_ok=True)
 -        path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
 +        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
          try:
              export_debug_bundle(session, path, overwrite=True)
-             print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
-@@ -141,4 +162,7 @@
- 
- 
+             print(f"Wrote bundle → {_display_path(path)}")
+@@ -165,4 +183,7 @@
+
+
  if __name__ == "__main__":
 -    asyncio.run(main())
 +    try:
@@ -306,7 +314,9 @@ uv run python docs/teaching/14-bring-your-own-agent/main.py
 
 Talk to it. Say **"goodbye"** to watch the session-action flow fire
 — the workflow enqueues `EndCallAction`, `CoreSessionActionExecutor`
-dispatches it, the session stops after the current turn.
+dispatches it, the session stops after the current turn. On exit the
+script exports its production-shaped bundle and prints both human and
+JSON `easycat latency` commands for that exact path.
 
 ## The bridge layer you didn't know was there
 

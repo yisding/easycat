@@ -35,7 +35,7 @@
 - **Modified:** the demo runs through `SessionManager.connection`
   instead of `await session.start()` / `stop()` directly.
 
-<!-- BEGIN auto:diff prev=14-bring-your-own-agent src=main.py -->
+<!-- BEGIN auto:diff prev=14-bring-your-own-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>14-bring-your-own-agent/main.py</code> (auto-generated)</summary>
 
@@ -45,7 +45,7 @@
 @@ -1,22 +1,8 @@
 -"""Chapter 14 — bring your own agent via GenericWorkflowBridge.
 +"""Chapter 15 — operate in production.
- 
+
 -Chapter 13 handed ``agents.Agent(...)`` to ``EasyConfig(agent=...)``.
 -Under the hood, ``create_session`` wrapped it in an
 -``OpenAIAgentsBridge`` so the runtime could drive it. This chapter
@@ -66,10 +66,10 @@
 +Start a real session, walk it through the full lifecycle, prove
 +the journal survives ``stop()``, export a bundle you could hand
 +to a teammate, and print the one-liner that opens the debugger UI.
- 
+
  Dependencies:
      uv sync --extra quickstart --group dev
-@@ -32,133 +18,96 @@
+@@ -32,27 +18,19 @@
  import asyncio
  import os
  import time
@@ -77,7 +77,7 @@
  from pathlib import Path
 -
 -from openai import AsyncOpenAI
- 
+
  from easycat import (
      EasyConfig,
 +    JournalRecordKind,
@@ -94,11 +94,15 @@
 -from easycat.cancel import CancelToken
 -from easycat.integrations.agents import GenericWorkflowBridge
 -from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
- 
+
 -MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
- 
- 
+
+
+@@ -72,114 +50,84 @@
+     )
+
+
 -class MyWorkflow:
 -    """Our brain. No framework — just async + OpenAI chat completions.
 -
@@ -114,7 +118,7 @@
 +    survive a process crash; we leave both at teaching defaults
 +    here so the run stays fast.
      """
- 
+
 -    def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
 -        self._client = client
 -        self._actions = actions
@@ -129,7 +133,7 @@
 -            }
 -        ]
 +    from agents import Agent  # type: ignore[import-untyped]
- 
+
 -    async def on_user_turn(
 -        self,
 -        text: str,
@@ -173,12 +177,12 @@
 +        debug="light",
 +    )
 +    return create_session(config)
- 
- 
+
+
  async def main() -> None:
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
- 
+
 -    client = AsyncOpenAI()
 -    actions = SessionActions()  # shared: workflow enqueues, session drains
 -    workflow = MyWorkflow(client, actions)
@@ -214,12 +218,13 @@
 +    manager: SessionManager[str] = SessionManager()
 +    session = build_session()
      attach_runtime_feedback(session)
- 
+
 -    await session.start()
 -    print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
 -    try:
 -        await wait_for_shutdown_signal(session)
 -    finally:
+-        await session.stop(force=True)
 -        RUNS_DIR.mkdir(exist_ok=True)
 -        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
 +    session_key = f"local-{int(time.time())}"
@@ -228,7 +233,11 @@
 +        print("Talk. Ctrl-C to stop.\n")
          try:
 -            export_debug_bundle(session, path, overwrite=True)
--            print(f"Wrote bundle → {path.relative_to(Path.cwd())}")
+-            print(f"Wrote bundle → {_display_path(path)}")
+-            human_command, json_command = measurement_commands(path)
+-            print("Measure this production-shaped bundle directly:")
+-            print(f"  {human_command}")
+-            print(f"  {json_command}")
 -        except Exception as exc:  # noqa: BLE001 — teaching script
 -            print(f"(no bundle written: {exc})")
 +            await wait_for_shutdown_signal(session)
@@ -255,7 +264,11 @@
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
 +    export_debug_bundle(session, bundle_path, overwrite=True)
-+    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
++    print(f"\nWrote bundle → {_display_path(bundle_path)}")
++    human_command, json_command = measurement_commands(bundle_path)
++    print("Measure this production-shaped bundle directly:")
++    print(f"  {human_command}")
++    print(f"  {json_command}")
 +
 +    # ── 3. The debugger one-liner ──────────────────────────────────
 +    print(
@@ -264,8 +277,8 @@
 +        f'serve_bundle("{bundle_path}", port=8765)\'\n'
 +        "  → browse http://127.0.0.1:8765"
 +    )
- 
- 
+
+
  if __name__ == "__main__":
 ```
 
@@ -285,7 +298,8 @@ Talk for a few seconds, Ctrl-C. You should see:
 3. `Session stopped; manager released the slot.`
 4. A post-stop event-count summary (journal is still readable).
 5. A bundle path.
-6. The one-liner to open the debugger on that bundle.
+6. Human and JSON `easycat latency` commands for that bundle.
+7. The one-liner to open the debugger on that bundle.
 
 ## The public lifecycle
 

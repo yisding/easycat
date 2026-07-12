@@ -22,25 +22,24 @@ via Cartesia's WebSocket API). What's the minimum diff from
 
 ## 2. Tightest P95/P50 ratio
 
-**Task.** Run all six cells on the same short prompt ("What time
-is it?"). Which cell has the tightest P95/P50 ratio in chapter
-12's eval output? Why?
+**Task.** Record about 20 matched turns per cell with the same short
+prompt ("What time is it?"). For each resulting production bundle,
+run `uv run easycat latency PATH --json`. Which provider mix has the
+tightest server-side p95/p50 ratio? What extra evidence would you
+need before making the same claim about transports end to end?
 
 **Hints**
 
 1. P95/P50 ratio measures *consistency*, not absolute speed. A
    slow-but-consistent pipeline beats a fast-but-jittery one for
    user experience.
-2. WebSocket-based providers (Deepgram, ElevenLabs) tend to have
-   tighter ratios *once warm* because they hold an open
-   connection — no TLS handshake per call. The HTTP OpenAI batch
-   STT shows higher variance from cold-start.
-3. Transports also affect this. WebRTC has the tightest jitter
-   profile (UDP, optimized for live). Twilio has the widest
-   (μ-law over PSTN, public-internet variance). Local has the
-   lowest absolute latency but is dominated by audio-device
-   buffer choices.
-4. With only a few turns per cell, P95 is a single bundle's
+2. `easycat latency` reports production journal milestones through
+   the first server-side TTS byte. It can support a provider-pipeline
+   comparison without translating the bundle.
+3. It cannot prove browser or phone delivery latency. Pair WebRTC
+   runs with client `getStats()` artifacts and phone runs with
+   provider/PSTN timing before ranking transports.
+4. With only a few turns per cell, P95 is a single turn's
    slowest run — noisy. Re-run each cell ~20 times for a
    meaningful number.
 
