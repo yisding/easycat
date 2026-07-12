@@ -41,16 +41,16 @@ from easycat import (
     EasyConfig,
     LocalTransportConfig,
     MarkdownStripProcessor,
-    PauseProcessor,
-    PhoneticReplacementProcessor,
     attach_runtime_feedback,
     create_session,
+    default_pronunciation_processors,
     export_debug_bundle,
     wait_for_shutdown_signal,
 )
 from easycat.cancel import CancelToken
 from easycat.integrations.agents import GenericWorkflowBridge
 from easycat.integrations.agents.base import AgentRecorder, CancellationMode
+from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 
 MODEL = "gpt-4o-mini"
@@ -71,6 +71,22 @@ def measurement_commands(path: Path) -> tuple[str, str]:
         f"uv run easycat latency {display_path}",
         f"uv run easycat latency {display_path} --json",
     )
+
+
+def pronunciation_command(path: Path) -> str:
+    """Inspect the scheduler's provider-ready pronunciation payloads."""
+    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
+
+
+def build_output_processors() -> list[LLMOutputProcessor]:
+    """Build the chapter's pronunciation stack from the public factory."""
+    return [
+        MarkdownStripProcessor(),
+        *default_pronunciation_processors(
+            name_pronunciations={"easycat": "ee zee cat"},
+            phone_pause_ms=120,
+        ),
+    ]
 
 
 class MyWorkflow:
@@ -161,12 +177,7 @@ async def main() -> None:
     # A tiny pronunciation pipeline. Processors run serially on every
     # committed assistant utterance before the text reaches TTS; a
     # raise in one is logged and the next runs (fail-open).
-    processors = [
-        MarkdownStripProcessor(),
-        PhoneticReplacementProcessor({"easycat": "ee zee cat"}),
-        # 120 ms pause between digit groups in a phone number.
-        PauseProcessor(pattern=r"\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b", pause_ms=120),
-    ]
+    processors = build_output_processors()
 
     config = EasyConfig(
         agent=bridge,  # ← the whole point of this chapter
@@ -196,6 +207,8 @@ async def main() -> None:
             print("Measure this production-shaped bundle directly:")
             print(f"  {human_command}")
             print(f"  {json_command}")
+            print("Inspect its provider-ready pronunciation payloads:")
+            print(f"  {pronunciation_command(path)}")
         except Exception as exc:  # noqa: BLE001 — teaching script
             print(f"(no bundle written: {exc})")
 
