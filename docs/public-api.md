@@ -234,10 +234,8 @@ custom transport.
 
 ## Deprecation & Removal Policy
 
-Symbols carry a machine-visible deprecation signal before removal: the
-`Session.shutdown()`, `Session.close()`, and `Session.destroy()` aliases and
-the provider config `settings=` alias are marked with PEP 702 `@deprecated`
-(or raise `DeprecationWarning`) so type-checkers and IDEs flag callers. A
-`@deprecated` alias stays for at least one minor release after it is
-announced and is only removed in a subsequent minor or major bump, so
-callers always have a green window to migrate to `stop()` / `params=`.
+Stable symbols normally carry a machine-visible deprecation signal before
+removal. During the pre-release period, obsolete APIs may be removed directly
+when retaining them would preserve ownership ambiguity. Provider config's
+legacy `settings=` alias currently raises `DeprecationWarning`; new code uses
+`params=`.

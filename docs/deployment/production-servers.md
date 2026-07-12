@@ -29,7 +29,7 @@ Use `run_websocket_config_server()` for a simple synchronous entry point, or
 
 ```python
 from easycat import EasyConfig, require_env
-from easycat.transports import run_websocket_config_server
+from easycat.server import run_websocket_config_server
 
 require_env("OPENAI_API_KEY")
 
@@ -114,7 +114,8 @@ many simultaneous tabs/users in one process:
 
 ```python
 from easycat import EasyConfig, require_env
-from easycat.transports import run_webrtc_config_server, webrtc_transport_config_from_env
+from easycat.server import run_webrtc_config_server
+from easycat.transports import webrtc_transport_config_from_env
 
 require_env("OPENAI_API_KEY")
 

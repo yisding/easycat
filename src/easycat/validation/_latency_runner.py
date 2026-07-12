@@ -24,7 +24,6 @@ from easycat.validation._lane_harness import (
 from easycat.validation._latency_artifacts import (
     build_latency_artifact,
     load_latency_samples,
-    load_reliability_samples,
 )
 from easycat.validation._latency_baseline import compare_latency_baseline
 from easycat.validation._latency_models import (
@@ -36,7 +35,7 @@ from easycat.validation._latency_models import (
 )
 from easycat.validation._latency_selectors import latency_pytest_args
 from easycat.validation._reliability_policy import (
-    load_reliability_failure,
+    load_reliability,
     reliability_budget_failure,
 )
 from easycat.validation._runner_support import (
@@ -306,14 +305,11 @@ def _load_evidence(
             message=redact_runtime_secrets(f"could not load latency samples: {exc}", secrets),
             failure_class="latency_artifact_error",
         )
-    reliability_failure = _redact_validation_failure(
-        load_reliability_failure(paths.reliability_samples),
-        secrets,
-    )
-    reliability_samples: list[ReliabilitySample] = []
+    loaded_reliability_samples, reliability_failure = load_reliability(paths.reliability_samples)
+    reliability_failure = _redact_validation_failure(reliability_failure, secrets)
+    reliability_samples: list[ReliabilitySample] = loaded_reliability_samples or []
     reliability_budget: ValidationFailure | None = None
-    if paths.reliability_samples.exists() and reliability_failure is None:
-        reliability_samples = load_reliability_samples(paths.reliability_samples.read_text())
+    if loaded_reliability_samples is not None:
         reliability_budget = reliability_budget_failure(reliability_samples)
     required_failure = None
     if require_samples and not samples:

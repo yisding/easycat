@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +20,16 @@ class CommandResult:
     stderr: str = ""
 
 
-CommandRunner = Callable[..., CommandResult]
+class CommandRunner(Protocol):
+    """Callable boundary for injected validation subprocess runners."""
+
+    def __call__(
+        self,
+        command: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | Path | None = None,
+    ) -> CommandResult: ...
 
 
 def run_subprocess(

@@ -137,6 +137,9 @@ _register(
     "easycat.transports.webrtc",
     "ICEServer",
     "WebRTCTransportConfig",
+)
+_register(
+    "easycat.server.webrtc_routes",
     "run_webrtc_config_server",
     "serve_webrtc_config_sessions",
 )

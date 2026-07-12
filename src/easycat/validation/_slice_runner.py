@@ -16,12 +16,10 @@ from easycat.validation._lane_harness import (
     _finish_lane_run,
     _start_lane_run,
 )
-from easycat.validation._latency_artifacts import (
-    build_reliability_artifact,
-    load_reliability_samples,
-)
+from easycat.validation._latency_artifacts import build_reliability_artifact
+from easycat.validation._latency_models import ReliabilitySample
 from easycat.validation._reliability_policy import (
-    load_reliability_failure,
+    load_reliability,
     reliability_budget_failure,
 )
 from easycat.validation._runner_support import (
@@ -256,10 +254,9 @@ def _evaluate_result(
     finished_at: datetime,
     secrets: Sequence[str],
 ) -> _SliceOutcome:
-    reliability_failure = load_reliability_failure(reliability_path)
+    samples, reliability_failure = load_reliability(reliability_path)
     reliability, budget_failure = _load_reliability(
-        reliability_path,
-        reliability_failure,
+        samples,
         finished_at,
     )
     exit_code = validation_exit_code_from_pytest(result.exit_code)
@@ -284,13 +281,11 @@ def _evaluate_result(
 
 
 def _load_reliability(
-    path: Path,
-    load_failure: ValidationFailure | None,
+    samples: list[ReliabilitySample] | None,
     finished_at: datetime,
 ) -> tuple[dict[str, object] | None, ValidationFailure | None]:
-    if not path.exists() or load_failure is not None:
+    if samples is None:
         return None, None
-    samples = load_reliability_samples(path.read_text())
     return (
         build_reliability_artifact(samples=samples, generated_at=finished_at),
         reliability_budget_failure(samples),

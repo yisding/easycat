@@ -79,10 +79,9 @@ look right?
 
 You should be able to: (a) explain when to use `async with
 session:`, `await session.stop()`, `await session.stop(force=True)`,
-and the `shutdown()` compatibility alias, (b) explain why
-`session.journal.read()` still works after `stop()`, and (c) sketch
-the `SessionManager` usage pattern for a WebSocket server in 10
-lines without looking at the file.
+(b) explain why `session.journal.read()` still works after `stop()`,
+and (c) sketch the `SessionManager` usage pattern for a WebSocket
+server in 10 lines without looking at the file.
 
 ## The teaching ladder, complete
 
