@@ -62,7 +62,7 @@ exceeds 1200 ms. That's the seed of a latency regression suite.
    production, you'd compare against a baseline file checked into
    the repo and require N standard deviations of regression
    before failing.
-3. The five chapter-12 fixtures include `turn_02_slow_agent`
+3. The six chapter-12 fixtures include `turn_02_slow_agent`
    which is *deliberately* 2900 ms — your test should flag it.
    That's the right behavior: the test catches the slowdown the
    fixture was built to represent.
@@ -78,7 +78,7 @@ hand-type the reference transcripts into a CSV, and run
 
 **Hints**
 
-1. Real numbers feel different. P95 over 5 bundles is noisy; over
+1. Real numbers feel different. P95 over 6 bundles is noisy; over
    20+ it stabilizes. WER over 20 utterances will produce a
    number you can actually trust to ±2%.
 2. Use a mix of clean and adversarial inputs (whisper, fast
@@ -86,7 +86,7 @@ hand-type the reference transcripts into a CSV, and run
    stages.
 3. This is the unglamorous part of voice eval: building a
    ground-truth set. Production teams maintain hundreds to
-   thousands of these. The five fixtures here are training
+   thousands of these. The six fixtures here are training
    wheels.
 
 ## Self-check
