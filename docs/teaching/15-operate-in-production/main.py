@@ -82,7 +82,7 @@ async def main() -> None:
     print("Session stopped; manager released the slot.")
 
     # ── 2. Post-stop: journal still works, bundle still exports ───
-    # The lifecycle invariant: after stop()/shutdown(), the
+    # The lifecycle invariant: after stop(), the
     # journal is in a read-only postmortem state. .read() works,
     # export_debug_bundle() works, .append() does not.
     assert session.journal is not None

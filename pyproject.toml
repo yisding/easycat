@@ -265,12 +265,10 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "scripts/extras_smoke.py" = ["C901", "PLR0912"]
 "src/easycat/_observability.py" = ["C901"]
 "src/easycat/cli/debug/diff.py" = ["B904"]
-"src/easycat/cli/debug/export.py" = ["C901", "PLR0912"]
 "src/easycat/cli/diagnose/explain.py" = ["PLR0912"]
 "src/easycat/cli/scaffold/_schema.py" = ["C901"]
 "src/easycat/cli/scaffold/init.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/config/_factory.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/config/_telephony_wiring.py" = ["C901", "PLR0915"]
 "src/easycat/config/easy.py" = ["C901", "PLR0912"]
 # Landed in a concurrent wave-4 item, grandfathered at integration time.
 "src/easycat/debug/_turn_timeline.py" = ["C901", "PLR0912", "PLR0915", "B007"]
@@ -279,10 +277,8 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/debugger/_audio.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_records.py" = ["C901", "PLR0912"]
 "src/easycat/debugger/_sources.py" = ["C901"]
-"src/easycat/debugger/server.py" = ["C901", "PLR0912", "PLR0915"]
+"src/easycat/debugger/server.py" = ["C901", "PLR0912"]
 "src/easycat/integrations/agents/_agent_runner.py" = ["C901", "PLR0912", "PLR0915", "B904"]
-"src/easycat/integrations/agents/_pydantic_ai_events.py" = ["C901", "PLR0912"]
-"src/easycat/integrations/agents/_responses_api_events.py" = ["C901"]
 "src/easycat/integrations/agents/generic_workflow.py" = ["C901"]
 "src/easycat/integrations/agents/langchain.py" = ["C901", "PLR0912", "B905"]
 "src/easycat/integrations/agents/langgraph.py" = ["C901", "PLR0912", "B905"]
@@ -291,9 +287,7 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/integrations/agents/pydantic_ai.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/responses_api.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/push_to_talk.py" = ["C901", "PLR0915"]
-"src/easycat/runtime/safe_defaults.py" = ["C901"]
 "src/easycat/session/_audio_router.py" = ["C901"]
-"src/easycat/session/_journal_sink.py" = ["C901"]
 "src/easycat/session/_session.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/session/_stt_committer.py" = ["C901", "PLR0912"]
 "src/easycat/session/text.py" = ["C901", "PLR0912"]
@@ -305,11 +299,9 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/stages/tts.py" = ["C901", "PLR0912"]
 "src/easycat/stages/turn.py" = ["C901"]
 "src/easycat/stages/vad.py" = ["C901"]
-"src/easycat/strip_markdown.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/stt/openai_realtime_provider.py" = ["C901", "PLR0912"]
 "src/easycat/telephony/call_state.py" = ["C901"]
 "src/easycat/telephony/voicemail.py" = ["C901", "PLR0912"]
-"src/easycat/transports/twilio_media.py" = ["C901", "PLR0912"]
 "src/easycat/transports/webrtc.py" = ["C901", "PLR0912", "PLR0915", "ASYNC110", "ASYNC240"]
 "src/easycat/transports/webtransport.py" = ["C901"]
 "src/easycat/tts/cartesia_tts.py" = ["C901", "PLR0912"]
@@ -569,23 +561,17 @@ ignore_imports = [
 ]
 
 # Orchestration direction: SessionManager owns the Sessions that drive the
-# pipeline, which in turn wraps the transport providers — so the transport layer
-# must never import back up into SessionManager. (A fuller Session -> Stages
+# pipeline, which in turn wraps the transport providers, so the transport layer
+# must never import back up into SessionManager. Standalone multi-session server
+# helpers live in easycat.server and leave provider modules focused on transport
+# mechanics. (A fuller Session -> Stages
 # spine is deliberately NOT modelled here: `events` and `config` both import
 # `session.actions` as a shared leaf, which is intentional, permanent
-# architecture rather than a ratchetable violation.) The three current upward
-# edges — one module-level (websocket) and two function-local (webrtc /
-# webtransport) — are grandfathered below (mirrors the C901 convention). Ratchet
-# this list down as the transports stop importing session_manager — never grow it.
+# architecture rather than a ratchetable violation.)
 [[tool.importlinter.contracts]]
 name = "Transport providers do not import the SessionManager orchestrator"
 type = "layers"
 layers = [
     "easycat.session_manager",
     "easycat.transports",
-]
-ignore_imports = [
-    "easycat.transports.websocket -> easycat.session_manager",
-    "easycat.transports.webrtc -> easycat.session_manager",
-    "easycat.transports.webtransport -> easycat.session_manager",
 ]

@@ -28,14 +28,12 @@ import logging
 import os
 import time
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from easycat._extras import require_module
 from easycat._net import is_loopback_host, normalize_auth_token
-from easycat._signals import create_shutdown_event
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk, AudioFormat
 from easycat.events import EventBus, TransportAudioDelivered
 from easycat.transports._base import AudioQueueMixin, make_version_info
@@ -335,7 +333,7 @@ class WebRTCTransportConfig:
         posture): query tokens are a browser/dev opt-in only.
     max_sessions:
         Maximum concurrent browser offers accepted by
-        :func:`serve_webrtc_config_sessions`. The single-client
+        :func:`easycat.server.serve_webrtc_config_sessions`. The single-client
         :class:`WebRTCTransport` compatibility wrapper ignores this value.
     stats_max_records:
         Maximum JSONL records written to ``stats_path`` by this process.
@@ -434,124 +432,6 @@ def webrtc_transport_config_from_env(
         auth_token=normalize_auth_token(os.getenv(auth_token_env)),
         max_sessions=int(os.getenv(max_sessions_env, "64")),
         expose_ice_credentials=_env_flag(expose_ice_credentials_env),
-    )
-
-
-async def serve_webrtc_config_sessions(
-    config_factory: Callable[[WebRTCTransport], Any],
-    config: WebRTCTransportConfig | None = None,
-    *,
-    stop_event: asyncio.Event | None = None,
-    runtime_feedback: bool = True,
-    announce: bool = True,
-    unsafe_allow_no_auth: bool = False,
-) -> None:
-    """Serve one EasyCat session per browser WebRTC offer.
-
-    The returned signaling server exposes the same ``/offer``, ``/config``,
-    ``/stats``, ``/health``, root, static-file, CORS, and bearer-token behavior
-    as :class:`WebRTCTransport`, but each accepted offer receives an isolated
-    transport/session instead of replacing a singleton peer connection.
-
-    A non-loopback bind requires ``config.auth_token``: binding beyond loopback
-    without a token raises :class:`ValueError` via the shared
-    :func:`easycat.server.auth.enforce_bind_guard` (the SAME structured guard
-    the WebSocket helper uses) unless ``unsafe_allow_no_auth=True`` is passed to
-    explicitly opt into an unauthenticated endpoint.
-
-    Capacity + draining are owned by the shared
-    :class:`~easycat.server.transports.CapacityGate` collaborator (lifted out of
-    the inline ``Semaphore``/active-set/``shutting_down`` state) so they behave
-    identically to the WebSocket helper.
-
-    M7 note: the route handlers (``/offer``, ``/config``, ``/stats``, ``/health``,
-    root, CORS) are no longer bound to a throwaway ``WebRTCTransport`` shim. They
-    are lifted into the transport-instance-free
-    :class:`~easycat.server.webrtc_routes.WebRTCRoutes` unit that the shared
-    :class:`~easycat.server.voice_server.VoiceServer` also mounts. This helper
-    delegates to it with ``prefix=""`` so it keeps serving the FLAT
-    ``/offer`` / ``/config`` / ``/stats`` paths the out-of-tree helper API and the
-    bundled client rely on.
-    """
-    from easycat.server.auth import BearerTokenAuth, enforce_bind_guard
-    from easycat.server.transports import CapacityGate
-    from easycat.server.webrtc_routes import WebRTCRoutes
-    from easycat.session_manager import SessionManager
-
-    settings = config or WebRTCTransportConfig()
-    # Reconcile the bind guard to the shared structured layer (closes the
-    # asymmetry: this helper previously raised unconditionally with no escape
-    # hatch). A configured ``auth_token`` satisfies the guard; the escape hatch
-    # mirrors the WebSocket helper.
-    auth_token = normalize_auth_token(settings.auth_token)
-    bind_auth = (
-        BearerTokenAuth(token=auth_token, allow_query_token=settings.allow_query_token)
-        if auth_token is not None
-        else None
-    )
-    enforce_bind_guard(
-        settings.host,
-        auth=bind_auth,
-        unsafe_allow_no_auth=unsafe_allow_no_auth,
-    )
-    web = require_module("aiohttp.web", extra="webrtc", purpose="WebRTC signaling")
-    manager: SessionManager[int] = SessionManager()
-    gate: CapacityGate[int] = CapacityGate(settings.max_sessions)
-
-    routes = WebRTCRoutes(
-        settings,
-        auth=bind_auth,
-        config_factory=config_factory,
-        gate=gate,
-        manager=manager,
-        runtime_feedback=runtime_feedback,
-    )
-
-    app = web.Application()
-    # ``prefix=""`` keeps the FLAT routes (``/offer`` / ``/config`` / ``/stats``)
-    # the bundled client and the out-of-tree helper API depend on.
-    routes.register(app, prefix="", web=web)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, settings.host, settings.port)
-    await site.start()
-    if announce:
-        print(f"\nServer ready. Open http://{settings.host}:{settings.port} in your browser")
-        print("Press Ctrl+C to stop.\n")
-
-    event = stop_event or create_shutdown_event()
-    try:
-        await event.wait()
-    finally:
-        gate.start_draining()
-        await site.stop()
-        await runner.cleanup()
-        await routes.cancel_cleanup_tasks()
-        await manager.stop_all()
-
-
-def run_webrtc_config_server(
-    config_factory: Callable[[WebRTCTransport], Any],
-    config: WebRTCTransportConfig | None = None,
-    *,
-    runtime_feedback: bool = True,
-    announce: bool = True,
-    unsafe_allow_no_auth: bool = False,
-) -> None:
-    """Run a multi-session WebRTC signaling server from a synchronous entry point.
-
-    A non-loopback bind requires a token unless ``unsafe_allow_no_auth=True``
-    (mirrors :func:`run_websocket_config_server`).
-    """
-    asyncio.run(
-        serve_webrtc_config_sessions(
-            config_factory,
-            config,
-            runtime_feedback=runtime_feedback,
-            announce=announce,
-            unsafe_allow_no_auth=unsafe_allow_no_auth,
-        )
     )
 
 
