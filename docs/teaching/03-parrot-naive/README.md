@@ -28,12 +28,15 @@ personally heard this fail on your own voice.
   `speak_acceptance_probe.py` and `parrot.delivery` records for
   provider-free output-acceptance evidence; correlated `stt.received` and
   `stt.partial`/`stt.final` records that separate provider ingress from queue
-  consumption.
+  consumption; `parrot_lifecycle_probe.py` for inherited task/resource scope.
 - **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
   timer keys off STT partials, which OpenAI's default STT only emits
   after the audio uploads.
 - **Modified:** STT events drive an action (speak) instead of just
   printing.
+- **Preserved:** Chapter 2's `AsyncExitStack` acquisition rollback and
+  `TaskGroup` sibling ownership. The timeout policy is deliberately naive;
+  cleanup and cancellation are not.
 
 <!-- BEGIN auto:diff prev=02-transcribe prev_src=streaming.py src=main.py trim_blank_context=true -->
 <details>
@@ -67,7 +70,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -17,178 +18,260 @@
+@@ -17,7 +18,6 @@
 
  from __future__ import annotations
 
@@ -75,10 +78,7 @@ personally heard this fail on your own voice.
  import asyncio
  import os
  import time
- import types
--from contextlib import AsyncExitStack
- from pathlib import Path
-
+@@ -28,167 +28,269 @@
  from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
@@ -105,8 +105,43 @@ personally heard this fail on your own voice.
 -
 -
 -def _display_path(path: Path) -> Path:
+-    try:
+-        return path.relative_to(Path.cwd())
+-    except ValueError:
+-        return path
+-
+-
+-def build_stt_config(provider: str) -> STTProviderConfig:
+-    """Resolve one documented provider without leaking its credential."""
+-    if provider not in PROVIDER_ENV_VARS:
+-        choices = ", ".join(PROVIDERS)
+-        raise ValueError(f"Unknown STT provider {provider!r}; choose one of: {choices}")
+-
+-    env_var = PROVIDER_ENV_VARS[provider]
+-    api_key = os.getenv(env_var)
+-    if not api_key:
+-        raise SystemExit(f"Set {env_var} in your environment first.")
+-
+-    params = None
+-    if provider == "deepgram":
+-        # This is Deepgram's wire target, not a restriction on upstream PCM.
+-        # Matching the transport avoids a resample in this comparison; the
+-        # provider also accepts other PCM rates and resamples them internally.
+-        params = {
+-            "sample_rate": PCM16_MONO_24K.sample_rate,
+-            "event_bus": EventBus(),
+-        }
+-
+-    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
+-
+-
+-async def run_streaming(
 +SESSION_ID = f"ch03-parrot-{int(time.time())}"
 +STTQueueItem = tuple[int, STTEvent, float] | None
++
++
++class ParrotEventStreamEndedError(RuntimeError):
++    """Private TaskGroup signal: the STT consumer drained its sentinel."""
 +
 +
 +def record_stt_received(
@@ -202,47 +237,6 @@ personally heard this fail on your own voice.
 +    )
 +
 +
-+async def shutdown(stt, transport) -> None:
-+    """End the logical STT stream, close its provider, then disconnect."""
-     try:
--        return path.relative_to(Path.cwd())
--    except ValueError:
--        return path
--
--
--def build_stt_config(provider: str) -> STTProviderConfig:
--    """Resolve one documented provider without leaking its credential."""
--    if provider not in PROVIDER_ENV_VARS:
--        choices = ", ".join(PROVIDERS)
--        raise ValueError(f"Unknown STT provider {provider!r}; choose one of: {choices}")
--
--    env_var = PROVIDER_ENV_VARS[provider]
--    api_key = os.getenv(env_var)
--    if not api_key:
--        raise SystemExit(f"Set {env_var} in your environment first.")
--
--    params = None
--    if provider == "deepgram":
--        # This is Deepgram's wire target, not a restriction on upstream PCM.
--        # Matching the transport avoids a resample in this comparison; the
--        # provider also accepts other PCM rates and resamples them internally.
--        params = {
--            "sample_rate": PCM16_MONO_24K.sample_rate,
--            "event_bus": EventBus(),
--        }
--
--    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
--
--
--async def run_streaming(
-+        await stt.end_stream()
-+    finally:
-+        try:
-+            await close_if_supported(stt)
-+        finally:
-+            await transport.disconnect()
-+
-+
 +async def feed_audio(stt, transport) -> None:
 +    async for chunk in transport.receive_audio():
 +        await stt.send_audio(chunk)
@@ -280,32 +274,6 @@ personally heard this fail on your own voice.
 -    # Register each cleanup as soon as ownership begins. If connect() or
 -    # start_stream() raises after partial acquisition, the earlier callbacks
 -    # still run. Successful acquisition unwinds as end → close → disconnect.
--    async with AsyncExitStack() as resources:
--        resources.push_async_callback(transport.disconnect)
--        resources.push_async_callback(close_if_supported, stt)
--        await transport.connect()
--
--        await stt.start_stream()
--        resources.push_async_callback(stt.end_stream)
--
--        start = time.monotonic()
--        print(f"Speak for {duration_s:g} seconds...")
--
--        async def feed_audio() -> None:
--            """Push mic chunks into STT until the capture window elapses."""
--            async for chunk in transport.receive_audio():
--                await stt.send_audio(chunk)
--                if time.monotonic() - start >= duration_s:
--                    break
--            # Closing the STT stream is what triggers the upload (for
--            # OpenAI's batch provider) or the final commit (for Deepgram).
--            # For OpenAI this call blocks for the full round-trip: the
--            # partials you see start arriving *after* we get here.
--            await stt.end_stream()
--
--        async def consume_events() -> None:
--            """Print every partial / final as soon as it arrives."""
--            async for event in stt.events():
 +    ev_queue: asyncio.Queue[STTQueueItem],
 +    journal: InMemoryRingBuffer,
 +    start: float,
@@ -318,42 +286,19 @@ personally heard this fail on your own voice.
 +            item = await asyncio.wait_for(ev_queue.get(), timeout=SILENCE_TIMEOUT_S)
 +        except TimeoutError:
 +            if last_text:
-                 offset_ms = (time.monotonic() - start) * 1000
--                kind = "FINAL" if event.type == STTEventType.FINAL else "part "
--                print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
++                offset_ms = (time.monotonic() - start) * 1000
 +                print(f"  t+{offset_ms:6.0f}ms  PARROT → {last_text!r}")
-                 journal.append(
-                     kind=JournalRecordKind.EVENT,
--                    name=f"stt.{event.type.value}",
--                    session_id=session_id,
++                journal.append(
++                    kind=JournalRecordKind.EVENT,
 +                    name="parrot.fire",
 +                    session_id=SESSION_ID,
-                     data={
--                        "stage": "stt",
--                        "event_type": event.type.value,
--                        "text": event.text,
++                    data={
 +                        "stage": "parrot",
 +                        "committed_text": last_text,
 +                        "silence_timeout_s": SILENCE_TIMEOUT_S,
-                         "offset_ms": offset_ms,
--                        # t_ms mirrors the later chapters' field so downstream
--                        # scripts (ch 12's evals.py, etc.) can read this bundle
--                        # without a translator.
--                        "t_ms": time.monotonic() * 1000,
-                     },
-                 )
--
--        # TaskGroup cancels and joins one sibling before it lets the failure
--        # escape. Resource cleanup therefore never races a live feeder or
--        # event consumer.
--        async with asyncio.TaskGroup() as streams:
--            streams.create_task(feed_audio())
--            streams.create_task(consume_events())
--
--
--async def main(provider: str = "openai") -> None:
--    config = build_stt_config(provider)
--    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
++                        "offset_ms": offset_ms,
++                    },
++                )
 +                await speak_and_record(transport, journal, last_text, start)
 +                last_text = ""
 +            continue
@@ -375,6 +320,93 @@ personally heard this fail on your own voice.
 +            consumed_offset_ms=offset_ms,
 +            queue_depth=ev_queue.qsize(),
 +        )
++
++
++async def stop_when_parrot_ends(
++    transport,
++    ev_queue: asyncio.Queue[STTQueueItem],
++    journal: InMemoryRingBuffer,
++    start: float,
++) -> None:
++    """Turn normal queue exhaustion into a TaskGroup-wide stop signal."""
++    await parrot_events(transport, ev_queue, journal, start)
++    raise ParrotEventStreamEndedError
++
++
++async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
++    """Own one parrot stream until cancellation, failure, or STT exhaustion."""
+     async with AsyncExitStack() as resources:
++        # These objects exist before connect(), so register final cleanup
++        # before the first fallible acquisition step.
+         resources.push_async_callback(transport.disconnect)
+         resources.push_async_callback(close_if_supported, stt)
+         await transport.connect()
+
+         await stt.start_stream()
++        # A logical stream exists only after start_stream() succeeds.
+         resources.push_async_callback(stt.end_stream)
+
+         start = time.monotonic()
+-        print(f"Speak for {duration_s:g} seconds...")
+-
+-        async def feed_audio() -> None:
+-            """Push mic chunks into STT until the capture window elapses."""
+-            async for chunk in transport.receive_audio():
+-                await stt.send_audio(chunk)
+-                if time.monotonic() - start >= duration_s:
+-                    break
+-            # Closing the STT stream is what triggers the upload (for
+-            # OpenAI's batch provider) or the final commit (for Deepgram).
+-            # For OpenAI this call blocks for the full round-trip: the
+-            # partials you see start arriving *after* we get here.
+-            await stt.end_stream()
+-
+-        async def consume_events() -> None:
+-            """Print every partial / final as soon as it arrives."""
+-            async for event in stt.events():
+-                offset_ms = (time.monotonic() - start) * 1000
+-                kind = "FINAL" if event.type == STTEventType.FINAL else "part "
+-                print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
+-                journal.append(
+-                    kind=JournalRecordKind.EVENT,
+-                    name=f"stt.{event.type.value}",
+-                    session_id=session_id,
+-                    data={
+-                        "stage": "stt",
+-                        "event_type": event.type.value,
+-                        "text": event.text,
+-                        "offset_ms": offset_ms,
+-                        # t_ms mirrors the later chapters' field so downstream
+-                        # scripts (ch 12's evals.py, etc.) can read this bundle
+-                        # without a translator.
+-                        "t_ms": time.monotonic() * 1000,
+-                    },
+-                )
+-
+-        # TaskGroup cancels and joins one sibling before it lets the failure
+-        # escape. Resource cleanup therefore never races a live feeder or
+-        # event consumer.
+-        async with asyncio.TaskGroup() as streams:
+-            streams.create_task(feed_audio())
+-            streams.create_task(consume_events())
+-
+-
+-async def main(provider: str = "openai") -> None:
+-    config = build_stt_config(provider)
+-    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
++        print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
++        ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
++
++        try:
++            async with asyncio.TaskGroup() as streams:
++                streams.create_task(feed_audio(stt, transport))
++                streams.create_task(listen_stt(stt, ev_queue, journal, start))
++                streams.create_task(stop_when_parrot_ends(transport, ev_queue, journal, start))
++        except* ParrotEventStreamEndedError:
++            # ``parrot_events`` consumed the listener's None sentinel. Raising
++            # inside its wrapper makes TaskGroup cancel and join the infinite
++            # microphone feeder before resource teardown begins.
++            pass
 +
 +
 +async def main() -> None:
@@ -421,25 +453,10 @@ personally heard this fail on your own voice.
 +        )
 +    )
 +
-+    await transport.connect()
-+    await stt.start_stream()
-+    start = time.monotonic()
-+    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
-+
-+    # Bridge STT events into an asyncio.Queue so the parrot loop can use
-+    # ``asyncio.wait_for`` to implement "silence timeout since last event."
-+    ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
-+
 +    try:
-+        await asyncio.gather(
-+            feed_audio(stt, transport),
-+            listen_stt(stt, ev_queue, journal, start),
-+            parrot_events(transport, ev_queue, journal, start),
-+        )
++        await run_parrot(stt, transport, journal)
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
-+    finally:
-+        await shutdown(stt, transport)
 
      RUNS_DIR.mkdir(exist_ok=True)
 -    bundle_path = RUNS_DIR / f"{session_id}.bundle"
@@ -503,6 +520,39 @@ a partial so you can feel why it exists.
                                       └─────────────────┘
                                       (blocks on speak())
 ```
+
+## Keep the intended bug isolated
+
+This chapter deliberately breaks one rule: it treats a 500 ms gap in consumed
+STT events as permission to speak a partial hypothesis. It does **not** need to
+reintroduce unrelated lifetime bugs to make that failure visceral.
+
+The surrounding scaffold is inherited from chapter 2:
+
+- `AsyncExitStack` registers transport disconnect and provider close before
+  `connect()`, then registers `end_stream()` only after logical stream startup.
+  Connect and start failures therefore unwind only the ownership that exists.
+- `TaskGroup` owns the microphone feeder, STT listener, and parrot consumer.
+  A failure in any child cancels and joins the other two before resource
+  teardown.
+- A long-running parrot has one extra case: the STT listener can end normally
+  while the microphone feeder is intentionally infinite. After the parrot
+  drains the listener's `None` sentinel, a private
+  `ParrotEventStreamEndedError` turns that terminal condition into a caught
+  TaskGroup stop signal. The feeder is cancelled and joined; the sentinel does
+  not escape as an application error.
+
+Run all four paths without credentials or audio hardware:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
+```
+
+`normal_event_end` shows `transport.receive.cancelled` before `stt.end`,
+`stt.close`, and `transport.disconnect`. The two startup failures never record
+`stt.end`, while the feed failure cancels the STT listener before the same
+ordered teardown. That leaves the silence timeout as the only deliberate
+failure introduced by this chapter.
 
 ## Break it, deliberately
 

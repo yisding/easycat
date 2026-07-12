@@ -29,13 +29,16 @@ def test_chapter_4_closes_stt_on_normal_and_cancelled_turns() -> None:
 
 
 def test_chapters_2_through_5_close_manually_created_stt() -> None:
-    chapter_2 = TEACHING / "02-transcribe" / "streaming.py"
-    source = chapter_2.read_text(encoding="utf-8")
-    assert "from easycat.runtime.capabilities import close_if_supported" in source
-    assert "resources.push_async_callback(close_if_supported, stt)" in source
+    scoped_cleanup_paths = (
+        TEACHING / "02-transcribe" / "streaming.py",
+        TEACHING / "03-parrot-naive" / "main.py",
+    )
+    for path in scoped_cleanup_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "from easycat.runtime.capabilities import close_if_supported" in source
+        assert "resources.push_async_callback(close_if_supported, stt)" in source
 
     direct_cleanup_paths = (
-        TEACHING / "03-parrot-naive" / "main.py",
         TEACHING / "04-vad-preroll" / "main.py",
         TEACHING / "05-blocking-agent" / "main.py",
     )

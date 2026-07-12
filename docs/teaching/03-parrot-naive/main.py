@@ -22,6 +22,7 @@ import asyncio
 import os
 import time
 import types
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from easycat import LocalTransportConfig
@@ -38,6 +39,10 @@ SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
 RUNS_DIR = Path(__file__).parent / "runs"
 SESSION_ID = f"ch03-parrot-{int(time.time())}"
 STTQueueItem = tuple[int, STTEvent, float] | None
+
+
+class ParrotEventStreamEndedError(RuntimeError):
+    """Private TaskGroup signal: the STT consumer drained its sentinel."""
 
 
 def record_stt_received(
@@ -133,17 +138,6 @@ async def speak_and_record(
     )
 
 
-async def shutdown(stt, transport) -> None:
-    """End the logical STT stream, close its provider, then disconnect."""
-    try:
-        await stt.end_stream()
-    finally:
-        try:
-            await close_if_supported(stt)
-        finally:
-            await transport.disconnect()
-
-
 async def feed_audio(stt, transport) -> None:
     async for chunk in transport.receive_audio():
         await stt.send_audio(chunk)
@@ -220,6 +214,46 @@ async def parrot_events(
         )
 
 
+async def stop_when_parrot_ends(
+    transport,
+    ev_queue: asyncio.Queue[STTQueueItem],
+    journal: InMemoryRingBuffer,
+    start: float,
+) -> None:
+    """Turn normal queue exhaustion into a TaskGroup-wide stop signal."""
+    await parrot_events(transport, ev_queue, journal, start)
+    raise ParrotEventStreamEndedError
+
+
+async def run_parrot(stt, transport, journal: InMemoryRingBuffer) -> None:
+    """Own one parrot stream until cancellation, failure, or STT exhaustion."""
+    async with AsyncExitStack() as resources:
+        # These objects exist before connect(), so register final cleanup
+        # before the first fallible acquisition step.
+        resources.push_async_callback(transport.disconnect)
+        resources.push_async_callback(close_if_supported, stt)
+        await transport.connect()
+
+        await stt.start_stream()
+        # A logical stream exists only after start_stream() succeeds.
+        resources.push_async_callback(stt.end_stream)
+
+        start = time.monotonic()
+        print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
+        ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
+
+        try:
+            async with asyncio.TaskGroup() as streams:
+                streams.create_task(feed_audio(stt, transport))
+                streams.create_task(listen_stt(stt, ev_queue, journal, start))
+                streams.create_task(stop_when_parrot_ends(transport, ev_queue, journal, start))
+        except* ParrotEventStreamEndedError:
+            # ``parrot_events`` consumed the listener's None sentinel. Raising
+            # inside its wrapper makes TaskGroup cancel and join the infinite
+            # microphone feeder before resource teardown begins.
+            pass
+
+
 async def main() -> None:
     oai_key = os.getenv("OPENAI_API_KEY")
     dg_key = os.getenv("DEEPGRAM_API_KEY")
@@ -243,25 +277,10 @@ async def main() -> None:
         )
     )
 
-    await transport.connect()
-    await stt.start_stream()
-    start = time.monotonic()
-    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
-
-    # Bridge STT events into an asyncio.Queue so the parrot loop can use
-    # ``asyncio.wait_for`` to implement "silence timeout since last event."
-    ev_queue: asyncio.Queue[STTQueueItem] = asyncio.Queue()
-
     try:
-        await asyncio.gather(
-            feed_audio(stt, transport),
-            listen_stt(stt, ev_queue, journal, start),
-            parrot_events(transport, ev_queue, journal, start),
-        )
+        await run_parrot(stt, transport, journal)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
-    finally:
-        await shutdown(stt, transport)
 
     RUNS_DIR.mkdir(exist_ok=True)
     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"

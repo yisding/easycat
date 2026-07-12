@@ -94,9 +94,39 @@ the audio?
 2. Rejection is actionable drop evidence. Acceptance means scheduled for
    delivery, not rendered by a device or heard by a person.
 
+## 4. Preserve the scaffold while breaking the policy
+
+**Task.** Run the provider-free lifecycle probe:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
+```
+
+Predict each event list first. Why does `normal_event_end` cancel the
+microphone feeder, why is that not reported as an error, and which two cases
+correctly omit `stt.end`?
+
+**Hints**
+
+1. The transport and STT objects exist before `connect()`, so their final
+   cleanup is registered first. A logical STT stream exists only after
+   `start_stream()` returns.
+2. `TaskGroup` cancels siblings when a child raises; it does not cancel them
+   merely because one child returns normally.
+3. The parrot consumer returns only after it drains the STT listener's `None`
+   sentinel. Its wrapper then raises `ParrotEventStreamEndedError`, causing the
+   infinite feeder to be cancelled and joined.
+4. `except* ParrotEventStreamEndedError` handles that private terminal signal.
+   A real feed, listener, or parrot failure remains in the exception group and
+   still propagates after cleanup.
+5. Removing the timeout would fix the intended Chapter 3 lesson. Removing
+   `AsyncExitStack` or `TaskGroup` would instead reintroduce unrelated bugs.
+
 ## Self-check
 
 You should be unable to defend the silence-timeout architecture for a serious
 voice product, actively reaching for "is the microphone currently carrying
 speech?", able to distinguish provider ingress from consumer dequeue, and able
-to distinguish synthesized, accepted, and played audio.
+to distinguish synthesized, accepted, and played audio. You should also be
+able to identify the silence-timeout policy—not cleanup, cancellation, or
+normal stream exhaustion—as this chapter's deliberate defect.
