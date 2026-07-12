@@ -415,7 +415,10 @@ class AudioRouter:
                     or not self._outbound_queue.empty()
                 ):
                     return False
-                if self._transport_send_audio_is_nonblocking:
+                if (
+                    self._transport_send_audio_is_nonblocking
+                    and self._transport_reports_audio_delivery
+                ):
                     # This opt-in transport contract guarantees send_audio has
                     # no suspension point, so cancellation cannot land until
                     # the transport has accepted or rejected the frame. Keep

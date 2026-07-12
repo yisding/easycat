@@ -349,6 +349,7 @@ async def test_nonblocking_transport_keeps_inline_send_in_caller_task(
 ) -> None:
     class _ImmediateTransport(_FakeTransport):
         send_audio_is_nonblocking = True
+        reports_audio_delivery = True
 
     transport = _ImmediateTransport()
     router, state = _make_router(transport=transport)
@@ -364,6 +365,45 @@ async def test_nonblocking_transport_keeps_inline_send_in_caller_task(
     assert len(transport.sent) == 1
     assert router._outbound_in_flight == 0
     assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_nonblocking_send_keeps_shield_when_delivery_handler_can_suspend() -> None:
+    class _ImmediateTransport(_FakeTransport):
+        send_audio_is_nonblocking = True
+
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    handler_finished = asyncio.Event()
+    transport = _ImmediateTransport()
+    router, state = _make_router(transport=transport)
+
+    async def _handle_audio_out(_event: AudioOut) -> None:
+        handler_started.set()
+        await release_handler.wait()
+        handler_finished.set()
+
+    state["bus"].subscribe(AudioOut, _handle_audio_out)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(handler_started.wait(), timeout=1)
+    inline.cancel()
+    await asyncio.sleep(0)
+
+    assert not inline.done()
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 1
+
+    release_handler.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert handler_finished.is_set()
+    assert router._outbound_in_flight == 0
 
     state["running"] = False
     await router.stop_outbound()
