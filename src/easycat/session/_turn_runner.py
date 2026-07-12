@@ -672,11 +672,7 @@ class TurnRunner:
         st: _StreamingTtsState,
         tts_task: asyncio.Task[None],
     ) -> None:
-        self._cancel_pending(tts_task)
-        try:
-            await tts_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await self._cancel_and_drain(tts_task)
         self._record_streaming_interruption(
             st,
             interrupted=st.turn.last_barge_in_time is not None,
@@ -698,19 +694,13 @@ class TurnRunner:
             else:
                 await asyncio.shield(agent_task)
         except asyncio.CancelledError:
-            tasks = (agent_task, tts_task)
-            self._cancel_pending(*tasks)
-            for t in tasks:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
+            await self._cancel_and_drain(agent_task, tts_task)
             raise
         except Exception as exc:
-            self._cancel_pending(agent_task, tts_task)
+            await self._cancel_and_drain(agent_task, tts_task)
             if isinstance(exc, AgentTimeoutError):
-                # Cancel the shielded agent before dispatching handlers: a slow
-                # Error subscriber must not give overdue work time to succeed.
+                # Drain the shielded agent before dispatching handlers so its
+                # cleanup is complete before the turn can advance.
                 await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
             else:
                 logger.exception("Streaming agent error")
@@ -719,10 +709,11 @@ class TurnRunner:
         return None
 
     @staticmethod
-    def _cancel_pending(*tasks: asyncio.Task[None]) -> None:
+    async def _cancel_and_drain(*tasks: asyncio.Task[None]) -> None:
         for t in tasks:
             if not t.done():
                 t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def _finalize_streamed_text(self, turn: TurnContext, accumulated_text: str) -> str:
         """Apply the final markdown strip and sync the agent framework state."""
