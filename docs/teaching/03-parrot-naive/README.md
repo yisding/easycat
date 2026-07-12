@@ -65,7 +65,7 @@ personally heard this fail on your own voice.
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -17,7 +18,6 @@
+@@ -17,178 +18,183 @@
 
  from __future__ import annotations
 
@@ -73,7 +73,11 @@ personally heard this fail on your own voice.
  import asyncio
  import os
  import time
-@@ -28,149 +28,173 @@
+ import types
+-from contextlib import AsyncExitStack
+ from pathlib import Path
+
+ from easycat import LocalTransportConfig
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
  from easycat.events import EventBus, STTEventType
@@ -128,6 +132,79 @@ personally heard this fail on your own voice.
 -    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
 -
 -
+-async def run_streaming(
+-    stt,
+-    transport,
++SESSION_ID = f"ch03-parrot-{int(time.time())}"
++
++
++def record_delivery(
+     journal: InMemoryRingBuffer,
+-    session_id: str,
+     *,
+-    duration_s: float = DURATION_S,
++    text: str,
++    accepted_chunks: int,
++    rejected_chunks: int,
++    offset_ms: float,
+ ) -> None:
+-    """Run one stream with acquisition rollback and joined sibling tasks."""
+-    # Register each cleanup as soon as ownership begins. If connect() or
+-    # start_stream() raises after partial acquisition, the earlier callbacks
+-    # still run. Successful acquisition unwinds as end → close → disconnect.
+-    async with AsyncExitStack() as resources:
+-        resources.push_async_callback(transport.disconnect)
+-        resources.push_async_callback(close_if_supported, stt)
+-        await transport.connect()
+-
+-        await stt.start_stream()
+-        resources.push_async_callback(stt.end_stream)
+-
+-        start = time.monotonic()
+-        print(f"Speak for {duration_s:g} seconds...")
+-
+-        async def feed_audio() -> None:
+-            """Push mic chunks into STT until the capture window elapses."""
+-            async for chunk in transport.receive_audio():
+-                await stt.send_audio(chunk)
+-                if time.monotonic() - start >= duration_s:
+-                    break
+-            # Closing the STT stream is what triggers the upload (for
+-            # OpenAI's batch provider) or the final commit (for Deepgram).
+-            # For OpenAI this call blocks for the full round-trip: the
+-            # partials you see start arriving *after* we get here.
+-            await stt.end_stream()
+-
+-        async def consume_events() -> None:
+-            """Print every partial / final as soon as it arrives."""
+-            async for event in stt.events():
+-                offset_ms = (time.monotonic() - start) * 1000
+-                kind = "FINAL" if event.type == STTEventType.FINAL else "part "
+-                print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
+-                journal.append(
+-                    kind=JournalRecordKind.EVENT,
+-                    name=f"stt.{event.type.value}",
+-                    session_id=session_id,
+-                    data={
+-                        "stage": "stt",
+-                        "event_type": event.type.value,
+-                        "text": event.text,
+-                        "offset_ms": offset_ms,
+-                        # t_ms mirrors the later chapters' field so downstream
+-                        # scripts (ch 12's evals.py, etc.) can read this bundle
+-                        # without a translator.
+-                        "t_ms": time.monotonic() * 1000,
+-                    },
+-                )
+-
+-        # TaskGroup cancels and joins one sibling before it lets the failure
+-        # escape. Resource cleanup therefore never races a live feeder or
+-        # event consumer.
+-        async with asyncio.TaskGroup() as streams:
+-            streams.create_task(feed_audio())
+-            streams.create_task(consume_events())
+-
+-
 -async def main(provider: str = "openai") -> None:
 -    config = build_stt_config(provider)
 -    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
@@ -140,17 +217,6 @@ personally heard this fail on your own voice.
 -    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
 -    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
 -
-+SESSION_ID = f"ch03-parrot-{int(time.time())}"
-+
-+
-+def record_delivery(
-+    journal: InMemoryRingBuffer,
-+    *,
-+    text: str,
-+    accepted_chunks: int,
-+    rejected_chunks: int,
-+    offset_ms: float,
-+) -> None:
 +    """Record transport acceptance without claiming speaker playback."""
      journal.append(
          kind=JournalRecordKind.EVENT,
@@ -172,7 +238,9 @@ personally heard this fail on your own voice.
 +            "rejected_chunks": rejected_chunks,
 +            "offset_ms": offset_ms,
          },
-+    )
+     )
+-
+-    await run_streaming(stt, transport, journal, session_id)
 +    if rejected_chunks:
 +        print(
 +            "  transport rejected "
@@ -226,23 +294,20 @@ personally heard this fail on your own voice.
 +            api_key=dg_key,
 +            params={"sample_rate": 24000, "event_bus": EventBus()},
 +        )
-     )
-
-     await transport.connect()
-     await stt.start_stream()
-     start = time.monotonic()
--    print(f"Speak for {DURATION_S} seconds...")
++    )
++
++    await transport.connect()
++    await stt.start_stream()
++    start = time.monotonic()
 +    print("Naive parrot. Talk to it. Ctrl-C when you're sick of it.")
 +
 +    # Bridge STT events into an asyncio.Queue so the parrot loop can use
 +    # ``asyncio.wait_for`` to implement "silence timeout since last event."
 +    ev_queue: asyncio.Queue = asyncio.Queue()
-
-     async def feed_audio() -> None:
--        """Push mic chunks into STT until DURATION_S seconds elapse."""
-         async for chunk in transport.receive_audio():
-             await stt.send_audio(chunk)
--            if time.monotonic() - start >= DURATION_S:
++
++    async def feed_audio() -> None:
++        async for chunk in transport.receive_audio():
++            await stt.send_audio(chunk)
 +
 +    async def listen_stt() -> None:
 +        async for event in stt.events():
@@ -275,54 +340,31 @@ personally heard this fail on your own voice.
 +                    last_text = ""
 +                continue
 +            if event is None:
-                 break
--        # Closing the STT stream is what triggers the upload (for
--        # OpenAI's batch provider) or the final commit (for Deepgram).
--        # For OpenAI this call blocks for the full round-trip: the
--        # partials you see start arriving *after* we get here.
--        await stt.end_stream()
--
--    async def consume_events() -> None:
--        """Print every partial / final as soon as it arrives."""
--        async for event in stt.events():
++                break
 +            # Deliberately acting on partials — chapter 2's rule, broken
 +            # on purpose. Chapter 4 restores it by waiting for a real
 +            # turn boundary from the VAD.
 +            last_text = event.text
 +            kind = "FINAL" if event.type == STTEventType.FINAL else "part "
-             offset_ms = (time.monotonic() - start) * 1000
--            kind = "FINAL" if event.type == STTEventType.FINAL else "part "
-             print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
-             journal.append(
-                 kind=JournalRecordKind.EVENT,
-                 name=f"stt.{event.type.value}",
--                session_id=session_id,
++            offset_ms = (time.monotonic() - start) * 1000
++            print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
++            journal.append(
++                kind=JournalRecordKind.EVENT,
++                name=f"stt.{event.type.value}",
 +                session_id=SESSION_ID,
-                 data={
-                     "stage": "stt",
-                     "event_type": event.type.value,
-                     "text": event.text,
-                     "offset_ms": offset_ms,
--                    # t_ms mirrors the later chapters' field so downstream
--                    # scripts (ch 12's evals.py, etc.) can read this bundle
--                    # without a translator.
--                    "t_ms": time.monotonic() * 1000,
-                 },
-             )
-
-     try:
--        await asyncio.gather(feed_audio(), consume_events())
++                data={
++                    "stage": "stt",
++                    "event_type": event.type.value,
++                    "text": event.text,
++                    "offset_ms": offset_ms,
++                },
++            )
++
++    try:
 +        await asyncio.gather(feed_audio(), listen_stt(), parrot())
 +    except (KeyboardInterrupt, asyncio.CancelledError):
 +        pass
-     finally:
--        try:
--            await stt.end_stream()
--        finally:
--            try:
--                await close_if_supported(stt)
--            finally:
--                await transport.disconnect()
++    finally:
 +        await shutdown(stt, transport)
 
      RUNS_DIR.mkdir(exist_ok=True)

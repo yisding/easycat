@@ -137,6 +137,35 @@ and which does not?
    artifact store with consent and a deletion policy. An untracked temp file
    is not a retention strategy.
 
+## 6. Fail one streaming sibling
+
+**Task.** Run the provider-free lifetime probe:
+
+```bash
+uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
+```
+
+Before reading the JSON, predict which cleanup events appear after a transport
+connect failure, an STT start failure, and an audio-feed failure. Then replace
+the `TaskGroup` in a scratch copy of `streaming.py` with its old `gather()`
+call. Which ordering guarantee disappears?
+
+**Hints**
+
+1. The transport and provider objects exist before `connect()` returns, so
+   their final cleanup is registered before that fallible await.
+2. `end_stream()` is registered only after `start_stream()` succeeds. A start
+   failure must close the provider and disconnect the transport, but it did
+   not open a logical stream that needs ending.
+3. In the feed failure, `TaskGroup` cancels and joins the blocked event
+   consumer first. `stt.events.cancelled` must therefore precede every
+   resource-cleanup event.
+4. The propagated feed error is an `ExceptionGroup` because `TaskGroup`
+   preserves concurrent failures. The probe unwraps its first root message for
+   compact JSON; production code may handle groups with `except*`.
+5. `AsyncExitStack` and `TaskGroup` solve different problems: resource
+   ownership versus task ownership. A correct streaming scope needs both.
+
 ## Self-check
 
 You should be able to read any bundle from any chapter from now on without
@@ -145,4 +174,6 @@ different from committing a side effect from one. You should also be able to
 distinguish ending one STT stream from closing the provider that owns it, and
 separate raw-audio retention from transcript retention. Finally, you should be
 able to switch the Chapter 2 STT provider without editing its consumer loop and
-tell a provider wire target from an upstream input-rate restriction.
+tell a provider wire target from an upstream input-rate restriction. You should
+also be able to prove that every concurrent task has stopped before its shared
+STT and transport resources begin teardown.
