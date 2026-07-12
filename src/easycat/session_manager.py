@@ -50,7 +50,9 @@ class SessionManager(Generic[TKey]):
             self._sessions[key] = session
         try:
             await session.start()
-        except Exception:
+        except BaseException:
+            # Cancellation is a BaseException. It must release the reservation
+            # just like an ordinary start failure so the key remains reusable.
             async with self._lock:
                 self._sessions.pop(key, None)
             raise

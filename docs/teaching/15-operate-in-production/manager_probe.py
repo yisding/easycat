@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from easycat import SessionManager
 
@@ -31,12 +31,26 @@ class ProbeSession:
             raise RuntimeError(f"{self.name} stop failed")
 
 
+@dataclass
+class BlockingStartSession(ProbeSession):
+    """Session whose start waits until the probe cancels its add task."""
+
+    start_entered: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def start(self) -> None:
+        self.start_calls += 1
+        self.start_entered.set()
+        await asyncio.Event().wait()
+
+
 async def probe() -> dict[str, object]:
     manager: SessionManager[str] = SessionManager()
     alpha = ProbeSession("alpha")
     beta = ProbeSession("beta")
     duplicate = ProbeSession("duplicate")
     failed = ProbeSession("failed", fail_start=True)
+    cancelled = BlockingStartSession("cancelled")
+    replacement = ProbeSession("replacement")
     sweep_healthy = ProbeSession("sweep-healthy")
     sweep_failing = ProbeSession("sweep-failing", fail_stop=True)
 
@@ -44,6 +58,7 @@ async def probe() -> dict[str, object]:
     failed_start_error = ""
     active_together = False
     failed_slot_released = False
+    cancelled_start_error = ""
 
     async with manager.connection("alpha", alpha):  # type: ignore[arg-type]
         async with manager.connection("beta", beta):  # type: ignore[arg-type]
@@ -60,6 +75,20 @@ async def probe() -> dict[str, object]:
                 failed_start_error = str(exc)
             failed_slot_released = manager.get("failed") is None
 
+    add_task = asyncio.create_task(
+        manager.add("cancelled", cancelled)  # type: ignore[arg-type]
+    )
+    await cancelled.start_entered.wait()
+    add_task.cancel()
+    try:
+        await add_task
+    except asyncio.CancelledError as exc:
+        cancelled_start_error = type(exc).__name__
+
+    cancelled_slot_released = manager.get("cancelled") is None
+    async with manager.connection("cancelled", replacement):  # type: ignore[arg-type]
+        replacement_used_released_slot = manager.get("cancelled") is replacement
+
     await manager.add("sweep-healthy", sweep_healthy)  # type: ignore[arg-type]
     await manager.add("sweep-failing", sweep_failing)  # type: ignore[arg-type]
     await manager.stop_all()
@@ -69,6 +98,14 @@ async def probe() -> dict[str, object]:
         "all_context_slots_released": (
             manager.get("alpha") is None and manager.get("beta") is None
         ),
+        "cancelled_start": {
+            "cancelled_stop_calls": cancelled.stop_calls,
+            "error": cancelled_start_error,
+            "replacement_start_calls": replacement.start_calls,
+            "replacement_stop_calls": replacement.stop_calls,
+            "replacement_used_released_slot": replacement_used_released_slot,
+            "slot_released": cancelled_slot_released,
+        },
         "duplicate_key_error": duplicate_error,
         "duplicate_start_calls": duplicate.start_calls,
         "failed_slot_released": failed_slot_released,

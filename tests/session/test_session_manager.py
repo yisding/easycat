@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from easycat.session_manager import SessionManager
@@ -48,6 +50,36 @@ async def test_session_manager_releases_key_when_start_fails() -> None:
     assert manager.get("reusable") is None
     assert failed.started == 1
     assert failed.stopped == 0
+
+    replacement = _DummySession()
+    await manager.add("reusable", replacement)  # type: ignore[arg-type]
+    assert manager.get("reusable") is replacement
+    await manager.remove("reusable")
+    assert replacement.stopped == 1
+
+
+@pytest.mark.asyncio
+async def test_session_manager_releases_key_when_start_is_cancelled() -> None:
+    manager: SessionManager[str] = SessionManager()
+    start_entered = asyncio.Event()
+
+    class BlockingSession(_DummySession):
+        async def start(self) -> None:
+            self.started += 1
+            start_entered.set()
+            await asyncio.Event().wait()
+
+    cancelled = BlockingSession()
+    add_task = asyncio.create_task(manager.add("reusable", cancelled))  # type: ignore[arg-type]
+    await start_entered.wait()
+    add_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await add_task
+
+    assert manager.get("reusable") is None
+    assert cancelled.started == 1
+    assert cancelled.stopped == 0
 
     replacement = _DummySession()
     await manager.add("reusable", replacement)  # type: ignore[arg-type]

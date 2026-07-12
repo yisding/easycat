@@ -391,9 +391,10 @@ async def handle_connection(ws):
 Key properties:
 
 - `add(key, session)` reserves a unique key, then awaits
-  `session.start()`. If start fails, the slot is released before the
-  exception is re-raised; the session's own start path owns rollback of
-  resources it opened before failing.
+  `session.start()`. If start fails or the add task is cancelled, the
+  slot is released before the exception or cancellation is re-raised.
+  The session's own start path owns rollback of resources it opened
+  before that interrupted start.
 - `stop_all()` gathers all sessions' `stop()` calls concurrently and
   logs exceptions per session without raising.
 - `connection(key, session)` is the context-manager sugar for
@@ -404,10 +405,11 @@ Key properties:
   sweep.
 
 Run the provider-free [manager probe](manager_probe.py) to see two
-active slots, duplicate-key rejection, start-failure rollback, and
-context-managed removal without opening a microphone. Its final
-`stop_all()` sweep also proves that every captured session is asked to
-stop and one stop failure does not abort the rest of the sweep.
+active slots, duplicate-key rejection, ordinary and cancelled-start
+rollback, key reuse, and context-managed removal without opening a
+microphone. Its final `stop_all()` sweep also proves that every captured
+session is asked to stop and one stop failure does not abort the rest of
+the sweep.
 
 A real Twilio server using exactly this shape lives in
 `examples/twilio_app.py`. Crack it open after this chapter.
@@ -665,10 +667,10 @@ the same `Session` you've run since chapter 5.
 
 ## Try breaking it
 
-1. Run `manager_probe.py`. Why is the failed-start slot reusable even
-   though the manager never calls `stop()` on that failed object, and
-   why does the failing `stop_all()` session not prevent its peer from
-   stopping?
+1. Run `manager_probe.py`. Why are both interrupted-start slots reusable
+   even though the manager never calls `stop()` on either interrupted
+   object? Why does the failing `stop_all()` session not prevent its peer
+   from stopping?
 2. Compare scoped production JSON reports from
    `uv run easycat doctor --provider openai --environment production --json`
    with `OPENAI_API_KEY` unset and set. Which rows appear or change?
