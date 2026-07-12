@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,3 +95,43 @@ def test_copied_turn_detectors_keep_audio_out_of_start_events() -> None:
             stale.append(path.relative_to(ROOT).as_posix())
 
     assert not stale, "speech_started must be one state-only event in: " + ", ".join(stale)
+
+
+def test_provider_free_probe_exposes_exact_preroll_frame_contract() -> None:
+    result = subprocess.run(
+        [sys.executable, str(CHAPTER / "preroll_probe.py")],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(result.stdout) == {
+        "input_frames": ["cached-1", "cached-2", "trigger", "live", "stop"],
+        "with_preroll": [
+            {"event": "speech_started", "frame": None},
+            {"event": "frame", "frame": "cached-1"},
+            {"event": "frame", "frame": "cached-2"},
+            {"event": "frame", "frame": "trigger"},
+            {"event": "frame", "frame": "live"},
+            {"event": "speech_ended", "frame": None},
+        ],
+        "without_preroll": [
+            {"event": "speech_started", "frame": None},
+            {"event": "frame", "frame": "trigger"},
+            {"event": "frame", "frame": "live"},
+            {"event": "speech_ended", "frame": None},
+        ],
+    }
+
+
+def test_preroll_lesson_separates_frame_contract_from_live_observations() -> None:
+    readme = (CHAPTER / "README.md").read_text(encoding="utf-8")
+    exercises = (CHAPTER / "EXERCISES.md").read_text(encoding="utf-8")
+
+    assert "preroll_probe.py" in readme
+    assert "preroll_probe.py" in exercises
+    assert "chop the first ~100 ms" not in exercises
+    assert "breaker now survives" not in readme
+    assert "Pre-roll does not change the stop decision" in readme
+    assert "Transcript and confidence changes are observations" in exercises

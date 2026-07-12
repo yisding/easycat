@@ -2,10 +2,18 @@
 
 ## 1. Diff your breakers across preroll on/off
 
-**Task.** Say chapter 3's breakers — *"the capital of France is…
-uh… Paris"*, *"apples, bananas, pears"*, a yes/no question —
-through `main.py` **with** and **without** pre-roll, and read
-both bundles side-by-side.
+**Task.** First run the provider-free frame probe:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/preroll_probe.py
+```
+
+Explain why `cached-1` and `cached-2` appear after
+`speech_started` only in `with_preroll`, while `trigger` and `live`
+appear in both traces. Then say chapter 3's breakers — *"the capital
+of France is… uh… Paris"*, *"apples, bananas, pears"*, a yes/no
+question — through `main.py` **with** and **without** pre-roll, and
+read both bundles side-by-side.
 
 ```python
 from pathlib import Path
@@ -24,18 +32,24 @@ for which in ("preroll", "nopreroll"):
 
 **Hints**
 
-1. Expect the no-preroll run to chop the first ~100 ms of every
-   utterance. STT confidence on the chopped versions will be
-   lower and the transcripts will sometimes mis-hear the leading
-   word ("Hello" → "Elo", "Paris" → "Aris").
-2. The "uh… Paris" breaker survives VAD entirely (the "uh" has
-   speech energy so VAD doesn't drop out). That's the chapter 3
-   problem now solved.
-3. The comma list ("apples, bananas, pears") is still fragile —
+1. The deterministic guarantee is frame routing: without pre-roll,
+   audio received before `VADStartSpeaking` is absent from the STT
+   stream; with pre-roll, up to the configured 300 ms is replayed in
+   order before the trigger frame. How much leading speech VAD misses
+   varies by utterance, backend, and audio conditions—it is not a fixed
+   ~100 ms.
+2. Transcript and confidence changes are observations, not invariants.
+   The no-pre-roll run may mis-hear a leading word ("Hello" → "Elo"),
+   while another run may transcribe both versions identically.
+3. Pre-roll fixes turn **start** clipping; it does not change endpointing.
+   The "uh… Paris" breaker stays in one turn only if VAD remains active
+   through the pause. If VAD emits `VADStopSpeaking`, the detector still
+   splits it.
+4. The comma list ("apples, bananas, pears") is still fragile —
    commas are often 300-500 ms of *real* silence below the speech
    threshold, so VAD drops out between items. Smart-turn (ch 8)
    is the right fix for that one.
-4. The new failure mode: VAD false-fires on coughs, door slams,
+5. The new failure mode: VAD false-fires on coughs, door slams,
    keyboard typing. Chapter 10's NR is the answer.
 
 ## 2. Compare against `naive_threshold.py`

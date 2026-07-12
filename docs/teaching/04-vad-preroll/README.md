@@ -458,6 +458,18 @@ class MiniTurnDetector:
 
 ## Try breaking it
 
+Before involving a microphone or provider, run the deterministic frame
+trace:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/preroll_probe.py
+```
+
+Both traces include the frame that triggered `VADStartSpeaking` and the
+following live frame. Only `with_preroll` replays `cached-1` and
+`cached-2` first. That frame inclusion is the contract; any particular
+transcript change is a provider-dependent observation.
+
 Say the same breakers you tortured chapter 3 with ("the capital
 of France is... uh... Paris", "apples, bananas, pears", a yes/no
 question) and run the script **twice** — once with pre-roll on,
@@ -478,9 +490,11 @@ for which in ("preroll", "nopreroll"):
 
 You should see:
 
-- Fewer chopped first syllables in the `preroll` run.
-- The "uh… Paris" breaker now survives (the "uh" has speech energy,
-  so VAD stays on straight through).
+- The `preroll` run contains the cached leading audio; whether that
+  changes the transcript depends on what VAD initially missed and how
+  the STT provider decodes both versions.
+- The "uh… Paris" breaker remains one turn only when VAD stays active
+  through the pause. Pre-roll does not change the stop decision.
 - Lists are still fragile: commas are often below the speech
   threshold and VAD fires `VADStopSpeaking` between items.
 - New failures: a cough, a door slam, or keyboard clicks can
