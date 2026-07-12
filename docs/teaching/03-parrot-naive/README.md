@@ -33,14 +33,14 @@ personally heard this fail on your own voice.
 - **Modified:** STT events drive an action (speak) instead of just
   printing.
 
-<!-- BEGIN auto:diff prev=02-transcribe prev_src=streaming.py src=main.py -->
+<!-- BEGIN auto:diff prev=02-transcribe prev_src=streaming.py src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>02-transcribe/streaming.py</code> (auto-generated)</summary>
 
 ```diff
 --- docs/teaching/02-transcribe/streaming.py
 +++ docs/teaching/03-parrot-naive/main.py
-@@ -1,12 +1,15 @@
+@@ -1,14 +1,15 @@
 -"""Chapter 2 — streaming transcription.
 -
 -Open a mic transport, stream audio into an STT provider, and print
@@ -53,32 +53,93 @@ personally heard this fail on your own voice.
 +
 +Run it and break it — "The capital of France is... uh... Paris" is
 +the canonical killer. Chapter 4 replaces this with a real VAD.
- 
+
  Dependencies:
--    uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
--    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
+-    uv sync --extra quickstart --group dev
+-    uv sync --extra quickstart --extra deepgram --group dev  # for --provider deepgram
+-    export OPENAI_API_KEY=...
+-    export DEEPGRAM_API_KEY=...  # for --provider deepgram
 +    uv sync --extra quickstart --extra deepgram --group dev
 +    export OPENAI_API_KEY=...      # OpenAI TTS
 +    export DEEPGRAM_API_KEY=...    # mid-speech STT partials
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -24,54 +27,145 @@
- from easycat import LocalTransportConfig
+@@ -17,7 +18,6 @@
+
+ from __future__ import annotations
+
+-import argparse
+ import asyncio
+ import os
+ import time
+@@ -28,149 +28,173 @@
  from easycat.audio_format import PCM16_MONO_24K
  from easycat.debug.export import export_debug_bundle
--from easycat.events import STTEventType
-+from easycat.events import EventBus, STTEventType
+ from easycat.events import EventBus, STTEventType
 +from easycat.recipes import speak
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.runtime.capabilities import close_if_supported
  from easycat.stt.factory import STTProviderConfig, create_stt_provider
  from easycat.transports.local import LocalTransport
- 
+
 -DURATION_S = 5
 +SILENCE_TIMEOUT_S = 0.5  # ← the magic number we will watch break things
  RUNS_DIR = Path(__file__).parent / "runs"
--SESSION_ID = f"ch02-streaming-{int(time.time())}"
+-PROVIDERS = ("openai", "deepgram")
+-PROVIDER_ENV_VARS = {
+-    "openai": "OPENAI_API_KEY",
+-    "deepgram": "DEEPGRAM_API_KEY",
+-}
+-PROVIDER_TIMING = {
+-    "openai": "after_stream_end",
+-    "deepgram": "during_audio",
+-}
+-
+-
+-def _display_path(path: Path) -> Path:
+-    try:
+-        return path.relative_to(Path.cwd())
+-    except ValueError:
+-        return path
+-
+-
+-def build_stt_config(provider: str) -> STTProviderConfig:
+-    """Resolve one documented provider without leaking its credential."""
+-    if provider not in PROVIDER_ENV_VARS:
+-        choices = ", ".join(PROVIDERS)
+-        raise ValueError(f"Unknown STT provider {provider!r}; choose one of: {choices}")
+-
+-    env_var = PROVIDER_ENV_VARS[provider]
+-    api_key = os.getenv(env_var)
+-    if not api_key:
+-        raise SystemExit(f"Set {env_var} in your environment first.")
+-
+-    params = None
+-    if provider == "deepgram":
+-        # This is Deepgram's wire target, not a restriction on upstream PCM.
+-        # Matching the transport avoids a resample in this comparison; the
+-        # provider also accepts other PCM rates and resamples them internally.
+-        params = {
+-            "sample_rate": PCM16_MONO_24K.sample_rate,
+-            "event_bus": EventBus(),
+-        }
+-
+-    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
+-
+-
+-async def main(provider: str = "openai") -> None:
+-    config = build_stt_config(provider)
+-    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
+-
+-    journal = InMemoryRingBuffer(capacity=10_000)
+-    # The same STT factory from batch.py — the CLI changes only its config.
+-    # The start/send/events consumer below is provider-independent.
+-    stt = create_stt_provider(config)
+-
+-    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
+-    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+-
 +SESSION_ID = f"ch03-parrot-{int(time.time())}"
 +
 +
@@ -91,17 +152,26 @@ personally heard this fail on your own voice.
 +    offset_ms: float,
 +) -> None:
 +    """Record transport acceptance without claiming speaker playback."""
-+    journal.append(
-+        kind=JournalRecordKind.EVENT,
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+-        name="stt.provider.selected",
+-        session_id=session_id,
 +        name="parrot.delivery",
 +        session_id=SESSION_ID,
-+        data={
+         data={
+-            "provider": provider,
+-            "credential_env": PROVIDER_ENV_VARS[provider],
+-            "event_timing": PROVIDER_TIMING[provider],
+-            "input_sample_rate_hz": PCM16_MONO_24K.sample_rate,
+-            "provider_target_sample_rate_hz": (
+-                PCM16_MONO_24K.sample_rate if provider == "deepgram" else None
+-            ),
 +            "stage": "parrot",
 +            "committed_text": text,
 +            "accepted_chunks": accepted_chunks,
 +            "rejected_chunks": rejected_chunks,
 +            "offset_ms": offset_ms,
-+        },
+         },
 +    )
 +    if rejected_chunks:
 +        print(
@@ -133,26 +203,16 @@ personally heard this fail on your own voice.
 +            await close_if_supported(stt)
 +        finally:
 +            await transport.disconnect()
- 
- 
- async def main() -> None:
--    api_key = os.getenv("OPENAI_API_KEY")
--    if not api_key:
--        raise SystemExit("Set OPENAI_API_KEY in your environment first.")
++
++
++async def main() -> None:
 +    oai_key = os.getenv("OPENAI_API_KEY")
 +    dg_key = os.getenv("DEEPGRAM_API_KEY")
 +    if not oai_key or not dg_key:
 +        raise SystemExit("Set OPENAI_API_KEY (for TTS) and DEEPGRAM_API_KEY (for STT).")
- 
-     journal = InMemoryRingBuffer(capacity=10_000)
--    # The same STT factory from batch.py — we just hand it a config
--    # instead of calling the `transcribe_file` shortcut. No consumer
--    # code would change if we swapped "openai" for "deepgram".
--    stt = create_stt_provider(STTProviderConfig(provider="openai", api_key=api_key))
--
--    # LocalTransport's default 24 kHz matches chapters 3+. OpenAI STT
--    # ingests WAV at whatever sample rate it's given, so this is fine.
-     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
++
++    journal = InMemoryRingBuffer(capacity=10_000)
++    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
 +
 +    # Deepgram emits partials mid-speech, which is what this chapter needs
 +    # to feel break. Its STT factory config takes provider-specific args via
@@ -166,8 +226,8 @@ personally heard this fail on your own voice.
 +            api_key=dg_key,
 +            params={"sample_rate": 24000, "event_bus": EventBus()},
 +        )
-+    )
- 
+     )
+
      await transport.connect()
      await stt.start_stream()
      start = time.monotonic()
@@ -177,7 +237,7 @@ personally heard this fail on your own voice.
 +    # Bridge STT events into an asyncio.Queue so the parrot loop can use
 +    # ``asyncio.wait_for`` to implement "silence timeout since last event."
 +    ev_queue: asyncio.Queue = asyncio.Queue()
- 
+
      async def feed_audio() -> None:
 -        """Push mic chunks into STT until DURATION_S seconds elapse."""
          async for chunk in transport.receive_audio():
@@ -235,7 +295,11 @@ personally heard this fail on your own voice.
              print(f"  t+{offset_ms:6.0f}ms  [{kind}] {event.text}")
              journal.append(
                  kind=JournalRecordKind.EVENT,
-@@ -82,23 +176,15 @@
+                 name=f"stt.{event.type.value}",
+-                session_id=session_id,
++                session_id=SESSION_ID,
+                 data={
+                     "stage": "stt",
                      "event_type": event.type.value,
                      "text": event.text,
                      "offset_ms": offset_ms,
@@ -245,7 +309,7 @@ personally heard this fail on your own voice.
 -                    "t_ms": time.monotonic() * 1000,
                  },
              )
- 
+
      try:
 -        await asyncio.gather(feed_audio(), consume_events())
 +        await asyncio.gather(feed_audio(), listen_stt(), parrot())
@@ -260,14 +324,29 @@ personally heard this fail on your own voice.
 -            finally:
 -                await transport.disconnect()
 +        await shutdown(stt, transport)
- 
+
      RUNS_DIR.mkdir(exist_ok=True)
-     bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
-@@ -108,4 +194,7 @@
- 
- 
+-    bundle_path = RUNS_DIR / f"{session_id}.bundle"
++    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
+     session_stub = types.SimpleNamespace(journal=journal)
+     export_debug_bundle(session_stub, bundle_path, overwrite=True)
+-    print(f"\nWrote bundle → {_display_path(bundle_path)}")
+-
+-
+-def parse_args() -> argparse.Namespace:
+-    parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument(
+-        "--provider",
+-        choices=PROVIDERS,
+-        default="openai",
+-        help="STT provider: OpenAI batches locally; Deepgram emits during speech.",
+-    )
+-    return parser.parse_args()
++    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
+
+
  if __name__ == "__main__":
--    asyncio.run(main())
+-    asyncio.run(main(parse_args().provider))
 +    try:
 +        asyncio.run(main())
 +    except KeyboardInterrupt:

@@ -5,8 +5,10 @@ partial + final transcripts with timestamps as they arrive. Writes a
 debug bundle to ``runs/``.
 
 Dependencies:
-    uv sync --extra quickstart --group dev  # add --extra deepgram for Deepgram partials
-    export OPENAI_API_KEY=...   # or DEEPGRAM_API_KEY for mid-speech partials
+    uv sync --extra quickstart --group dev
+    uv sync --extra quickstart --extra deepgram --group dev  # for --provider deepgram
+    export OPENAI_API_KEY=...
+    export DEEPGRAM_API_KEY=...  # for --provider deepgram
     uv run easycat doctor
     uv run easycat doctor --env-file .env         # if keys live in .env
     uv run easycat doctor --env-file .env --json  # for parseable checks
@@ -15,6 +17,7 @@ Dependencies:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import time
@@ -24,7 +27,7 @@ from pathlib import Path
 from easycat import LocalTransportConfig
 from easycat.audio_format import PCM16_MONO_24K
 from easycat.debug.export import export_debug_bundle
-from easycat.events import STTEventType
+from easycat.events import EventBus, STTEventType
 from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 from easycat.runtime.capabilities import close_if_supported
 from easycat.stt.factory import STTProviderConfig, create_stt_provider
@@ -32,23 +35,74 @@ from easycat.transports.local import LocalTransport
 
 DURATION_S = 5
 RUNS_DIR = Path(__file__).parent / "runs"
-SESSION_ID = f"ch02-streaming-{int(time.time())}"
+PROVIDERS = ("openai", "deepgram")
+PROVIDER_ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "deepgram": "DEEPGRAM_API_KEY",
+}
+PROVIDER_TIMING = {
+    "openai": "after_stream_end",
+    "deepgram": "during_audio",
+}
 
 
-async def main() -> None:
-    api_key = os.getenv("OPENAI_API_KEY")
+def _display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def build_stt_config(provider: str) -> STTProviderConfig:
+    """Resolve one documented provider without leaking its credential."""
+    if provider not in PROVIDER_ENV_VARS:
+        choices = ", ".join(PROVIDERS)
+        raise ValueError(f"Unknown STT provider {provider!r}; choose one of: {choices}")
+
+    env_var = PROVIDER_ENV_VARS[provider]
+    api_key = os.getenv(env_var)
     if not api_key:
-        raise SystemExit("Set OPENAI_API_KEY in your environment first.")
+        raise SystemExit(f"Set {env_var} in your environment first.")
+
+    params = None
+    if provider == "deepgram":
+        # This is Deepgram's wire target, not a restriction on upstream PCM.
+        # Matching the transport avoids a resample in this comparison; the
+        # provider also accepts other PCM rates and resamples them internally.
+        params = {
+            "sample_rate": PCM16_MONO_24K.sample_rate,
+            "event_bus": EventBus(),
+        }
+
+    return STTProviderConfig(provider=provider, api_key=api_key, params=params)
+
+
+async def main(provider: str = "openai") -> None:
+    config = build_stt_config(provider)
+    session_id = f"ch02-streaming-{provider}-{int(time.time())}"
 
     journal = InMemoryRingBuffer(capacity=10_000)
-    # The same STT factory from batch.py — we just hand it a config
-    # instead of calling the `transcribe_file` shortcut. No consumer
-    # code would change if we swapped "openai" for "deepgram".
-    stt = create_stt_provider(STTProviderConfig(provider="openai", api_key=api_key))
+    # The same STT factory from batch.py — the CLI changes only its config.
+    # The start/send/events consumer below is provider-independent.
+    stt = create_stt_provider(config)
 
-    # LocalTransport's default 24 kHz matches chapters 3+. OpenAI STT
-    # ingests WAV at whatever sample rate it's given, so this is fine.
+    # LocalTransport's 24 kHz pipeline rate matches chapters 3+.
     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="stt.provider.selected",
+        session_id=session_id,
+        data={
+            "provider": provider,
+            "credential_env": PROVIDER_ENV_VARS[provider],
+            "event_timing": PROVIDER_TIMING[provider],
+            "input_sample_rate_hz": PCM16_MONO_24K.sample_rate,
+            "provider_target_sample_rate_hz": (
+                PCM16_MONO_24K.sample_rate if provider == "deepgram" else None
+            ),
+        },
+    )
 
     await transport.connect()
     await stt.start_stream()
@@ -76,7 +130,7 @@ async def main() -> None:
             journal.append(
                 kind=JournalRecordKind.EVENT,
                 name=f"stt.{event.type.value}",
-                session_id=SESSION_ID,
+                session_id=session_id,
                 data={
                     "stage": "stt",
                     "event_type": event.type.value,
@@ -101,11 +155,22 @@ async def main() -> None:
                 await transport.disconnect()
 
     RUNS_DIR.mkdir(exist_ok=True)
-    bundle_path = RUNS_DIR / f"{SESSION_ID}.bundle"
+    bundle_path = RUNS_DIR / f"{session_id}.bundle"
     session_stub = types.SimpleNamespace(journal=journal)
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
-    print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
+    print(f"\nWrote bundle → {_display_path(bundle_path)}")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--provider",
+        choices=PROVIDERS,
+        default="openai",
+        help="STT provider: OpenAI batches locally; Deepgram emits during speech.",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(parse_args().provider))
