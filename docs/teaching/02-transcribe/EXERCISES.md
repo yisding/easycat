@@ -37,15 +37,19 @@ where the wrong guess stuck. Compare it to the final.
 **Task.** Read the same bundle two ways:
 
 ```python
-# Way 1: linear iteration
-for r in b.records():
-    if r["name"] == "stt.partial":
-        print(r["data"]["text"])
+from easycat.debug.testing import load_bundle
 
-# Way 2: structured query
-view = b.view  # JournalView
-for r in view.filter_by_stage("stt"):
-    print(r["sequence"], r["data"].get("text"))
+b = load_bundle("docs/teaching/02-transcribe/runs/<file>.bundle")
+
+# Way 1: linear iteration
+linear = [r for r in b.records() if r["name"] == "stt.partial"]
+
+# Way 2: RunBundle's structured stage filter
+structured = [r for r in b.filter_by_stage("stt") if r["name"] == "stt.partial"]
+
+assert [r["sequence"] for r in linear] == [r["sequence"] for r in structured]
+for r in structured:
+    print(r["sequence"], r["data"]["text"])
 ```
 
 When does each shape pay off?
@@ -58,6 +62,10 @@ When does each shape pay off?
 2. Chapter 11 leans entirely on the structured query shape because
    real debugging is "all the TTS spans in this turn" not "every
    record from t=0."
+3. `load_bundle()` returns a `RunBundle`; its query helpers return
+   dictionaries just like `records()`. A live session journal exposes
+   a `JournalView` whose query helpers return typed `JournalRecord`
+   objects. Chapter 11 compares those two representations explicitly.
 
 ## Self-check
 
