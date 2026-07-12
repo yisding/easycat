@@ -43,9 +43,15 @@ AEC. Compare bundles.
 
 ## 3. NR on but AEC off — what changes?
 
-**Task.** Set `--nr on --aec off` with the `livekit` extra
-installed. AEC runs but its reference path is dead. Compare audio
-quality to NR off + AEC on.
+**Task.** Run the two single-component configurations separately:
+
+```bash
+uv run python docs/teaching/10-cleaning-signal/main.py --nr on --aec off
+uv run python docs/teaching/10-cleaning-signal/main.py --nr off --aec on
+```
+
+Compare audio quality and each bundle's `audio.config` record. In the
+first run, which noises remain? In the second, which noises remain?
 
 **Hints**
 
@@ -55,7 +61,11 @@ quality to NR off + AEC on.
 2. AEC alone (without NR): subtracts the bot's voice but leaves
    the fan in. Useful if your environment is quiet and the
    speaker is the only problem.
-3. The order also matters: NR-first lets NR see raw noise and
+3. `--aec off` installs `_Passthrough`; no AEC filter runs, even
+   though the TTS drain safely calls its no-op `feed_reference()`.
+   To study a real AEC filter with a dead reference path, use
+   `wrong_order.py --mode aec-no-reference` in exercise 4.
+4. The order also matters: NR-first lets NR see raw noise and
    model it cleanly; AEC then handles whatever NR couldn't
    classify as noise (the bot's voice has speech *structure*, so
    NR leaves it alone). This is why the pipeline is NR → AEC, not
@@ -69,14 +79,16 @@ decision (so NR's output never affected what VAD saw).
 
 **Hints**
 
-1. The journal records two stage events per chunk in the wrong
-   order: `stage.vad.execute` *before* `stage.nr.execute`. NR is
-   still running — it's just not in the right place to influence
-   VAD's verdict.
+1. The journal records `vad.processed_raw` followed by
+   `nr.applied_after_vad` with the same `frame_index`. NR is still
+   running, but only after VAD consumed the raw frame, so its output
+   cannot influence that verdict.
 2. The `audio.config` record names the live backend, so you can
-   confirm RNNoise is loaded — but the bundle's `vad.*` events
-   look identical to a run with NR off. NR isn't broken; it's
-   just irrelevant where you put it.
+   confirm RNNoise is loaded. `vad.processed_raw.data.events` names
+   any VAD transitions produced from each raw frame. The paired record
+   order proves NR cannot affect those transitions; a matched baseline
+   run is still required before claiming the false-fire rate is
+   unchanged.
 3. Try `--mode aec-no-reference`: AEC's `feed_reference()` counter
    stays at zero, and the bundle records `aec.no_reference`. The
    subtraction has nothing to subtract from, so it's a pure
