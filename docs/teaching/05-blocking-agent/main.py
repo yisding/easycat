@@ -160,7 +160,7 @@ async def run_turn(transport, stt, client, journal) -> None:
     tts_start = time.monotonic()
     print(f"  bot:  {reply!r}")
     audio_probe = FirstAudioProbe(transport)
-    await speak(audio_probe, reply)
+    accepted_chunks, rejected_chunks = await speak(audio_probe, reply)
     tts_end = time.monotonic()
     first_audio_t = audio_probe.first_audio_at
     tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
@@ -172,6 +172,8 @@ async def run_turn(transport, stt, client, journal) -> None:
         text=reply,
         first_audio_ms=tts_first_audio_ms,
         enqueue_ms=tts_enqueue_ms,
+        accepted_chunks=accepted_chunks,
+        rejected_chunks=rejected_chunks,
     )
 
     total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
@@ -186,11 +188,20 @@ async def run_turn(transport, stt, client, journal) -> None:
             "agent_ms": (agent_end - agent_start) * 1000,
             "tts_ms": tts_first_audio_ms,
             "tts_enqueue_ms": tts_enqueue_ms,
+            "tts_accepted_chunks": accepted_chunks,
+            "tts_rejected_chunks": rejected_chunks,
             "text": reply,
         },
     )
     if total_gap is None:
-        print("  (turn gap unavailable — TTS produced no audio)")
+        if accepted_chunks:
+            print("  (turn gap unavailable — accepted TTS audio had no timestamp)")
+        elif rejected_chunks:
+            print(
+                f"  (turn gap unavailable — transport rejected all {rejected_chunks} TTS chunks)"
+            )
+        else:
+            print("  (turn gap unavailable — TTS produced no audio)")
     else:
         print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
 
