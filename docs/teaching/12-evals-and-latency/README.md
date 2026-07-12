@@ -237,6 +237,27 @@ P50 so you know the median, but *target* P95.
 > directory full of your own chapter-6 or chapter-10 runs for a number you can
 > trend.
 
+#### One turn controls this P95
+
+The evaluator also recomputes P95 after omitting each bundle once. Run
+the same diagnostic directly:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+```
+
+For the six primary fixtures, the full P95 is 2,420 ms. Omitting
+`turn_02_slow_agent.bundle` lowers it to 1,160 ms; omitting any other
+bundle leaves it at 2,420 ms. The printed leave-one-out range is
+therefore 1,160–2,420 ms.
+
+This is an **influence diagnostic, not a confidence interval**. It
+answers “which observed turn controls this statistic?” It does not
+estimate unseen traffic, sampling bias, or the probability that a
+candidate is faster. Use repeated representative turns, a paired
+baseline/candidate design where possible, and an uncertainty method
+suited to the decision before gating a small regression.
+
 ### WER — word error rate for STT
 
 WER = (substitutions + deletions + insertions) / reference words.
@@ -328,7 +349,7 @@ hides exactly the regressions you care about.
 2. Add a `filler_appropriate` dimension to the LLM-judge rubric.
    Re-run on the chapter-7 tool-bearing bundles (you'll need to
    copy one over). Does the judge agree with your ears?
-3. Write a pytest test that fails if any bundle's P95 exceeds
+3. Write a pytest test that fails if the fixture set's P95 exceeds
    1200 ms. That is the seed of a latency regression suite.
 
 ## What's next

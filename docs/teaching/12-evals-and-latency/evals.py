@@ -146,6 +146,41 @@ def _validate_coverage(bundles: list[Path], rows: dict[str, dict[str, str]]) -> 
         raise ValueError("coverage mismatch: " + "; ".join(details))
 
 
+def _p95(values: list[float]) -> float:
+    stats = LatencyPercentileStats.from_values(values)
+    assert stats.p95 is not None
+    return stats.p95
+
+
+def p95_sensitivity(samples: dict[str, float]) -> dict[str, object]:
+    """Show how much each single sample controls the reported P95.
+
+    This leave-one-out diagnostic measures influence only. It is not a
+    confidence interval and does not estimate unseen production traffic.
+    """
+    if len(samples) < 2:
+        raise ValueError("P95 sensitivity requires at least two samples")
+    full_p95 = _p95(list(samples.values()))
+    leave_one_out = {
+        omitted: _p95([value for name, value in samples.items() if name != omitted])
+        for omitted in sorted(samples)
+    }
+    influential = max(
+        leave_one_out,
+        key=lambda name: abs(leave_one_out[name] - full_p95),
+    )
+    influential_p95 = leave_one_out[influential]
+    return {
+        "sample_count": len(samples),
+        "full_p95_ms": full_p95,
+        "leave_one_out_p95_ms": leave_one_out,
+        "leave_one_out_min_ms": min(leave_one_out.values()),
+        "leave_one_out_max_ms": max(leave_one_out.values()),
+        "most_influential_bundle": influential,
+        "most_influential_delta_ms": influential_p95 - full_p95,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("bundles_dir", type=Path)
@@ -190,6 +225,19 @@ def main() -> None:
     print(f"  {'P50':38}  {p50:>6.0f} ms")
     print(f"  {'P95':38}  {p95:>6.0f} ms")
     print(f"  {'P95 / P50 ratio':38}  {ratio:>6.2f}")
+    sensitivity = p95_sensitivity(
+        {bundle.name: stats[bundle.name]["total_gap_ms"] for bundle in bundles}
+    )
+    print(
+        f"  {'P95 leave-one-out range':38}  "
+        f"{sensitivity['leave_one_out_min_ms']:.0f}–"
+        f"{sensitivity['leave_one_out_max_ms']:.0f} ms"
+    )
+    print(
+        f"  {'Most influential omission':38}  "
+        f"{sensitivity['most_influential_bundle']} "
+        f"({sensitivity['most_influential_delta_ms']:+.0f} ms)"
+    )
 
     # WER aggregated.
     print("\n=== WER ===")

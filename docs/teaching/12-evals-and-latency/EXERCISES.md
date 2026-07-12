@@ -2,7 +2,7 @@
 
 ## 1. Find the budget-blower, propose a fix without coding it
 
-**Task.** Run `latency_budget.py` over each of the five turn
+**Task.** Run `latency_budget.py` over each of the six primary
 bundles. Identify the slowest. Which stage blew its budget?
 Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is
@@ -61,9 +61,9 @@ judge agree with your ears?
    percentile. Reusing the maintained helper keeps the test aligned with the
    debug CLI.
 2. Hard-coded thresholds are fine for the teaching version. For
-   production, you'd compare against a baseline file checked into
-   the repo and require N standard deviations of regression
-   before failing.
+   production, compare representative baseline and candidate turns
+   under matched conditions, predeclare an absolute/relative tolerance,
+   and quantify uncertainty before failing.
 3. The six chapter-12 fixtures include `turn_02_slow_agent`, which is
    *deliberately* 2420 ms to first audio. With this small sample, the maintained
    clamped-exclusive P95 is the observed maximum, so your test should flag it.
@@ -97,7 +97,33 @@ bundles?
 4. Coverage is not a fifth quality metric. It is the precondition that
    makes the other four interpretable.
 
-## 5. (Bonus) Build a real eval set
+## 5. Find the turn that controls P95
+
+**Task.** Run the provider-free sensitivity probe:
+
+```bash
+uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
+```
+
+Before reading the output, predict the P95 after omitting each fixture.
+Then explain what the 1,160–2,420 ms range proves—and what it cannot
+prove.
+
+**Hints**
+
+1. With this maintained small-sample percentile rule, the slowest
+   observed turn owns P95. Removing any non-maximum turn leaves 2,420 ms.
+2. Removing `turn_02_slow_agent.bundle` exposes the next-slowest tool
+   turn at 1,160 ms, a -1,260 ms change.
+3. Leave-one-out sensitivity identifies influential observed samples.
+   It is not a confidence interval and says nothing about unobserved
+   production turns or whether the fixture mix is representative.
+4. A candidate comparison needs repeated, representative measurements.
+   Pair baseline/candidate observations by prompt, environment, and
+   provider conditions when possible so traffic-mix changes do not
+   masquerade as a latency win.
+
+## 6. (Bonus) Build a real eval set
 
 **Task.** Record 20 of your own chapter-6 or chapter-10 turns,
 hand-type the reference transcripts into a CSV, and run
@@ -124,4 +150,6 @@ say "this turn's bottleneck was X", (b) explain why F1 over
 TP/FP/FN/TN is the right shape for barge-in (rather than raw
 accuracy), and (c) describe one regression each of the four
 metrics catches that the others miss, and (d) explain why coverage
-must be validated before any point estimate is reported.
+must be validated before any point estimate is reported, and (e)
+distinguish an influential-sample diagnostic from uncertainty about a
+production percentile.
