@@ -309,3 +309,7 @@ class Transport(VersionedProvider, Protocol):
     #   reference frames captured at playback time and fed to the echo canceller
     #   before the matching near-end mic frame (LocalTransport + WebRTC).
     # - ``send_playback_mark(...)`` — see :class:`PlaybackAcknowledgements`.
+    # - ``send_audio_is_nonblocking: bool`` — opt in only when every
+    #   ``send_audio`` path completes without suspending. AudioRouter can then
+    #   preserve first-frame ownership in the caller task instead of creating
+    #   a cancellation-shielding child task. Missing/false stays conservative.

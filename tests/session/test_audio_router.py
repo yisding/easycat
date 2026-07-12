@@ -344,6 +344,32 @@ async def test_first_audio_sends_inline_only_when_outbound_path_is_idle():
 
 
 @pytest.mark.asyncio
+async def test_nonblocking_transport_keeps_inline_send_in_caller_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ImmediateTransport(_FakeTransport):
+        send_audio_is_nonblocking = True
+
+    transport = _ImmediateTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    def _unexpected_task(*args, **kwargs):
+        _ = args, kwargs
+        pytest.fail("nonblocking inline send should not create a child task")
+
+    monkeypatch.setattr("easycat.session._audio_router.asyncio.create_task", _unexpected_task)
+
+    assert await router.try_send_first_audio_inline(_make_chunk()) is True
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
 async def test_inline_send_defers_caller_cancellation_until_transport_finishes():
     started = asyncio.Event()
     release = asyncio.Event()

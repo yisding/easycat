@@ -1114,6 +1114,7 @@ class WebTransportConnectionTransport(AudioQueueMixin):
     underscore-prefixed kwargs.
     """
 
+    send_audio_is_nonblocking = True
     transport_kind = "webtransport"
     default_echo_cancellation_enabled = True
 
@@ -1534,6 +1535,7 @@ class WebTransportTransport(AudioQueueMixin):
     orchestration beyond returning an ``EasyConfig``.
     """
 
+    send_audio_is_nonblocking = True
     transport_kind = "webtransport"
     default_echo_cancellation_enabled = True
 

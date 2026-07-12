@@ -158,6 +158,9 @@ class AudioRouter:
         capture_aec_reference: bool = False,
     ) -> None:
         self._transport = transport
+        self._transport_send_audio_is_nonblocking = bool(
+            getattr(transport, "send_audio_is_nonblocking", False)
+        )
         self._audio_stage = audio_stage
         self._vad_stage = vad_stage
         self._stt_stage = stt_stage
@@ -412,11 +415,18 @@ class AudioRouter:
                     or not self._outbound_queue.empty()
                 ):
                     return False
-                send_task = asyncio.create_task(
-                    self._send_outbound_chunk(chunk),
-                    name=self._INLINE_SEND_TASK_NAME,
-                )
-                await self._await_non_cancellable_send(send_task)
+                if self._transport_send_audio_is_nonblocking:
+                    # This opt-in transport contract guarantees send_audio has
+                    # no suspension point, so cancellation cannot land until
+                    # the transport has accepted or rejected the frame. Keep
+                    # the truly-inline path free of a child-task handoff.
+                    await self._send_outbound_chunk(chunk)
+                else:
+                    send_task = asyncio.create_task(
+                        self._send_outbound_chunk(chunk),
+                        name=self._INLINE_SEND_TASK_NAME,
+                    )
+                    await self._await_non_cancellable_send(send_task)
                 return True
         finally:
             await self._finish_outbound_send(replayed_chunk=False)
