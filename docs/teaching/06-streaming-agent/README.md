@@ -618,12 +618,20 @@ by the time the final arrived.
 
 ## Try breaking it
 
-Add `MODEL = "gpt-4o"` (bigger, slower). Re-run. The per-sentence
-synth stays overlapping, but the *first* sentence now takes
-longer to complete because the first token arrives later. The
-`agent.first_token → tts.first_audio` span in the journal grows;
-everything downstream stays overlapping. This isolates which
-knob buys you what.
+Add `MODEL = "gpt-4o"` (bigger, slower). Re-run, then decompose each
+bundle:
+
+```bash
+uv run python docs/teaching/06-streaming-agent/measure_start.py PATH
+```
+
+The model's startup belongs to `stt_final_to_first_token_ms`, before
+the first non-empty delta exists. `first_token_to_first_audio_ms`
+starts after that milestone and covers sentence accumulation plus the
+first TTS audio. Their sum is `stt_final_to_first_audio_ms`, the
+software milestone closest to when the bot starts replying. Compare
+`sentence_tts_ms` separately; response wording may change those values
+even when the TTS provider does not.
 
 ## What's next
 
