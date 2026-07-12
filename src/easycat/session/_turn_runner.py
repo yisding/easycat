@@ -377,7 +377,7 @@ class TurnRunner:
         if not stt_needs_close:
             return transcript, None
         close_task = self._runtime_scope.create_task(
-            "stt_end_stream_after_final",
+            self._stt.FINAL_CLOSE_TASK_NAME,
             self._stt.end_stream(turn),
         )
         return transcript, close_task

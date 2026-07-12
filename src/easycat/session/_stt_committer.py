@@ -68,6 +68,8 @@ def _pending_commit_bytes(provider: STTProvider) -> int | None:
 class STTCommitter:
     """Schedules and commits STT segments for a Session."""
 
+    FINAL_CLOSE_TASK_NAME = "stt_end_stream_after_final"
+
     def __init__(
         self,
         *,
@@ -407,6 +409,11 @@ class STTCommitter:
         """Cancel all STT work; preserves the original ``_cancel_stt`` ordering."""
         await self._runtime_scope.cancel_and_drain("stt_pause_commit")
         await self._runtime_scope.cancel_and_drain("stt_segment_commit")
+        # The committed-transcript fast path may still be closing the same
+        # provider in parallel with agent work. Drain it before invoking the
+        # provider teardown below so a barge-in cannot issue concurrent closes
+        # or let the old close race a successor stream.
+        await self._runtime_scope.cancel_and_drain(self.FINAL_CLOSE_TASK_NAME)
         self._pause_commit_task = None
         self._segment_commit_task = None
         try:
