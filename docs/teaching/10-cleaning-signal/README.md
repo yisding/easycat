@@ -9,7 +9,9 @@
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)
-- `uv sync --extra quickstart --extra deepgram --group dev`
+- For the live pipeline: `uv sync --extra quickstart --extra deepgram --group dev`.
+- For offline replay only: `uv sync --extra quickstart --group dev`. The
+  checked-in WAV pairs need no microphone or API keys.
 - RNNoise is included in `quickstart`; Krisp requires its own SDK.
 - For real AEC: `uv sync --extra aec --group dev` (LiveKit APM).
 - `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`.
@@ -485,16 +487,19 @@ this chapter's AEC demo, take them off.
 
 ### B — offline replay (deterministic fixtures)
 
-Generate a synthetic fixture set once, then replay any condition
-through `replay.py`:
+The synthetic fixture set is checked in, so you can replay a condition
+directly from the repository root without a microphone or API keys:
 
 ```bash
-uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py
 uv run python docs/teaching/10-cleaning-signal/replay.py \
-    --mic recordings/speakerphone_loop.mic.wav \
-    --ref recordings/speakerphone_loop.ref.wav \
+    --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \
+    --ref docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav \
     --nr on --aec on
 ```
+
+Maintainers intentionally rebuilding the tracked WAV fixtures run
+`uv run python docs/teaching/10-cleaning-signal/generate_fixtures.py`
+and review the resulting audio diff.
 
 The fixtures are toy signals (sine-wave "voice," deterministic
 white noise, a 30 ms echo at -18 dB) — enough to exercise the
