@@ -125,10 +125,32 @@ payload, and which guarantee was lost?
    With such a provider, the record would show `prepared_format: ssml`
    and `ssml_downgraded: false`.
 
+## 4. Move the custom client across the ownership boundary
+
+**Task.** Remove the outer `async with AsyncOpenAI()` block and create
+the client with `client = AsyncOpenAI()` instead. Which owner now closes
+that caller-owned `AsyncOpenAI` object?
+
+**Hints**
+
+1. The session closes providers and transports it constructs from
+   `EasyConfig`; the client captured by `MyWorkflow` was created by
+   caller code.
+2. `GenericWorkflowBridge` delegates turn behavior and state hooks. It
+   does not infer ownership from `MyWorkflow.__dict__` or close every
+   reachable object.
+3. Without an explicit `await client.close()` or async context, there
+   is no owner. Restore the outer client scope rather than teaching the
+   session to reach into custom workflow internals.
+4. Keep postmortem export after the inner session scope. The read-only
+   journal survives session teardown, while the outer client remains
+   open until the export finishes.
+
 ## Self-check
 
 You should be able to: (a) explain the difference between deep and
 shallow mode in one sentence each, (b) name when to use a tool vs
 a session action without re-reading chapter 7, and (c) describe
 where in the pipeline output processors run (TTS only? history
-too?) without checking the source.
+too?) without checking the source, and (d) distinguish session-owned
+providers from caller-owned workflow dependencies.

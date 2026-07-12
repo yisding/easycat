@@ -72,9 +72,36 @@ on the Twilio preset? What does a user on the phone hear?
    end-to-end path, use an isolated development account and number,
    not production traffic.
 
+## 4. Trace scoped session teardown
+
+**Task.** Run the provider-free lifecycle probe:
+
+```bash
+uv run python \
+  docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
+```
+
+Explain why postmortem export belongs after `session.stop(force=True)`
+but before the caller-owned client closes.
+
+**Hints**
+
+1. `async with session:` starts on entry and force-stops on exit. The
+   signal helper may already have stopped gracefully; the second stop
+   is deliberately idempotent.
+2. Clean stop preserves a read-only journal view while releasing live
+   providers, transport, and writable storage.
+3. The outer client is not one of the providers constructed from
+   `EasyConfig`. A custom workflow captured it, so caller code retains
+   ownership and chooses its scope.
+4. Move `session.export_postmortem()` inside the session block in the
+   probe. The assertion no longer describes a postmortem export, even
+   though the fake object can still append an event.
+
 ## Self-check
 
 You should be able to: (a) name two axes the matrix attacks, (b)
 draw the "one code change per axis" diagram from memory, and (c)
 explain the structural `event_bus` opt-in and distinguish reconnect
-telemetry from HTTP provider-error telemetry.
+telemetry from HTTP provider-error telemetry, and (d) place session
+scope exit before postmortem bundle export.

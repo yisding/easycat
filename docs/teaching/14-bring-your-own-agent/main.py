@@ -168,36 +168,38 @@ async def main() -> None:
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY.")
 
-    client = AsyncOpenAI()
-    actions = SessionActions()  # shared: workflow enqueues, session drains
-    workflow = MyWorkflow(client, actions)
-    bridge = GenericWorkflowBridge(workflow)
-    assert bridge.deep_mode, "deep mode required for mid-turn interruption"
+    # The custom workflow owns this client; EasyCat only owns providers and
+    # transports it creates from EasyConfig. Keep the caller-owned scope outer.
+    async with AsyncOpenAI() as client:
+        actions = SessionActions()  # shared: workflow enqueues, session drains
+        workflow = MyWorkflow(client, actions)
+        bridge = GenericWorkflowBridge(workflow)
+        assert bridge.deep_mode, "deep mode required for mid-turn interruption"
 
-    # A tiny pronunciation pipeline. Processors run serially on every
-    # committed assistant utterance before the text reaches TTS; a
-    # raise in one is logged and the next runs (fail-open).
-    processors = build_output_processors()
+        # A tiny pronunciation pipeline. Processors run serially on every
+        # committed assistant utterance before the text reaches TTS; a
+        # raise in one is logged and the next runs (fail-open).
+        processors = build_output_processors()
 
-    config = EasyConfig(
-        agent=bridge,  # ← the whole point of this chapter
-        transport=LocalTransportConfig(),
-        stt="openai",
-        tts="openai",
-        output_processors=processors,
-        session_actions=actions,
-        action_executors=(CoreSessionActionExecutor(),),
-        debug="light",
-    )
-    session = create_session(config)
-    attach_runtime_feedback(session)
+        config = EasyConfig(
+            agent=bridge,  # ← the whole point of this chapter
+            transport=LocalTransportConfig(),
+            stt="openai",
+            tts="openai",
+            output_processors=processors,
+            session_actions=actions,
+            action_executors=(CoreSessionActionExecutor(),),
+            debug="light",
+        )
+        session = create_session(config)
+        attach_runtime_feedback(session)
 
-    await session.start()
-    print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
-    try:
-        await wait_for_shutdown_signal(session)
-    finally:
-        await session.stop(force=True)
+        async with session:
+            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
+            await wait_for_shutdown_signal(session)
+
+        # Session exit preserves the read-only journal view. Export while the
+        # custom workflow's client is still in its separately owned scope.
         RUNS_DIR.mkdir(exist_ok=True)
         path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
         try:

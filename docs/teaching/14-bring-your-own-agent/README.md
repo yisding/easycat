@@ -135,7 +135,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,85 +73,133 @@
+@@ -74,93 +73,150 @@
      )
 
 
@@ -286,63 +286,85 @@
 -    print(f"=== {tag} ===")
 -
 -    mix = provider_mix(args.provider_mix)
-+    client = AsyncOpenAI()
-+    actions = SessionActions()  # shared: workflow enqueues, session drains
-+    workflow = MyWorkflow(client, actions)
-+    bridge = GenericWorkflowBridge(workflow)
-+    assert bridge.deep_mode, "deep mode required for mid-turn interruption"
-+
-+    # A tiny pronunciation pipeline. Processors run serially on every
-+    # committed assistant utterance before the text reaches TTS; a
-+    # raise in one is logged and the next runs (fail-open).
-+    processors = build_output_processors()
-+
-     config = EasyConfig(
+-    config = EasyConfig(
 -        agent=build_agent(),
 -        transport=transport_config(args.transport),
 -        debug="light",  # journal must be on so export_debug_bundle works
 -        **mix,
-+        agent=bridge,  # ← the whole point of this chapter
-+        transport=LocalTransportConfig(),
-+        stt="openai",
-+        tts="openai",
-+        output_processors=processors,
-+        session_actions=actions,
-+        action_executors=(CoreSessionActionExecutor(),),
-+        debug="light",
-     )
-     session = create_session(config)
-     attach_runtime_feedback(session)
-
-     await session.start()
--    print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
-+    print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
-     try:
-         await wait_for_shutdown_signal(session)
-     finally:
--        # The helper stops gracefully on its normal signal path. This
--        # idempotent force-stop also covers cancellation by an outer loop,
--        # so the exported bundle always observes a clean postmortem session.
-         await session.stop(force=True)
-         RUNS_DIR.mkdir(exist_ok=True)
--        path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
+-    )
+-    session = create_session(config)
+-    attach_runtime_feedback(session)
+-
+-    async with session:
+-        print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+-        await wait_for_shutdown_signal(session)
+-
+-    # Context exit force-stops cancellation paths. The normal signal helper
+-    # already stopped gracefully, so that second stop is an idempotent no-op.
+-    # The session preserves a read-only journal view for postmortem export.
+-    RUNS_DIR.mkdir(exist_ok=True)
+-    path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
++    # The custom workflow owns this client; EasyCat only owns providers and
++    # transports it creates from EasyConfig. Keep the caller-owned scope outer.
++    async with AsyncOpenAI() as client:
++        actions = SessionActions()  # shared: workflow enqueues, session drains
++        workflow = MyWorkflow(client, actions)
++        bridge = GenericWorkflowBridge(workflow)
++        assert bridge.deep_mode, "deep mode required for mid-turn interruption"
++
++        # A tiny pronunciation pipeline. Processors run serially on every
++        # committed assistant utterance before the text reaches TTS; a
++        # raise in one is logged and the next runs (fail-open).
++        processors = build_output_processors()
++
++        config = EasyConfig(
++            agent=bridge,  # ← the whole point of this chapter
++            transport=LocalTransportConfig(),
++            stt="openai",
++            tts="openai",
++            output_processors=processors,
++            session_actions=actions,
++            action_executors=(CoreSessionActionExecutor(),),
++            debug="light",
++        )
++        session = create_session(config)
++        attach_runtime_feedback(session)
++
++        async with session:
++            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
++            await wait_for_shutdown_signal(session)
++
++        # Session exit preserves the read-only journal view. Export while the
++        # custom workflow's client is still in its separately owned scope.
++        RUNS_DIR.mkdir(exist_ok=True)
 +        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
-         try:
-             export_debug_bundle(session, path, overwrite=True)
-             print(f"Wrote bundle → {_display_path(path)}")
-@@ -160,9 +207,14 @@
-             print("Measure this production-shaped bundle directly:")
-             print(f"  {human_command}")
-             print(f"  {json_command}")
++        try:
++            export_debug_bundle(session, path, overwrite=True)
++            print(f"Wrote bundle → {_display_path(path)}")
++            human_command, json_command = measurement_commands(path)
++            print("Measure this production-shaped bundle directly:")
++            print(f"  {human_command}")
++            print(f"  {json_command}")
 +            print("Inspect its provider-ready pronunciation payloads:")
 +            print(f"  {pronunciation_command(path)}")
-         except Exception as exc:  # noqa: BLE001 — teaching script
-             print(f"(no bundle written: {exc})")
-
-
- if __name__ == "__main__":
++        except Exception as exc:  # noqa: BLE001 — teaching script
++            print(f"(no bundle written: {exc})")
++
++
++if __name__ == "__main__":
+     try:
+-        export_debug_bundle(session, path, overwrite=True)
+-        print(f"Wrote bundle → {_display_path(path)}")
+-        human_command, json_command = measurement_commands(path)
+-        print("Measure this production-shaped bundle directly:")
+-        print(f"  {human_command}")
+-        print(f"  {json_command}")
+-    except Exception as exc:  # noqa: BLE001 — teaching script
+-        print(f"(no bundle written: {exc})")
+-
+-
+-if __name__ == "__main__":
 -    asyncio.run(main())
-+    try:
 +        asyncio.run(main())
 +    except KeyboardInterrupt:
 +        pass
@@ -362,6 +384,30 @@ Talk to it. Say **"goodbye"** to watch the session-action flow fire
 dispatches it, the session stops after the current turn. On exit the
 script exports its production-shaped bundle and prints both human and
 JSON `easycat latency` commands for that exact path.
+
+## Caller-owned workflow dependencies
+
+`Session` owns the STT, TTS, VAD, transport, and storage it constructs
+from `EasyConfig`. It does not automatically own arbitrary objects
+captured inside your workflow. `GenericWorkflowBridge` does not infer
+that `MyWorkflow._client` should be closed, so the script gives the
+caller-owned `AsyncOpenAI` client a separate outer scope:
+
+```python
+async with AsyncOpenAI() as client:
+    workflow = MyWorkflow(client, actions)
+    session = create_session(config)
+    async with session:
+        await wait_for_shutdown_signal(session)
+
+    export_debug_bundle(session, path, overwrite=True)
+```
+
+The order is intentional: stop the session while its workflow client
+is still available, export through the preserved postmortem journal,
+then close the caller-owned client. A bridge adapts behavior; it does
+not silently transfer ownership of everything reachable from the
+workflow object.
 
 ## The bridge layer you didn't know was there
 

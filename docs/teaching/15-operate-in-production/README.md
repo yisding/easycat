@@ -99,7 +99,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -73,144 +50,85 @@
+@@ -73,146 +50,85 @@
      )
 
 
@@ -219,28 +219,13 @@
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
 
--    client = AsyncOpenAI()
--    actions = SessionActions()  # shared: workflow enqueues, session drains
--    workflow = MyWorkflow(client, actions)
--    bridge = GenericWorkflowBridge(workflow)
--    assert bridge.deep_mode, "deep mode required for mid-turn interruption"
--
--    # A tiny pronunciation pipeline. Processors run serially on every
--    # committed assistant utterance before the text reaches TTS; a
--    # raise in one is logged and the next runs (fail-open).
--    processors = build_output_processors()
--
--    config = EasyConfig(
--        agent=bridge,  # ← the whole point of this chapter
--        transport=LocalTransportConfig(),
--        stt="openai",
--        tts="openai",
--        output_processors=processors,
--        session_actions=actions,
--        action_executors=(CoreSessionActionExecutor(),),
--        debug="light",
--    )
--    session = create_session(config)
+-    # The custom workflow owns this client; EasyCat only owns providers and
+-    # transports it creates from EasyConfig. Keep the caller-owned scope outer.
+-    async with AsyncOpenAI() as client:
+-        actions = SessionActions()  # shared: workflow enqueues, session drains
+-        workflow = MyWorkflow(client, actions)
+-        bridge = GenericWorkflowBridge(workflow)
+-        assert bridge.deep_mode, "deep mode required for mid-turn interruption"
 +    # ── 1. SessionManager for multi-session servers ───────────────
 +    # In a real server (WebSocket handler, Twilio websocket,
 +    # whatever) you'd scope a session to a connection key and let
@@ -248,37 +233,35 @@
 +    # but the shape is the same.
 +    manager: SessionManager[str] = SessionManager()
 +    session = build_session()
-     attach_runtime_feedback(session)
++    attach_runtime_feedback(session)
 
--    await session.start()
--    print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
--    try:
--        await wait_for_shutdown_signal(session)
--    finally:
--        await session.stop(force=True)
--        RUNS_DIR.mkdir(exist_ok=True)
--        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
+-        # A tiny pronunciation pipeline. Processors run serially on every
+-        # committed assistant utterance before the text reaches TTS; a
+-        # raise in one is logged and the next runs (fail-open).
+-        processors = build_output_processors()
 +    session_key = f"local-{int(time.time())}"
 +    async with manager.connection(session_key, session):
 +        print(f"Session {session_key!r} started via SessionManager.")
 +        print("Talk. Ctrl-C to stop.\n")
-         try:
--            export_debug_bundle(session, path, overwrite=True)
--            print(f"Wrote bundle → {_display_path(path)}")
--            human_command, json_command = measurement_commands(path)
--            print("Measure this production-shaped bundle directly:")
--            print(f"  {human_command}")
--            print(f"  {json_command}")
--            print("Inspect its provider-ready pronunciation payloads:")
--            print(f"  {pronunciation_command(path)}")
--        except Exception as exc:  # noqa: BLE001 — teaching script
--            print(f"(no bundle written: {exc})")
++        try:
 +            await wait_for_shutdown_signal(session)
 +        except (KeyboardInterrupt, asyncio.CancelledError):
 +            pass
 +    # manager.connection exited -> session.stop() -> private teardown.
 +    print("Session stopped; manager released the slot.")
-+
+
+-        config = EasyConfig(
+-            agent=bridge,  # ← the whole point of this chapter
+-            transport=LocalTransportConfig(),
+-            stt="openai",
+-            tts="openai",
+-            output_processors=processors,
+-            session_actions=actions,
+-            action_executors=(CoreSessionActionExecutor(),),
+-            debug="light",
+-        )
+-        session = create_session(config)
+-        attach_runtime_feedback(session)
 +    # ── 2. Post-stop: journal still works, bundle still exports ───
 +    # The lifecycle invariant: after stop(), the
 +    # journal is in a read-only postmortem state. .read() works,
@@ -293,7 +276,10 @@
 +    print("\nPost-stop event counts (top 5):")
 +    for name, n in sorted(counts.items(), key=lambda kv: -kv[1])[:5]:
 +        print(f"  {n:>4}  {name}")
-+
+
+-        async with session:
+-            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
+-            await wait_for_shutdown_signal(session)
 +    RUNS_DIR.mkdir(exist_ok=True)
 +    bundle_path = RUNS_DIR / f"ch15-{session_key}.bundle"
 +    export_debug_bundle(session, bundle_path, overwrite=True)
@@ -302,7 +288,22 @@
 +    print("Measure this production-shaped bundle directly:")
 +    print(f"  {human_command}")
 +    print(f"  {json_command}")
-+
+
+-        # Session exit preserves the read-only journal view. Export while the
+-        # custom workflow's client is still in its separately owned scope.
+-        RUNS_DIR.mkdir(exist_ok=True)
+-        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
+-        try:
+-            export_debug_bundle(session, path, overwrite=True)
+-            print(f"Wrote bundle → {_display_path(path)}")
+-            human_command, json_command = measurement_commands(path)
+-            print("Measure this production-shaped bundle directly:")
+-            print(f"  {human_command}")
+-            print(f"  {json_command}")
+-            print("Inspect its provider-ready pronunciation payloads:")
+-            print(f"  {pronunciation_command(path)}")
+-        except Exception as exc:  # noqa: BLE001 — teaching script
+-            print(f"(no bundle written: {exc})")
 +    # ── 3. The debugger CLI ────────────────────────────────────────
 +    print("\nOpen the debugger UI on this bundle:")
 +    print(f"  {debugger_command(bundle_path)}")

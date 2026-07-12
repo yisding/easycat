@@ -91,6 +91,40 @@ server. That is the right provider-pipeline comparison, but it does
 speaker playback. Pair it with WebRTC client stats or telephony
 provider metrics before claiming one transport is faster end to end.
 
+## The production session boundary
+
+This chapter replaces the manual resource stacks with the public
+session scope:
+
+```python
+async with session:
+    await wait_for_shutdown_signal(session)
+
+export_debug_bundle(session, path, overwrite=True)
+```
+
+Entering starts the session. On a normal SIGINT/SIGTERM path,
+`wait_for_shutdown_signal` first calls graceful `session.stop()`;
+context exit then calls `stop(force=True)`, which is an idempotent
+no-op because the session is already closed. If an outer coroutine
+cancels the block instead, context exit supplies the force-cancel path
+that the signal helper cannot.
+
+The export intentionally happens after the block. A clean stop closes
+providers, transport, and writable backends but preserves a read-only
+postmortem journal view, so bundle inspection does not require keeping
+runtime resources alive.
+
+Run the provider-free ordering probe:
+
+```bash
+uv run python \
+  docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
+```
+
+It also previews Chapter 14's second boundary: a dependency created by
+your custom workflow remains caller-owned and gets its own outer scope.
+
 ## Architecture
 
 ```
