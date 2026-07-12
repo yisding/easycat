@@ -46,3 +46,19 @@ def test_post_build_failure_rolls_back_acquired_journal(
         create_session(EasyConfig(openai_api_key="test-key", agent=_DummyAgent(), debug="light"))
 
     journal.close.assert_called_once_with()
+
+
+def test_build_failure_rolls_back_acquired_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _tracked_journal(monkeypatch)
+
+    def fail_audio_pipeline(_config: EasyConfig, _event_bus: object) -> object:
+        raise RuntimeError("audio build failed")
+
+    monkeypatch.setattr(_factory, "_resolve_audio_pipeline", fail_audio_pipeline)
+
+    with pytest.raises(RuntimeError, match="audio build failed"):
+        create_session(EasyConfig(openai_api_key="test-key", agent=_DummyAgent(), debug="light"))
+
+    journal.close.assert_called_once_with()
