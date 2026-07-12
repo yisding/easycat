@@ -13,6 +13,8 @@ _CHAPTER_ROW_RE = re.compile(
 )
 _API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
 _UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
+_SELF_CHECK_HEADING_RE = re.compile(r"^## Self-check[ \t]*$", re.MULTILINE)
+_LEVEL_TWO_HEADING_RE = re.compile(r"^## .+$", re.MULTILINE)
 _ENV_FILE_RUN_HINT = "add `--env-file .env` after `uv run`"
 
 
@@ -62,6 +64,17 @@ def _python_docstring_and_key_literals(path: Path) -> tuple[str, set[str]]:
 
 def _has_env_file_run_hint(text: str) -> bool:
     return _ENV_FILE_RUN_HINT in text.replace("``", "`").lower()
+
+
+def _self_check_sections(markdown: str) -> list[str]:
+    sections: list[str] = []
+
+    for heading in _SELF_CHECK_HEADING_RE.finditer(markdown):
+        next_heading = _LEVEL_TWO_HEADING_RE.search(markdown, heading.end())
+        end = next_heading.start() if next_heading is not None else len(markdown)
+        sections.append(markdown[heading.end() : end])
+
+    return sections
 
 
 def test_teaching_ladder_index_matches_chapter_directories() -> None:
@@ -554,11 +567,41 @@ def test_teaching_exercise_pages_include_one_mastery_self_check() -> None:
 
     for chapter_dir in _chapter_dirs():
         exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
-        if exercises.count("## Self-check") != 1:
+        self_check_sections = _self_check_sections(exercises)
+        if len(self_check_sections) != 1:
             stale.append(f"{chapter_dir.name}: expected one Self-check heading")
             continue
-        self_check = exercises.split("## Self-check", 1)[1]
-        if "You should" not in self_check:
+        if "You should" not in self_check_sections[0]:
             stale.append(f"{chapter_dir.name}: missing learner outcome")
 
     assert not stale, "Teaching exercise mastery checks are incomplete: " + ", ".join(stale)
+
+
+def test_self_check_sections_require_an_exact_level_two_heading() -> None:
+    malformed = """\
+### Self-check
+
+You should not make a level-three heading count.
+
+Ordinary prose containing ## Self-check should not count either.
+"""
+
+    assert _self_check_sections(malformed) == []
+
+
+def test_self_check_sections_stop_at_the_next_level_two_heading() -> None:
+    markdown = """\
+## Self-check
+
+The outcome is missing from this section.
+
+## What's next
+
+You should not let this later outcome satisfy the self-check.
+"""
+
+    sections = _self_check_sections(markdown)
+
+    assert len(sections) == 1
+    assert "The outcome is missing" in sections[0]
+    assert "You should" not in sections[0]
