@@ -11,7 +11,7 @@ Inputs:
     had_real_barge_in     — "1" if the interruption was intentional
 
 Outputs (stdout):
-- Per-bundle turn.gap ms, sorted.
+- Per-bundle first-audio ``turn.gap`` ms, sorted.
 - P50 and P95 across the set.
 - WER aggregated across bundles with a reference transcript.
 - Barge-in F1 over the {had_real_barge_in, observed_interruption} matrix.
@@ -92,7 +92,7 @@ def main() -> None:
         sys.exit("No bundles found.")
 
     # Latency per-bundle.
-    print("=== Per-bundle latency (turn.gap ms) ===")
+    print("=== Per-bundle first-audio latency (turn.gap ms) ===")
     lat_ms = []
     for b in bundles:
         s = _bundle_stats(b)

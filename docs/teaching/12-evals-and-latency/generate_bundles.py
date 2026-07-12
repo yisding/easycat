@@ -1,9 +1,10 @@
-"""Build five eval bundles for chapter 12.
+"""Build six eval bundles for chapter 12.
 
 These fixtures mirror the event shape the chapter-6 streaming agent
-writes (``stt.final``, ``agent.first_token``, ``stage.tts.execute``,
-``turn.gap``, and, where relevant, ``interruption.start``). The
-numbers are invented but representative.
+writes (``stt.final``, ``agent.first_token``, ``tts.first_audio``,
+``stage.tts.execute``, ``turn.gap``, and, where relevant,
+``interruption.start``). The numbers are invented but internally
+consistent: ``turn.gap.total_gap_ms`` ends at first accepted audio.
 
 Run once; the checked-in bundles and ground_truth.csv are the
 artifacts the reader actually uses.
@@ -35,7 +36,11 @@ def _save(j, sid: str, filename: str, into: Path = BUNDLES) -> None:
     into.mkdir(parents=True, exist_ok=True)
     path = into / filename
     export_debug_bundle(types.SimpleNamespace(journal=j), path, overwrite=True)
-    print(f"  wrote {path.relative_to(Path.cwd())}")
+    try:
+        display_path = path.relative_to(Path.cwd())
+    except ValueError:
+        display_path = path
+    print(f"  wrote {display_path}")
 
 
 def _turn(
@@ -45,7 +50,6 @@ def _turn(
     stt_text: str,
     agent_first_token_delay_ms: float = 350,
     tts_spans_ms: list[float] | None = None,
-    total_gap_ms: float = 1000.0,
     interruption_t_ms: float | None = None,
     tool_calls: list[dict] | None = None,
 ) -> None:
@@ -58,18 +62,36 @@ def _turn(
     """
     if tts_spans_ms is None:
         tts_spans_ms = [300]
+    # The first TTS sentence is the first audible reply. On a tool turn
+    # it serves as chapter-7-style filler, so tool execution continues
+    # after the user has heard the bot respond.
+    first_audio_gap_ms = agent_first_token_delay_ms + tts_spans_ms[0]
+    stt_final_t = t_start + 1000
+    first_token_t = stt_final_t + agent_first_token_delay_ms
     _emit(j, "turn.started", sid, {"stage": "turn", "t_ms": t_start})
     _emit(
         j,
         "stt.final",
         sid,
-        {"stage": "stt", "text": stt_text, "t_ms": t_start + 1000},
+        {"stage": "stt", "text": stt_text, "t_ms": stt_final_t},
     )
     _emit(
         j,
         "agent.first_token",
         sid,
-        {"stage": "agent", "t_ms": t_start + 1000 + agent_first_token_delay_ms},
+        {"stage": "agent", "t_ms": first_token_t},
+    )
+    _emit(
+        j,
+        "tts.first_audio",
+        sid,
+        {"stage": "tts", "t_ms": stt_final_t + first_audio_gap_ms},
+    )
+    _emit(
+        j,
+        "stage.tts.execute",
+        sid,
+        {"stage": "tts", "text": "sentence 1", "elapsed_ms": tts_spans_ms[0]},
     )
     for tc in tool_calls or ():
         _emit(
@@ -89,12 +111,12 @@ def _turn(
                 "result": tc["result"],
             },
         )
-    for i, ms in enumerate(tts_spans_ms):
+    for i, ms in enumerate(tts_spans_ms[1:], start=2):
         _emit(
             j,
             "stage.tts.execute",
             sid,
-            {"stage": "tts", "text": f"sentence {i + 1}", "elapsed_ms": ms},
+            {"stage": "tts", "text": f"sentence {i}", "elapsed_ms": ms},
         )
     if interruption_t_ms is not None:
         _emit(j, "interruption.start", sid, {"stage": "vad", "t_ms": interruption_t_ms})
@@ -102,7 +124,11 @@ def _turn(
         j,
         "turn.gap",
         sid,
-        {"stage": "turn", "total_gap_ms": total_gap_ms, "text": stt_text},
+        {
+            "stage": "turn",
+            "total_gap_ms": first_audio_gap_ms,
+            "text": stt_text,
+        },
     )
 
 
@@ -116,7 +142,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="what time is it",
                 agent_first_token_delay_ms=350,
                 tts_spans_ms=[300, 280, 310],
-                total_gap_ms=1150,
             ),
         ),
         # Slow agent turn (P95 spike).
@@ -127,7 +152,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="tell me a joke",
                 agent_first_token_delay_ms=2100,
                 tts_spans_ms=[320, 290],
-                total_gap_ms=2900,
             ),
         ),
         # Normal turn with a ghost interruption (like ch11 bug 3).
@@ -138,7 +162,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="whats the weather",
                 agent_first_token_delay_ms=400,
                 tts_spans_ms=[310],
-                total_gap_ms=900,
                 interruption_t_ms=1_200_001_450.0,
             ),
         ),
@@ -150,7 +173,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="stop",
                 agent_first_token_delay_ms=380,
                 tts_spans_ms=[290, 310],
-                total_gap_ms=1250,
                 interruption_t_ms=1_300_001_400.0,
             ),
         ),
@@ -162,7 +184,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="remind me to buy milk",
                 agent_first_token_delay_ms=600,
                 tts_spans_ms=[310, 280, 300, 320],
-                total_gap_ms=1700,
             ),
         ),
         # Turn with two tool calls — exercises the chapter-7 tool
@@ -175,7 +196,6 @@ def build_all() -> list[dict[str, str]]:
                 stt_text="whats the weather in paris and set a timer for five minutes",
                 agent_first_token_delay_ms=820,
                 tts_spans_ms=[340, 310, 290],
-                total_gap_ms=2200,
                 tool_calls=[
                     {
                         "name": "get_weather",
@@ -293,7 +313,6 @@ def build_golden() -> None:
             sid,
             t_start=t,
             stt_text=case["hypothesis"],
-            total_gap_ms=1000.0,
         )
         _save(j, sid, case["filename"], into=GOLDEN)
         rows.append(

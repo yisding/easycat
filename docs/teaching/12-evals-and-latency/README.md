@@ -32,7 +32,7 @@
 - **Removed:** still no live pipeline. This chapter is pure
   measurement.
 
-## The five pre-recorded bundles
+## The six pre-recorded bundles
 
 ```bash
 uv run python docs/teaching/12-evals-and-latency/generate_bundles.py
@@ -59,7 +59,7 @@ and whether the interruption (if any) was real.
 
 ## The golden WER fixtures (`bundles/golden/`)
 
-The five fixtures above are useful for **latency** and **barge-in
+The six fixtures above are useful for **latency** and **barge-in
 F1** but they all happen to have STT hypotheses identical to their
 reference transcripts — so the WER pipeline reports 0.0% across
 the board. That tells you the pipeline runs without errors; it
@@ -106,9 +106,9 @@ Expected output:
 
 ```
 === turn_02_slow_agent.bundle ===
-  agent first token                2100 ms     budget   600 ms    OVER
-  tts synth (2 sent.)               610 ms     budget   400 ms    OVER
-  total (stt final → done)         2900 ms     budget  1000 ms    OVER
+  stt final → first token          2100 ms     budget   600 ms    OVER
+  first token → first audio         320 ms     budget   400 ms    OK
+  stt final → first audio          2420 ms     budget  1000 ms    OVER
 ```
 
 The budget isn't a timeout. It is a **drift detector**. When a
@@ -124,23 +124,28 @@ teams):
 | VAD silence wait | 200-500 ms |
 | STT final commit | 100-300 ms |
 | Agent → first token | 300-1000 ms |
-| TTS → first audio | 100-400 ms |
-| **Total (stt-final → bot-done)** | **<1000 ms** |
+| Agent first token → first audio | 100-400 ms |
+| **Total (STT final → first audio)** | **<1000 ms** |
 
 The budgets here are defensible starting points; real numbers are
 per-deployment.
 
-The check itself is straightforward — pull the spans out of the
-journal, compare each against its budget, label `OK` or `OVER`:
+The check follows one responsiveness milestone: the first audio
+chunk the transport accepted. Summing every `stage.tts.execute`
+span measures response-length-dependent synthesis throughput, not
+how long the user waited to hear the bot start. Instead, pull
+`stt.final`, `agent.first_token`, `tts.first_audio`, and `turn.gap`
+from the journal, compare the critical-path spans against their
+budgets, and label each `OK` or `OVER`:
 
-<!-- BEGIN auto:snippet src=latency_budget.py symbol=analyze -->
+<!-- BEGIN auto:snippet src=latency_budget.py symbol=measure -->
 ```python
-def analyze(path: Path) -> None:
+def measure(path: Path) -> dict[str, float | None]:
+    """Return the three first-audio critical-path measurements."""
     bundle = load_bundle(path)
     stt_final_t = None
     first_token_t = None
-    tts_total = 0.0
-    tts_count = 0
+    first_audio_t = None
     total_gap = None
 
     for r in bundle.records():
@@ -148,18 +153,26 @@ def analyze(path: Path) -> None:
             stt_final_t = r["data"].get("t_ms")
         elif r["name"] == "agent.first_token" and first_token_t is None:
             first_token_t = r["data"].get("t_ms")
-        elif r["name"] == "stage.tts.execute":
-            tts_total += r["data"].get("elapsed_ms", 0.0)
-            tts_count += 1
+        elif r["name"] == "tts.first_audio" and first_audio_t is None:
+            first_audio_t = r["data"].get("t_ms")
         elif r["name"] == "turn.gap" and total_gap is None:
             total_gap = r["data"].get("total_gap_ms")
 
-    agent_dispatch_ms = (first_token_t - stt_final_t) if (stt_final_t and first_token_t) else None
-
-    print(f"=== {path.name} ===")
-    _row("agent first token", agent_dispatch_ms, BUDGET_MS["agent_first_token"])
-    _row(f"tts synth ({tts_count} sent.)", tts_total, BUDGET_MS["tts_total"])
-    _row("total (stt final → done)", total_gap, BUDGET_MS["total"])
+    agent_dispatch_ms = (
+        first_token_t - stt_final_t
+        if stt_final_t is not None and first_token_t is not None
+        else None
+    )
+    first_token_to_audio_ms = (
+        first_audio_t - first_token_t
+        if first_audio_t is not None and first_token_t is not None
+        else None
+    )
+    return {
+        "stt_final_to_first_token_ms": agent_dispatch_ms,
+        "first_token_to_audio_ms": first_token_to_audio_ms,
+        "first_audio_gap_ms": total_gap,
+    }
 ```
 <!-- END auto:snippet -->
 
@@ -175,7 +188,7 @@ Three blocks of output:
 
 ### Latency percentiles
 
-Sort every bundle's `turn.gap`, then report P50 and P95. **P95 is
+Sort every bundle's first-audio `turn.gap`, then report P50 and P95. **P95 is
 the number you report.** Voice users remember the bad turns, not
 the good ones; a single stumble poisons an otherwise-fast bot's
 reputation. Track P50 so you know the median, but *target* P95.
@@ -194,7 +207,7 @@ not per-bundle, to even out small-sample noise.
 
 > The bundled fixtures are synthetic — the STT "hypothesis" is
 > identical to the ground-truth transcript, so WER is trivially
-> 0% on all five. The script is wired and ready; point it at a
+> 0% on all six. The script is wired and ready; point it at a
 > bundle you recorded through a real STT in chapter 6 (plus a
 > hand-typed reference) and it will produce real edits.
 
