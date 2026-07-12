@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -114,8 +116,52 @@ def test_loader_caps_manifest_and_journal_members(
     bundle_facade.RunBundle.load(path)
 
     assert observed_limits["manifest.json"] == bundle_loader._MANIFEST_SIZE_CAP
-    assert bundle_loader._MANIFEST_SIZE_CAP > 4 * ((_ARTIFACT_SIZE_CAP + 2) // 3)
     assert observed_limits["journal.ndjson"] == _ARTIFACT_SIZE_CAP
+
+
+def test_loader_accepts_real_inline_payload_at_manifest_member_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = b"inline artifact payload" * 64
+    ref = hashlib.sha256(data).hexdigest()
+    raw_manifest = {
+        "format_version": FORMAT_VERSION,
+        "inline_artifacts": {ref: base64.b64encode(data).decode("ascii")},
+    }
+    encoded_manifest = json.dumps(raw_manifest).encode()
+    monkeypatch.setattr(bundle_loader, "_MANIFEST_SIZE_CAP", len(encoded_manifest))
+    path = tmp_path / "inline-at-limit.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", encoded_manifest)
+        archive.writestr("journal.ndjson", "")
+
+    loaded = bundle_loader.load_bundle(path)
+
+    assert loaded.artifact_blobs == {ref: data}
+
+
+def test_loader_rejects_inline_artifact_count_overflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bundle_loader, "_INLINE_ARTIFACT_COUNT_CAP", 1)
+    inline = {
+        hashlib.sha256(value).hexdigest(): base64.b64encode(value).decode("ascii")
+        for value in (b"first", b"second")
+    }
+    path = tmp_path / "too-many-inline.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            "manifest.json",
+            json.dumps({"format_version": FORMAT_VERSION, "inline_artifacts": inline}),
+        )
+        archive.writestr("journal.ndjson", "")
+
+    with pytest.raises(BundleValidationError) as exc_info:
+        bundle_loader.load_bundle(path)
+
+    assert exc_info.value.reason_code == "SIZE_EXCEEDED"
 
 
 def test_journal_scalar_records_do_not_break_bundle_loading(tmp_path: Path) -> None:

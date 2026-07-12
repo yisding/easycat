@@ -509,6 +509,22 @@ class TestBundleExport:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
 
+    def test_inline_export_rejects_artifact_count_overflow(self, tmp_path, monkeypatch):
+        import easycat.debug.export as export_module
+
+        monkeypatch.setattr(export_module, "_INLINE_ARTIFACT_COUNT_CAP", 1)
+        artifacts = {hashlib.sha256(value).hexdigest(): value for value in (b"first", b"second")}
+        session = _FakeSession(
+            debug="full",
+            journal=_FakeJournal(),
+            artifact_store=_FakeArtifactStore(artifacts),
+        )
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(session, tmp_path / "too-many-inline.zip", inline_artifacts=True)
+
+        assert exc_info.value.reason_code == "SIZE_EXCEEDED"
+
     def test_export_serializes_nested_enum_values(self, tmp_path):
         record = JournalRecord(
             sequence=1,

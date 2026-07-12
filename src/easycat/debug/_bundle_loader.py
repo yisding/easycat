@@ -17,6 +17,8 @@ from typing import Any
 
 from easycat.debug._bundle_models import (
     _ARTIFACT_SIZE_CAP,
+    _INLINE_ARTIFACT_COUNT_CAP,
+    _INLINE_ARTIFACT_ENTRY_OVERHEAD,
     _SHA256_REF,
     FORMAT_VERSION,
     ArtifactEntry,
@@ -32,7 +34,9 @@ from easycat.debug._bundle_models import (
 # per-artifact refs. The decoded artifacts still pass through the stricter
 # aggregate ``_ARTIFACT_SIZE_CAP`` below.
 _BASE64_ARTIFACT_SIZE_CAP = 4 * ((_ARTIFACT_SIZE_CAP + 2) // 3)
-_MANIFEST_METADATA_ALLOWANCE = 10_000_000
+_MANIFEST_METADATA_ALLOWANCE = (
+    2_000_000 + _INLINE_ARTIFACT_COUNT_CAP * _INLINE_ARTIFACT_ENTRY_OVERHEAD
+)
 _MANIFEST_SIZE_CAP = _BASE64_ARTIFACT_SIZE_CAP + _MANIFEST_METADATA_ALLOWANCE
 
 
@@ -229,6 +233,11 @@ def _read_inline_artifacts(
         raise BundleValidationError(
             "Bundle inline_artifacts must be a JSON object",
             reason_code="INVALID_MANIFEST",
+        )
+    if len(raw_inline) > _INLINE_ARTIFACT_COUNT_CAP:
+        raise BundleValidationError(
+            f"Bundle has more than {_INLINE_ARTIFACT_COUNT_CAP} inline artifacts",
+            reason_code="SIZE_EXCEEDED",
         )
 
     for ref, encoded in raw_inline.items():

@@ -8,6 +8,12 @@ from typing import Any
 
 FORMAT_VERSION = 1
 _ARTIFACT_SIZE_CAP = 500_000_000
+# Bound the JSON object overhead independently from decoded bytes. At 80 bytes
+# per entry (64-byte SHA ref plus JSON punctuation/indentation), this cap keeps
+# entry metadata within 8 MB while still allowing far more artifacts than a
+# practical debug session produces.
+_INLINE_ARTIFACT_COUNT_CAP = 100_000
+_INLINE_ARTIFACT_ENTRY_OVERHEAD = 80
 _SHA256_REF = re.compile(r"^[a-f0-9]{64}$")
 
 

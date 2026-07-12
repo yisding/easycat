@@ -14,11 +14,13 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from easycat.debug._bundle_models import _INLINE_ARTIFACT_COUNT_CAP
 from easycat.debug._serialize import record_to_dict, safe_config_snapshot_from_session
 from easycat.debug.bundle import (
     FORMAT_VERSION,
     ArtifactEntry,
     BundleExists,
+    BundleValidationError,
     CommittableCheckpoint,
     DebugCaptureDisabledError,
     Manifest,
@@ -102,6 +104,11 @@ def export_debug_bundle(
 
     manifest_dict = _manifest_to_dict(manifest)
     if inline_artifacts and artifact_data:
+        if len(artifact_data) > _INLINE_ARTIFACT_COUNT_CAP:
+            raise BundleValidationError(
+                f"Bundle has more than {_INLINE_ARTIFACT_COUNT_CAP} inline artifacts",
+                reason_code="SIZE_EXCEEDED",
+            )
         manifest_dict["inline_artifacts"] = {
             ref: base64.b64encode(data).decode("ascii") for ref, data in artifact_data.items()
         }
