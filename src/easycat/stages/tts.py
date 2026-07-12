@@ -51,15 +51,18 @@ class TTSStage:
 
     async def execute(self, input: Any, ctx: RunContext, turn: TurnContext) -> Any:
         ctx = self._journal_ctx(ctx)
+        capture_enabled = ctx.journal is not None or ctx.artifact_store is not None
         started = time.perf_counter()
-        state_before = self.snapshot_state()
-        start_sequence = journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_start",
-            turn_id=turn.id,
-            state_before=state_before,
-        )
+        state_before = self.snapshot_state() if capture_enabled else None
+        start_sequence = None
+        if capture_enabled:
+            start_sequence = journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_start",
+                turn_id=turn.id,
+                state_before=state_before,
+            )
         try:
             result = self._provider.synthesize(input)
         except Exception as exc:
@@ -78,27 +81,68 @@ class TTSStage:
             raise
 
         if isinstance(result, AsyncIterator) or inspect.isasyncgen(result):
+            if not capture_enabled:
+                return self._wrap_stream_without_capture(result, ctx, turn.id)
             return self._wrap_stream(result, ctx, turn.id, state_before, start_sequence)
 
-        state_after = self.snapshot_state()
-        elapsed_ms = (time.perf_counter() - started) * 1000
-        journal_append_event(
-            ctx,
-            stage=self.name,
-            name="stage_complete",
-            turn_id=turn.id,
-            state_before=state_before,
-            state_after=state_after,
-            data_extra={"elapsed_ms": elapsed_ms},
-        )
+        if capture_enabled:
+            state_after = self.snapshot_state()
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            journal_append_event(
+                ctx,
+                stage=self.name,
+                name="stage_complete",
+                turn_id=turn.id,
+                state_before=state_before,
+                state_after=state_after,
+                data_extra={"elapsed_ms": elapsed_ms},
+            )
         return result
+
+    async def _wrap_stream_without_capture(
+        self,
+        stream: Any,
+        ctx: RunContext,
+        turn_id: str,
+    ) -> AsyncIterator[Any]:
+        """Stream provider events without constructing replay-only metadata."""
+        started = time.perf_counter()
+        result_attr = "pass"
+        try:
+            with observability.span(
+                "easycat.tts.synthesize",
+                {"easycat.stage": self.name, "easycat.surface": "tts"},
+            ):
+                async for event in stream:
+                    yield event
+        except Exception as exc:
+            result_attr = "fail"
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            record_stage_failure(
+                exc,
+                ctx,
+                stage=self.name,
+                provider=type(self._provider).__name__.lower(),
+                surface="tts",
+                elapsed_ms=elapsed_ms,
+                sequence=None,
+                turn_id=turn_id,
+                state_before=None,
+            )
+            raise
+        finally:
+            observability.record_histogram(
+                "easycat.stage.latency",
+                time.perf_counter() - started,
+                {"easycat.stage": self.name, "easycat.result": result_attr},
+            )
 
     async def _wrap_stream(
         self,
         stream: Any,
         ctx: RunContext,
         turn_id: str,
-        state_before: StageStateSnapshot,
+        state_before: StageStateSnapshot | None,
         start_sequence: int | None,
     ) -> AsyncIterator[Any]:
         """Iterate *stream*, capture audio bytes per frame, yield each event.
