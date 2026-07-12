@@ -301,9 +301,48 @@ class TestMultiContextWSManager:
         ws.sent.clear()
         await mgr._on_reconnect()
 
-        assert replayed == [armed.context_id]
+        assert replayed == []
         assert len(ws.sent) == 1
         assert json.loads(ws.sent[0])["context_id"] == armed.context_id
+        await armed.queue.put({"context_id": armed.context_id, "type": "chunk"})
+        frame = await anext(armed.frames())
+        assert frame["type"] == "chunk"
+        assert replayed == [armed.context_id]
+        await mgr.aclose()
+
+    async def test_reconnect_reset_waits_for_buffered_frames_under_backpressure(self):
+        ws = FakeMultiContextWS()
+        trace: list[str] = []
+        mgr = MultiContextWSManager(
+            _make_adapter(
+                ws,
+                on_context_replay=lambda _cid: trace.append("reset"),
+                context_queue_maxsize=1,
+            )
+        )
+        ctx = await mgr.open_context()
+        await mgr.send(ctx, [json.dumps({"context_id": ctx.context_id, "transcript": "hi"})])
+        ctx.queue.put_nowait({"context_id": ctx.context_id, "phase": "pre-drop"})
+
+        replay = asyncio.create_task(mgr._on_reconnect())
+        await asyncio.sleep(0)
+
+        assert not replay.done()
+        assert trace == []
+
+        frames = ctx.frames()
+        pre_drop = await anext(frames)
+        trace.append(pre_drop["phase"])
+        await replay
+
+        replayed_frame = asyncio.create_task(anext(frames))
+        await asyncio.sleep(0)
+        assert trace == ["pre-drop", "reset"]
+        await ctx.queue.put({"context_id": ctx.context_id, "phase": "replayed"})
+        replayed = await replayed_frame
+        trace.append(replayed["phase"])
+
+        assert trace == ["pre-drop", "reset", "replayed"]
         await mgr.aclose()
 
     async def test_cancel_context_sends_cancel_without_socket_close(self):

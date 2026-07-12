@@ -53,8 +53,9 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-# Sentinel pushed onto a context queue to terminate its ``frames()`` iterator.
+# Sentinels pushed onto a context queue to preserve consumer-visible ordering.
 _TERMINAL = object()
+_REPLAY_BOUNDARY = object()
 
 # Short timeout for the cancel-frame send. A barge-in must stay near-instant, so
 # we never let the cancel send block on a reconnect window; on timeout we fall
@@ -85,7 +86,7 @@ class MultiContextAdapter:
     route_key: Callable[[Any], str | None]
     # Frames to cancel/close a single context without closing the socket.
     context_cancel_frames: Callable[[str], list[str]]
-    # Called at the top of a per-context reconnect replay (resets sample carry).
+    # Called by the context consumer at the replay boundary (resets sample carry).
     on_context_replay: Callable[[str], None]
     # Frames to send to gracefully close the whole socket.
     socket_close_frames: Callable[[], list[str]]
@@ -101,6 +102,7 @@ class _Context:
 
     context_id: str
     queue: asyncio.Queue[Any]
+    on_replay: Callable[[str], None]
     done: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
     # ``None`` until the caller's frames have been sent successfully; once
@@ -135,6 +137,10 @@ class _Context:
                 if self.error is not None and not self.cancelled:
                     raise self.error
                 return
+            if item is _REPLAY_BOUNDARY:
+                if not self.cancelled:
+                    self.on_replay(self.context_id)
+                continue
             if self.cancelled:
                 continue
             yield item
@@ -173,6 +179,7 @@ class MultiContextWSManager:
         ctx = _Context(
             context_id=str(uuid4()),
             queue=asyncio.Queue(maxsize=self._adapter.context_queue_maxsize),
+            on_replay=self._adapter.on_context_replay,
         )
         self._contexts[ctx.context_id] = ctx
         return ctx
@@ -267,9 +274,20 @@ class MultiContextWSManager:
         for ctx in list(self._contexts.values()):
             if ctx.cancelled or ctx.pending_frames is None:
                 continue
-            self._adapter.on_context_replay(ctx.context_id)
+            # Queue the decoder reset behind every pre-drop frame and before
+            # replay responses can be read. Running the callback here would
+            # mutate consumer-owned decoder state while buffered old-connection
+            # frames are still waiting under backpressure.
+            await ctx.queue.put(_REPLAY_BOUNDARY)
+            pending_frames = ctx.pending_frames
+            if (
+                ctx.cancelled
+                or pending_frames is None
+                or self._contexts.get(ctx.context_id) is not ctx
+            ):
+                continue
             with contextlib.suppress(Exception):
-                await self._send_frames(ctx.pending_frames)
+                await self._send_frames(pending_frames)
 
     # ── internals ─────────────────────────────────────────────────
 
