@@ -74,9 +74,35 @@ forecast). Verify none of it reaches TTS.
    defense is keeping the streams separate at parse time. By the
    time it's reached TTS it's already too late.
 
+## 4. Reject the filler, not the reply
+
+**Task.** Run the provider-free filler attribution probe:
+
+```bash
+uv run python docs/teaching/07-tools/filler_delivery_probe.py
+```
+
+Then change the slow case's transport decisions from `[False, True]`
+to `[True, False]`. Predict the first-audio kind and the two TTS
+records before re-running it.
+
+**Hints**
+
+1. `filler_enqueued` stays true in both runs. It records the queueing
+   policy, not transport acceptance.
+2. With `[False, True]`, the filler record proves one rejected chunk;
+   the first accepted reply chunk owns `tts.first_audio`.
+3. With `[True, False]`, the filler is scheduled for delivery and owns
+   `tts.first_audio`, while the final reply is rejected. Neither case
+   proves what the speaker rendered or the user heard.
+4. Follow `tool_call_id` from `tool.call.started` to
+   `tool.call.result` and the filler-kind `stage.tts.execute` record.
+   Reply-kind TTS records intentionally have no tool-call ID.
+
 ## Self-check
 
 You should be able to look at a voice agent's response time and
 predict where filler utterances would help vs hurt, and explain
-the *tool vs session action* distinction in one sentence without
-opening the file.
+the *tool vs session action* distinction in one sentence. You should
+also be able to prove whether a filler was requested and whether its
+audio was accepted without conflating either fact with “heard.”

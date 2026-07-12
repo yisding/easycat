@@ -120,7 +120,7 @@ async def run_agent_blocking(
 
     Compare this body to `main.py`'s `run_agent_streaming`: the
     only difference is the missing `if should_play_filler(name):
-    await sentence_queue.put(("filler", FILLER_PHRASES[name]))`.
+    await sentence_queue.put(("filler", FILLER_PHRASES[name], tc["id"]))`.
     That one missing branch is the entire UX gap.
     """
     messages = [
@@ -199,7 +199,13 @@ async def run_agent_blocking(
                 kind=JournalRecordKind.EVENT,
                 name="tool.call.started",
                 session_id=SESSION_ID,
-                data={"stage": "tool", "name": name, "args": args, "filler_played": False},
+                data={
+                    "stage": "tool",
+                    "name": name,
+                    "tool_call_id": tc["id"],
+                    "args": args,
+                    "filler_enqueued": False,
+                },
             )
             t0 = time.monotonic()
             result = await TOOL_IMPLS[name](**args)
@@ -210,6 +216,7 @@ async def run_agent_blocking(
                 data={
                     "stage": "tool",
                     "name": name,
+                    "tool_call_id": tc["id"],
                     "elapsed_ms": (time.monotonic() - t0) * 1000,
                     "result": result,
                 },
@@ -385,8 +392,8 @@ async def main() -> None:
     export_debug_bundle(session_stub, bundle_path, overwrite=True)
     print(f"\nWrote bundle → {bundle_path.relative_to(Path.cwd())}")
     print("Compare the `tool.call.*` records here vs main.py's:")
-    print("  - This bundle: `filler_played: False`, no `stage.tts.execute kind=filler`.")
-    print("  - main.py:     `filler_played: True`, a `kind=filler` TTS span")
+    print("  - This bundle: `filler_enqueued: False`, no `stage.tts.execute kind=filler`.")
+    print("  - main.py:     `filler_enqueued: True`, then inspect filler TTS acceptance")
     print("                 between tool.started/result.")
 
 
