@@ -344,6 +344,89 @@ async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
 
 
 @pytest.mark.asyncio
+async def test_committed_transcript_overlaps_stt_close_with_agent() -> None:
+    """A provider-confirmed transcript must not wait for stream shutdown."""
+
+    class BlockingCloseSTT(FakeSTT):
+        def __init__(self) -> None:
+            super().__init__(transcript="")
+            self.close_started = asyncio.Event()
+            self.release_close = asyncio.Event()
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            self.close_started.set()
+            await self.release_close.wait()
+            self.stream_open = False
+
+    class StartedAgent(_SimpleStreamingAgent):
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            self.started.set()
+            yield AgentBridgeEvent(kind="text_delta", text="Reply.")
+            yield AgentBridgeEvent(kind="done", text="Reply.")
+
+    stt = BlockingCloseSTT()
+    agent = StartedAgent()
+    session = Session(_config(stt=stt, agent=agent))
+    turn = TurnContext("turn-committed", CancelToken())
+    turn.append_stt_segment("hello")
+    session._turn = turn
+    session._stt_committer.mark_active()
+
+    run_task = asyncio.create_task(session._turn_runner.handle_end_of_speech(turn=turn))
+    await asyncio.wait_for(agent.started.wait(), timeout=0.5)
+
+    assert stt.close_started.is_set()
+    assert not stt.release_close.is_set()
+    assert not run_task.done()
+
+    stt.release_close.set()
+    await asyncio.wait_for(run_task, timeout=0.5)
+    assert stt.end_stream_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_committed_transcript_fast_path_requires_no_pending_work_or_journal() -> None:
+    stt = FakeSTT(transcript="")
+    session = Session(_config(stt=stt))
+    turn = TurnContext("turn-pending", CancelToken())
+    turn.append_stt_segment("hello")
+    pending = asyncio.get_running_loop().create_future()
+    turn.pending_stt_segment_futures.append(pending)
+    session._turn = turn
+    session._stt_committer.mark_active()
+
+    transcript, close_task = session._turn_runner._take_committed_transcript(turn)
+
+    assert transcript == ""
+    assert close_task is None
+    assert session._stt_committer.is_active
+
+    pending.set_result("hello")
+    turn.pending_stt_segment_futures.clear()
+    journaled = Session(_config(stt=FakeSTT(transcript=""), journal=InMemoryRingBuffer()))
+    journaled_turn = TurnContext("turn-journaled", CancelToken())
+    journaled_turn.append_stt_segment("hello")
+    journaled._turn = journaled_turn
+    journaled._stt_committer.mark_active()
+
+    transcript, close_task = journaled._turn_runner._take_committed_transcript(journaled_turn)
+
+    assert transcript == ""
+    assert close_task is None
+    assert journaled._stt_committer.is_active
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> None:
     tts = FakeTTS()
     session = Session(_config(tts=tts))
