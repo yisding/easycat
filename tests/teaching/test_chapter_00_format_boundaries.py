@@ -24,14 +24,14 @@ def test_format_boundary_probe_reports_runtime_defaults_without_io() -> None:
 
     assert {name: row["sample_rate_hz"] for name, row in rows.items()} == {
         "cartesia_stt_target": 16_000,
-        "cartesia_tts_output": 24_000,
+        "cartesia_tts_config_default": 24_000,
         "deepgram_stt_target": 16_000,
-        "deepgram_tts_output": 24_000,
+        "deepgram_tts_config_default": 24_000,
         "elevenlabs_realtime_stt_target": 16_000,
-        "elevenlabs_tts_output": 24_000,
+        "elevenlabs_tts_config_default": 24_000,
         "local_pipeline": 24_000,
         "openai_realtime_stt_input": 24_000,
-        "openai_tts_output": 24_000,
+        "openai_tts_config_default": 24_000,
         "twilio_pipeline_target": 16_000,
         "twilio_wire": 8_000,
         "webrtc_media_frames": 48_000,
@@ -41,6 +41,7 @@ def test_format_boundary_probe_reports_runtime_defaults_without_io() -> None:
     assert rows["twilio_wire"]["encoding"] == "mulaw"
     assert rows["webrtc_media_frames"]["role"] == "media"
     assert rows["openai_realtime_stt_input"]["role"] == "provider_input"
+    assert rows["openai_tts_config_default"]["role"] == "provider_config_default"
 
 
 def test_lesson_names_boundaries_instead_of_brand_wide_rates() -> None:

@@ -68,9 +68,37 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
    probe. You changed one provider-input boundary, not the capture, TTS, or
    transport wire formats.
 
+## 3. Compare raw and resolved TTS formats
+
+**Task.** Run the transport-alignment probe. Explain why “OpenAI TTS
+defaults to 24 kHz” and “Twilio resolves OpenAI TTS transport output to
+8 kHz” are both true:
+
+```bash
+uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
+```
+
+**Hints**
+
+1. A provider config default describes the object before `EasyConfig`
+   resolves the whole session. It is not the final transport boundary.
+2. With alignment enabled, untouched defaults follow the transport:
+   Local 24 kHz, WebSocket/WebRTC 16 kHz, and Twilio 8 kHz output.
+3. ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
+   requests 16 kHz from the provider and exposes 8 kHz transport output
+   after the adapter's final resample.
+4. The `twilio_explicit_16k_preserved` control proves explicit caller intent
+   wins over automatic default alignment. Twilio still converts that PCM to
+   its 8 kHz μ-law wire format later.
+5. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
+   Disable alignment only when you deliberately own the downstream format
+   conversion or need a provider-specific output.
+
 ## Self-check
 
 You should now be able to predict — without running the code —
 roughly how an utterance will sound at 4 kHz, 8 kHz, 16 kHz, and
 44.1 kHz, explain the difference in one sentence each, and identify
-the boundary meant by any sample rate you quote.
+the boundary meant by any sample rate you quote. You should also be able
+to distinguish a raw provider config default from a transport-resolved
+session output.
