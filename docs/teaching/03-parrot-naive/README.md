@@ -1,7 +1,7 @@
 # Chapter 3 — Parrot, the Naive Way
 
 <!-- BEGIN auto:navigation -->
-**Progress: 4 of 16** · [← Chapter 2](../02-transcribe/) · [Ladder index](../) · [Chapter 4 →](../04-vad-preroll/)
+**Progress: 4 of 16** · [← Chapter 2](../02-transcribe/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 4 →](../04-vad-preroll/)
 <!-- END auto:navigation -->
 
 > A bot that repeats what you said. Except it breaks the instant

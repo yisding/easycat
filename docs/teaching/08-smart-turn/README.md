@@ -1,7 +1,7 @@
 # Chapter 8 — Smart-turn
 
 <!-- BEGIN auto:navigation -->
-**Progress: 9 of 16** · [← Chapter 7](../07-tools/) · [Ladder index](../) · [Chapter 9 →](../09-interruption/)
+**Progress: 9 of 16** · [← Chapter 7](../07-tools/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 9 →](../09-interruption/)
 <!-- END auto:navigation -->
 
 > A tiny ML model that knows you're done talking before the silence

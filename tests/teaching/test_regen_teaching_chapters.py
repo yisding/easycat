@@ -107,14 +107,17 @@ def test_render_navigation_tracks_the_first_middle_and_last_chapters() -> None:
 
     assert f"**Progress: 1 of {chapter_count}**" in first
     assert "[Ladder index](../)" in first
+    assert "[Exercises](./EXERCISES.md)" in first
     assert "Chapter -1" not in first
     assert f"[Chapter 1 →](../{chapters[1].slug}/)" in first
 
     assert f"**Progress: {middle_position + 1} of {chapter_count}**" in middle
+    assert "[Exercises](./EXERCISES.md)" in middle
     assert f"[← Chapter {middle_position - 1}](../{chapters[middle_position - 1].slug}/)" in middle
     assert f"[Chapter {middle_position + 1} →](../{chapters[middle_position + 1].slug}/)" in middle
 
     assert f"**Progress: {chapter_count} of {chapter_count}**" in last
+    assert "[Exercises](./EXERCISES.md)" in last
     assert f"[← Chapter {chapter_count - 2}](../{chapters[-2].slug}/)" in last
     assert f"Chapter {chapter_count}" not in last
 

@@ -1,7 +1,7 @@
 # Chapter 12 — Evals + the Latency Budget
 
 <!-- BEGIN auto:navigation -->
-**Progress: 13 of 16** · [← Chapter 11](../11-journal/) · [Ladder index](../) · [Chapter 13 →](../13-swap-providers-and-transports/)
+**Progress: 13 of 16** · [← Chapter 11](../11-journal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 13 →](../13-swap-providers-and-transports/)
 <!-- END auto:navigation -->
 
 > The difference between *building* a voice bot and *operating* one

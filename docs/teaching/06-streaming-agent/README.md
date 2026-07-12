@@ -1,7 +1,7 @@
 # Chapter 6 — Streaming Agent + Sentence TTS
 
 <!-- BEGIN auto:navigation -->
-**Progress: 7 of 16** · [← Chapter 5](../05-blocking-agent/) · [Ladder index](../) · [Chapter 7 →](../07-tools/)
+**Progress: 7 of 16** · [← Chapter 5](../05-blocking-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 7 →](../07-tools/)
 <!-- END auto:navigation -->
 
 > Start speaking before the LLM is done thinking. First real

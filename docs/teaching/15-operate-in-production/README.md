@@ -1,7 +1,7 @@
 # Chapter 15 — Operate in production
 
 <!-- BEGIN auto:navigation -->
-**Progress: 16 of 16** · [← Chapter 14](../14-bring-your-own-agent/) · [Ladder index](../)
+**Progress: 16 of 16** · [← Chapter 14](../14-bring-your-own-agent/) · [Ladder index](../) · [Exercises](./EXERCISES.md)
 <!-- END auto:navigation -->
 
 > Chapters 0-14 built and generalised a single session. Production

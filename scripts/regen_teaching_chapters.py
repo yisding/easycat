@@ -16,7 +16,8 @@ with the chapter's source code:
 
       <!-- BEGIN auto:navigation -->
       **Progress: 2 of 16** · [← Chapter 0](../00-hello-audio/) ·
-      [Ladder index](../) · [Chapter 2 →](../02-transcribe/)
+      [Ladder index](../) · [Exercises](./EXERCISES.md) ·
+      [Chapter 2 →](../02-transcribe/)
       <!-- END auto:navigation -->
 
 * The unified diff against the previous chapter's source::
@@ -165,6 +166,7 @@ def render_navigation(chapter: Chapter) -> str:
         previous = chapters[position - 1]
         links.append(f"[← Chapter {position - 1}](../{previous.slug}/)")
     links.append("[Ladder index](../)")
+    links.append("[Exercises](./EXERCISES.md)")
     if position + 1 < len(chapters):
         following = chapters[position + 1]
         links.append(f"[Chapter {position + 1} →](../{following.slug}/)")
