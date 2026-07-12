@@ -27,7 +27,7 @@ from easycat.tts.factory import TTSProviderConfig, create_tts_provider
 from easycat.tts.input import TTSInput
 
 if TYPE_CHECKING:
-    from easycat.providers import Transport, TTSProvider
+    from easycat.providers import STTProvider, Transport, TTSProvider
 
 __all__ = ["speak", "transcribe_file"]
 
@@ -56,6 +56,7 @@ def _resolve_api_key(provider: str, api_key: str | None, *, catalog: ProviderCat
 async def transcribe_file(
     path: str | Path,
     *,
+    stt: STTProvider | None = None,
     provider: str = "openai",
     api_key: str | None = None,
 ) -> str:
@@ -65,35 +66,46 @@ async def transcribe_file(
     every ``FINAL`` event's text with spaces. Raises ``ValueError`` if
     the file is not 16-bit PCM, and ``RuntimeError`` if no API key can
     be resolved.
+
+    A helper-created provider is closed before return. Pass ``stt=`` to reuse
+    a caller-owned provider; the helper still starts and ends its logical
+    stream but leaves final provider cleanup to the caller.
     """
-    resolved_key = _resolve_api_key(provider, api_key, catalog=_STT_CATALOG)
-    stt = create_stt_provider(STTProviderConfig(provider=provider, api_key=resolved_key))
+    owned_stt: STTProvider | None = None
+    if stt is None:
+        resolved_key = _resolve_api_key(provider, api_key, catalog=_STT_CATALOG)
+        stt = create_stt_provider(STTProviderConfig(provider=provider, api_key=resolved_key))
+        owned_stt = stt
 
-    with wave.open(str(Path(path)), "rb") as wf:
-        if wf.getsampwidth() != 2:
-            raise ValueError("transcribe_file expects a 16-bit PCM WAV file")
-        audio_format = AudioFormat(
-            sample_rate=wf.getframerate(),
-            channels=wf.getnchannels(),
-            sample_width=2,
-        )
-        pcm_bytes = wf.readframes(wf.getnframes())
-
-    await stt.start_stream()
     try:
-        chunk_size = max(audio_format.bytes_per_second // 10, audio_format.frame_size)
-        for i in range(0, len(pcm_bytes), chunk_size):
-            await stt.send_audio(
-                AudioChunk(data=pcm_bytes[i : i + chunk_size], format=audio_format)
+        with wave.open(str(Path(path)), "rb") as wf:
+            if wf.getsampwidth() != 2:
+                raise ValueError("transcribe_file expects a 16-bit PCM WAV file")
+            audio_format = AudioFormat(
+                sample_rate=wf.getframerate(),
+                channels=wf.getnchannels(),
+                sample_width=2,
             )
-    finally:
-        await stt.end_stream()
+            pcm_bytes = wf.readframes(wf.getnframes())
 
-    parts: list[str] = []
-    async for event in stt.events():
-        if event.type == STTEventType.FINAL:
-            parts.append(event.text)
-    return " ".join(p for p in parts if p).strip()
+        await stt.start_stream()
+        try:
+            chunk_size = max(audio_format.bytes_per_second // 10, audio_format.frame_size)
+            for i in range(0, len(pcm_bytes), chunk_size):
+                await stt.send_audio(
+                    AudioChunk(data=pcm_bytes[i : i + chunk_size], format=audio_format)
+                )
+        finally:
+            await stt.end_stream()
+
+        parts: list[str] = []
+        async for event in stt.events():
+            if event.type == STTEventType.FINAL:
+                parts.append(event.text)
+        return " ".join(p for p in parts if p).strip()
+    finally:
+        if owned_stt is not None:
+            await close_if_supported(owned_stt)
 
 
 async def speak(

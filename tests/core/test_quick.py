@@ -9,7 +9,9 @@ defaulting to ``OPENAI_API_KEY``.
 
 from __future__ import annotations
 
+import wave
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -17,8 +19,8 @@ import easycat.quick as quick
 import easycat.recipes as recipes
 from easycat.audio_format import PCM16_MONO_24K, AudioChunk
 from easycat.errors import EasyCatError
-from easycat.events import TTSEvent, TTSEventType
-from easycat.recipes import _resolve_api_key, speak
+from easycat.events import STTEvent, STTEventType, TTSEvent, TTSEventType
+from easycat.recipes import _resolve_api_key, speak, transcribe_file
 from easycat.stt.factory import _CATALOG as _STT_CATALOG
 from easycat.tts.factory import _CATALOG as _TTS_CATALOG
 from easycat.tts.input import TTSInput
@@ -55,6 +57,76 @@ class TestResolveApiKey:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setenv("DEEPGRAM_API_KEY", "dg-key")
         assert _resolve_api_key("deepgram", None, catalog=_STT_CATALOG) == "dg-key"
+
+
+def _write_wav(path: Path, *, sample_width: int = 2) -> None:
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(sample_width)
+        wav.setframerate(16_000)
+        wav.writeframes(b"\x00" * (320 * sample_width))
+
+
+class _FakeSTT:
+    def __init__(self) -> None:
+        self.closed = False
+        self.ended = False
+        self.chunks: list[AudioChunk] = []
+
+    async def start_stream(self) -> None:
+        pass
+
+    async def send_audio(self, chunk: AudioChunk) -> None:
+        self.chunks.append(chunk)
+
+    async def end_stream(self) -> None:
+        self.ended = True
+
+    async def events(self) -> AsyncIterator[STTEvent]:
+        yield STTEvent(type=STTEventType.FINAL, text="hello")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class TestTranscribeResourceOwnership:
+    @pytest.mark.asyncio
+    async def test_helper_constructed_stt_is_closed(self, monkeypatch, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path)
+        fake = _FakeSTT()
+        monkeypatch.setattr(recipes, "create_stt_provider", lambda _config: fake)
+
+        transcript = await transcribe_file(wav_path, api_key="placeholder")
+
+        assert transcript == "hello"
+        assert fake.ended is True
+        assert fake.closed is True
+        assert fake.chunks
+
+    @pytest.mark.asyncio
+    async def test_caller_supplied_stt_is_not_closed(self, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path)
+        fake = _FakeSTT()
+
+        transcript = await transcribe_file(wav_path, stt=fake)
+
+        assert transcript == "hello"
+        assert fake.ended is True
+        assert fake.closed is False
+
+    @pytest.mark.asyncio
+    async def test_helper_constructed_stt_closes_on_invalid_wav(self, monkeypatch, tmp_path: Path):
+        wav_path = tmp_path / "audio.wav"
+        _write_wav(wav_path, sample_width=1)
+        fake = _FakeSTT()
+        monkeypatch.setattr(recipes, "create_stt_provider", lambda _config: fake)
+
+        with pytest.raises(ValueError, match="16-bit PCM"):
+            await transcribe_file(wav_path, api_key="placeholder")
+
+        assert fake.closed is True
 
 
 class _FakeTTS:
