@@ -29,6 +29,8 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "../README.md#install",
         "teaching/",
         "teaching/00-hello-audio/",
+        "using-easycat/",
+        "using-easycat/00-first-voice-app/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -123,6 +125,8 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Docs map",
         "Teaching ladder",
         "First lesson",
+        "EasyCat feature ladder",
+        "Feature first lesson",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -238,6 +242,7 @@ def test_cli_docs_routes_declare_diataxis_categories() -> None:
     diataxis = {entry["path"]: entry["diataxis"] for entry in _DOCS_LINKS}
     assert diataxis["README.md#install"] == "tutorial"
     assert diataxis["docs/teaching/"] == "tutorial"
+    assert diataxis["docs/using-easycat/"] == "tutorial"
     assert diataxis["docs/architecture.md"] == "explanation"
     assert diataxis["docs/reference/events.md"] == "reference"
     assert diataxis["docs/reference/easyconfig.md"] == "reference"
@@ -256,6 +261,10 @@ def test_cli_docs_routes_have_online_urls() -> None:
     assert entries["docs/teaching/"]["url"].endswith("/tree/main/docs/teaching")
     assert entries["docs/teaching/00-hello-audio/"]["url"].endswith(
         "/tree/main/docs/teaching/00-hello-audio"
+    )
+    assert entries["docs/using-easycat/"]["url"].endswith("/tree/main/docs/using-easycat")
+    assert entries["docs/using-easycat/00-first-voice-app/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/00-first-voice-app"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]

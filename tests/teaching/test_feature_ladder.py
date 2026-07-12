@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+from easycat.cli._app import _docs_entries
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FEATURE_LADDER = REPO_ROOT / "docs" / "using-easycat"
+AVAILABLE_ROW_RE = re.compile(
+    r"^\| (?P<number>\d+) "
+    r"\| \[`(?P<name>[^`]+)`\]\(\./(?P<link>[^)]+)/\) "
+    r"\| (?P<features>[^|]+) "
+    r"\| Available \|$",
+    flags=re.MULTILINE,
+)
+API_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9_]*_API_KEY\b")
+UV_EXTRA_RE = re.compile(r"--extra\s+(?P<extra>[A-Za-z0-9_.-]+)")
+
+
+def _chapter_dirs() -> list[Path]:
+    return sorted(FEATURE_LADDER.glob("[0-9][0-9]-*"))
+
+
+def _prerequisites(readme: str) -> str:
+    return readme.split("## Prerequisites", 1)[1].split("\n## ", 1)[0]
+
+
+def test_feature_ladder_available_rows_match_published_chapters() -> None:
+    readme = (FEATURE_LADDER / "README.md").read_text(encoding="utf-8")
+    rows = [match.groupdict() for match in AVAILABLE_ROW_RE.finditer(readme)]
+    chapter_dirs = [path.name for path in _chapter_dirs()]
+
+    assert [row["link"] for row in rows] == chapter_dirs
+    assert [row["name"] for row in rows] == chapter_dirs
+    assert [int(row["number"]) for row in rows] == list(range(len(chapter_dirs)))
+
+
+def test_feature_ladder_declares_complete_feature_journey() -> None:
+    readme = (FEATURE_LADDER / "README.md").read_text(encoding="utf-8")
+
+    for feature in (
+        "VoiceApp",
+        "Browser, WebSocket, local, and Twilio",
+        "STT/TTS provider specs",
+        "VAD, smart turn, interruption, push-to-talk",
+        "tools, fillers, session actions, and pronunciation",
+        "OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents",
+        "`EasyConfig`, `Session`, events, text turns, and lifecycle",
+        "Journals, bundles, inspect, replay, diff, and the debugger",
+        "Offline turns, assertions, evals, and latency budgets",
+        "Per-connection factories, authentication, limits, and supervision",
+        "Twilio streams, outbound calls, screening, IVR, and call control",
+        "Validation, deployment, durability, metrics, and production teardown",
+    ):
+        assert feature in readme
+
+    assert "how voice AI works" in readme
+    assert "what EasyCat can do and how to use it" in readme
+    assert "[voice-pipeline ladder](../teaching/)" in readme
+
+
+def test_feature_chapters_have_self_contained_reader_entrypoints() -> None:
+    missing: list[str] = []
+
+    for chapter in _chapter_dirs():
+        for filename in ("README.md", "EXERCISES.md", "main.py"):
+            if not (chapter / filename).exists():
+                missing.append(f"{chapter.name}/{filename}")
+        if not (chapter / "README.md").exists():
+            continue
+        readme = (chapter / "README.md").read_text(encoding="utf-8")
+        command = f"uv run python docs/using-easycat/{chapter.name}/main.py"
+        if command not in readme:
+            missing.append(f"{chapter.name}: documented `{command}`")
+
+    assert not missing, "Feature chapters missing reader entrypoints: " + ", ".join(missing)
+
+
+def test_feature_chapter_prerequisites_cover_script_requirements() -> None:
+    stale: list[str] = []
+
+    for chapter in _chapter_dirs():
+        readme = (chapter / "README.md").read_text(encoding="utf-8")
+        prerequisites = _prerequisites(readme)
+        script = chapter / "main.py"
+        source = script.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=script.as_posix())
+        docstring = ast.get_docstring(tree) or ""
+        script_keys = set(API_KEY_RE.findall(docstring))
+        script_extras = set(UV_EXTRA_RE.findall(docstring))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                script_keys.update(API_KEY_RE.findall(node.value))
+
+        missing_keys = sorted(script_keys - set(API_KEY_RE.findall(prerequisites)))
+        missing_extras = sorted(script_extras - set(UV_EXTRA_RE.findall(prerequisites)))
+        if missing_keys or missing_extras:
+            stale.append(
+                f"{chapter.name}: missing keys {missing_keys or '-'}, "
+                f"extras {missing_extras or '-'}"
+            )
+        if script_keys and "uv run easycat doctor --env-file .env" not in prerequisites:
+            stale.append(f"{chapter.name}: missing .env doctor preflight")
+        if script_keys and "add `--env-file .env` after `uv run`" not in prerequisites:
+            stale.append(f"{chapter.name}: missing .env runtime guidance")
+
+    assert not stale, "Feature chapter prerequisites drifted:\n" + "\n".join(stale)
+
+
+def test_first_feature_chapter_uses_only_the_public_easycat_app_surface() -> None:
+    script = FEATURE_LADDER / "00-first-voice-app" / "main.py"
+    tree = ast.parse(script.read_text(encoding="utf-8"), filename=script.as_posix())
+    easycat_imports = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("easycat")
+    ]
+
+    assert len(easycat_imports) == 1
+    assert easycat_imports[0].module == "easycat"
+    assert {alias.name for alias in easycat_imports[0].names} == {"VoiceApp", "require_env"}
+    assert 'app.run("local")' in script.read_text(encoding="utf-8")
+
+
+def test_feature_scripts_do_not_import_easycat_internals() -> None:
+    internal_imports: list[str] = []
+
+    for script in FEATURE_LADDER.glob("[0-9][0-9]-*/*.py"):
+        tree = ast.parse(script.read_text(encoding="utf-8"), filename=script.as_posix())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom | ast.Import) or not node.lineno:
+                continue
+            modules = (
+                [node.module]
+                if isinstance(node, ast.ImportFrom)
+                else [alias.name for alias in node.names]
+            )
+            for module in modules:
+                if (
+                    module
+                    and module.startswith("easycat.")
+                    and any(part.startswith("_") for part in module.split("."))
+                ):
+                    internal_imports.append(
+                        f"{script.relative_to(REPO_ROOT).as_posix()}:{node.lineno}: {module}"
+                    )
+
+    assert not internal_imports, "Feature lessons imported internals:\n" + "\n".join(
+        internal_imports
+    )
+
+
+def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
+    root_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    docs_readme = (REPO_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+
+    assert "[EasyCat feature ladder](docs/using-easycat/)" in root_readme
+    assert "[EasyCat feature ladder](using-easycat/)" in docs_readme
+    assert entries["docs/using-easycat/"]["diataxis"] == "tutorial"
+    assert entries["docs/using-easycat/"]["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/00-first-voice-app/main.py"
+        in entries["docs/using-easycat/"]["commands"]
+    )
+    assert entries["docs/using-easycat/00-first-voice-app/"]["diataxis"] == "tutorial"

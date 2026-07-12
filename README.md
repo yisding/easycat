@@ -95,6 +95,7 @@ Prefer exported shell variables? `uv run easycat doctor` and
 |---|---|---|
 | Run a local mic/speaker voice bot | [Install](#install) | `uv sync --extra quickstart --group dev`, then `uv run easycat doctor`; for `.env` keys, use `uv run easycat doctor --env-file .env` and `uv run --env-file .env python examples/openai_agents_voice.py` |
 | No mic or API key yet | [Journal demo](examples/journal_demo.py) | `uv run easycat console`, then `uv run python examples/journal_demo.py` and teaching ch. [11 journal](docs/teaching/11-journal/) and [12 evals & latency](docs/teaching/12-evals-and-latency/) |
+| Learn EasyCat feature by feature | [EasyCat feature ladder](docs/using-easycat/) | Start with [`VoiceApp`](docs/using-easycat/00-first-voice-app/), then add one product capability per chapter |
 | Learn the pipeline step by step | [Teaching ladder](docs/teaching/) | Pick a chapter from its starting-point table |
 | Choose a runnable example | [Examples matrix](examples/README.md) | Use its chooser for no-key, browser, provider, or debugging examples |
 | Scaffold a new app | [CLI and scaffolds](#cli) | `uv run easycat init --list-templates` before `uv run easycat init my-agent` |
@@ -114,6 +115,19 @@ streaming agent → tools → smart-turn → interruption → noise/AEC →
 journal → evals → swap providers → BYO agent → operate in production).
 
 For the maintained docs map, see [`docs/README.md`](docs/README.md).
+
+## Learn EasyCat feature by feature
+
+The [EasyCat feature ladder](docs/using-easycat/) starts with a working
+`VoiceApp` and teaches the public product surface one capability at a time:
+runtime modes, providers and voices, conversation controls, tools, agent
+frameworks, sessions and events, debugging, evals, multi-client servers,
+telephony, and production operations. Start at
+[`00-first-voice-app`](docs/using-easycat/00-first-voice-app/).
+
+Use the ground-up ladder above when you want to build the underlying voice
+pipeline from PCM onward; use the feature ladder when you want to build an app
+with EasyCat first and reveal lower-level control as you need it.
 
 ## Optional extras
 

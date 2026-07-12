@@ -147,6 +147,46 @@ uv sync --extra local --group dev
 uv run python docs/teaching/00-hello-audio/main.py
 ```
 
+## EasyCat feature ladder
+
+- Path: docs/using-easycat/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat
+- Audience: learners
+- Learn EasyCat's public features one app capability at a time.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run easycat docs --audience learners
+uv run easycat docs --audience learners --json
+uv run python docs/using-easycat/00-first-voice-app/main.py
+uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py
+```
+
+## Feature first lesson
+
+- Path: docs/using-easycat/00-first-voice-app/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/00-first-voice-app
+- Audience: learners
+- Build a local voice app with VoiceApp and automatic pipeline wiring.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/00-first-voice-app/main.py
+uv run --env-file .env python docs/using-easycat/00-first-voice-app/main.py
+```
+
 ## Examples
 
 - Path: examples/README.md
