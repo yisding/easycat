@@ -312,7 +312,10 @@ ids, but EasyCat avoids that boundary.
   still preserve transcript text, agent output, and tool-result text for replay.
   A pluggable full `RedactionPolicy` is still planned. Do not attach journal
   bundles to public issues or send them to third parties until you have manually
-  scrubbed them.
+  scrubbed them. Config snapshots are diagnostic rather than lossless: cycles
+  and values beyond fixed depth, item, node, scalar, and final-output safety
+  budgets collapse to `...`, `<unavailable>`, or type/length markers so debug
+  export cannot recurse forever or grow without bound.
 - **Latency is reported, not gated.** Every pipeline stage records its
   `elapsed_ms` to the journal, and each turn emits a `turn_total_latency_ms`
   (voice, once first TTS audio is available) or `text_turn_latency_ms` (text)

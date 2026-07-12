@@ -80,6 +80,13 @@ def split_at_sentence_boundaries(text: str) -> tuple[str, str]:
 # clipped opener like "Sure," is never sent to TTS by itself.
 _FIRST_CLAUSE_MIN_CHARS = 12
 
+# If a model streams a long opener without punctuation, cap how much text the
+# first TTS payload waits for.  The split still happens only at a word boundary
+# and only after a useful phrase has accumulated; later payloads continue to
+# use full-sentence granularity.
+_FIRST_PHRASE_TARGET_CHARS = 48
+_FIRST_PHRASE_MIN_CHARS = 24
+
 # Clause boundaries used only for the first payload of a turn: the sentence
 # terminators ``split_at_sentence_boundaries`` honours plus mid-sentence
 # punctuation (comma/semicolon/colon) that marks a natural early pause.
@@ -126,6 +133,32 @@ def split_first_clause(text: str) -> tuple[str, str]:
         # Too short to ship on its own; keep scanning for a later boundary.
 
     return "", text
+
+
+def _split_first_phrase(text: str) -> tuple[str, str]:
+    """Bound the first TTS payload when streamed text has no punctuation.
+
+    Once at least ``_FIRST_PHRASE_TARGET_CHARS`` are buffered, split at the
+    latest whitespace at or before that target.  Requiring a boundary after
+    ``_FIRST_PHRASE_MIN_CHARS`` avoids shipping a tiny prefix before a long
+    URL, identifier, or unbroken word.  The whitespace stays with the ready
+    prefix so concatenating the returned pair reproduces the input exactly.
+    """
+    if len(text) < _FIRST_PHRASE_TARGET_CHARS:
+        return "", text
+
+    upper = min(len(text), _FIRST_PHRASE_TARGET_CHARS + 1)
+    split_at = -1
+    for index in range(upper - 1, _FIRST_PHRASE_MIN_CHARS - 1, -1):
+        if text[index].isspace():
+            split_at = index + 1
+            break
+    if split_at < 0:
+        return "", text
+
+    while split_at < len(text) and text[split_at].isspace():
+        split_at += 1
+    return text[:split_at], text[split_at:]
 
 
 def _is_url_separator(text: str, index: int) -> bool:
