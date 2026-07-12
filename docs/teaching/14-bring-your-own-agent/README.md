@@ -25,7 +25,7 @@
 
 - **Added:** a hand-rolled `MyWorkflow` class with
   `on_user_turn(text, *, recorder, cancel_token)` (deep mode);
-  the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the five
+  the `auto_adapt_agent()` → `BridgeAdapterShim` flow; the seven
   `SessionAction` types and their executors; the four output
   processors (`MarkdownStripProcessor`, `PhoneticReplacementProcessor`,
   `PauseProcessor`, custom); `mcp_servers=[...]` config entry.

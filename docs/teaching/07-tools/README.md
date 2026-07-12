@@ -470,7 +470,9 @@ Two different things live in `easycat.session.actions`:
   turn. The result is fed back to the LLM, which then speaks an
   answer informed by the tool output.
 - **Session actions**: requested by the agent, run *after* the
-  turn, and do *not* return data to the LLM. Five types ship:
+  turn, and do *not* return data to the LLM. Run the maintained
+  [`action_catalog.py`](action_catalog.py) probe to discover the seven
+  types currently shipped:
 
 | Action | What it does |
 |---|---|
@@ -478,6 +480,8 @@ Two different things live in `easycat.session.actions`:
 | `TransferCallAction` | Hands off to a human or another number |
 | `SendDTMFAction` | Plays DTMF tones on a telephony leg |
 | `SendSMSAction` | Sends a text-message side effect |
+| `AddToDNCAction` | Adds the current caller or a supplied number to the DNC store |
+| `RemoveFromDNCAction` | Removes the current caller or a supplied number from the DNC store |
 | `CustomAction` | Escape hatch — anything else |
 
 A weather lookup is a tool. "Hang up" is not a tool — there is

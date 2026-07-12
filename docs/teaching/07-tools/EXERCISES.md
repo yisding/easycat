@@ -23,27 +23,36 @@ it" filler at the 2.5-second mark.
 
 ## 2. Why is each session action *not* a tool?
 
-**Task.** Open `src/easycat/session/actions.py` and look at the
-five action dataclasses (`EndCallAction`, `TransferCallAction`,
-`SendDTMFAction`, `SendSMSAction`, `CustomAction`). For each one,
-answer in one sentence: *why is this a session action and not a
-tool?*
+**Task.** Run the provider-free catalog, then open
+`src/easycat/session/actions.py`:
+
+```bash
+uv run python docs/teaching/07-tools/action_catalog.py
+```
+
+The output is discovered from the concrete action classes currently
+bound in the runtime module rather than a hand-maintained count. For
+each of the seven action dataclasses, answer in one sentence: *why is
+this a deferred session action rather than a tool whose result must
+shape the current response?*
 
 **Hints**
 
-1. The test is **whether the LLM has anything useful to do with
-   the return value.** If yes → tool (the result informs the next
-   token). If no → session action (queue it, run it after the
-   turn, don't feed anything back).
+1. The test is whether the current response **depends on the result**.
+   If yes, use an inline tool so the result informs the next token. If
+   the operation is a deferred session/transport/compliance side effect,
+   enqueue an action after the turn and observe its lifecycle separately.
 2. `EndCallAction` — there is nothing after the call ends. The
    LLM doesn't need to know "I successfully hung up."
-3. `TransferCallAction` / `SendDTMFAction` — the call leg is gone
-   or being modified; the LLM should not be generating more text.
-4. `SendSMSAction` — fire-and-forget; the agent's response is
-   what the user *hears*, the SMS is the side effect.
-5. `CustomAction` — escape hatch. The discipline is "if you'd be
-   tempted to feed the result back to the LLM, make it a tool
-   instead."
+3. `TransferCallAction`, `SendDTMFAction`, and `SendSMSAction` are
+   transport side effects performed after the spoken turn. Their success
+   or failure is journaled; it does not shape the already-produced reply.
+4. `AddToDNCAction` / `RemoveFromDNCAction` mutate the compliance
+   store through `CoreSessionActionExecutor`. The user-facing
+   acknowledgement comes first; the auditable store write follows.
+5. `CustomAction` is an escape hatch, not an automatic classification.
+   The discipline is: if you'd be tempted to feed the result back to
+   the LLM, make it a tool instead.
 
 ## 3. Plug a JSON-leak
 
