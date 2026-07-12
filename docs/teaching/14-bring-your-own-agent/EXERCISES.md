@@ -27,35 +27,59 @@ mid-sentence. What do you see in the journal?
 
 ## 2. Custom action with a custom executor
 
-**Task.** Add a `CustomAction(name="play_chime", data={"freq":
-440})` and a 10-line executor that prints the action. Trigger it
-from the workflow. How does the journal record the action's
-lifecycle?
+**Task.** Add a `CustomAction(name="play_chime", payload={"freq":
+440})` and a small executor that prints the action. Trigger it from
+the workflow. How does the journal record the action's lifecycle?
 
 **Hints**
 
-1. Executor protocol:
+1. Here is the complete executor contract. Merge the two config fields
+   into the chapter's existing `EasyConfig` rather than creating a second
+   config:
 
    ```python
+   from typing import Any
+
+   from easycat import EasyConfig
+   from easycat.session.actions import (
+       CustomAction,
+       SessionAction,
+       SessionActionResult,
+       SessionActions,
+   )
+
+
    class ChimeExecutor:
-       def supports(self, action) -> bool:
+       def supports(self, action: SessionAction) -> bool:
            return isinstance(action, CustomAction) and action.name == "play_chime"
 
-       async def execute(self, action, context) -> None:
-           print(f"BEEP at {action.data['freq']} Hz")
+       async def execute(
+           self, _session: Any, action: SessionAction
+       ) -> SessionActionResult:
+           assert isinstance(action, CustomAction)
+           frequency = action.payload["freq"]
+           print(f"BEEP at {frequency} Hz")
+           return SessionActionResult(metadata={"frequency": frequency})
+
+
+   actions = SessionActions()
+   actions.enqueue(CustomAction(name="play_chime", payload={"freq": 440}))
+   config = EasyConfig(
+       session_actions=actions,
+       action_executors=(ChimeExecutor(),),
+   )
    ```
 
-   Register it via `EasyConfig(session_action_executors=[ChimeExecutor()])`.
-
-2. The journal records `session_action.enqueued` when the workflow
-   calls `actions.enqueue(...)`, then `session_action.dispatched`
-   when the session drains the queue, then `session_action.executed`
-   or `.failed` per the executor's return.
+2. Enqueueing only changes the in-memory queue. When the session drains
+   that queue, the journal records `session_action_requested`, then
+   `session_action_started`, then `session_action_completed`. If
+   `execute(...)` raises, the last record is `session_action_failed`
+   instead. The completed record includes the result metadata.
 3. The session dispatches to the *first* executor that returns
-   `True` from `supports()`. Order matters: if you register
-   `CoreSessionActionExecutor` after `ChimeExecutor`, end-of-call
-   actions still work, but a `CustomAction` with name="end_call"
-   would claim the wrong executor. Use disjoint `name` namespaces.
+   `True` from `supports()`. Configured executors run before EasyCat's
+   built-in `CoreSessionActionExecutor`, so keep each custom executor's
+   `supports()` check narrow. The example claims only `CustomAction`
+   objects named `play_chime`.
 
 ## 3. Watch the pronunciation pipeline at work
 
