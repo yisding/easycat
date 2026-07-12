@@ -91,6 +91,34 @@ class MiniTurnDetector:
                 self._preroll.append(chunk)
 
 
+def record_delivery(
+    journal: InMemoryRingBuffer,
+    *,
+    session_id: str,
+    text: str,
+    accepted_chunks: int,
+    rejected_chunks: int,
+) -> None:
+    """Preserve transport acceptance without claiming speaker playback."""
+    journal.append(
+        kind=JournalRecordKind.EVENT,
+        name="parrot.delivery",
+        session_id=session_id,
+        data={
+            "stage": "parrot",
+            "committed_text": text,
+            "accepted_chunks": accepted_chunks,
+            "rejected_chunks": rejected_chunks,
+            "t_ms": time.monotonic() * 1000,
+        },
+    )
+    if rejected_chunks:
+        print(
+            "  transport rejected "
+            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+        )
+
+
 async def parrot(
     transport,
     stt_factory,
@@ -146,7 +174,14 @@ async def parrot(
 
                 if collected_final.strip():
                     print(f"  → parrot: {collected_final!r}")
-                    await speak(transport, collected_final)
+                    accepted_chunks, rejected_chunks = await speak(transport, collected_final)
+                    record_delivery(
+                        journal,
+                        session_id=session_id,
+                        text=collected_final,
+                        accepted_chunks=accepted_chunks,
+                        rejected_chunks=rejected_chunks,
+                    )
     finally:
         if stt is not None:
             try:

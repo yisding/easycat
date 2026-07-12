@@ -115,7 +115,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -67,86 +61,159 @@
+@@ -67,121 +61,159 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -143,14 +143,15 @@ build movement (chapters 6-9) exists to close this gap.
                  self._preroll.append(chunk)
  
  
--async def parrot(
--    transport,
--    stt_factory,
--    detector: MiniTurnDetector,
+-def record_delivery(
 -    journal: InMemoryRingBuffer,
+-    *,
 -    session_id: str,
+-    text: str,
+-    accepted_chunks: int,
+-    rejected_chunks: int,
 -) -> None:
--    """On each VAD turn, stream audio into STT, wait for final, speak it."""
+-    """Preserve transport acceptance without claiming speaker playback."""
 +class FirstAudioProbe:
 +    """Forward audio while recording when the first chunk is accepted."""
 +
@@ -168,8 +169,10 @@ build movement (chapters 6-9) exists to close this gap.
 +def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
 +    """Record a closed span with start→end wall time in ms."""
 +    elapsed_ms = (time.monotonic() - t0) * 1000
-+    journal.append(
-+        kind=JournalRecordKind.EVENT,
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+-        name="parrot.delivery",
+-        session_id=session_id,
 +        name=name,
 +        session_id=SESSION_ID,
 +        data={"stage": name.split(".")[1], "elapsed_ms": elapsed_ms, **extra},
@@ -254,7 +257,12 @@ build movement (chapters 6-9) exists to close this gap.
 +        kind=JournalRecordKind.EVENT,
 +        name="turn.gap",
 +        session_id=SESSION_ID,
-+        data={
+         data={
+-            "stage": "parrot",
+-            "committed_text": text,
+-            "accepted_chunks": accepted_chunks,
+-            "rejected_chunks": rejected_chunks,
+-            "t_ms": time.monotonic() * 1000,
 +            "stage": "turn",
 +            "total_gap_ms": total_gap,
 +            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
@@ -262,8 +270,23 @@ build movement (chapters 6-9) exists to close this gap.
 +            "tts_ms": tts_first_audio_ms,
 +            "tts_enqueue_ms": tts_enqueue_ms,
 +            "text": reply,
-+        },
-+    )
+         },
+     )
+-    if rejected_chunks:
+-        print(
+-            "  transport rejected "
+-            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
+-        )
+-
+-
+-async def parrot(
+-    transport,
+-    stt_factory,
+-    detector: MiniTurnDetector,
+-    journal: InMemoryRingBuffer,
+-    session_id: str,
+-) -> None:
+-    """On each VAD turn, stream audio into STT, wait for final, speak it."""
 +    if total_gap is None:
 +        print("  (turn gap unavailable — TTS produced no audio)")
 +    else:
@@ -320,11 +343,18 @@ build movement (chapters 6-9) exists to close this gap.
 -
 -                if collected_final.strip():
 -                    print(f"  → parrot: {collected_final!r}")
--                    await speak(transport, collected_final)
+-                    accepted_chunks, rejected_chunks = await speak(transport, collected_final)
+-                    record_delivery(
+-                        journal,
+-                        session_id=session_id,
+-                        text=collected_final,
+-                        accepted_chunks=accepted_chunks,
+-                        rejected_chunks=rejected_chunks,
+-                    )
      finally:
          if stt is not None:
              try:
-@@ -156,22 +223,8 @@
+@@ -191,22 +223,8 @@
  
  
  async def main() -> None:
@@ -349,7 +379,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      journal = InMemoryRingBuffer(capacity=10_000)
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
-@@ -180,7 +233,7 @@
+@@ -215,7 +233,7 @@
          return create_stt_provider(
              STTProviderConfig(
                  provider="deepgram",
@@ -358,7 +388,7 @@ build movement (chapters 6-9) exists to close this gap.
                  params={"sample_rate": 24000, "event_bus": EventBus()},
              )
          )
-@@ -191,16 +244,19 @@
+@@ -226,16 +244,19 @@
  
          vad = create_vad(VADConfig())
          resources.push_async_callback(close_if_supported, vad)

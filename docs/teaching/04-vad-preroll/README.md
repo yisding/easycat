@@ -24,9 +24,12 @@
 - **Added:** `create_vad()` + a `MiniTurnDetector` with a 300 ms
   pre-roll ring buffer; a `--no-preroll` flag to demonstrate
   start-of-utterance truncation; `naive_threshold.py` showing why
-  an energy threshold isn't enough.
+  an energy threshold isn't enough; `delivery_probe.py` for provider-free
+  output-acceptance evidence.
 - **Modified:** turns now commit on VAD boundaries, not on a
   fixed-timeout absence of STT partials.
+- **Preserved:** `speak()` acceptance/rejection counts still become
+  `parrot.delivery`; better input endpointing does not prove output playback.
 - **Removed:** the silence-timeout turn detector from chapter 3.
 
 <!-- BEGIN auto:diff prev=03-parrot-naive src=main.py trim_blank_context=true -->
@@ -71,7 +74,7 @@
  import os
  import time
  import types
-@@ -26,264 +29,178 @@
+@@ -26,95 +29,87 @@
  from pathlib import Path
 
  from easycat import LocalTransportConfig
@@ -101,6 +104,54 @@
 -
 -
 -def record_stt_received(
+-    journal: InMemoryRingBuffer,
+-    *,
+-    event_id: int,
+-    event: STTEvent,
+-    offset_ms: float,
+-    queue_depth: int,
+-) -> None:
+-    """Record provider ingress before the consumer can be blocked by TTS."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name="stt.received",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "stt",
+-            "event_id": event_id,
+-            "event_type": event.type.value,
+-            "text": event.text,
+-            "offset_ms": offset_ms,
+-            "queue_depth_before_put": queue_depth,
+-        },
+-    )
+-
+-
+-def record_stt_consumed(
+-    journal: InMemoryRingBuffer,
+-    *,
+-    event_id: int,
+-    event: STTEvent,
+-    received_offset_ms: float,
+-    consumed_offset_ms: float,
+-    queue_depth: int,
+-) -> None:
+-    """Record when the parrot finally dequeues one provider event."""
+-    journal.append(
+-        kind=JournalRecordKind.EVENT,
+-        name=f"stt.{event.type.value}",
+-        session_id=SESSION_ID,
+-        data={
+-            "stage": "stt",
+-            "event_id": event_id,
+-            "event_type": event.type.value,
+-            "text": event.text,
+-            "offset_ms": consumed_offset_ms,
+-            "received_offset_ms": received_offset_ms,
+-            "consumer_lag_ms": consumed_offset_ms - received_offset_ms,
+-            "queue_depth_after_get": queue_depth,
+-        },
+-    )
 +
 +
 +class MiniTurnDetector:
@@ -148,94 +199,47 @@
 +                yield "frame", chunk
 +            else:
 +                self._preroll.append(chunk)
-+
-+
+
+
+ def record_delivery(
+     journal: InMemoryRingBuffer,
+     *,
++    session_id: str,
+     text: str,
+     accepted_chunks: int,
+     rejected_chunks: int,
+-    offset_ms: float,
+ ) -> None:
+-    """Record transport acceptance without claiming speaker playback."""
++    """Preserve transport acceptance without claiming speaker playback."""
+     journal.append(
+         kind=JournalRecordKind.EVENT,
+         name="parrot.delivery",
+-        session_id=SESSION_ID,
++        session_id=session_id,
+         data={
+             "stage": "parrot",
+             "committed_text": text,
+             "accepted_chunks": accepted_chunks,
+             "rejected_chunks": rejected_chunks,
+-            "offset_ms": offset_ms,
++            "t_ms": time.monotonic() * 1000,
+         },
+     )
+     if rejected_chunks:
+@@ -124,166 +119,123 @@
+         )
+
+
+-async def speak_and_record(
+-    transport, journal: InMemoryRingBuffer, text: str, start: float
 +async def parrot(
 +    transport,
 +    stt_factory,
 +    detector: MiniTurnDetector,
-     journal: InMemoryRingBuffer,
--    *,
--    event_id: int,
--    event: STTEvent,
--    offset_ms: float,
--    queue_depth: int,
++    journal: InMemoryRingBuffer,
 +    session_id: str,
  ) -> None:
--    """Record provider ingress before the consumer can be blocked by TTS."""
--    journal.append(
--        kind=JournalRecordKind.EVENT,
--        name="stt.received",
--        session_id=SESSION_ID,
--        data={
--            "stage": "stt",
--            "event_id": event_id,
--            "event_type": event.type.value,
--            "text": event.text,
--            "offset_ms": offset_ms,
--            "queue_depth_before_put": queue_depth,
--        },
--    )
--
--
--def record_stt_consumed(
--    journal: InMemoryRingBuffer,
--    *,
--    event_id: int,
--    event: STTEvent,
--    received_offset_ms: float,
--    consumed_offset_ms: float,
--    queue_depth: int,
--) -> None:
--    """Record when the parrot finally dequeues one provider event."""
--    journal.append(
--        kind=JournalRecordKind.EVENT,
--        name=f"stt.{event.type.value}",
--        session_id=SESSION_ID,
--        data={
--            "stage": "stt",
--            "event_id": event_id,
--            "event_type": event.type.value,
--            "text": event.text,
--            "offset_ms": consumed_offset_ms,
--            "received_offset_ms": received_offset_ms,
--            "consumer_lag_ms": consumed_offset_ms - received_offset_ms,
--            "queue_depth_after_get": queue_depth,
--        },
--    )
--
--
--def record_delivery(
--    journal: InMemoryRingBuffer,
--    *,
--    text: str,
--    accepted_chunks: int,
--    rejected_chunks: int,
--    offset_ms: float,
--) -> None:
--    """Record transport acceptance without claiming speaker playback."""
--    journal.append(
--        kind=JournalRecordKind.EVENT,
--        name="parrot.delivery",
--        session_id=SESSION_ID,
--        data={
--            "stage": "parrot",
--            "committed_text": text,
--            "accepted_chunks": accepted_chunks,
--            "rejected_chunks": rejected_chunks,
--            "offset_ms": offset_ms,
--        },
--    )
--    if rejected_chunks:
--        print(
--            "  transport rejected "
--            f"{rejected_chunks}/{accepted_chunks + rejected_chunks} audio chunks"
--        )
--
--
--async def speak_and_record(
--    transport, journal: InMemoryRingBuffer, text: str, start: float
--) -> None:
 -    """Speak once, then preserve every transport acceptance result."""
 -    accepted_chunks, rejected_chunks = await speak(transport, text)
 -    record_delivery(
@@ -404,7 +408,14 @@
 +
 +                if collected_final.strip():
 +                    print(f"  → parrot: {collected_final!r}")
-+                    await speak(transport, collected_final)
++                    accepted_chunks, rejected_chunks = await speak(transport, collected_final)
++                    record_delivery(
++                        journal,
++                        session_id=session_id,
++                        text=collected_final,
++                        accepted_chunks=accepted_chunks,
++                        rejected_chunks=rejected_chunks,
++                    )
 +    finally:
 +        if stt is not None:
 +            try:
@@ -639,6 +650,32 @@ uv run python docs/teaching/04-vad-preroll/stt_cleanup_probe.py
 Both paths report one start, one logical end, and one provider close. The
 `try/finally` around the detector loop is what makes cancellation obey the
 same ownership contract instead of leaking the active per-turn provider.
+
+## Better input does not prove output
+
+VAD and pre-roll improve what reaches STT. They do not change the outbound
+transport contract introduced in chapter 3. `speak()` still returns one
+acceptance decision per synthesized chunk, and the Chapter 4 parrot preserves
+the totals in `parrot.delivery`:
+
+- `rejected_chunks > 0` is direct evidence that synthesized audio was dropped
+  before delivery.
+- `accepted_chunks > 0` means the transport scheduled those chunks. It does
+  not prove a speaker rendered them or a person heard them.
+- `turn.ended.data.text` proves the input turn produced final text;
+  `parrot.delivery.data.committed_text` links that text to its separate output
+  attempt.
+
+Run the real VAD-turn parrot path with scripted STT, TTS, and transport results:
+
+```bash
+uv run python docs/teaching/04-vad-preroll/delivery_probe.py
+```
+
+The probe's STT starts, receives one frame, ends, and closes before TTS returns
+two accepted chunks and one rejection. Its journal order is `turn.started`,
+`turn.ended`, then `parrot.delivery`. That order is evidence of three distinct
+boundaries—not proof that the final accepted chunk reached a device.
 
 ## Try breaking it
 
