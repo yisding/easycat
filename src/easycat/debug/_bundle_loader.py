@@ -26,6 +26,15 @@ from easycat.debug._bundle_models import (
     Manifest,
 )
 
+# Inline artifacts expand by 4/3 when base64 encoded into ``manifest.json``.
+# Keep the manifest bounded independently from decoded artifact bytes while
+# leaving room for the full 500 MB inline budget plus normal JSON metadata and
+# per-artifact refs. The decoded artifacts still pass through the stricter
+# aggregate ``_ARTIFACT_SIZE_CAP`` below.
+_BASE64_ARTIFACT_SIZE_CAP = 4 * ((_ARTIFACT_SIZE_CAP + 2) // 3)
+_MANIFEST_METADATA_ALLOWANCE = 10_000_000
+_MANIFEST_SIZE_CAP = _BASE64_ARTIFACT_SIZE_CAP + _MANIFEST_METADATA_ALLOWANCE
+
 
 @dataclass(frozen=True, slots=True)
 class LoadedBundle:
@@ -118,7 +127,7 @@ def _read_manifest(archive: zipfile.ZipFile) -> tuple[Manifest, dict[str, Any]]:
         archive,
         "manifest.json",
         missing_reason_code="MISSING_MANIFEST",
-        size_limit=_ARTIFACT_SIZE_CAP,
+        size_limit=_MANIFEST_SIZE_CAP,
     )
     try:
         raw = json.loads(encoded)

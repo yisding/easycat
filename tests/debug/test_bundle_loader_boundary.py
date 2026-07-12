@@ -113,7 +113,8 @@ def test_loader_caps_manifest_and_journal_members(
 
     bundle_facade.RunBundle.load(path)
 
-    assert observed_limits["manifest.json"] == _ARTIFACT_SIZE_CAP
+    assert observed_limits["manifest.json"] == bundle_loader._MANIFEST_SIZE_CAP
+    assert bundle_loader._MANIFEST_SIZE_CAP > 4 * ((_ARTIFACT_SIZE_CAP + 2) // 3)
     assert observed_limits["journal.ndjson"] == _ARTIFACT_SIZE_CAP
 
 
