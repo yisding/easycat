@@ -1,14 +1,13 @@
-"""Chapter 9c — cancel + estimate what the user actually heard.
+"""Chapter 9c — cancel + estimate what the user could have heard.
 
-Same as ``cancel.py`` plus: we track bytes of TTS audio that made
-it onto the speaker before the cancel fires, compute the character
-position in the bot's *text* reply that corresponds to those bytes,
-and rewrite the assistant turn in the conversation history to end
-there. Next turn, the LLM has the same picture of reality the
-user does.
+Same as ``cancel.py`` plus: we track bytes of TTS audio accepted by
+the transport before the cancel fires, compute the character position
+in the bot's *text* reply that corresponds to those bytes, and rewrite
+the assistant turn in the conversation history to end there. Next turn,
+the LLM has a closer picture of what the user could have heard.
 
-The byte-to-char estimate is deliberately simple: bytes heard ÷
-total bytes × total chars. The production
+The byte-to-char estimate is deliberately simple: accepted bytes ÷
+expected bytes × total chars. The production
 `easycat.session.interruption` estimator is a lot more careful
 about silence, SSML, markdown, and playback-ack fudge factors —
 read it after you understand the toy.
@@ -66,17 +65,17 @@ TTS_BYTES_PER_SECOND = 24_000 * 2
 
 @dataclass
 class TurnLedger:
-    """Per-turn record of what the bot tried to say vs. what played.
+    """Per-turn record of what the bot tried to say vs. what was accepted.
 
     ``sentences_sent`` accumulates the text of each sentence dispatched
-    to TTS in order. ``bytes_sent`` tracks audio bytes that actually
-    reached ``transport.send_audio``. At cancel time we combine them
-    to estimate where, in the concatenated text, the user's ear fell
-    silent.
+    to TTS in order. ``bytes_accepted`` tracks audio bytes for which
+    ``transport.send_audio`` returned ``True``. At cancel time we combine
+    them to estimate where, in the concatenated text, the user's ear
+    fell silent.
     """
 
     sentences_sent: list[str] = field(default_factory=list)
-    bytes_sent: int = 0
+    bytes_accepted: int = 0
 
     def heard_text(self) -> str:
         """Estimate the text prefix the user's ear actually reached.
@@ -90,7 +89,7 @@ class TurnLedger:
             return ""
         full_text = " ".join(self.sentences_sent)
         expected = max(1, _expected_bytes(full_text))
-        estimated_chars = int(len(full_text) * self.bytes_sent / expected)
+        estimated_chars = int(len(full_text) * self.bytes_accepted / expected)
         estimated_chars = max(0, min(estimated_chars, len(full_text)))
         return full_text[:estimated_chars]
 
@@ -166,8 +165,9 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 await tts.cancel()
                 break
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                await transport.send_audio(event.audio)
-                ledger.bytes_sent += len(event.audio.data)
+                accepted = await transport.send_audio(event.audio)
+                if accepted:
+                    ledger.bytes_accepted += len(event.audio.data)
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -175,7 +175,7 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
             data={
                 "stage": "tts",
                 "text": sentence,
-                "bytes_sent_so_far": ledger.bytes_sent,
+                "bytes_accepted_so_far": ledger.bytes_accepted,
                 "cancelled": cancel.is_cancelled,
             },
         )
@@ -235,10 +235,10 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
                         "stage": "interruption",
                         "full_text": full,
                         "heard_text": heard,
-                        "bytes_heard": active_ledger.bytes_sent,
+                        "bytes_accepted": active_ledger.bytes_accepted,
                     },
                 )
-                # Rewrite history: the bot said *only* what the user heard.
+                # Rewrite history to the best prefix this toy can estimate.
                 history.append({"role": "assistant", "content": heard})
                 print(f"  bot (cut): {heard!r}")
                 active_cancel = None
