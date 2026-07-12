@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 
 from easycat import SessionManager
@@ -15,6 +16,7 @@ class ProbeSession:
 
     name: str
     fail_start: bool = False
+    fail_stop: bool = False
     start_calls: int = 0
     stop_calls: int = 0
 
@@ -25,6 +27,8 @@ class ProbeSession:
 
     async def stop(self) -> None:
         self.stop_calls += 1
+        if self.fail_stop:
+            raise RuntimeError(f"{self.name} stop failed")
 
 
 async def probe() -> dict[str, object]:
@@ -33,6 +37,8 @@ async def probe() -> dict[str, object]:
     beta = ProbeSession("beta")
     duplicate = ProbeSession("duplicate")
     failed = ProbeSession("failed", fail_start=True)
+    sweep_healthy = ProbeSession("sweep-healthy")
+    sweep_failing = ProbeSession("sweep-failing", fail_stop=True)
 
     duplicate_error = ""
     failed_start_error = ""
@@ -54,6 +60,10 @@ async def probe() -> dict[str, object]:
                 failed_start_error = str(exc)
             failed_slot_released = manager.get("failed") is None
 
+    await manager.add("sweep-healthy", sweep_healthy)  # type: ignore[arg-type]
+    await manager.add("sweep-failing", sweep_failing)  # type: ignore[arg-type]
+    await manager.stop_all()
+
     return {
         "active_together": active_together,
         "all_context_slots_released": (
@@ -73,8 +83,22 @@ async def probe() -> dict[str, object]:
             "beta": beta.stop_calls,
             "failed": failed.stop_calls,
         },
+        "stop_all": {
+            "all_slots_released": (
+                manager.get("sweep-healthy") is None and manager.get("sweep-failing") is None
+            ),
+            "start_calls": {
+                "sweep-failing": sweep_failing.start_calls,
+                "sweep-healthy": sweep_healthy.start_calls,
+            },
+            "stop_calls": {
+                "sweep-failing": sweep_failing.stop_calls,
+                "sweep-healthy": sweep_healthy.stop_calls,
+            },
+        },
     }
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.ERROR, format="%(levelname)s %(name)s: %(message)s")
     print(json.dumps(asyncio.run(probe()), indent=2, sort_keys=True))
