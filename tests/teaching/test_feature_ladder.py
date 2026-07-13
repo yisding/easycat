@@ -514,6 +514,63 @@ def test_observability_pair_supports_show_replay_and_diff_without_credentials(
     assert all(turn["transcript"]["changed"] for turn in diff_payload["turns"])
 
 
+def test_testing_evals_chapter_uses_real_offline_turn_and_assertion_surfaces() -> None:
+    chapter = FEATURE_LADDER / "08-testing-evals"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "EvalCase",
+        "run_text_turn",
+        "assert_exact_match",
+        "assert_regex",
+        "assert_turn_completed",
+        "assert_no_error",
+        "assert_llm_judge",
+        "assert_latency",
+        'percentile="p95"',
+    ):
+        assert surface in script
+    for concept in (
+        "The testing ladder",
+        "Assertions work on turns and bundles",
+        "Eval cases separate input from oracle",
+        "Judges are one oracle, not ground truth",
+        "Report latency or gate latency deliberately",
+        "There is no separate `easycat eval` CLI command",
+        "smoke --json` is a low-sample live integration",
+        "sweep --require-samples --json` collects",
+    ):
+        assert concept in readme
+
+
+def test_testing_evals_suite_passes_and_latency_budget_can_fail_without_credentials() -> None:
+    script = FEATURE_LADDER / "08-testing-evals" / "main.py"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    passing = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    failing = subprocess.run(
+        [sys.executable, str(script), "--max-ms", "0"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert "PASS hours:" in passing.stdout
+    assert "PASS refund:" in passing.stdout
+    assert "PASS latency: p95 <= 5000.0 ms across 2 turns" in passing.stdout
+    assert failing.returncode != 0
+    assert "exceeds budget 0.0 ms" in failing.stderr
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 

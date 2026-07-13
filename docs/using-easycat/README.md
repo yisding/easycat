@@ -54,7 +54,7 @@ pretending unfinished lessons are runnable.
 | 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
 | 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle | Available |
 | 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger | Available |
-| 8 | Test the experience | Offline turns, assertions, evals, and latency budgets | Planned |
+| 8 | [`08-testing-evals`](./08-testing-evals/) | Offline turns, assertions, evals, and latency budgets | Available |
 | 9 | Serve many callers | Per-connection factories, authentication, limits, and supervision | Planned |
 | 10 | Answer the phone | Twilio streams, outbound calls, screening, IVR, and call control | Planned |
 | 11 | Ship and operate | Validation, deployment, durability, metrics, and production teardown | Planned |
