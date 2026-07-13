@@ -8,10 +8,11 @@ checking boxes; regeneration restores this file to its blank state. Keep command
 record names, measurements, and explanations in your copy—not credentials, raw audio,
 or sensitive transcript text.
 
-A chapter is complete only when every box on its card is checked. Chapters 2-15 begin
-with a two-chapter-lag recall before the new narrative. Preserve wrong predictions:
-they are evidence to explain, not history to rewrite. Complete both integration checks
-at each phase boundary before starting the next chapter card.
+A chapter is complete only when every box on its card is checked and its self-check
+score reaches N/N. Retry only missed answers; preserve wrong predictions because they
+are evidence to explain, not history to rewrite. Chapters 2-15 begin with a
+two-chapter-lag recall. Complete both integration checks at each phase boundary before
+starting the next chapter card.
 
 ## Chapter 0 — Hello, Audio
 
@@ -27,8 +28,9 @@ at each phase boundary before starting the next chapter card.
   requires.
 - [ ] **Practice:** complete [the chapter exercises](./00-hello-audio/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./00-hello-audio/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./00-hello-audio/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 0 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 1 — Echo
@@ -45,8 +47,9 @@ at each phase boundary before starting the next chapter card.
   fails.
 - [ ] **Practice:** complete [the chapter exercises](./01-echo/EXERCISES.md) and keep an attempt
   record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./01-echo/EXERCISES.md#self-check) with
-  evidence from an attempt record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./01-echo/EXERCISES.md#self-check); record 3/3 with one attempt-evidence citation per
+  answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 1 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 2 — Transcribe
@@ -66,8 +69,9 @@ at each phase boundary before starting the next chapter card.
   revised partial.
 - [ ] **Practice:** complete [the chapter exercises](./02-transcribe/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./02-transcribe/EXERCISES.md#self-check) with
-  evidence from an attempt record.
+- [ ] **Retrieve:** pass all 6 numbered questions in [the closed-book
+  self-check](./02-transcribe/EXERCISES.md#self-check); record 6/6 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 3 — Parrot, the Naive Way
@@ -85,8 +89,9 @@ at each phase boundary before starting the next chapter card.
 - [ ] **Reflect:** State which timeout failure you would accept for a target conversation and why.
 - [ ] **Practice:** complete [the chapter exercises](./03-parrot-naive/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./03-parrot-naive/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./03-parrot-naive/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 3 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 4 — VAD + Pre-roll
@@ -105,8 +110,9 @@ at each phase boundary before starting the next chapter card.
 - [ ] **Reflect:** Use the frame order to explain which part of an utterance pre-roll protects.
 - [ ] **Practice:** complete [the chapter exercises](./04-vad-preroll/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./04-vad-preroll/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./04-vad-preroll/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 4 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 5 — The Blocking Agent
@@ -125,8 +131,9 @@ at each phase boundary before starting the next chapter card.
   not it.
 - [ ] **Practice:** complete [the chapter exercises](./05-blocking-agent/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./05-blocking-agent/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./05-blocking-agent/EXERCISES.md#self-check); record 3/3 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 6 — Streaming Agent + Sentence TTS
@@ -146,8 +153,9 @@ at each phase boundary before starting the next chapter card.
   changes.
 - [ ] **Practice:** complete [the chapter exercises](./06-streaming-agent/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./06-streaming-agent/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./06-streaming-agent/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 6 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 7 — Tools, Mid-stream
@@ -167,8 +175,9 @@ at each phase boundary before starting the next chapter card.
   first.
 - [ ] **Practice:** complete [the chapter exercises](./07-tools/EXERCISES.md) and keep an attempt
   record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./07-tools/EXERCISES.md#self-check) with
-  evidence from an attempt record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./07-tools/EXERCISES.md#self-check); record 3/3 with one attempt-evidence citation
+  per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 7 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 8 — Smart-turn
@@ -187,8 +196,9 @@ at each phase boundary before starting the next chapter card.
   baseline.
 - [ ] **Practice:** complete [the chapter exercises](./08-smart-turn/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./08-smart-turn/EXERCISES.md#self-check) with
-  evidence from an attempt record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./08-smart-turn/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 9 — Interruption / Barge-in
@@ -208,8 +218,9 @@ at each phase boundary before starting the next chapter card.
   cleanup.
 - [ ] **Practice:** complete [the chapter exercises](./09-interruption/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./09-interruption/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./09-interruption/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 9 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Build phase review
@@ -239,8 +250,9 @@ Complete this closed-book integration gate before entering the next phase.
   changes.
 - [ ] **Practice:** complete [the chapter exercises](./10-cleaning-signal/EXERCISES.md) and keep an
   attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./10-cleaning-signal/EXERCISES.md#self-check)
-  with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 4 numbered questions in [the closed-book
+  self-check](./10-cleaning-signal/EXERCISES.md#self-check); record 4/4 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 10 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 11 — The Journal as Mental Model
@@ -259,8 +271,9 @@ Complete this closed-book integration gate before entering the next phase.
   identifier.
 - [ ] **Practice:** complete [the chapter exercises](./11-journal/EXERCISES.md) and keep an attempt
   record for every task.
-- [ ] **Retrieve:** pass [the closed-book self-check](./11-journal/EXERCISES.md#self-check) with
-  evidence from an attempt record.
+- [ ] **Retrieve:** pass all 6 numbered questions in [the closed-book
+  self-check](./11-journal/EXERCISES.md#self-check); record 6/6 with one attempt-evidence citation
+  per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 11 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 12 — Evals + the Latency Budget
@@ -279,8 +292,9 @@ Complete this closed-book integration gate before entering the next phase.
   generalize.
 - [ ] **Practice:** complete [the chapter exercises](./12-evals-and-latency/EXERCISES.md) and keep
   an attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book
-  self-check](./12-evals-and-latency/EXERCISES.md#self-check) with evidence from an attempt record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./12-evals-and-latency/EXERCISES.md#self-check); record 5/5 with one attempt-evidence
+  citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Operate phase review
@@ -310,9 +324,9 @@ Complete this closed-book integration gate before entering the next phase.
 - [ ] **Practice:** complete [the chapter
   exercises](./13-swap-providers-and-transports/EXERCISES.md) and keep an attempt record for every
   task.
-- [ ] **Retrieve:** pass [the closed-book
-  self-check](./13-swap-providers-and-transports/EXERCISES.md#self-check) with evidence from an
-  attempt record.
+- [ ] **Retrieve:** pass all 4 numbered questions in [the closed-book
+  self-check](./13-swap-providers-and-transports/EXERCISES.md#self-check); record 4/4 with one
+  attempt-evidence citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 13 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Chapter 14 — Bring your own agent
@@ -331,9 +345,9 @@ Complete this closed-book integration gate before entering the next phase.
   state.
 - [ ] **Practice:** complete [the chapter exercises](./14-bring-your-own-agent/EXERCISES.md) and
   keep an attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book
-  self-check](./14-bring-your-own-agent/EXERCISES.md#self-check) with evidence from an attempt
-  record.
+- [ ] **Retrieve:** pass all 5 numbered questions in [the closed-book
+  self-check](./14-bring-your-own-agent/EXERCISES.md#self-check); record 5/5 with one
+  attempt-evidence citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Generalise phase review
@@ -362,9 +376,9 @@ Complete this closed-book integration gate before entering the next phase.
   another.
 - [ ] **Practice:** complete [the chapter exercises](./15-operate-in-production/EXERCISES.md) and
   keep an attempt record for every task.
-- [ ] **Retrieve:** pass [the closed-book
-  self-check](./15-operate-in-production/EXERCISES.md#self-check) with evidence from an attempt
-  record.
+- [ ] **Retrieve:** pass all 3 numbered questions in [the closed-book
+  self-check](./15-operate-in-production/EXERCISES.md#self-check); record 3/3 with one
+  attempt-evidence citation per answer.
 - [ ] **Replay:** run `uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4 --show-evidence` and explain any mismatch.
 
 ## Ship phase review and finish the ladder

@@ -299,10 +299,11 @@ The probe uses `debug="full"` and SQLite so the backend transition is
 > 2. Answer every numbered question below from memory, aloud or in writing.
 > 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
+> 4. Mark each answer **pass** or **retry** in your progress record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
-> correct your explanation, close it, and retry. Continue only when you can answer
-> without looking.
+> correct your explanation, close it, and retry. Continue only when every answer
+> passes without looking.
 <!-- END auto:self-check-protocol -->
 
 1. When should code use `async with session:`, `await session.stop()`, or
