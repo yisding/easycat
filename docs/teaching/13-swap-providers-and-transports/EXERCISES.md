@@ -24,20 +24,35 @@ via Cartesia's WebSocket API). What's the minimum diff from
 `deepgram-eleven`?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Add `cartesia` to the `--provider-mix` choices and return
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Add `cartesia` to the `--provider-mix` choices and return
    `{"stt": "cartesia", "tts": "cartesia"}` from
    `provider_mix()`. Require `CARTESIA_API_KEY`, and install the
    provider extra with `uv sync --extra cartesia --group dev`.
-2. Check `src/easycat/stt/factory.py` and `src/easycat/tts/factory.py`:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Check `src/easycat/stt/factory.py` and `src/easycat/tts/factory.py`:
    Cartesia is already registered on both sides. The exercise
    changes only this teaching script; the `Agent`, `Session`,
    event bus, journal, and smart-turn configuration stay put.
-3. First verify the preset without making a provider request:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+First verify the preset without making a provider request:
    import `main.py`, set a placeholder `CARTESIA_API_KEY`, and
    assert that `provider_mix("cartesia")` returns those two string
    shortcuts. A credentialed run writes the same production-shaped
@@ -56,21 +71,42 @@ tightest server-side p95/p50 ratio? What extra evidence would you
 need before making the same claim about transports end to end?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. P95/P50 ratio measures *consistency*, not absolute speed. A
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+P95/P50 ratio measures *consistency*, not absolute speed. A
    slow-but-consistent pipeline beats a fast-but-jittery one for
    user experience.
-2. `easycat latency` reports production journal milestones through
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`easycat latency` reports production journal milestones through
    the first server-side TTS byte. It can support a provider-pipeline
    comparison without translating the bundle.
-3. It cannot prove browser or phone delivery latency. Pair WebRTC
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+It cannot prove browser or phone delivery latency. Pair WebRTC
    runs with client `getStats()` artifacts and phone runs with
    provider/PSTN timing before ranking transports.
-4. With only a few turns per cell, P95 is a single turn's
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+With only a few turns per cell, P95 is a single turn's
    slowest run — noisy. Re-run each cell ~20 times for a
    meaningful number.
 
@@ -84,25 +120,46 @@ user asks for "press 1 to continue"). What does the journal show
 on the Twilio preset? What does a user on the phone hear?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `SendDTMFAction(digits="1")` is dispatched to
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`SendDTMFAction(digits="1")` is dispatched to
    `TwilioSessionActionExecutor`, which calls Twilio's REST API
    to update the active call with `<Play digits="1">`. A successful
    journal path is `session_action_requested`,
    `session_action_started`, then `session_action_completed`; the
    started record names `TwilioSessionActionExecutor`.
-2. The user on the phone hears the DTMF tone before the call yields
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+The user on the phone hears the DTMF tone before the call yields
    back to the bot's audio.
-3. On the `local` transport, `CoreSessionActionExecutor` does not
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+On the `local` transport, `CoreSessionActionExecutor` does not
    claim DTMF. The journal records `session_action_requested`
    followed by `session_action_failed` with `No session action
    executor for send_dtmf`; there is no started or completed record.
    The failure is observable rather than a silent no-op.
-4. Exercise the executor with a fake Twilio client first, as
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Exercise the executor with a fake Twilio client first, as
    `tests/telephony/test_session_actions.py` does. If you try the
    end-to-end path, use an isolated development account and number,
    not production traffic.
@@ -126,23 +183,50 @@ explain why postmortem export belongs after session scope exit but before
 the caller-owned client closes.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `wait_for_shutdown_signal()` calls default `stop(force=False)` after
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`wait_for_shutdown_signal()` calls default `stop(force=False)` after
    SIGINT/SIGTERM so in-flight work can drain. An outer task cancellation
    can bypass that call.
-2. `async with session:` starts on entry and always calls
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`async with session:` starts on entry and always calls
    `stop(force=True)` on exit. If graceful stop already closed the
    session, the second call is deliberately idempotent.
-3. Clean stop preserves a read-only journal view while releasing live
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Clean stop preserves a read-only journal view while releasing live
    providers, transport, and writable storage.
-4. The outer client is not one of the providers constructed from
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+The outer client is not one of the providers constructed from
    `EasyConfig`. A custom workflow captured it, so caller code retains
    ownership and chooses its scope.
-5. Move `session.export_postmortem()` inside the session block in the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+Move `session.export_postmortem()` inside the session block in the
    probe. The assertion no longer describes a postmortem export, even
    though the fake object can still append an event.
 

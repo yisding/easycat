@@ -30,18 +30,33 @@ each condition below, and for each one record which of the three
 | Insert `await asyncio.sleep(0.5)` inside agent | ?                   | ?            |
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Switching to `gpt-4o` mostly affects the `agent_ms` span — same
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+Switching to `gpt-4o` mostly affects the `agent_ms` span — same
    prompt, slower model. The other two stay put.
-2. The one-word system prompt shrinks `tts_enqueue_ms` (less text
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The one-word system prompt shrinks `tts_enqueue_ms` (less text
    to synthesise) and also shrinks `agent_ms` slightly (fewer tokens
    to generate). `tts_ms` may move much less because provider startup
    and the first audio chunk dominate it. `stt_to_agent_ms` is unchanged.
-3. `asyncio.sleep(0.5)` adds exactly 500 ms to `agent_ms`. Use
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+`asyncio.sleep(0.5)` adds exactly 500 ms to `agent_ms`. Use
    this to verify your understanding of which code lives in which
    span.
 
@@ -59,16 +74,31 @@ Now write down: **how many seconds was the human standing in the
 room holding their breath?**
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. 3 s question + ~3 s `turn.gap` + however long the bot speaks =
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+3 s question + ~3 s `turn.gap` + however long the bot speaks =
    6+ seconds of awkward silence per turn.
-2. Voice users budget around 100-300 ms for turn-taking. We're an
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+Voice users budget around 100-300 ms for turn-taking. We're an
    order of magnitude over budget — that's why this feels so off.
-3. There's no software fix here. The fix is structural: don't make
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+There's no software fix here. The fix is structural: don't make
    the user wait for the entire `agent.complete` event before
    starting to speak. That's chapter 6.
 
@@ -89,15 +119,24 @@ attribute the time to the three sub-spans:
   scope)
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The first sub-span is hard to measure from the outside (you
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 2</summary>
+
+The first sub-span is hard to measure from the outside (you
    don't see the STT final). A rough proxy: the moment the
    wave-form indicator (if present) drops.
-2. Good products run the gap at 600-900 ms total. Bad ones 2-4 s.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 2</summary>
+
+Good products run the gap at 600-900 ms total. Bad ones 2-4 s.
    Excellent ones (OpenAI Realtime API, smart-turn-equipped
    pipelines) target 300-500 ms.
 
@@ -117,21 +156,48 @@ accepted/rejected fields from `stage.tts.execute` and `turn.gap` in a scratch
 copy. Which two root causes become observationally identical?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `mixed` has an accepted chunk, so `FirstAudioProbe` captures the milestone
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+`mixed` has an accepted chunk, so `FirstAudioProbe` captures the milestone
    and the software turn gap is measurable.
-2. `all_rejected` proves TTS produced two chunks and the transport dropped
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+`all_rejected` proves TTS produced two chunks and the transport dropped
    both. This is not a TTS-empty response.
-3. `no_audio` has zero accepted and zero rejected chunks. Only this case
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+`no_audio` has zero accepted and zero rejected chunks. Only this case
    supports the narrower “TTS produced no audio” diagnosis.
-4. An accepted count with no first-audio timestamp would indicate broken
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+An accepted count with no first-audio timestamp would indicate broken
    instrumentation, so the runtime prints a fourth defensive outcome even
    though the scripted probe cannot produce it through `FirstAudioProbe`.
-5. None of these counts proves playback. Chapter 9 adds delivery-progress
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+None of these counts proves playback. Chapter 9 adds delivery-progress
    evidence later.
 
 </details>

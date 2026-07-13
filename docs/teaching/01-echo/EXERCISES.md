@@ -36,18 +36,33 @@ Now you have a delay line. Why does that create the sensation of
 an *echo* rather than just "a delay"?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. There are two paths from your mouth to your brain: through
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+There are two paths from your mouth to your brain: through
    air-to-ear (instant) and through skull-to-cochlea (also
    instant). Both reach you before the loop.
-2. The delayed copy reaches your *ears* (the speaker) 500 ms after
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The delayed copy reaches your *ears* (the speaker) 500 ms after
    the original. Two arrivals from the same sound at different
    times is the definition of an acoustic echo.
-3. If you played the delayed copy *into your skull* directly, it
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+If you played the delayed copy *into your skull* directly, it
    wouldn't feel like an echo — it would feel like a delay.
 
 **Wider points to check yourself on**
@@ -75,16 +90,31 @@ the two counters before rerunning it. Then remove `version_info()` from
 `ScriptedTransport` and predict which structural checks change.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `False` means the chunk was not fully accepted for delivery. It does not
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+`False` means the chunk was not fully accepted for delivery. It does not
    mean the coroutine failed or raised.
-2. `True` means accepted, not heard. A transport queue, network, jitter buffer,
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+`True` means accepted, not heard. A transport queue, network, jitter buffer,
    device buffer, and speaker can still sit downstream.
-3. The four connection/audio methods satisfy `TransportLike`; the full
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+The four connection/audio methods satisfy `TransportLike`; the full
    `Transport` also inherits `version_info()` for journaled provider metadata.
 
 </details>

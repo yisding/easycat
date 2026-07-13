@@ -30,30 +30,57 @@ uv run python docs/teaching/09-interruption/playback_evidence.py
 ```
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The toy estimator multiplies `bytes_accepted` by ~15 chars / 48000
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The toy estimator multiplies `bytes_accepted` by ~15 chars / 48000
    bytes / second (24 kHz × 2 bytes/sample). The constant is an
    *average* — a fast word like "yes" lasts ~150 ms but the formula
    assigns it ~500 ms; a slow word like "elephant" lasts ~600 ms
    and gets the same ~500 ms.
-2. The playback queue also lies: `transport.send_audio=True`
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+The playback queue also lies: `transport.send_audio=True`
    means accepted, not heard. `clear_audio()` drops queued chunks,
    so `bytes_accepted` *overcounts* by that unplayed backlog. A
    `False` return is different: that chunk was rejected and the
    corrected toy does not count it at all.
-3. Net effect: `heard_text` *usually* overshoots by 0-2 words. On
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Net effect: `heard_text` *usually* overshoots by 0-2 words. On
    a *slow* word at the start of a sentence it can undershoot.
-4. Production uses the strongest progress evidence each transport
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Production uses the strongest progress evidence each transport
    exposes. `LocalTransport` and WebRTC emit `TransportAudioDelivered`
    when their output callback/track consumes a chunk. Twilio sends
    playback marks and emits `PlaybackMarkAck` when Twilio acknowledges
    reaching them. Other transports fall back to a serial-playout timing
    estimate from the send log.
-5. These signals are stronger than `send_audio=True`, but none is
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+These signals are stronger than `send_audio=True`, but none is
    literal ground truth at the human ear: device, network, and acoustic
    delays can remain after the transport milestone.
 
@@ -68,21 +95,36 @@ for a table or a bulleted list). The text fed to TTS is
 affect `heard_text` vs reality?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `sentences_sent` records the *stripped* text (what TTS actually
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 3</summary>
+
+`sentences_sent` records the *stripped* text (what TTS actually
    spoke). `bytes_accepted` is accepted bytes of the stripped audio.
    So `bytes_accepted → heard_chars` is internally consistent *on
    the stripped text*, before the playback-queue correction.
-2. The bug arises when you append `heard_text` back into the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 3</summary>
+
+The bug arises when you append `heard_text` back into the
    conversation history — should it be the stripped version (what
    the user heard) or the original (what the LLM produced)? The
    toy uses stripped, which is correct for the *next turn's
    prompt* but loses the markdown structure.
-3. Production `interruption.py` keeps both: stripped for the user
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 3</summary>
+
+Production `interruption.py` keeps both: stripped for the user
    model, original for any tool that wants the structured text.
 
 </details>
@@ -95,23 +137,44 @@ bot interrupts itself. Why does AEC fix this, and why is VAD alone
 not enough?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. VAD's job is "is this frame speech?" — it can't distinguish
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+VAD's job is "is this frame speech?" — it can't distinguish
    the user's speech from the bot's speech radiated back through
    the speaker. From VAD's perspective, both are equally
    "speech."
-2. AEC takes the TTS audio we sent to the speaker as a
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+AEC takes the TTS audio we sent to the speaker as a
    *reference*, and subtracts the echo path's filtered version of
    that reference from the mic. The result is a mic signal that
    no longer contains the bot's voice — only the user's.
-3. AEC is *dual-input* (mic + reference); VAD is *single-input*
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+AEC is *dual-input* (mic + reference); VAD is *single-input*
    (mic only). No amount of better VAD will fix the loop, because
    the information VAD needs isn't in its input.
-4. This is the preview of chapter 10.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+This is the preview of chapter 10.
 
 </details>
 <!-- END auto:exercise-hints -->
@@ -129,20 +192,41 @@ by the cancellation branch, and why the mic frames are still available
 after the coordinator waits for the old bot task.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `route_barge_in` returns `event_consumed: false`. The coordinator
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`route_barge_in` returns `event_consumed: false`. The coordinator
    therefore falls through to the same STT-start branch used by an
    ordinary user turn.
-2. `mic_producer` is a separate coroutine. It keeps adding pre-roll and
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`mic_producer` is a separate coroutine. It keeps adding pre-roll and
    live frames to `mic_queue` while cooperative bot shutdown finishes.
-3. Change the probe's fallthrough condition to act as if the event were
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Change the probe's fallthrough condition to act as if the event were
    consumed. The STT lifecycle disappears, which is the old behavior:
    the bot stops, but the user must repeat the interruption.
-4. On process shutdown, the coordinator must stop both possible
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+On process shutdown, the coordinator must stop both possible
    in-flight owners—STT and the bot task—before the shared TTS/client/VAD
    stack closes.
 
@@ -162,19 +246,40 @@ changing the transport's 30 ms return. Predict the completion record
 before re-running it.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. `cancel_to_clear_audio_return_ms` should remain 30 ms. It measures
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+`cancel_to_clear_audio_return_ms` should remain 30 ms. It measures
    when the transport's queue-clear call returns.
-2. `cancel_to_bot_task_return_ms` should become 150 ms. Cooperative
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+`cancel_to_bot_task_return_ms` should become 150 ms. Cooperative
    cancellation is not complete until the old task exits and its result
    is observed.
-3. The triggering `speech_started` still has `event_consumed: false`;
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+The triggering `speech_started` still has `event_consumed: false`;
    cancellation latency must not discard the next user turn.
-4. A fast `clear_audio()` return does not prove acoustic silence at the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+A fast `clear_audio()` return does not prove acoustic silence at the
    human ear. It is a software control milestone, not playback or
    perception evidence.
 

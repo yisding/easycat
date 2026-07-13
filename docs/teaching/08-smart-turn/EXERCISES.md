@@ -35,22 +35,43 @@ that pause and `false` when you intended to continue, then rerun with
 counts differ?
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
    just below 0.5 are newly accepted by the candidate threshold, but
    that fact alone says nothing about whether each decision is correct.
-2. A newly accepted decision is a false positive only when its
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+A newly accepted decision is a false positive only when its
    `user_was_done` label is `false`. Without labels the report leaves
    `metrics` as `null` rather than inventing an error rate.
-3. Re-scoring one bundle holds the audio and model probabilities fixed,
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Re-scoring one bundle holds the audio and model probabilities fixed,
    isolating the threshold policy. Re-recording after editing
    `SMART_THRESHOLD` is still useful for experiencing the UX, but it is
    not a controlled metric comparison.
-4. Lower thresholds usually trade fewer false negatives and earlier
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+Lower thresholds usually trade fewer false negatives and earlier
    commits for more false positives and user interruption. Tune on a
    representative labeled set, not on probability counts alone.
 
@@ -64,21 +85,42 @@ right and `smart` gets it wrong. Save both bundles. (You will
 need this in chapter 12 when you build an eval set.)
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The easiest misfire to provoke: a list with level intonation
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 4</summary>
+
+The easiest misfire to provoke: a list with level intonation
    ("apples, bananas, pears"). Smart-turn may say "done" after
    "bananas" because pitch was flat at that word.
-2. Another one: trailing "and?" with rising intonation. Smart-turn
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 4</summary>
+
+Another one: trailing "and?" with rising intonation. Smart-turn
    should *not* fire (pitch up = continuation), but may
    misclassify on noisy mics.
-3. Save the bundle by copying it out of `runs/` before you re-run
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 4</summary>
+
+Save the bundle by copying it out of `runs/` before you re-run
    (the `runs/` directory is gitignored but the file persists
    until you re-run with the same session id).
-4. A single real misfire is a tiny eval set of 1. Chapter 12
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 4</summary>
+
+A single real misfire is a tiny eval set of 1. Chapter 12
    teaches you to grow this into dozens.
 
 </details>
@@ -91,22 +133,49 @@ miss on the utterance *"I was thinking… we should order pizza."*
 Then run `--backend smart` and check.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. The "…" pause is ~500 ms of soft silence. VAD will fire
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+The "…" pause is ~500 ms of soft silence. VAD will fire
    `VADStopSpeaking` during it.
-2. Smart-turn then sees the audio up to "thinking" and is asked
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+Smart-turn then sees the audio up to "thinking" and is asked
    "is this end-of-turn?" Pitch at "thinking" is mid-falling but
    not definitively final. Probability is likely in the 0.4-0.6
    range — coin-flippy.
-3. If the model says "not done" → pending state, no commit until
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+If the model says "not done" → pending state, no commit until
    either the user resumes (chapter 8's "we should order pizza"
    continues the same turn) or the fallback silence fires.
-4. If the model says "done" → bot interrupts the user. Bad.
-5. This is exactly why the *fallback* silence timeout exists.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+If the model says "done" → bot interrupts the user. Bad.
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+This is exactly why the *fallback* silence timeout exists.
    Smart-turn is a speedup over the worst case, not a replacement
    for the safety net.
 
@@ -126,22 +195,49 @@ the scripted classifier cost from 40 ms to 120 ms and predict which
 fields and totals move.
 
 <!-- BEGIN auto:exercise-hints -->
-<details markdown="1">
-<summary>Reveal hints after your first attempt</summary>
-
 **Hints**
 
-1. Baseline VAD has no classifier or pending phase: its configured
+After your first attempt, open Hint 1 only. Close it and try again before opening
+the next hint; keep each attempt in your evidence record.
+
+<details markdown="1">
+<summary>Hint 1 of 5</summary>
+
+Baseline VAD has no classifier or pending phase: its configured
    800 ms silence wait is its whole endpoint wait.
-2. Smart accept is early silence plus classifier inference:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 2 of 5</summary>
+
+Smart accept is early silence plus classifier inference:
    `200 + 40 = 240 ms` in the original probe.
-3. Smart fallback adds all three components:
+
+</details>
+
+<details markdown="1">
+<summary>Hint 3 of 5</summary>
+
+Smart fallback adds all three components:
    `200 + 40 + 800 = 1,040 ms`. `SMART_FALLBACK_MS` starts after
    classification; it is not a cap on the total endpoint wait.
-4. Raising only inference cost should move
+
+</details>
+
+<details markdown="1">
+<summary>Hint 4 of 5</summary>
+
+Raising only inference cost should move
    `classification_inference_ms` and `endpoint_wait_ms`. It must not
    change `silence_wait_ms` or `pending_wait_ms`.
-5. In a live run, compare the recorded components. Do not infer the
+
+</details>
+
+<details markdown="1">
+<summary>Hint 5 of 5</summary>
+
+In a live run, compare the recorded components. Do not infer the
    user-visible delay from a configured timeout alone.
 
 </details>
