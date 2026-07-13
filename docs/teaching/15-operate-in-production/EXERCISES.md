@@ -175,3 +175,11 @@ is either a new provider in the existing factories, a new
 transport in the existing config, a new bridge in the existing
 shim, or a new telephony deep-cut in the existing executors. The
 pattern doesn't change.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Return to the teaching ladder](../)
+<!-- END auto:exercise-completion -->

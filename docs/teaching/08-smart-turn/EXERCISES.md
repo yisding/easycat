@@ -115,3 +115,11 @@ name two utterance patterns that can challenge the classifier, and
 (d) explain why STT-final → first-audio cannot measure an endpoint
 detector's latency win, and (e) decompose a smart fallback's endpoint
 wait into early silence, inference, and pending time.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+<!-- END auto:exercise-completion -->

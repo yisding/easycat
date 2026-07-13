@@ -142,3 +142,11 @@ accepted-but-queued—and (c) explain why `CancelToken` is a token
 and not an exception, and (d) trace the triggering `speech_started`
 event into the next STT turn, and (e) distinguish clear-audio return,
 bot-task return, transport playback evidence, and human hearing.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+<!-- END auto:exercise-completion -->

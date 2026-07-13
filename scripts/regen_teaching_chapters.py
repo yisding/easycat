@@ -77,6 +77,28 @@ sync with the chapter's source code and ladder order:
   The renderer inserts this block after the chapter's opening summary and
   refreshes the concept and command from the spine's single manifest.
 
+* A narrative-to-practice handoff before the chapter's next-step section::
+
+      <!-- BEGIN auto:practice-handoff -->
+      ## Practice and self-check
+
+      Work through the chapter exercises, then try their closing self-check
+      from memory.
+      <!-- END auto:practice-handoff -->
+
+* A completion footer at the end of each exercise page::
+
+      <!-- BEGIN auto:exercise-completion -->
+      ---
+      Self-check complete?
+
+      - Review the chapter narrative
+      - Continue to Chapter 6 →
+      <!-- END auto:exercise-completion -->
+
+  Together these blocks make the narrative → practice → recall → next-chapter
+  loop explicit while deriving all chapter links from ladder order.
+
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
 ``main.py``; ``--check`` exits non-zero if any block would change,
@@ -128,6 +150,18 @@ OFFLINE_CHECKPOINT_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:offline-checkpoint -->)"
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:offline-checkpoint -->)",
+    re.DOTALL,
+)
+PRACTICE_HANDOFF_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:practice-handoff -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:practice-handoff -->)",
+    re.DOTALL,
+)
+EXERCISE_COMPLETION_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:exercise-completion -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:exercise-completion -->)",
     re.DOTALL,
 )
 ATTR_RE = re.compile(r"(\w+)=(?:\"([^\"]*)\"|(\S+))")
@@ -271,6 +305,26 @@ def render_exercise_navigation(chapter: Chapter) -> str:
     return " · ".join(links)
 
 
+def render_practice_handoff() -> str:
+    return (
+        "## Practice and self-check\n\n"
+        "Work through [the chapter exercises](./EXERCISES.md), then try their closing\n"
+        "self-check from memory. If an answer is weak, rerun the hardware-free\n"
+        "checkpoint or revisit the section that owns the gap."
+    )
+
+
+def render_exercise_completion(chapter: Chapter) -> str:
+    chapters, index = _chapter_position(chapter)
+    links = ["[Review the chapter narrative](./README.md)"]
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[Continue to {_chapter_title(following)} →](../{following.slug}/)")
+    else:
+        links.append("[Return to the teaching ladder](../)")
+    return "---\nSelf-check complete?\n\n" + "\n".join(f"- {link}" for link in links)
+
+
 @functools.cache
 def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
     spine_path = TEACHING / "offline_spine.py"
@@ -326,6 +380,22 @@ def _render_offline_checkpoint_block(chapter: Chapter) -> str:
     )
 
 
+def _render_practice_handoff_block() -> str:
+    return (
+        "<!-- BEGIN auto:practice-handoff -->\n"
+        f"{render_practice_handoff()}\n"
+        "<!-- END auto:practice-handoff -->"
+    )
+
+
+def _render_exercise_completion_block(chapter: Chapter) -> str:
+    return (
+        "<!-- BEGIN auto:exercise-completion -->\n"
+        f"{render_exercise_completion(chapter)}\n"
+        "<!-- END auto:exercise-completion -->"
+    )
+
+
 def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
     block = _render_navigation_block(navigation)
     if NAVIGATION_RE.search(text):
@@ -363,6 +433,36 @@ def _ensure_offline_checkpoint(chapter: Chapter, text: str) -> str:
     return f"{prefix}\n\n{block}\n\n{remainder}"
 
 
+def _ensure_practice_handoff(chapter: Chapter, text: str) -> str:
+    block = _render_practice_handoff_block()
+    if PRACTICE_HANDOFF_RE.search(text):
+        return PRACTICE_HANDOFF_RE.sub(lambda _match: block, text)
+
+    target = re.search(
+        r"^## (?:What's next|The ladder, complete \(really\))$",
+        text,
+        re.MULTILINE,
+    )
+    if target is None:
+        raise ValueError(f"{chapter.slug}/README.md is missing its closing handoff section")
+    try_breaking = text.find("## Try breaking it")
+    if try_breaking < 0 or try_breaking > target.start():
+        raise ValueError(f"{chapter.slug}/README.md must practice before its closing handoff")
+    prefix = text[: target.start()].rstrip("\n")
+    remainder = text[target.start() :].lstrip("\n")
+    return f"{prefix}\n\n{block}\n\n{remainder}"
+
+
+def _ensure_exercise_completion(chapter: Chapter, text: str) -> str:
+    block = _render_exercise_completion_block(chapter)
+    if "## Self-check" not in text:
+        raise ValueError(f"{chapter.slug}/EXERCISES.md is missing its self-check")
+    if EXERCISE_COMPLETION_RE.search(text):
+        updated = EXERCISE_COMPLETION_RE.sub(lambda _match: block, text)
+        return updated.rstrip() + "\n"
+    return text.rstrip() + f"\n\n{block}\n"
+
+
 def regen_readme(chapter: Chapter) -> tuple[str, str]:
     readme_path = chapter.path / "README.md"
     original = readme_path.read_text()
@@ -385,6 +485,7 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
 
     updated = _ensure_navigation(chapter, original, render_navigation(chapter))
     updated = _ensure_offline_checkpoint(chapter, updated)
+    updated = _ensure_practice_handoff(chapter, updated)
     updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)
@@ -400,6 +501,7 @@ def regen_exercises(chapter: Chapter) -> tuple[str, str]:
         original,
         render_exercise_navigation(chapter),
     )
+    updated = _ensure_exercise_completion(chapter, updated)
     return original, updated
 
 

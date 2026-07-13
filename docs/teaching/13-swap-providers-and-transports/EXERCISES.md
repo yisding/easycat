@@ -115,3 +115,11 @@ draw the "one code change per axis" diagram from memory, and (c)
 explain the structural `event_bus` opt-in and distinguish reconnect
 telemetry from HTTP provider-error telemetry, and (d) place session
 scope exit before postmortem bundle export.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+<!-- END auto:exercise-completion -->

@@ -561,6 +561,14 @@ and find the exact partial where the wrong guess stuck. Compare
 that to the final. Did the revision save it, or did the provider
 commit to the wrong word?
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 3 — Parrot, the naive way](../03-parrot-naive/) glues STT

@@ -741,6 +741,14 @@ software milestone closest to when the bot starts replying. Compare
 `sentence_tts_ms` separately; response wording may change those values
 even when the TTS provider does not.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 7 — Tools, mid-stream](../07-tools/) adds tool calls

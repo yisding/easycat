@@ -78,3 +78,11 @@ echo loop needs without looking at the protocol, (b) distinguish a chunk
 being produced from `send_audio(...)` accepting it, and (c) explain why the
 same loop can use Local, WebSocket, WebRTC, or Twilio transports without
 changing its control flow.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 2 — Transcribe →](../02-transcribe/)
+<!-- END auto:exercise-completion -->

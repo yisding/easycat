@@ -229,6 +229,8 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "Narrative, exercises, self-check" in normalized_index
     assert "one or more applied tasks in the dedicated `EXERCISES.md`" in normalized_index
     assert "Generated source diffs can make a README long" in normalized_index
+    assert "Generated handoffs connect those steps" in normalized_index
+    assert "point the learner to the next chapter" in normalized_index
     assert "one primary question" in normalized_index
     assert not any(contract in index for contract in stale_contracts)
 

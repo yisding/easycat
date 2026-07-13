@@ -157,3 +157,11 @@ metrics catches that the others miss, and (d) explain why coverage
 must be validated before any point estimate is reported, and (e)
 distinguish an influential-sample diagnostic from uncertainty about a
 production percentile.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:exercise-completion -->

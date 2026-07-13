@@ -124,3 +124,11 @@ process-wide voice stack, (d) distinguish an empty streamed TTS
 response from transport rejection, and (e) point at the production
 `consume_agent_stream` and name one parameter without re-reading
 the README.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 7 — Tools, Mid-stream →](../07-tools/)
+<!-- END auto:exercise-completion -->

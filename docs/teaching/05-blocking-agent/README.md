@@ -608,6 +608,14 @@ flow where a user asks a 3-second question and waits 3 seconds
 for an answer. Six seconds of one human standing in the room
 holding their breath.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 6 — Streaming agent + sentence TTS](../06-streaming-agent/)

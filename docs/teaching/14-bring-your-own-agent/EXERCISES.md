@@ -185,3 +185,11 @@ where in the pipeline output processors run (TTS only? history
 too?) without checking the source, and (d) distinguish session-owned
 providers from caller-owned workflow dependencies, and (e) explain why a
 deep workflow should define an explicit metadata-only state snapshot.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 15 — Operate in production →](../15-operate-in-production/)
+<!-- END auto:exercise-completion -->

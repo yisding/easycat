@@ -106,3 +106,11 @@ roughly how an utterance will sound at 4 kHz, 8 kHz, 16 kHz, and
 the boundary meant by any sample rate you quote. You should also be able
 to distinguish a raw provider config default from a transport-resolved
 session output.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 1 — Echo →](../01-echo/)
+<!-- END auto:exercise-completion -->

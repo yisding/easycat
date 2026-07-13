@@ -110,3 +110,11 @@ predict where filler utterances would help vs hurt, and explain
 the *tool vs session action* distinction in one sentence. You should
 also be able to prove whether a filler was requested and whether its
 audio was accepted without conflating either fact with “heard.”
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 8 — Smart-turn →](../08-smart-turn/)
+<!-- END auto:exercise-completion -->

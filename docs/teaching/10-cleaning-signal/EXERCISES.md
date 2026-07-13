@@ -138,3 +138,11 @@ office with bluetooth headset, (b) noisy retail kiosk with
 speakerphone, (c) phone call (Twilio). You should also be able to
 distinguish backend availability, reference alignment, signal-energy
 change, and actual speech quality.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 11 — The Journal as Mental Model →](../11-journal/)
+<!-- END auto:exercise-completion -->

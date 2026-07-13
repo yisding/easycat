@@ -208,6 +208,14 @@ answer should match what you just read about Nyquist.
 
 If you had to look that up, read this chapter again.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 1 — Echo](../01-echo/) takes the same PCM stream but
