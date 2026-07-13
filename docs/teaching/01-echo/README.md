@@ -21,6 +21,9 @@
 > **Evidence to find:** two chunks are accepted, one is rejected, and `version_info()` changes
 > full conformance.
 >
+> **Explain the result:** Explain why structural compatibility can pass while full runtime
+> conformance fails.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

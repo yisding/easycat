@@ -21,6 +21,9 @@
 >
 > **Evidence to find:** removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms.
 >
+> **Explain the result:** Explain why one slow bundle controls a small-sample percentile and what
+> not to generalize.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

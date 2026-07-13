@@ -148,6 +148,10 @@ def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:
         "full enqueue takes\n"
         "> 800 ms.\n"
         ">\n"
+        "> **Explain the result:** Point to the milestone that defines first audio and explain "
+        "why full\n"
+        "> enqueue is not it.\n"
+        ">\n"
         "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )
 

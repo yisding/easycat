@@ -24,6 +24,9 @@
 > **Evidence to find:** `MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep
 > mode.
 >
+> **Explain the result:** Trace the workflow yield into both reply and action without
+> framework-specific state.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

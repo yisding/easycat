@@ -40,13 +40,19 @@ prerequisites below when you continue into provider-backed chapters.
 
 Every chapter now has at least one deterministic checkpoint that needs no
 microphone, speaker, or provider credential. List the curated one-per-chapter
-spine with concepts, prediction prompts, setup commands, evidence cues, and
-individual commands:
+spine with concepts, prediction prompts, setup commands, evidence cues,
+reflection prompts, and individual commands:
 
 ```bash
 uv run python docs/teaching/offline_spine.py
 uv run python docs/teaching/offline_spine.py --json
 ```
+
+Write down your answer to **Predict** before running a checkpoint. After the
+command, compare the observed JSON with **Look for**, then answer **Explain
+after** using the exact fields that confirmed or overturned your prediction.
+Keep the original prediction visible; a mismatch is evidence to explain, not an
+answer to rewrite after the fact.
 
 After finishing a chapter, replay only the cumulative spine you have completed.
 For example, after Chapter 5:

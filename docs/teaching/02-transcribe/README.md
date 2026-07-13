@@ -21,6 +21,9 @@
 > **Evidence to find:** revised partials cancel speculation; only the final `fifty` commits the
 > safe action.
 >
+> **Explain the result:** Identify the irreversible side effect that would be wrong if it fired
+> on a revised partial.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

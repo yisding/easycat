@@ -23,6 +23,9 @@
 > **Evidence to find:** two provider mixes cross three transport configs into six cells without
 > changing axes.
 >
+> **Explain the result:** Pick one row and column; name what changes on each axis and what must
+> remain constant.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

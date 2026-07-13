@@ -21,6 +21,9 @@
 > **Evidence to find:** 500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit
 > wait.
 >
+> **Explain the result:** State which timeout failure you would accept for a target conversation
+> and why.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

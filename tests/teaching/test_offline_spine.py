@@ -32,6 +32,7 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
     assert len({row["command"] for row in rows}) == len(rows)
     assert len({row["prediction"] for row in rows}) == len(rows)
     assert len({row["evidence"] for row in rows}) == len(rows)
+    assert len({row["reflection"] for row in rows}) == len(rows)
     for row in rows:
         path = ROOT / "docs" / "teaching" / row["folder"] / row["script"]
         expected_extra = "local" if row["chapter"] <= 1 else "quickstart"
@@ -40,6 +41,7 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
         assert row["command"] == f"uv run python {path.relative_to(ROOT).as_posix()}"
         assert row["prediction"].strip()
         assert row["evidence"].strip()
+        assert row["reflection"].strip()
 
 
 def test_offline_spine_prioritizes_primary_chapter_questions() -> None:
@@ -85,7 +87,9 @@ def test_offline_spine_json_list_is_documented() -> None:
         root_readme
     )
     assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in root_readme
-    assert "concepts, prediction prompts, setup commands, evidence cues, and" in readme
+    assert "prediction prompts, setup commands, evidence cues," in readme
+    assert "reflection prompts, and individual commands" in readme
+    assert "a mismatch is evidence to explain" in readme
     assert "uv sync --extra quickstart --group dev" in readme
     assert "--run --through 5 --jobs 4" in readme
     assert "--show-evidence" in readme
@@ -170,13 +174,22 @@ def test_offline_spine_human_run_can_show_observed_evidence() -> None:
     assert "Predict: Which rates belong to the wire" in completed.stdout
     assert "Observed:" in completed.stdout
     assert '"sample_rate_hz": 8000' in completed.stdout
+    assert "Reflect: If any rate surprised you" in completed.stdout
 
 
 def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     spine = _load_spine()
     script = tmp_path / "docs" / "teaching" / "probe.py"
     script.parent.mkdir(parents=True)
-    checkpoint = spine.Checkpoint(0, ".", "probe.py", "concept", "prediction", "evidence")
+    checkpoint = spine.Checkpoint(
+        0,
+        ".",
+        "probe.py",
+        "concept",
+        "prediction",
+        "evidence",
+        "reflection",
+    )
     spine.REPO_ROOT = tmp_path
 
     script.write_text("print('not json')\n", encoding="utf-8")
@@ -211,11 +224,13 @@ def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
     assert completed.stdout.count("Setup:") == len(spine.catalog())
     assert completed.stdout.count("Run:") == len(spine.catalog())
     assert completed.stdout.count("Look for:") == len(spine.catalog())
+    assert completed.stdout.count("Explain after:") == len(spine.catalog())
     for row in spine.catalog():
         assert row["prediction"] in completed.stdout
         assert row["setup_command"] in completed.stdout
         assert row["command"] in completed.stdout
         assert row["evidence"] in completed.stdout
+        assert row["reflection"] in completed.stdout
 
 
 def test_offline_chapter_cumulative_replay_restores_quickstart_setup() -> None:

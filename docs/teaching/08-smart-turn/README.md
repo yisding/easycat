@@ -21,6 +21,9 @@
 > **Evidence to find:** smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three
 > components.
 >
+> **Explain the result:** Name the component each path adds or skips and which path wins against
+> the baseline.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -21,6 +21,9 @@
 > **Evidence to find:** wire, provider-input, pipeline, config-default, and media roles use
 > different rates.
 >
+> **Explain the result:** If any rate surprised you, name the boundary and the conversion its
+> neighbor requires.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

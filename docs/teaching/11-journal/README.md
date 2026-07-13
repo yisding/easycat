@@ -21,6 +21,9 @@
 > **Evidence to find:** a zero-result intersection has marginal matches, while a misspelled turn
 > has none.
 >
+> **Explain the result:** Use the marginal counts to decide whether to loosen a filter or fix an
+> identifier.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 
