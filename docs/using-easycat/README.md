@@ -47,7 +47,7 @@ pretending unfinished lessons are runnable.
 | # | Chapter | EasyCat features | Status |
 |---|---|---|---|
 | 0 | [`00-first-voice-app`](./00-first-voice-app/) | `VoiceApp`, automatic pipeline wiring, and the local runtime | Available |
-| 1 | Run it anywhere | Browser, WebSocket, local, and Twilio runtime modes | Planned |
+| 1 | [`01-runtime-modes`](./01-runtime-modes/) | Browser, WebSocket, local, and Twilio runtime modes | Available |
 | 2 | Pick providers and voices | STT/TTS provider specs, voices, and environment preflight | Planned |
 | 3 | Shape the conversation | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Planned |
 | 4 | Add tools and actions | Agent tools, fillers, session actions, and pronunciation rules | Planned |
