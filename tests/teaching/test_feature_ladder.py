@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import runpy
@@ -414,6 +415,103 @@ def test_session_control_text_lifecycle_runs_without_credentials() -> None:
     assert "Reply 2: Workflow turn 2: second message" in completed.stdout
     assert "Reply after reset: Workflow turn 1: after reset" in completed.stdout
     assert "Post-stop guard: Session has been stopped" in completed.stdout
+
+
+def test_observability_chapter_records_and_explains_postmortem_surfaces() -> None:
+    chapter = FEATURE_LADDER / "07-observability"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        'debug="full"',
+        "session.journal.read()",
+        "session.export_debug_bundle(",
+        '"baseline.bundle"',
+        '"candidate.bundle"',
+    ):
+        assert surface in script
+    for command in (
+        "easycat bundles show",
+        "easycat inspect",
+        "easycat replay",
+        "easycat diff",
+        "easycat debugger serve",
+        "easycat journal grep",
+        "easycat bundles export",
+    ):
+        assert command in readme
+    for concept in (
+        "Journal and bundle are different forms",
+        "Replay safely",
+        "Output redaction is not bundle redaction",
+        '`debug="full"` does not open a browser',
+        "Tool policy selects `deny`, `stub`, or `allow`",
+    ):
+        assert concept in readme
+
+
+def test_observability_pair_supports_show_replay_and_diff_without_credentials(
+    tmp_path: Path,
+) -> None:
+    script = FEATURE_LADDER / "07-observability" / "main.py"
+    bundles = tmp_path / "bundles"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    env["EASYCAT_DATA_DIR"] = str(tmp_path / "data")
+    subprocess.run(
+        [sys.executable, str(script), "pair", str(bundles)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    baseline = bundles / "baseline.bundle"
+    candidate = bundles / "candidate.bundle"
+    easycat = Path(sys.executable).with_name("easycat")
+    show = subprocess.run(
+        [str(easycat), "bundles", "show", str(baseline), "--json"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    replay = subprocess.run(
+        [
+            str(easycat),
+            "replay",
+            str(baseline),
+            "--fidelity",
+            "artifact",
+            "--tool-policy",
+            "deny",
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    diff = subprocess.run(
+        [str(easycat), "diff", str(baseline), str(candidate), "--json"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    show_payload = json.loads(show.stdout)
+    replay_payload = json.loads(replay.stdout)
+    diff_payload = json.loads(diff.stdout)
+    assert show_payload["status"] == "ok"
+    assert show_payload["turn_count"] == 2
+    assert replay_payload["fidelity_effective"] == "artifact"
+    assert replay_payload["side_effecting"] is False
+    assert len(diff_payload["turns"]) == 2
+    assert all(turn["transcript"]["changed"] for turn in diff_payload["turns"])
 
 
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
