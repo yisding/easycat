@@ -322,8 +322,8 @@ This is the unglamorous part of voice eval: building a
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -331,14 +331,15 @@ This is the unglamorous part of voice eval: building a
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) read a bundle and within 30 seconds
-say "this turn's bottleneck was X", (b) explain why F1 over
-TP/FP/FN/TN is the right shape for barge-in (rather than raw
-accuracy), and (c) describe one regression each of the four
-metrics catches that the others miss, and (d) explain why coverage
-must be validated before any point estimate is reported, and (e)
-distinguish an influential-sample diagnostic from uncertainty about a
-production percentile.
+1. Which span proves an unfamiliar turn's dominant bottleneck within 30
+   seconds?
+2. Why is F1 over TP/FP/FN the right barge-in shape rather than raw accuracy,
+   and which confusion-matrix case exposes the difference?
+3. Which distinct regression does each maintained metric catch?
+4. Why must coverage be validated before reporting a point estimate, and which
+   missing record invalidates one metric in your fixtures?
+5. How does leave-one-out sensitivity identify an influential observed sample
+   without quantifying uncertainty in a production percentile?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

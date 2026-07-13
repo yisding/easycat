@@ -328,8 +328,8 @@ Treat the explicit dictionary as author-owned persisted data. Temporarily
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -337,13 +337,15 @@ Treat the explicit dictionary as author-owned persisted data. Temporarily
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) explain the difference between deep and
-shallow mode in one sentence each, (b) name when to use a tool vs
-a session action without re-reading chapter 7, and (c) describe
-where in the pipeline output processors run (TTS only? history
-too?) without checking the source, and (d) distinguish session-owned
-providers from caller-owned workflow dependencies, and (e) explain why a
-deep workflow should define an explicit metadata-only state snapshot.
+1. What state and interruption guarantees distinguish deep from shallow bridge
+   mode, and which attempt record exposes the difference?
+2. When should a workflow yield a tool call versus a session action?
+3. Where do output processors run for TTS and history, and which prepared
+   payload proves the boundary?
+4. Which providers are session-owned and which workflow dependencies remain
+   caller-owned after session exit?
+5. Why should a deep workflow define an explicit metadata-only state snapshot,
+   and which fields are safe to persist?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

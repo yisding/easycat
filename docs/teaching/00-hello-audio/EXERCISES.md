@@ -213,8 +213,8 @@ The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -222,12 +222,12 @@ The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should now be able to predict — without running the code —
-roughly how an utterance will sound at 4 kHz, 8 kHz, 16 kHz, and
-44.1 kHz, explain the difference in one sentence each, and identify
-the boundary meant by any sample rate you quote. You should also be able
-to distinguish a raw provider config default from a transport-resolved
-session output.
+1. Without running code, how would the same utterance change at 4 kHz, 8 kHz,
+   16 kHz, and 44.1 kHz, and which observed result supports each prediction?
+2. When you quote a sample rate, which boundary—wire, provider input, config
+   default, pipeline, or media—do you mean, and where is conversion required?
+3. Which observed fields distinguish a raw provider config default from the
+   transport-resolved session output?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

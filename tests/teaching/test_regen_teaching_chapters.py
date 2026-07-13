@@ -306,8 +306,8 @@ def test_render_self_check_protocol_requires_evidence_backed_retrieval() -> None
         "> **Closed-book retrieval gate**\n"
         ">\n"
         "> 1. Close the chapter narrative and every hint disclosure.\n"
-        "> 2. Answer each outcome below from memory, aloud or in writing.\n"
-        "> 3. Support the answer with at least one observed field, measurement, or behavior\n"
+        "> 2. Answer every numbered question below from memory, aloud or in writing.\n"
+        "> 3. Support each answer with at least one observed field, measurement, or behavior\n"
         ">    from your attempt record.\n"
         ">\n"
         "> If an answer needs notes, reopen only the section that owns the weak concept,\n"
@@ -441,6 +441,28 @@ def test_each_self_check_starts_with_current_closed_book_retrieval_gate() -> Non
         assert heading is not None
         assert not exercises[heading.end() : matches[0].start()].strip()
         assert matches[0].end() < exercises.index("<!-- BEGIN auto:exercise-completion -->")
+
+
+def test_each_self_check_uses_sequential_answerable_questions() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        protocol = SELF_CHECK_PROTOCOL_RE.search(exercises)
+        completion = exercises.index("<!-- BEGIN auto:exercise-completion -->")
+
+        assert protocol is not None
+        next_heading = exercises.find("\n## ", protocol.end(), completion)
+        question_end = next_heading if next_heading >= 0 else completion
+        body = exercises[protocol.end() : question_end].strip()
+        starts = list(re.finditer(r"^(?P<number>\d+)\. ", body, re.MULTILINE))
+
+        assert len(starts) >= 3, chapter.slug
+        assert [int(match.group("number")) for match in starts] == list(
+            range(1, len(starts) + 1)
+        ), chapter.slug
+        assert "You should" not in body, chapter.slug
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(body)
+            assert "?" in body[start.start() : end], chapter.slug
 
 
 def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:

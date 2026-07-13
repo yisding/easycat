@@ -228,8 +228,8 @@ Follow `tool_call_id` from `tool.call.started` to
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -237,11 +237,11 @@ Follow `tool_call_id` from `tool.call.started` to
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to look at a voice agent's response time and
-predict where filler utterances would help vs hurt, and explain
-the *tool vs session action* distinction in one sentence. You should
-also be able to prove whether a filler was requested and whether its
-audio was accepted without conflating either fact with “heard.”
+1. At which observed response times would a filler help or hurt, and why?
+2. What is the tool-versus-session-action distinction, and which lifecycle
+   records demonstrate it?
+3. Which fields prove that filler was requested and that its audio was
+   accepted, and why does neither prove it was heard?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

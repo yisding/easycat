@@ -358,8 +358,8 @@ Use strict turn scope to reconstruct causality. Add same-session
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -367,15 +367,17 @@ Use strict turn scope to reconstruct causality. Add same-session
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) open a bundle from any chapter and
-identify the dominant time-cost without reading the chapter's
-README, (b) describe in one sentence what each of the three
-planted bugs was about, and (c) name the `JournalView` query you'd
-reach for first on a multi-turn bundle, and (d) distinguish a real
-absence from a typo or an empty filter intersection, and (e)
-distinguish the typed journal envelope from emitter-defined payload
-schemas, and (f) decide when a strict turn query needs same-session
-unscoped context.
+1. Which records let you identify an unfamiliar bundle's dominant time cost
+   without its README?
+2. What causal defect produced each of the three planted-bug symptoms?
+3. Which `JournalView` query would you use first on a multi-turn bundle, and
+   which result from your attempt justifies that choice?
+4. How do marginal counts distinguish a real absence, a typo, and an empty
+   filter intersection?
+5. Which fields belong to the typed journal envelope and which remain
+   emitter-defined payload schema?
+6. When does a strict turn query need same-session unscoped context, and which
+   joined record supplies it?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

@@ -243,6 +243,8 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "make a fresh attempt before opening the next clue" in normalized_index
     assert "A task is complete when the learner has kept an initial plan" in normalized_index
     assert "Closing self-checks are closed-book retrieval gates" in normalized_index
+    assert "answer every numbered question" in normalized_index
+    assert "support each answer with attempt evidence" in normalized_index
     assert "one primary question" in normalized_index
     assert not any(contract in index for contract in stale_contracts)
 

@@ -292,8 +292,8 @@ A fast `clear_audio()` return does not prove acoustic silence at the
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -301,13 +301,15 @@ A fast `clear_audio()` return does not prove acoustic silence at the
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) name the three differences between
-versions A, B, and C, (b) describe why "bytes accepted ≠ bytes heard"
-without re-reading the README—including why rejected differs from
-accepted-but-queued—and (c) explain why `CancelToken` is a token
-and not an exception, and (d) trace the triggering `speech_started`
-event into the next STT turn, and (e) distinguish clear-audio return,
-bot-task return, transport playback evidence, and human hearing.
+1. What changes between interruption versions A, B, and C, and which event
+   order distinguishes them?
+2. Why do bytes accepted not equal bytes heard, and how does rejected audio
+   differ from accepted-but-queued audio in the records?
+3. Why is `CancelToken` shared state rather than an exception?
+4. How does the triggering `speech_started` event survive cleanup and enter the
+   next STT turn?
+5. Which milestones distinguish clear-audio return, bot-task return,
+   transport playback evidence, and actual human hearing?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

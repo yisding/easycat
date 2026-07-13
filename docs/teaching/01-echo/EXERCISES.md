@@ -134,8 +134,8 @@ shape.
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -143,11 +143,12 @@ shape.
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to: (a) state the inbound/outbound audio shape that the
-echo loop needs without looking at the protocol, (b) distinguish a chunk
-being produced from `send_audio(...)` accepting it, and (c) explain why the
-same loop can use Local, WebSocket, WebRTC, or Twilio transports without
-changing its control flow.
+1. What inbound and outbound audio shape does the echo loop require, and which
+   probe result confirms that contract?
+2. What evidence distinguishes a produced chunk from one accepted by
+   `send_audio(...)`?
+3. Why can the same control flow use Local, WebSocket, WebRTC, or Twilio
+   transports, and which boundary owns their differences?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

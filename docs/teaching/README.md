@@ -200,8 +200,9 @@ Each chapter's README lists its own prerequisites up front.
   next clue. A task is complete when the learner has
   kept an initial plan, the exact command or change plus an observation, and a
   causal explanation. Closing self-checks are closed-book retrieval gates:
-  support recalled answers with attempt evidence, repair only weak concepts,
-  and retry before advancing. From chapter 2 onward, a generated prompt also
+  answer every numbered question, support each answer with attempt evidence,
+  repair only weak concepts, and retry before advancing. From chapter 2 onward,
+  a generated prompt also
   revisits the checkpoint from two chapters earlier before the new narrative,
   then asks the learner to connect both concepts before checking the old probe.
 - **Journals are the single source of truth.** From chapter 2

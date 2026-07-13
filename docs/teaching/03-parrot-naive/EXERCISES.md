@@ -251,8 +251,8 @@ Removing the timeout would fix the intended Chapter 3 lesson. Removing
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -260,12 +260,15 @@ Removing the timeout would fix the intended Chapter 3 lesson. Removing
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be unable to defend the silence-timeout architecture for a serious
-voice product, actively reaching for "is the microphone currently carrying
-speech?", able to distinguish provider ingress from consumer dequeue, and able
-to distinguish synthesized, accepted, and played audio. You should also be
-able to identify the silence-timeout policy—not cleanup, cancellation, or
-normal stream exhaustion—as this chapter's deliberate defect.
+1. Which observed false split and added wait make a fixed silence timeout
+   indefensible as the sole endpoint policy?
+2. What direct signal answers “is the microphone currently carrying speech?”,
+   and why is it stronger than elapsed silence alone?
+3. Which timestamps distinguish provider ingress from consumer dequeue?
+4. Which records distinguish synthesized, accepted, and played audio, and what
+   claim remains unsupported after transport acceptance?
+5. Why is the silence-timeout policy—rather than cleanup, cancellation, or
+   normal stream exhaustion—this chapter's deliberate defect?
 
 <!-- BEGIN auto:exercise-completion -->
 ---

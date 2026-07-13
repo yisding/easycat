@@ -209,8 +209,8 @@ None of these counts proves playback. Chapter 9 adds delivery-progress
 > **Closed-book retrieval gate**
 >
 > 1. Close the chapter narrative and every hint disclosure.
-> 2. Answer each outcome below from memory, aloud or in writing.
-> 3. Support the answer with at least one observed field, measurement, or behavior
+> 2. Answer every numbered question below from memory, aloud or in writing.
+> 3. Support each answer with at least one observed field, measurement, or behavior
 >    from your attempt record.
 >
 > If an answer needs notes, reopen only the section that owns the weak concept,
@@ -218,11 +218,12 @@ None of these counts proves playback. Chapter 9 adds delivery-progress
 > without looking.
 <!-- END auto:self-check-protocol -->
 
-You should be able to name the three sub-gaps in order without
-looking them up, predict which one each chapter-6/8 fix attacks,
-and have visceral evidence for why both fixes matter. You should also be able
-to distinguish no synthesized audio from audio rejected before its first
-accepted chunk.
+1. What are the three first-audio sub-gaps in order, and which measured
+   milestones bound each one?
+2. Which sub-gap does chapter 6 reduce, which does chapter 8 reduce, and what
+   evidence shows that both fixes matter?
+3. Which accepted/rejected counts distinguish no synthesized audio from audio
+   rejected before its first accepted chunk?
 
 <!-- BEGIN auto:exercise-completion -->
 ---
