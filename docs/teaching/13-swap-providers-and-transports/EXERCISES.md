@@ -1,5 +1,9 @@
 # Chapter 13 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+<!-- END auto:navigation -->
+
 ## 1. Add a Cartesia provider preset
 
 **Task.** Add a `--provider-mix cartesia` preset (both STT and TTS

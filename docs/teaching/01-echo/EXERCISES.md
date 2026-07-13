@@ -1,5 +1,9 @@
 # Chapter 1 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
+<!-- END auto:navigation -->
+
 ## 1. Insert a 500 ms delay line
 
 **Task.** Buffer chunks for 500 ms before forwarding them:

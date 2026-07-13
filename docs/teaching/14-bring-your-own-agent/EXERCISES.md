@@ -1,5 +1,9 @@
 # Chapter 14 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
+<!-- END auto:navigation -->
+
 ## 1. Demote yourself to shallow mode
 
 **Task.** Change `on_user_turn` to `async def on_user_turn(self,

@@ -1,5 +1,9 @@
 # Chapter 15 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../)
+<!-- END auto:navigation -->
+
 ## 1. Probe `SessionManager` without two microphones
 
 **Task.** Run the provider-free manager probe:

@@ -1,5 +1,9 @@
 # Chapter 9 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+<!-- END auto:navigation -->
+
 ## 1. Probe the over-/under-shoot of `heard_text`
 
 **Task.** Run `estimate.py`. Interrupt the bot as close as you can

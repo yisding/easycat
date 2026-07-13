@@ -1,5 +1,9 @@
 # Chapter 2 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:navigation -->
+
 ## 1. Find the moment STT committed to the wrong guess
 
 **Task.** Say a word the STT consistently mishears ("bass" vs

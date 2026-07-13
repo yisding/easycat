@@ -1,7 +1,7 @@
 # Chapter 6 — Streaming Agent + Sentence TTS
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 5 — The Blocking Agent](../05-blocking-agent/) · [Teaching ladder](../) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+[← Chapter 5 — The Blocking Agent](../05-blocking-agent/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
 <!-- END auto:navigation -->
 
 > Start speaking before the LLM is done thinking. First real

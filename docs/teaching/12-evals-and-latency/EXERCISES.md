@@ -1,5 +1,9 @@
 # Chapter 12 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
 ## 1. Find the budget-blower, propose a fix without coding it
 
 **Task.** Run `latency_budget.py` over each of the six primary

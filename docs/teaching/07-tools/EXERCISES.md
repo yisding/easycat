@@ -1,5 +1,9 @@
 # Chapter 7 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+<!-- END auto:navigation -->
+
 ## 1. Add a "still working on it" update for slow tools
 
 **Task.** Change `get_weather` to sleep 5 seconds. Run. One filler

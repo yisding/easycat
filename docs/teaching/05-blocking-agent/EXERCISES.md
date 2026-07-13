@@ -1,5 +1,9 @@
 # Chapter 5 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 ## 1. Three controlled experiments on the same question
 
 **Task.** Ask the bot *"What is the capital of France?"* under

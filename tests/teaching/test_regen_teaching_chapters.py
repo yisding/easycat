@@ -23,8 +23,10 @@ from scripts.regen_teaching_chapters import (
     Chapter,
     _resolve_child_path,
     discover_chapters,
+    regen_exercises,
     regen_readme,
     render_diff,
+    render_exercise_navigation,
     render_navigation,
 )
 
@@ -84,16 +86,17 @@ def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_navigation(chapters[0]) == (
-        "[Teaching ladder](../) · [Chapter 1 — Echo →](../01-echo/)"
+        "[Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_navigation(chapters[8]) == (
         "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
         "[Teaching ladder](../) · "
+        "[Exercises](./EXERCISES.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_navigation(chapters[-1]) == (
         "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
-        "[Teaching ladder](../)"
+        "[Teaching ladder](../) · [Exercises](./EXERCISES.md)"
     )
 
 
@@ -106,6 +109,52 @@ def test_each_chapter_has_one_current_generated_navigation_block() -> None:
         assert matches[0].group("body").strip() == render_navigation(chapter)
         assert matches[0].start() > readme.index("# ")
         assert matches[0].start() < readme.find("\n## ")
+
+
+def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> None:
+    chapters = discover_chapters()
+
+    assert render_exercise_navigation(chapters[0]) == (
+        "[← Chapter narrative](./README.md) · "
+        "[Teaching ladder](../) · "
+        "[Chapter 1 — Echo →](../01-echo/)"
+    )
+    assert render_exercise_navigation(chapters[8]) == (
+        "[← Chapter narrative](./README.md) · "
+        "[Teaching ladder](../) · "
+        "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
+    )
+    assert render_exercise_navigation(chapters[-1]) == (
+        "[← Chapter narrative](./README.md) · [Teaching ladder](../)"
+    )
+
+
+def test_each_exercise_page_has_one_current_generated_navigation_block() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        matches = list(NAVIGATION_RE.finditer(exercises))
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_exercise_navigation(chapter)
+        assert matches[0].start() > exercises.index("# ")
+        assert matches[0].start() < exercises.find("\n## ")
+
+
+def test_teaching_exercises_match_regenerated_navigation() -> None:
+    stale_exercises: list[str] = []
+
+    for chapter in discover_chapters():
+        exercises = chapter.path / "EXERCISES.md"
+        if not exercises.exists():
+            continue
+        original, updated = regen_exercises(chapter)
+        if original != updated:
+            stale_exercises.append(exercises.relative_to(ROOT).as_posix())
+
+    assert not stale_exercises, (
+        "Teaching exercise navigation is stale. Run "
+        "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_exercises)
+    )
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

@@ -1,5 +1,9 @@
 # Chapter 10 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+<!-- END auto:navigation -->
+
 ## 1. Type while you talk
 
 **Task.** Type loudly on your keyboard while saying "hello." Run

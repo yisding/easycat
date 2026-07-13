@@ -1,5 +1,9 @@
 # Chapter 3 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
+<!-- END auto:navigation -->
+
 The whole chapter is one big exercise: feel a bad pipeline
 viscerally so the next chapter's fix lands. The README walks you
 through four sentences that break it; this file deepens that into

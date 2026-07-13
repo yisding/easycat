@@ -1,8 +1,8 @@
-"""Refresh auto-generated blocks in teaching-chapter READMEs.
+"""Refresh auto-generated blocks in teaching-chapter pages.
 
-Each chapter README under ``docs/teaching/NN-*/README.md`` may contain
-HTML-comment markers delimiting blocks that this script keeps in sync
-with the chapter's source code:
+Each chapter README and exercise page under ``docs/teaching/NN-*`` may
+contain HTML-comment markers delimiting blocks that this script keeps in
+sync with the chapter's source code and ladder order:
 
 * Embedded function/class bodies extracted from a sibling source file::
 
@@ -48,11 +48,14 @@ with the chapter's source code:
       <!-- BEGIN auto:navigation -->
       [← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) ·
       [Teaching ladder](../) ·
+      [Exercises](./EXERCISES.md) ·
       [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
       <!-- END auto:navigation -->
 
   The renderer inserts this block immediately after the H1 when it is missing
-  and refreshes adjacent chapter titles/links when the ladder changes.
+  and refreshes adjacent chapter titles/links when the ladder changes. Exercise
+  pages get a companion block linking back to the narrative, index, and next
+  chapter.
 
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
@@ -205,34 +208,46 @@ def _chapter_title(chapter: Chapter) -> str:
     return heading.removeprefix("# ")
 
 
-def render_navigation(chapter: Chapter) -> str:
+def _chapter_position(chapter: Chapter) -> tuple[list[Chapter], int]:
     chapters = discover_chapters()
     try:
         index = next(i for i, candidate in enumerate(chapters) if candidate.path == chapter.path)
     except StopIteration as exc:
         raise ValueError(f"unknown teaching chapter: {chapter.slug}") from exc
+    return chapters, index
+
+
+def render_navigation(chapter: Chapter) -> str:
+    chapters, index = _chapter_position(chapter)
 
     links: list[str] = []
     if index:
         previous = chapters[index - 1]
         links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
     links.append("[Teaching ladder](../)")
+    links.append("[Exercises](./EXERCISES.md)")
     if index + 1 < len(chapters):
         following = chapters[index + 1]
         links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
     return " · ".join(links)
 
 
-def _render_navigation_block(chapter: Chapter) -> str:
-    return (
-        "<!-- BEGIN auto:navigation -->\n"
-        f"{render_navigation(chapter)}\n"
-        "<!-- END auto:navigation -->"
-    )
+def render_exercise_navigation(chapter: Chapter) -> str:
+    chapters, index = _chapter_position(chapter)
+
+    links = ["[← Chapter narrative](./README.md)", "[Teaching ladder](../)"]
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
+    return " · ".join(links)
 
 
-def _ensure_navigation(chapter: Chapter, text: str) -> str:
-    block = _render_navigation_block(chapter)
+def _render_navigation_block(navigation: str) -> str:
+    return f"<!-- BEGIN auto:navigation -->\n{navigation}\n<!-- END auto:navigation -->"
+
+
+def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
+    block = _render_navigation_block(navigation)
     if NAVIGATION_RE.search(text):
         updated = NAVIGATION_RE.sub(lambda _match: block, text)
         match = NAVIGATION_RE.search(updated)
@@ -268,11 +283,22 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return render_linkhash(chapter, attrs, m.group(1))
 
-    updated = _ensure_navigation(chapter, original)
+    updated = _ensure_navigation(chapter, original, render_navigation(chapter))
     updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)
     updated = LINKHASH_RE.sub(_linkhash_sub, updated)
+    return original, updated
+
+
+def regen_exercises(chapter: Chapter) -> tuple[str, str]:
+    exercises_path = chapter.path / "EXERCISES.md"
+    original = exercises_path.read_text(encoding="utf-8")
+    updated = _ensure_navigation(
+        chapter,
+        original,
+        render_exercise_navigation(chapter),
+    )
     return original, updated
 
 
@@ -282,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit non-zero if any README would change. Writes nothing.",
+        help="Exit non-zero if any README or exercise page would change. Writes nothing.",
     )
     args = parser.parse_args(argv)
 
@@ -295,28 +321,32 @@ def main(argv: list[str] | None = None) -> int:
 
     drift = False
     for chapter in chapters:
-        readme = chapter.path / "README.md"
-        if not readme.exists():
-            continue
-        original, updated = regen_readme(chapter)
-        if original == updated:
-            continue
-        if args.check:
-            drift = True
-            print(f"would update {readme.relative_to(ROOT)}", file=sys.stderr)
-            sys.stderr.write(
-                "".join(
-                    difflib.unified_diff(
-                        original.splitlines(keepends=True),
-                        updated.splitlines(keepends=True),
-                        fromfile=str(readme),
-                        tofile=f"{readme} (regenerated)",
+        for filename, regenerator in (
+            ("README.md", regen_readme),
+            ("EXERCISES.md", regen_exercises),
+        ):
+            path = chapter.path / filename
+            if not path.exists():
+                continue
+            original, updated = regenerator(chapter)
+            if original == updated:
+                continue
+            if args.check:
+                drift = True
+                print(f"would update {path.relative_to(ROOT)}", file=sys.stderr)
+                sys.stderr.write(
+                    "".join(
+                        difflib.unified_diff(
+                            original.splitlines(keepends=True),
+                            updated.splitlines(keepends=True),
+                            fromfile=str(path),
+                            tofile=f"{path} (regenerated)",
+                        )
                     )
                 )
-            )
-        else:
-            readme.write_text(updated)
-            print(f"updated {readme.relative_to(ROOT)}")
+            else:
+                path.write_text(updated)
+                print(f"updated {path.relative_to(ROOT)}")
 
     return 1 if drift else 0
 

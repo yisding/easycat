@@ -1,5 +1,9 @@
 # Chapter 8 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+<!-- END auto:navigation -->
+
 ## 1. Separate threshold changes from classification errors
 
 **Task.** Record several ambiguous pauses once with `--backend smart`,

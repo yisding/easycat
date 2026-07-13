@@ -1,7 +1,7 @@
 # Chapter 4 — VAD + Pre-roll
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Teaching ladder](../) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+[← Chapter 3 — Parrot, the Naive Way](../03-parrot-naive/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
 <!-- END auto:navigation -->
 
 > Real speech detection. And why the buffer *before* the detection

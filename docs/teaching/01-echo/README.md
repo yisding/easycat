@@ -1,7 +1,7 @@
 # Chapter 1 — Echo
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 0 — Hello, Audio](../00-hello-audio/) · [Teaching ladder](../) · [Chapter 2 — Transcribe →](../02-transcribe/)
+[← Chapter 0 — Hello, Audio](../00-hello-audio/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
 <!-- END auto:navigation -->
 
 > Mic to speaker, continuously, through the `Transport` protocol.

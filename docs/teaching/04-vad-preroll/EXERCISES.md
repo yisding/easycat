@@ -1,5 +1,9 @@
 # Chapter 4 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+<!-- END auto:navigation -->
+
 ## 1. Diff your breakers across preroll on/off
 
 **Task.** First run the provider-free frame probe:

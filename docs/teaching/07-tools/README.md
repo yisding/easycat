@@ -1,7 +1,7 @@
 # Chapter 7 — Tools, Mid-stream
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 6 — Streaming Agent + Sentence TTS](../06-streaming-agent/) · [Teaching ladder](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+[← Chapter 6 — Streaming Agent + Sentence TTS](../06-streaming-agent/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:navigation -->
 
 > The agent pauses to fetch something. The user hears silence — or

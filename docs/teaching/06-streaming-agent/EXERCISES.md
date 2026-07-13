@@ -1,5 +1,9 @@
 # Chapter 6 — Exercises
 
+<!-- BEGIN auto:navigation -->
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 7 — Tools, Mid-stream →](../07-tools/)
+<!-- END auto:navigation -->
+
 ## 1. Isolate which knob buys you what
 
 **Task.** Change `MODEL = "gpt-4o-mini"` to `"gpt-4o"`. Re-run.
