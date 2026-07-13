@@ -1,5 +1,9 @@
 # Chapter 15 — Operate in production
 
+<!-- BEGIN auto:navigation -->
+[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · [Teaching ladder](../)
+<!-- END auto:navigation -->
+
 > Chapters 0-14 built and generalised a single session. Production
 > means running N of them at once, tearing them down cleanly, and
 > being able to debug the one that misbehaved yesterday. This

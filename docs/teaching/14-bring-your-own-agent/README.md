@@ -1,5 +1,9 @@
 # Chapter 14 — Bring your own agent
 
+<!-- BEGIN auto:navigation -->
+[← Chapter 13 — Swap Providers AND Transports](../13-swap-providers-and-transports/) · [Teaching ladder](../) · [Chapter 15 — Operate in production →](../15-operate-in-production/)
+<!-- END auto:navigation -->
+
 > Chapter 13's `build_agent()` returned an `agents.Agent(...)` from
 > the OpenAI Agents SDK. `create_session` silently wrapped it in an
 > `OpenAIAgentsBridge`. In this chapter we drop the framework

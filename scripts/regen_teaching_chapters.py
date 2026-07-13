@@ -43,6 +43,17 @@ with the chapter's source code:
   The script rewrites the line-range fragment of the link that immediately
   follows the marker.
 
+* A chapter breadcrumb derived from the ordered chapter directories::
+
+      <!-- BEGIN auto:navigation -->
+      [← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) ·
+      [Teaching ladder](../) ·
+      [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+      <!-- END auto:navigation -->
+
+  The renderer inserts this block immediately after the H1 when it is missing
+  and refreshes adjacent chapter titles/links when the ladder changes.
+
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
 ``main.py``; ``--check`` exits non-zero if any block would change,
@@ -80,6 +91,12 @@ LINERANGE_RE = re.compile(r"(<!-- auto:linerange (?P<attrs>[^>]*?) -->)`L\d+(?:-
 LINKHASH_RE = re.compile(
     r"(<!-- auto:linkhash (?P<attrs>[^>]*?) -->\s*\[[^\]]*\]\([^)\s]+?\.py)"
     r"#L\d+(?:-L\d+)?"
+)
+NAVIGATION_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:navigation -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:navigation -->)",
+    re.DOTALL,
 )
 ATTR_RE = re.compile(r"(\w+)=(?:\"([^\"]*)\"|(\S+))")
 
@@ -180,6 +197,57 @@ def render_linkhash(chapter: Chapter, attrs: dict[str, str], prefix: str) -> str
     return prefix + anchor
 
 
+def _chapter_title(chapter: Chapter) -> str:
+    readme = chapter.path / "README.md"
+    heading = readme.read_text(encoding="utf-8").splitlines()[0]
+    if not heading.startswith("# "):
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    return heading.removeprefix("# ")
+
+
+def render_navigation(chapter: Chapter) -> str:
+    chapters = discover_chapters()
+    try:
+        index = next(i for i, candidate in enumerate(chapters) if candidate.path == chapter.path)
+    except StopIteration as exc:
+        raise ValueError(f"unknown teaching chapter: {chapter.slug}") from exc
+
+    links: list[str] = []
+    if index:
+        previous = chapters[index - 1]
+        links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
+    links.append("[Teaching ladder](../)")
+    if index + 1 < len(chapters):
+        following = chapters[index + 1]
+        links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
+    return " · ".join(links)
+
+
+def _render_navigation_block(chapter: Chapter) -> str:
+    return (
+        "<!-- BEGIN auto:navigation -->\n"
+        f"{render_navigation(chapter)}\n"
+        "<!-- END auto:navigation -->"
+    )
+
+
+def _ensure_navigation(chapter: Chapter, text: str) -> str:
+    block = _render_navigation_block(chapter)
+    if NAVIGATION_RE.search(text):
+        updated = NAVIGATION_RE.sub(lambda _match: block, text)
+        match = NAVIGATION_RE.search(updated)
+        assert match is not None
+        remainder = updated[match.end() :].lstrip("\n")
+        return f"{updated[: match.end()]}\n\n{remainder}"
+
+    heading = re.match(r"^# [^\n]+\n", text)
+    if heading is None:
+        readme = chapter.path / "README.md"
+        raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
+    remainder = text[heading.end() :].lstrip("\n")
+    return f"{text[: heading.end()]}\n{block}\n\n{remainder}"
+
+
 def regen_readme(chapter: Chapter) -> tuple[str, str]:
     readme_path = chapter.path / "README.md"
     original = readme_path.read_text()
@@ -200,7 +268,8 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return render_linkhash(chapter, attrs, m.group(1))
 
-    updated = SNIPPET_RE.sub(_snippet_sub, original)
+    updated = _ensure_navigation(chapter, original)
+    updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)
     updated = LINKHASH_RE.sub(_linkhash_sub, updated)

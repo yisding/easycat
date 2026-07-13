@@ -1,5 +1,9 @@
 # Chapter 2 — Transcribe
 
+<!-- BEGIN auto:navigation -->
+[← Chapter 1 — Echo](../01-echo/) · [Teaching ladder](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:navigation -->
+
 > Speak, see text. Twice — once batch, once streaming. Feel the
 > latency difference. And meet the journal.
 

@@ -1,5 +1,9 @@
 # Chapter 9 — Interruption / Barge-in
 
+<!-- BEGIN auto:navigation -->
+[← Chapter 8 — Smart-turn](../08-smart-turn/) · [Teaching ladder](../) · [Chapter 10 — Cleaning the Signal →](../10-cleaning-signal/)
+<!-- END auto:navigation -->
+
 > Three versions of the same feature. Each one better. Each one
 > teaching something the previous one didn't.
 

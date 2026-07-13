@@ -1,5 +1,9 @@
 # Chapter 0 — Hello, Audio
 
+<!-- BEGIN auto:navigation -->
+[Teaching ladder](../) · [Chapter 1 — Echo →](../01-echo/)
+<!-- END auto:navigation -->
+
 > Record, play, and *understand* raw PCM. No framework. Just bytes
 > and sample rates.
 

@@ -1,5 +1,9 @@
 # Chapter 5 — The Blocking Agent
 
+<!-- BEGIN auto:navigation -->
+[← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) · [Teaching ladder](../) · [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 

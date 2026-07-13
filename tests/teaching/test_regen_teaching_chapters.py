@@ -17,6 +17,7 @@ from easycat.events import (
 )
 from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
+    NAVIGATION_RE,
     ROOT,
     TEACHING,
     Chapter,
@@ -24,6 +25,7 @@ from scripts.regen_teaching_chapters import (
     discover_chapters,
     regen_readme,
     render_diff,
+    render_navigation,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -76,6 +78,34 @@ def test_teaching_readmes_match_regenerated_auto_blocks() -> None:
         "Teaching README auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_readmes)
     )
+
+
+def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
+    chapters = discover_chapters()
+
+    assert render_navigation(chapters[0]) == (
+        "[Teaching ladder](../) · [Chapter 1 — Echo →](../01-echo/)"
+    )
+    assert render_navigation(chapters[8]) == (
+        "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
+        "[Teaching ladder](../) · "
+        "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
+    )
+    assert render_navigation(chapters[-1]) == (
+        "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
+        "[Teaching ladder](../)"
+    )
+
+
+def test_each_chapter_has_one_current_generated_navigation_block() -> None:
+    for chapter in discover_chapters():
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        matches = list(NAVIGATION_RE.finditer(readme))
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_navigation(chapter)
+        assert matches[0].start() > readme.index("# ")
+        assert matches[0].start() < readme.find("\n## ")
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:
