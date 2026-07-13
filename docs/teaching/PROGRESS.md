@@ -11,8 +11,8 @@ or sensitive transcript text.
 A chapter is complete only when every box on its card is checked and its self-check
 score reaches N/N. Retry only missed answers; preserve wrong predictions because they
 are evidence to explain, not history to rewrite. Chapters 2-15 begin with a
-two-chapter-lag recall. Complete both integration checks at each phase boundary before
-starting the next chapter card.
+two-chapter-lag recall. At each phase boundary, pass all four integration criteria at
+4/4 before starting the next chapter card.
 
 ## Chapter 0 — Hello, Audio
 
@@ -225,13 +225,18 @@ starting the next chapter card.
 
 ## Build phase review
 
-Complete this closed-book integration gate before entering the next phase.
+Without notes, draw one turn from raw input format through STT partial/final, endpointing,
+agent/TTS, transport acceptance, and barge-in cancellation.
 
-- [ ] **Integrate:** without notes, draw one turn from raw input format through STT partial/final,
-  endpointing, agent/TTS, transport acceptance, and barge-in cancellation; mark which observations
-  may revise and which actions commit.
-- [ ] **Ground it:** cite attempt evidence for format, partial/final policy, first audio, and
-  interruption ordering; state one caller-heard claim that transport acceptance still cannot prove.
+Score the result against all four criteria below. Mark each criterion **pass** or
+**retry** in your progress record; advance only at 4/4 and redo only missed criteria.
+
+- [ ] **Coverage:** the drawing includes every stage from input format through interruption.
+- [ ] **Causality:** it marks which observations may revise, which actions commit, and why
+  cancellation ordering preserves the next utterance.
+- [ ] **Evidence:** it cites attempt evidence for format, partial/final policy, first audio, and
+  interruption ordering.
+- [ ] **Limits:** it states one caller-heard claim that transport acceptance still cannot prove.
 
 ## Chapter 10 — Cleaning the Signal
 
@@ -299,12 +304,16 @@ Complete this closed-book integration gate before entering the next phase.
 
 ## Operate phase review
 
-Complete this closed-book integration gate before entering the next phase.
+Given an unfamiliar bad call, write the diagnostic order before proposing a fix.
 
-- [ ] **Integrate:** given an unfamiliar bad call, write the diagnostic order for NR/AEC, journal
-  queries, and latency/eval coverage before proposing a fix.
-- [ ] **Ground it:** cite one bundle or probe result to name the bottleneck, strongest supported
-  cause, missing evidence, and metric that would catch a regression.
+Score the result against all four criteria below. Mark each criterion **pass** or
+**retry** in your progress record; advance only at 4/4 and redo only missed criteria.
+
+- [ ] **Coverage:** the order covers NR/AEC, journal queries, and latency/eval coverage.
+- [ ] **Causality:** it explains why each check precedes the proposed fix and names the strongest
+  supported cause.
+- [ ] **Evidence:** it cites one bundle or probe result that identifies the bottleneck.
+- [ ] **Limits:** it names missing evidence and the metric that would catch a regression.
 
 ## Chapter 13 — Swap Providers AND Transports
 
@@ -352,12 +361,18 @@ Complete this closed-book integration gate before entering the next phase.
 
 ## Generalise phase review
 
-Complete this closed-book integration gate before entering the next phase.
+Design one provider × transport × agent comparison that changes one axis at a time while preserving
+the session and bridge contracts.
 
-- [ ] **Integrate:** design one provider × transport × agent comparison that changes one axis at a
-  time while preserving the session and bridge contracts.
-- [ ] **Ground it:** name the config or bridge boundary for each axis, one invariant event/state
-  shape, and the measurement that decides the tradeoff.
+Score the result against all four criteria below. Mark each criterion **pass** or
+**retry** in your progress record; advance only at 4/4 and redo only missed criteria.
+
+- [ ] **Coverage:** the design names the config or bridge boundary for every axis.
+- [ ] **Causality:** it explains what changes on the selected axis and how the other axes stay
+  controlled.
+- [ ] **Evidence:** it names one invariant event/state shape and the measurement that decides the
+  tradeoff.
+- [ ] **Limits:** it states one comparison claim that the selected measurement cannot support.
 
 ## Chapter 15 — Operate in production
 
@@ -383,7 +398,17 @@ Complete this closed-book integration gate before entering the next phase.
 
 ## Ship phase review and finish the ladder
 
-- [ ] **Replay everything:** run `uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence`.
-- [ ] **Teach it back:** without notes, explain the path from raw PCM through a multi-session
-  production service, including ownership, start rollback, shutdown, and postmortem evidence; cite
-  the result that changed your model most.
+Run `uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence`. Then, without
+notes, explain the path from raw PCM through a multi-session production service, including
+ownership, start rollback, shutdown, and postmortem evidence.
+
+Score the result against all four criteria below. Mark each criterion **pass** or
+**retry** in your progress record; advance only at 4/4 and redo only missed criteria.
+
+- [ ] **Coverage:** the explanation connects raw audio, turn processing, and multi-session
+  operation.
+- [ ] **Causality:** it explains how ownership, start rollback, and shutdown protect peer sessions.
+- [ ] **Evidence:** all 16 offline checkpoints pass and it cites the result that changed the
+  learner's model most.
+- [ ] **Limits:** it states one production claim the postmortem evidence cannot prove and the next
+  measurement needed.

@@ -202,7 +202,10 @@ Each chapter's README lists its own prerequisites up front.
   causal explanation. Closing self-checks are closed-book retrieval gates:
   answer every numbered question, support each answer with attempt evidence,
   mark each answer pass or retry, and advance only at the chapter's N/N
-  threshold. From chapter 2 onward, a generated prompt also
+  threshold. Phase reviews use the same mastery rule for synthesis: score
+  **coverage**, **causality**, **evidence**, and **limits**, mark each criterion
+  pass or retry, and enter the next phase only at 4/4. From chapter 2 onward,
+  a generated prompt also
   revisits the checkpoint from two chapters earlier before the new narrative,
   then asks the learner to connect both concepts before checking the old probe.
 - **Journals are the single source of truth.** From chapter 2

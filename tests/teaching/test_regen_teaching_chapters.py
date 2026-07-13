@@ -23,11 +23,13 @@ from scripts.regen_teaching_chapters import (
     HINT_DISCLOSURE_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
+    PHASE_REVIEW_CRITERION_LABELS,
     PHASE_REVIEWS,
     PRACTICE_HANDOFF_RE,
     PROGRESS_WORKSHEET,
     ROOT,
     SELF_CHECK_PROTOCOL_RE,
+    SHIP_PHASE_REVIEW,
     SHIP_PHASE_REVIEW_TITLE,
     SPACED_RETRIEVAL_RE,
     TEACHING,
@@ -114,7 +116,7 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
     for label in labels:
         assert worksheet.count(f"- [ ] **{label}:**") == 16
     assert worksheet.count("- [ ] **Recall earlier:**") == 14
-    assert worksheet.count("- [ ]") == 150
+    assert worksheet.count("- [ ]") == 158
     assert "- [x]" not in worksheet.lower()
     for chapter_number, chapter in enumerate(discover_chapters()):
         checkpoint = _offline_checkpoint_for(chapter)
@@ -138,17 +140,32 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
             assert recall_link in worksheet
         else:
             assert recall_link not in worksheet
-    for final_chapter, (title, integrate, ground) in PHASE_REVIEWS.items():
+    for final_chapter, review in PHASE_REVIEWS.items():
         chapter_heading = worksheet.index(f"## Chapter {final_chapter} ")
-        review_heading = worksheet.index(f"## {title}")
+        review_heading = worksheet.index(f"## {review.title}")
         next_heading = worksheet.index(f"## Chapter {final_chapter + 1} ")
+        review_section = worksheet[review_heading:next_heading]
+        normalized_review = re.sub(r"\s+", " ", review_section)
 
         assert chapter_heading < review_heading < next_heading
-        assert integrate in normalized_worksheet
-        assert ground in normalized_worksheet
-    assert worksheet.count("- [ ] **Integrate:**") == 3
-    assert worksheet.count("- [ ] **Ground it:**") == 3
-    assert "## Ship phase review and finish the ladder" in worksheet
+        assert review.prompt in normalized_review
+        for label, criterion in review.criteria:
+            assert f"- [ ] **{label}:**" in review_section
+            assert criterion in normalized_review
+
+    ship_heading = worksheet.index(f"## {SHIP_PHASE_REVIEW.title}")
+    normalized_ship_review = re.sub(r"\s+", " ", worksheet[ship_heading:])
+    assert SHIP_PHASE_REVIEW.prompt in normalized_ship_review
+    for label, criterion in SHIP_PHASE_REVIEW.criteria:
+        assert f"- [ ] **{label}:**" in worksheet[ship_heading:]
+        assert criterion in normalized_ship_review
+
+    for label in PHASE_REVIEW_CRITERION_LABELS:
+        assert worksheet.count(f"- [ ] **{label}:**") == 4
+    assert worksheet.count("advance only at 4/4") == 4
+    assert worksheet.count("Mark each criterion **pass** or") == 4
+    assert "- [ ] **Integrate:**" not in worksheet
+    assert "- [ ] **Ground it:**" not in worksheet
 
 
 def test_render_navigation_handles_first_middle_and_last_chapters() -> None:

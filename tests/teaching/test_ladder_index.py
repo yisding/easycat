@@ -247,6 +247,11 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
     assert "support each answer with attempt evidence" in normalized_index
     assert "mark each answer pass or retry" in normalized_index
     assert "chapter's N/N threshold" in normalized_index
+    assert "Phase reviews use the same mastery rule for synthesis" in normalized_index
+    for criterion in ("coverage", "causality", "evidence", "limits"):
+        assert f"**{criterion}**" in normalized_index
+    assert "mark each criterion pass or retry" in normalized_index
+    assert "enter the next phase only at 4/4" in normalized_index
     assert "one primary question" in normalized_index
     assert not any(contract in index for contract in stale_contracts)
 
