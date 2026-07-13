@@ -19,6 +19,7 @@ Source: https://github.com/yisding/easycat
 - [CLI and scaffolds](https://github.com/yisding/easycat/blob/main/README.md#cli) — for app builders: Scaffold projects, compare templates with base package requirements, extras, env requirements, optional env knobs, generated files, and copyable create/preflight/check/fix/docs/json-schema/run commands, and learn CLI JSON envelopes.
 - [Docs map](https://github.com/yisding/easycat/blob/main/docs/README.md) — for all readers: Choose the maintained guide for your current task.
 - [Teaching ladder](https://github.com/yisding/easycat/tree/main/docs/teaching) — for learners: Learn voice pipelines chapter by chapter.
+- [Progress worksheet](https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md) — for learners: Track evidence-backed completion across all 16 teaching chapters.
 - [First lesson](https://github.com/yisding/easycat/tree/main/docs/teaching/00-hello-audio) — for learners: Start with audio chunks before agents or providers.
 - [Examples](https://github.com/yisding/easycat/blob/main/examples/README.md) — for app builders: Find runnable local, browser, WebSocket, and telephony apps.
 - [Architecture](https://github.com/yisding/easycat/blob/main/docs/architecture.md) — for maintainers: Understand the pipeline, session collaborators, stages, providers, and agent bridges.

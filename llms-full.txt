@@ -138,6 +138,20 @@ uv run easycat validate report .easycat/validation/latest.json
 uv run easycat validate report .easycat/validation/latest.json --json
 ```
 
+## Progress worksheet
+
+- Path: docs/teaching/PROGRESS.md
+- URL: https://github.com/yisding/easycat/blob/main/docs/teaching/PROGRESS.md
+- Audience: learners
+- Track evidence-backed completion across all 16 teaching chapters.
+
+Commands:
+
+```bash
+uv run python docs/teaching/00-hello-audio/format_boundaries.py
+uv run python docs/teaching/offline_spine.py --run --jobs 4 --show-evidence
+```
+
 ## First lesson
 
 - Path: docs/teaching/00-hello-audio/
