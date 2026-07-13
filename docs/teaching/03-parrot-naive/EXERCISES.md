@@ -9,6 +9,19 @@ viscerally so the next chapter's fix lands. The README walks you
 through four sentences that break it; this file deepens that into
 two tractable follow-ups.
 
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
+
 ## 1. There is no good timeout value
 
 **Task.** Change `SILENCE_TIMEOUT_S` at the top of `main.py` to

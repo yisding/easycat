@@ -8,6 +8,19 @@ The README's three planted-bug investigations *are* the chapter's
 core exercises. This file adds two follow-ups for once you've
 worked through them.
 
+<!-- BEGIN auto:exercise-protocol -->
+> **Completion evidence for every task**
+>
+> 1. **Before hints:** keep your initial prediction or plan.
+> 2. **After the attempt:** keep the exact command or change and one observed field,
+>    measurement, or behavior.
+> 3. **Before moving on:** explain in one sentence why the evidence supports or changes
+>    your model.
+>
+> A task is complete when all three are present. Keep a wrong first answer visible;
+> it is evidence to explain after revealing hints, not an answer to rewrite.
+<!-- END auto:exercise-protocol -->
+
 ## 1. Three "what could go wrong" hypotheses
 
 **Task.** Pick any bundle from your own `runs/` directories

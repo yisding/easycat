@@ -92,6 +92,23 @@ sync with the chapter's source code and ladder order:
       from memory.
       <!-- END auto:practice-handoff -->
 
+* A completion-evidence protocol before the first exercise task::
+
+      <!-- BEGIN auto:exercise-protocol -->
+      > **Completion evidence for every task**
+      >
+      > 1. **Before hints:** keep your initial prediction or plan.
+      > 2. **After the attempt:** keep the exact command or change and one
+      >    observed field, measurement, or behavior.
+      > 3. **Before moving on:** explain why the evidence supports or changes
+      >    your model.
+      >
+      > A task is complete when all three are present.
+      <!-- END auto:exercise-protocol -->
+
+  The renderer places this after any exercise-page introduction and before the
+  first task, so every applied exercise shares one concrete completion contract.
+
 * A completion footer at the end of each exercise page::
 
       <!-- BEGIN auto:exercise-completion -->
@@ -184,6 +201,12 @@ PRACTICE_HANDOFF_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:practice-handoff -->)"
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:practice-handoff -->)",
+    re.DOTALL,
+)
+EXERCISE_PROTOCOL_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:exercise-protocol -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:exercise-protocol -->)",
     re.DOTALL,
 )
 EXERCISE_COMPLETION_RE = re.compile(
@@ -347,6 +370,21 @@ def render_exercise_navigation(chapter: Chapter) -> str:
     return " · ".join(links)
 
 
+def render_exercise_protocol() -> str:
+    return (
+        "> **Completion evidence for every task**\n"
+        ">\n"
+        "> 1. **Before hints:** keep your initial prediction or plan.\n"
+        "> 2. **After the attempt:** keep the exact command or change and one observed field,\n"
+        ">    measurement, or behavior.\n"
+        "> 3. **Before moving on:** explain in one sentence why the evidence supports or changes\n"
+        ">    your model.\n"
+        ">\n"
+        "> A task is complete when all three are present. Keep a wrong first answer visible;\n"
+        "> it is evidence to explain after revealing hints, not an answer to rewrite."
+    )
+
+
 def render_practice_handoff() -> str:
     return (
         "## Practice and self-check\n\n"
@@ -473,6 +511,14 @@ def _render_practice_handoff_block() -> str:
     )
 
 
+def _render_exercise_protocol_block() -> str:
+    return (
+        "<!-- BEGIN auto:exercise-protocol -->\n"
+        f"{render_exercise_protocol()}\n"
+        "<!-- END auto:exercise-protocol -->"
+    )
+
+
 def _render_exercise_completion_block(chapter: Chapter) -> str:
     return (
         "<!-- BEGIN auto:exercise-completion -->\n"
@@ -535,6 +581,19 @@ def _ensure_practice_handoff(chapter: Chapter, text: str) -> str:
         raise ValueError(f"{chapter.slug}/README.md must practice before its closing handoff")
     prefix = text[: target.start()].rstrip("\n")
     remainder = text[target.start() :].lstrip("\n")
+    return f"{prefix}\n\n{block}\n\n{remainder}"
+
+
+def _ensure_exercise_protocol(chapter: Chapter, text: str) -> str:
+    block = _render_exercise_protocol_block()
+    if EXERCISE_PROTOCOL_RE.search(text):
+        return EXERCISE_PROTOCOL_RE.sub(lambda _match: block, text)
+
+    first_task = re.search(r"^## (?:\d+\.|Bonus\b)", text, re.MULTILINE)
+    if first_task is None:
+        raise ValueError(f"{chapter.slug}/EXERCISES.md is missing its first applied task")
+    prefix = text[: first_task.start()].rstrip("\n")
+    remainder = text[first_task.start() :].lstrip("\n")
     return f"{prefix}\n\n{block}\n\n{remainder}"
 
 
@@ -604,6 +663,7 @@ def regen_exercises(chapter: Chapter) -> tuple[str, str]:
         original,
         render_exercise_navigation(chapter),
     )
+    updated = _ensure_exercise_protocol(chapter, updated)
     updated = _ensure_exercise_hints(updated)
     updated = _ensure_exercise_completion(chapter, updated)
     return original, updated

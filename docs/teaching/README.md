@@ -191,7 +191,9 @@ Each chapter's README lists its own prerequisites up front.
   probes to isolate boundary claims. Generated handoffs connect those steps
   and only then point the learner to the next chapter. Applied-task hints stay
   concealed behind a reveal-after-attempt disclosure so learners take a first
-  swing before seeing solution cues.
+  swing before seeing solution cues. A task is complete when the learner has
+  kept an initial plan, the exact command or change plus an observation, and a
+  causal explanation.
 - **Journals are the single source of truth.** From chapter 2
   onward each runnable chapter dumps a `RunBundle` to
   `runs/*.bundle` in its own folder. The `runs/` directory is
