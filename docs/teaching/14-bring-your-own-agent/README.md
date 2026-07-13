@@ -10,6 +10,17 @@
 > entirely and plug in a plain async class — same Session code,
 > different brain.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `workflow artifact boundary` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 13.](../13-swap-providers-and-transports/)

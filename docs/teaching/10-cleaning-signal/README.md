@@ -10,6 +10,17 @@
 > through the microphone. Same pipeline slot; fundamentally
 > different techniques.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `NR/AEC replay metrics` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 9](../09-interruption/)

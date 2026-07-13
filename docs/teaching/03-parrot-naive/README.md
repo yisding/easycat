@@ -7,6 +7,17 @@
 > A bot that repeats what you said. Except it breaks the instant
 > you say "um."
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `task/resource cleanup` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 **Wrong-version-first chapter.** The whole point of this chapter
 is to fail. Do not skip it. Do not read chapter 4 until you have
 personally heard this fail on your own voice.

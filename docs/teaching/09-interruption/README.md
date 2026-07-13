@@ -7,6 +7,17 @@
 > Three versions of the same feature. Each one better. Each one
 > teaching something the previous one didn't.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `barge-in cancellation` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 **Wrong-version-first, in triplicate.** Read them in order.
 
 ## Prerequisites

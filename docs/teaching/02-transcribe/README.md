@@ -7,6 +7,17 @@
 > Speak, see text. Twice — once batch, once streaming. Feel the
 > latency difference. And meet the journal.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `stream lifetime cleanup` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 1](../01-echo/)

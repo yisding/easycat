@@ -7,6 +7,17 @@
 > Mic to speaker, continuously, through the `Transport` protocol.
 > First encounter with EasyCat and with async audio streams.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `transport acceptance` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/01-echo/transport_contract_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 0](../00-hello-audio/)

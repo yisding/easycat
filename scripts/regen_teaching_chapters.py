@@ -57,6 +57,23 @@ sync with the chapter's source code and ladder order:
   pages get a companion block linking back to the narrative, index, and next
   chapter.
 
+* A chapter-local hardware-free checkpoint derived from
+  ``docs/teaching/offline_spine.py``::
+
+      <!-- BEGIN auto:offline-checkpoint -->
+      > **Hardware-free checkpoint:** prove `first-audio outcomes` without a
+      > microphone, speakers, or provider credentials:
+      >
+      > ```bash
+      > uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+      > ```
+      >
+      > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+      <!-- END auto:offline-checkpoint -->
+
+  The renderer inserts this block after the chapter's opening summary and
+  refreshes the concept and command from the spine's single manifest.
+
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
 ``main.py``; ``--check`` exits non-zero if any block would change,
@@ -68,6 +85,8 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
+import functools
+import importlib.util
 import re
 import sys
 from dataclasses import dataclass
@@ -99,6 +118,12 @@ NAVIGATION_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:navigation -->)"
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:navigation -->)",
+    re.DOTALL,
+)
+OFFLINE_CHECKPOINT_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:offline-checkpoint -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:offline-checkpoint -->)",
     re.DOTALL,
 )
 ATTR_RE = re.compile(r"(\w+)=(?:\"([^\"]*)\"|(\S+))")
@@ -242,8 +267,51 @@ def render_exercise_navigation(chapter: Chapter) -> str:
     return " · ".join(links)
 
 
+@functools.cache
+def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
+    spine_path = TEACHING / "offline_spine.py"
+    module_name = "_easycat_teaching_offline_spine_for_regen"
+    spec = importlib.util.spec_from_file_location(module_name, spine_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"cannot load {spine_path.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    rows = module.catalog()
+    checkpoints = {str(row["folder"]): row for row in rows}
+    if len(checkpoints) != len(rows):
+        raise ValueError(f"duplicate chapter folders in {spine_path.relative_to(ROOT)}")
+    return checkpoints
+
+
+def render_offline_checkpoint(chapter: Chapter) -> str:
+    checkpoint = _offline_checkpoints_by_folder().get(chapter.slug)
+    if checkpoint is None:
+        raise ValueError(f"no offline checkpoint for teaching chapter {chapter.slug}")
+    concept = checkpoint["concept"]
+    command = checkpoint["command"]
+    return (
+        f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
+        "> speakers, or provider credentials:\n"
+        ">\n"
+        "> ```bash\n"
+        f"> {command}\n"
+        "> ```\n"
+        ">\n"
+        "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
+    )
+
+
 def _render_navigation_block(navigation: str) -> str:
     return f"<!-- BEGIN auto:navigation -->\n{navigation}\n<!-- END auto:navigation -->"
+
+
+def _render_offline_checkpoint_block(chapter: Chapter) -> str:
+    return (
+        "<!-- BEGIN auto:offline-checkpoint -->"
+        f"{render_offline_checkpoint(chapter)}"
+        "<!-- END auto:offline-checkpoint -->"
+    )
 
 
 def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
@@ -261,6 +329,26 @@ def _ensure_navigation(chapter: Chapter, text: str, navigation: str) -> str:
         raise ValueError(f"{readme.relative_to(ROOT)} must start with an H1")
     remainder = text[heading.end() :].lstrip("\n")
     return f"{text[: heading.end()]}\n{block}\n\n{remainder}"
+
+
+def _ensure_offline_checkpoint(chapter: Chapter, text: str) -> str:
+    block = _render_offline_checkpoint_block(chapter)
+    if OFFLINE_CHECKPOINT_RE.search(text):
+        return OFFLINE_CHECKPOINT_RE.sub(lambda _match: block, text)
+
+    navigation = NAVIGATION_RE.search(text)
+    if navigation is None:
+        raise ValueError(f"{chapter.slug}/README.md is missing generated navigation")
+    summary_start = navigation.end()
+    while summary_start < len(text) and text[summary_start] == "\n":
+        summary_start += 1
+    summary = re.match(r"(?:>[^\n]*(?:\n|$))+", text[summary_start:])
+    if summary is None:
+        raise ValueError(f"{chapter.slug}/README.md must open with a blockquote summary")
+    summary_end = summary_start + summary.end()
+    prefix = text[:summary_end].rstrip("\n")
+    remainder = text[summary_end:].lstrip("\n")
+    return f"{prefix}\n\n{block}\n\n{remainder}"
 
 
 def regen_readme(chapter: Chapter) -> tuple[str, str]:
@@ -284,6 +372,7 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         return render_linkhash(chapter, attrs, m.group(1))
 
     updated = _ensure_navigation(chapter, original, render_navigation(chapter))
+    updated = _ensure_offline_checkpoint(chapter, updated)
     updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)

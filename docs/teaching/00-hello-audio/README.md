@@ -7,6 +7,17 @@
 > Record, play, and *understand* raw PCM. No framework. Just bytes
 > and sample rates.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `audio format boundaries` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/00-hello-audio/format_boundaries.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - Python 3.11+.

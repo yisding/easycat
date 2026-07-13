@@ -7,6 +7,17 @@
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `first-audio outcomes` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 **Wrong-version-first chapter.** Do not skip. The rest of the
 build movement (chapters 6-9) exists to close this gap.
 

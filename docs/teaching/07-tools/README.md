@@ -8,6 +8,17 @@
 > hears "let me check that for you." That choice is the whole
 > chapter.
 
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `session-action catalog` without a microphone,
+> speakers, or provider credentials:
+>
+> ```bash
+> uv run python docs/teaching/07-tools/action_catalog.py
+> ```
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
+
 ## Prerequisites
 
 - [Chapter 6](../06-streaming-agent/)
