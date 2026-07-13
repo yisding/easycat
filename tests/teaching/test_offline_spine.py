@@ -86,6 +86,8 @@ def test_offline_spine_json_list_is_documented() -> None:
     assert "concepts, setup commands, evidence cues, and individual commands" in readme
     assert "uv sync --extra quickstart --group dev" in readme
     assert "--run --through 5 --jobs 4" in readme
+    assert "--show-evidence" in readme
+    assert "row's `observed` value" in readme
 
 
 def test_offline_spine_lists_only_completed_chapters() -> None:
@@ -121,6 +123,8 @@ def test_offline_spine_runs_only_completed_chapters() -> None:
     assert payload["passed"] == 2
     assert payload["failed"] == 0
     assert [row["chapter"] for row in payload["checkpoints"]] == [0, 1]
+    assert isinstance(payload["checkpoints"][0]["observed"], list)
+    assert payload["checkpoints"][1]["observed"]["accepted"] == 2
 
 
 def test_offline_spine_rejects_out_of_range_chapter() -> None:
@@ -137,6 +141,34 @@ def test_offline_spine_rejects_out_of_range_chapter() -> None:
         assert "--through must be between 0 and 15" in completed.stderr
 
 
+def test_offline_spine_show_evidence_requires_run() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SPINE), "--show-evidence"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "--show-evidence requires --run" in completed.stderr
+
+
+def test_offline_spine_human_run_can_show_observed_evidence() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(SPINE), "--run", "--through", "0", "--show-evidence"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert "PASS     0  audio format boundaries" in completed.stdout
+    assert "Observed:" in completed.stdout
+    assert '"sample_rate_hz": 8000' in completed.stdout
+
+
 def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     spine = _load_spine()
     script = tmp_path / "docs" / "teaching" / "probe.py"
@@ -147,6 +179,7 @@ def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     script.write_text("print('not json')\n", encoding="utf-8")
     invalid_json = spine._run_checkpoint(checkpoint, timeout_s=5)
     assert invalid_json["status"] == "fail"
+    assert invalid_json["observed"] is None
     assert str(invalid_json["detail"]).startswith("stdout is not one JSON document:")
 
     script.write_text(
@@ -157,6 +190,7 @@ def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     )
     noisy = spine._run_checkpoint(checkpoint, timeout_s=5)
     assert noisy["status"] == "fail"
+    assert noisy["observed"] is None
     assert noisy["detail"] == "unexpected stderr: unexpected noise"
 
 
@@ -210,6 +244,7 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     assert {row["status"] for row in payload["checkpoints"]} == {"pass"}
     assert {row["returncode"] for row in payload["checkpoints"]} == {0}
     assert {row["detail"] for row in payload["checkpoints"]} == {""}
+    assert all(isinstance(row["observed"], dict | list) for row in payload["checkpoints"])
     after = {path.relative_to(TEACHING) for path in TEACHING.rglob("*")}
     assert after == before
     assert {path.name for path in ROOT.iterdir()} == root_entries_before

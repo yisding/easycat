@@ -95,7 +95,7 @@ sync with the chapter's source code and ladder order:
 
       ```bash
       uv sync --extra quickstart --group dev
-      uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+      uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --show-evidence
       ```
 
       - Review the chapter narrative
@@ -335,7 +335,7 @@ def render_exercise_completion(chapter: Chapter) -> str:
         "```bash\n"
         f"{checkpoint['setup_command']}\n"
         "uv run python docs/teaching/offline_spine.py --run "
-        f"--through {checkpoint['chapter']} --jobs 4\n"
+        f"--through {checkpoint['chapter']} --jobs 4 --show-evidence\n"
         "```\n\n" + "\n".join(f"- {link}" for link in links)
     )
 
