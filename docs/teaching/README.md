@@ -23,7 +23,8 @@ rules; use [llms.txt](../../llms.txt) for machine-readable docs route discovery
 or run `uv run easycat explain json-schema` (`uv run easycat doctor --json`
 emits first-run environment checks as parseable rows).
 
-> **Start here:** [`00-hello-audio/`](./00-hello-audio/).
+> **Start here:** [`00-hello-audio/`](./00-hello-audio/). Copy the generated
+> [progress worksheet](./PROGRESS.md) to keep an end-to-end completion record.
 
 After completing the prerequisites below, launch the first chapter from the
 repository root:
