@@ -70,3 +70,11 @@ Forget `Transport` for a minute. Write the same echo in pure
 how you'd add *one more downstream consumer* (like STT). The
 contrast is the whole pedagogical point of choosing the Protocol
 shape.
+
+## Self-check
+
+You should be able to: (a) state the inbound/outbound audio shape that the
+echo loop needs without looking at the protocol, (b) distinguish a chunk
+being produced from `send_audio(...)` accepting it, and (c) explain why the
+same loop can use Local, WebSocket, WebRTC, or Twilio transports without
+changing its control flow.

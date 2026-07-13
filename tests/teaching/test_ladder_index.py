@@ -216,6 +216,37 @@ def test_teaching_chapters_have_reader_entrypoints() -> None:
     assert not missing, "Teaching chapters missing reader entrypoints: " + ", ".join(missing)
 
 
+def test_teaching_chapters_follow_documented_learning_contract() -> None:
+    index = (TEACHING_DIR / "README.md").read_text(encoding="utf-8")
+    normalized_index = re.sub(r"\s+", " ", index)
+    stale_contracts = (
+        "Each README gets one diagram and one exercise",
+        "longer than one page",
+        "~≤200 lines of new reader-facing code",
+    )
+    invalid_exercises: list[str] = []
+
+    assert "Narrative, exercises, self-check" in normalized_index
+    assert "one or more applied tasks in the dedicated `EXERCISES.md`" in normalized_index
+    assert "Generated source diffs can make a README long" in normalized_index
+    assert "one primary question" in normalized_index
+    assert not any(contract in index for contract in stale_contracts)
+
+    for chapter_dir in _chapter_dirs():
+        exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
+        self_check_count = len(re.findall(r"^## Self-check$", exercises, re.M))
+        applied_task_count = len(re.findall(r"^## (?:\d+\.|Bonus\b)", exercises, re.M))
+        if self_check_count != 1 or applied_task_count < 1:
+            invalid_exercises.append(
+                f"{chapter_dir.name}: {applied_task_count} applied task(s), "
+                f"{self_check_count} self-check(s)"
+            )
+
+    assert not invalid_exercises, "Teaching exercise contract drifted: " + "; ".join(
+        invalid_exercises
+    )
+
+
 def test_teaching_chapter_readmes_include_runnable_commands() -> None:
     missing: list[str] = []
 
