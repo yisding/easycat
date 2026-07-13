@@ -8,15 +8,15 @@
 > you say "um."
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `task/resource cleanup` without a microphone,
+> **Hardware-free checkpoint:** prove `silence-timeout tradeoff` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
+> uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py
 > ```
 >
-> **Evidence to find:** event-stream exhaustion cancels mic receive; every path closes STT before
-> disconnect.
+> **Evidence to find:** 500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit
+> wait.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
@@ -46,7 +46,8 @@ personally heard this fail on your own voice.
   `speak_acceptance_probe.py` and `parrot.delivery` records for
   provider-free output-acceptance evidence; correlated `stt.received` and
   `stt.partial`/`stt.final` records that separate provider ingress from queue
-  consumption; `parrot_lifecycle_probe.py` for inherited task/resource scope.
+  consumption; `timeout_policy_probe.py` for the fixed-timeout tradeoff;
+  `parrot_lifecycle_probe.py` for inherited task/resource scope.
 - **New requirement:** `DEEPGRAM_API_KEY` — the parrot's silence
   timer keys off STT partials, which OpenAI's default STT only emits
   after the audio uploads.
@@ -514,6 +515,17 @@ uv run python docs/teaching/03-parrot-naive/main.py
 ```
 
 Talk. It repeats. Ctrl-C to stop.
+
+Before involving a microphone or provider, make the fixed-timeout tradeoff
+visible with deterministic journal-shaped records:
+
+```bash
+uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py
+```
+
+The 500 ms case fires 45 ms before the next word arrives; stretching the same
+policy to 2 seconds avoids that split only by adding roughly 2 seconds before
+every genuine commit.
 
 ## The naive plan
 

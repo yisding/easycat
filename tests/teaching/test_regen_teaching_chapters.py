@@ -132,16 +132,17 @@ def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:
     chapter = discover_chapters()[5]
 
     assert render_offline_checkpoint(chapter) == (
-        "\n> **Hardware-free checkpoint:** prove `first-audio outcomes` without a microphone,\n"
+        "\n> **Hardware-free checkpoint:** prove `blocking first-audio gap` without "
+        "a microphone,\n"
         "> speakers, or provider credentials:\n"
         ">\n"
         "> ```bash\n"
-        "> uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py\n"
+        "> uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py\n"
         "> ```\n"
         ">\n"
-        "> **Evidence to find:** no chunks, all rejected, and first accepted audio "
-        "produce three distinct\n"
-        "> outcomes.\n"
+        "> **Evidence to find:** 1,200 ms agent plus 450 ms TTS equals 1,650 ms total; "
+        "full enqueue takes\n"
+        "> 800 ms.\n"
         ">\n"
         "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )

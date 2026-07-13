@@ -8,15 +8,15 @@
 > pipeline overlap.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `streamed TTS delivery` without a microphone,
+> **Hardware-free checkpoint:** prove `sentence-level TTS handoff` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
 > uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
 > ```
 >
-> **Evidence to find:** sentence delivery counts roll up to matching turn counts in all three
-> scenarios.
+> **Evidence to find:** sentence delivery rows preserve acceptance separately and roll up to one
+> matching turn.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->

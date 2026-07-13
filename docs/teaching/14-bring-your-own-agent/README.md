@@ -11,15 +11,15 @@
 > different brain.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `workflow artifact boundary` without a microphone,
+> **Hardware-free checkpoint:** prove `plain workflow bridge contract` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
 > uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
 > ```
 >
-> **Evidence to find:** the artifact keeps metadata-only workflow state plus a pending session
-> action.
+> **Evidence to find:** `MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep
+> mode.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->

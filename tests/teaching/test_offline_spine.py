@@ -45,8 +45,13 @@ def test_offline_spine_prioritizes_primary_chapter_questions() -> None:
     checkpoints = {row["chapter"]: row for row in spine.catalog()}
     expected = {
         2: ("partial_policy_probe.py", "partial vs final commitment"),
+        3: ("timeout_policy_probe.py", "silence-timeout tradeoff"),
         4: ("preroll_probe.py", "VAD pre-roll frame order"),
+        5: ("gap_decomposition_probe.py", "blocking first-audio gap"),
+        6: ("tts_delivery_probe.py", "sentence-level TTS handoff"),
         7: ("filler_delivery_probe.py", "tool filler delivery"),
+        13: ("matrix_probe.py", "provider × transport matrix"),
+        14: ("workflow_state_probe.py", "plain workflow bridge contract"),
         15: ("manager_probe.py", "multi-session manager rollback"),
     }
 
