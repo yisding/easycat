@@ -19,6 +19,10 @@ It finishes with a two-session `stop_all()` sweep where one `stop()`
 raises. Which guarantees belong to the manager, and which cleanup remains
 the session's responsibility?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `SessionManager` has no journal and synthesizes no transport events.
@@ -54,6 +58,9 @@ the session's responsibility?
    PortAudio device sharing varies by host API and OS, so opening two
    `LocalTransport` instances is not a portable manager test.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Run `uv run easycat doctor` twice
 
 **Task.** Compare two scoped, server-oriented JSON reports:
@@ -68,6 +75,10 @@ OPENAI_API_KEY=not-a-real-key uv run easycat doctor \
 
 Which rows appear or change? Why does the second command test network
 liveness but not credential validity?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -94,6 +105,9 @@ liveness but not credential validity?
    live in a project dotenv file; doctor loads only recognized provider
    credentials and restores the process environment afterwards.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Gate a production bundle directly
 
 **Task.** Record at least five voice turns in chapter 13 or 15, replace
@@ -108,6 +122,10 @@ uv run easycat latency PATH --json \
 Then lower `--max-ms` until the gate fails. Finally raise
 `--min-samples` above the bundle's count. Why are those two failures
 different?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -132,6 +150,9 @@ different?
    captured-bundle gate here is for replayable call samples you already
    recorded; the validation command owns live canaries.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Prove the stable postmortem view
 
 **Task.** Run the provider-free full-SQLite probe:
@@ -143,6 +164,10 @@ uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
 Explain why `same_object_after_stop` and `records_preserved` are true,
 why `append_exposed_before_stop` was already false, and why the backend
 type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -158,6 +183,9 @@ type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
 4. `session.export_debug_bundle(...)` reads the preserved backend after
    stop. Reloading the emitted bundle and matching its record names proves
    the export is not merely an empty ZIP created after teardown.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

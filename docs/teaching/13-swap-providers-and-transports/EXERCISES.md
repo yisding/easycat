@@ -10,6 +10,10 @@
 via Cartesia's WebSocket API). What's the minimum diff from
 `deepgram-eleven`?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Add `cartesia` to the `--provider-mix` choices and return
@@ -27,6 +31,9 @@ via Cartesia's WebSocket API). What's the minimum diff from
    bundle as the other chapter 13 cells, so inspect it directly with
    `uv run easycat latency PATH --json`; no translator is needed.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Tightest P95/P50 ratio
 
 **Task.** Record about 20 matched turns per cell with the same short
@@ -34,6 +41,10 @@ prompt ("What time is it?"). For each resulting production bundle,
 run `uv run easycat latency PATH --json`. Which provider mix has the
 tightest server-side p95/p50 ratio? What extra evidence would you
 need before making the same claim about transports end to end?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -50,11 +61,18 @@ need before making the same claim about transports end to end?
    slowest run — noisy. Re-run each cell ~20 times for a
    meaningful number.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. SendDTMFAction on a real call
 
 **Task.** Wire `SendDTMFAction` from chapter 7 into the agent (the
 user asks for "press 1 to continue"). What does the journal show
 on the Twilio preset? What does a user on the phone hear?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -76,6 +94,9 @@ on the Twilio preset? What does a user on the phone hear?
    end-to-end path, use an isolated development account and number,
    not production traffic.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Trace scoped session teardown
 
 **Task.** Run the provider-free lifecycle probe:
@@ -90,6 +111,10 @@ trace contains `stop(force=False)` followed by a force-stop no-op, while
 the cancelled trace has only an effective `stop(force=True)`. Then
 explain why postmortem export belongs after session scope exit but before
 the caller-owned client closes.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -107,6 +132,9 @@ the caller-owned client closes.
 5. Move `session.export_postmortem()` inside the session block in the
    probe. The assertion no longer describes a postmortem export, even
    though the fake object can still append an event.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

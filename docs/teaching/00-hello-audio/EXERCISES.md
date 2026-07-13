@@ -14,6 +14,10 @@ and form your own answer before peeking.
 re-record, and play back. Is speech still intelligible? What about
 music? (Try humming a song while the recording window is open.)
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. For an ideally band-limited signal, an 8 kHz sample rate can represent
@@ -47,6 +51,9 @@ music? (Try humming a song while the recording window is open.)
   stream on entry and guarantees stop + close on normal exit, a failed
   write, or Ctrl-C.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Trace every format boundary
 
 **Task.** Run the provider-free format catalog and find two resampling
@@ -55,6 +62,10 @@ boundaries whose input and output are both mono PCM:
 ```bash
 uv run python docs/teaching/00-hello-audio/format_boundaries.py
 ```
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -72,6 +83,9 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
    probe. You changed one provider-input boundary, not the capture, TTS, or
    transport wire formats.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Compare raw and resolved TTS formats
 
 **Task.** Run the transport-alignment probe. Explain why “OpenAI TTS
@@ -81,6 +95,10 @@ defaults to 24 kHz” and “Twilio resolves OpenAI TTS transport output to
 ```bash
 uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 ```
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -97,6 +115,9 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 5. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
    Disable alignment only when you deliberately own the downstream format
    conversion or need a provider-specific output.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

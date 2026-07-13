@@ -21,6 +21,10 @@ that pause and `false` when you intended to continue, then rerun with
 `--labels labels.json`. How do the baseline and candidate confusion
 counts differ?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The classifier outputs `P(end-of-turn)`. Scores from 0.3 through
@@ -37,11 +41,18 @@ counts differ?
    commits for more false positives and user interruption. Tune on a
    representative labeled set, not on probability counts alone.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Find a real misfire and keep it
 
 **Task.** Record an utterance where the `vad` backend gets it
 right and `smart` gets it wrong. Save both bundles. (You will
 need this in chapter 12 when you build an eval set.)
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -57,11 +68,18 @@ need this in chapter 12 when you build an eval set.)
 4. A single real misfire is a tiny eval set of 1. Chapter 12
    teaches you to grow this into dozens.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Predict the cost of the "I was thinking..." case
 
 **Task.** Before running, predict whether smart-turn will hit or
 miss on the utterance *"I was thinking… we should order pizza."*
 Then run `--backend smart` and check.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -79,6 +97,9 @@ Then run `--backend smart` and check.
    Smart-turn is a speedup over the worst case, not a replacement
    for the safety net.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Account for the whole fallback wait
 
 **Task.** Run the provider-free endpoint path probe:
@@ -90,6 +111,10 @@ uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
 Before reading its JSON, calculate the total for each path. Then change
 the scripted classifier cost from 40 ms to 120 ms and predict which
 fields and totals move.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -105,6 +130,9 @@ fields and totals move.
    change `silence_wait_ms` or `pending_wait_ms`.
 5. In a live run, compare the recorded components. Do not infer the
    user-visible delay from a configured timeout alone.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

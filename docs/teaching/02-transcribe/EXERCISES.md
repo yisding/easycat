@@ -11,6 +11,10 @@
 `streaming.py`, then read the bundle and find the exact partial
 where the wrong guess stuck. Compare it to the final.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The bundle is `runs/*.bundle`. Open it with
@@ -46,6 +50,9 @@ where the wrong guess stuck. Compare it to the final.
   is not, and explain why `after_stream_end` is not microphone latency while
   `during_audio` can be.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Open a bundle in two ways
 
 **Task.** Read the same bundle two ways:
@@ -68,6 +75,10 @@ for r in structured:
 
 When does each shape pay off?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Linear iteration is good for "I want to see what happened in
@@ -81,6 +92,9 @@ When does each shape pay off?
    a `JournalView` whose query helpers return typed `JournalRecord`
    objects. Chapter 11 compares those two representations explicitly.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Draw the partial-commit boundary
 
 **Task.** Run the deterministic policy probe:
@@ -93,6 +107,10 @@ Change the second partial to "cancel my timer" while leaving the final as
 "set a timer for fifty minutes." Predict every list before rerunning it. Which
 consumers may observe the cancellation hypothesis, and which must wait?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. A caption can replace text freely; no external state was committed.
@@ -100,6 +118,9 @@ consumers may observe the cancellation hypothesis, and which must wait?
    the hypothesis changes.
 3. Tool calls, database writes, agent-history commits, and spoken audio cross
    the irreversible boundary. Dispatch those from `FINAL`, not `PARTIAL`.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 4. Separate stream end from provider close
 
@@ -113,6 +134,10 @@ Predict the four lifecycle booleans before reading the output. Then remove the
 helper's final `close_if_supported(owned_stt)` call temporarily and rerun. Which
 contract breaks, and why would a persistent provider make that visible?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The logical stream ends in both cases because this helper owns the one-file
@@ -121,11 +146,18 @@ contract breaks, and why would a persistent provider make that visible?
 3. A caller-supplied STT may be reused for another operation, so closing it
    would violate the caller's ownership.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Audit recording retention
 
 **Task.** Run `batch.py`, open its newest bundle, and inspect
 `recording.complete` plus `recording.cleaned`. Which sensitive data survives,
 and which does not?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -141,6 +173,9 @@ and which does not?
    artifact store with consent and a deletion policy. An untracked temp file
    is not a retention strategy.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 6. Fail one streaming sibling
 
 **Task.** Run the provider-free lifetime probe:
@@ -153,6 +188,10 @@ Before reading the JSON, predict which cleanup events appear after a transport
 connect failure, an STT start failure, and an audio-feed failure. Then replace
 the `TaskGroup` in a scratch copy of `streaming.py` with its old `gather()`
 call. Which ordering guarantee disappears?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -169,6 +208,9 @@ call. Which ordering guarantee disappears?
    compact JSON; production code may handle groups with `except*`.
 5. `AsyncExitStack` and `TaskGroup` solve different problems: resource
    ownership versus task ownership. A correct streaming scope needs both.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

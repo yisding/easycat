@@ -23,6 +23,10 @@ For each value × sentence pair, write down: **false fire?**
 (parrot commits mid-sentence) or **sluggish?** (parrot waits >1s
 after you finish).
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. There is no value at which all six combinations succeed. That's
@@ -34,6 +38,9 @@ after you finish).
    UX); sluggish bots just feel slow (bad UX). Voice-product
    teams skew toward sluggish for that reason — the chapter 4 fix
    gets you out of the tradeoff entirely.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 2. Find the broken moment in the journal
 
@@ -59,6 +66,10 @@ the former at least the latter rather than exactly equal? Compare
 `post_fire_ingress_gap_ms` with `post_fire_consumer_gap_ms`. How much of the
 latter is `consumer_backlog_ms`, and what work was the parrot loop doing then?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Every STT event resets `asyncio.wait_for`, including a final. The
@@ -79,6 +90,9 @@ latter is `consumer_backlog_ms`, and what work was the parrot loop doing then?
    handling in chapter 9 instead cancels or ignores current bot audio and
    routes the continuing user turn deliberately.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Reject one synthesized chunk
 
 **Task.** Run the provider-free output probe:
@@ -91,12 +105,19 @@ Change the acceptance sequence to reject all three chunks, then accept all
 three. Predict the counts each time. Which result proves that a speaker played
 the audio?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `recipes.speak()` preserves every `send_audio()` acceptance result instead
    of treating a completed coroutine as delivery.
 2. Rejection is actionable drop evidence. Acceptance means scheduled for
    delivery, not rendered by a device or heard by a person.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 4. Preserve the scaffold while breaking the policy
 
@@ -109,6 +130,10 @@ uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
 Predict each event list first. Why does `normal_event_end` cancel the
 microphone feeder, why is that not reported as an error, and which two cases
 correctly omit `stt.end`?
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -125,6 +150,9 @@ correctly omit `stt.end`?
    still propagates after cleanup.
 5. Removing the timeout would fix the intended Chapter 3 lesson. Removing
    `AsyncExitStack` or `TaskGroup` would instead reintroduce unrelated bugs.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

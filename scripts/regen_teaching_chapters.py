@@ -15,7 +15,7 @@ sync with the chapter's source code and ladder order:
 * The unified diff against the previous chapter's source::
 
       <!-- BEGIN auto:diff prev=04-vad-preroll src=main.py -->
-      <details>
+      <details markdown="1">
       <summary>...</summary>
 
       ```diff
@@ -111,6 +111,22 @@ sync with the chapter's source code and ladder order:
   Together these blocks make the narrative → practice → recall → next-chapter
   loop explicit while deriving all chapter links from ladder order.
 
+* Hand-authored exercise hints concealed until the learner attempts the task::
+
+      <!-- BEGIN auto:exercise-hints -->
+      <details>
+      <summary>Reveal hints after your first attempt</summary>
+
+      **Hints**
+
+      1. The hand-authored hint content stays here.
+
+      </details>
+      <!-- END auto:exercise-hints -->
+
+  The renderer preserves the hint content while adding or refreshing the
+  disclosure wrapper, so answer cues do not appear before the first attempt.
+
 The blocks render fine on GitHub (the markers are HTML comments) and
 also display correctly inside MkDocs. Run after editing any chapter
 ``main.py``; ``--check`` exits non-zero if any block would change,
@@ -175,6 +191,20 @@ EXERCISE_COMPLETION_RE = re.compile(
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:exercise-completion -->)",
     re.DOTALL,
+)
+EXERCISE_HINTS_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:exercise-hints -->)\n"
+    r"<details(?: markdown=\"1\")?>\n"
+    r"<summary>[^\n]*</summary>\n\n"
+    r"\*\*Hints\*\*\n\n"
+    r"(?P<body>.*?)\n"
+    r"</details>\n"
+    r"(?P<end><!-- END auto:exercise-hints -->)",
+    re.DOTALL,
+)
+BARE_EXERCISE_HINTS_RE = re.compile(
+    r"^\*\*Hints\*\*\n\n(?P<body>.*?)(?=^## )",
+    re.DOTALL | re.MULTILINE,
 )
 ATTR_RE = re.compile(r"(\w+)=(?:\"([^\"]*)\"|(\S+))")
 
@@ -346,6 +376,19 @@ def render_exercise_completion(chapter: Chapter) -> str:
     )
 
 
+def render_exercise_hints(body: str) -> str:
+    body = body.strip()
+    return (
+        "<!-- BEGIN auto:exercise-hints -->\n"
+        "<details markdown=\"1\">\n"
+        "<summary>Reveal hints after your first attempt</summary>\n\n"
+        "**Hints**\n\n"
+        f"{body}\n\n"
+        "</details>\n"
+        "<!-- END auto:exercise-hints -->"
+    )
+
+
 @functools.cache
 def _offline_checkpoints_by_folder() -> dict[str, dict[str, object]]:
     spine_path = TEACHING / "offline_spine.py"
@@ -505,6 +548,24 @@ def _ensure_exercise_completion(chapter: Chapter, text: str) -> str:
     return text.rstrip() + f"\n\n{block}\n"
 
 
+def _ensure_exercise_hints(text: str) -> str:
+    stashed: dict[str, str] = {}
+
+    def _stash_existing(match: re.Match[str]) -> str:
+        placeholder = f"EASYCAT_STASHED_EXERCISE_HINT_{len(stashed)}"
+        stashed[placeholder] = render_exercise_hints(match.group("body"))
+        return placeholder
+
+    protected = EXERCISE_HINTS_RE.sub(_stash_existing, text)
+    updated = BARE_EXERCISE_HINTS_RE.sub(
+        lambda match: render_exercise_hints(match.group("body")) + "\n\n",
+        protected,
+    )
+    for placeholder, block in stashed.items():
+        updated = updated.replace(placeholder, block)
+    return updated
+
+
 def regen_readme(chapter: Chapter) -> tuple[str, str]:
     readme_path = chapter.path / "README.md"
     original = readme_path.read_text()
@@ -543,6 +604,7 @@ def regen_exercises(chapter: Chapter) -> tuple[str, str]:
         original,
         render_exercise_navigation(chapter),
     )
+    updated = _ensure_exercise_hints(updated)
     updated = _ensure_exercise_completion(chapter, updated)
     return original, updated
 

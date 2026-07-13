@@ -17,6 +17,10 @@ Compare `stt_final_to_first_token_ms`,
 `first_token_to_first_audio_ms`, the total
 `stt_final_to_first_audio_ms`, and `sentence_tts_ms`.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. A slower model primarily grows `stt_final_to_first_token_ms`:
@@ -32,11 +36,18 @@ Compare `stt_final_to_first_token_ms`,
    The source's concurrent producer/consumer structure creates overlap;
    these closed composite durations alone do not prove the overlap.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Break markdown stripping deliberately
 
 **Task.** Remove the `strip_markdown(ready)` call so the raw
 markdown reaches TTS. Ask the bot for a *bulleted list of three
 things*. Listen.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -51,12 +62,19 @@ things*. Listen.
    `easycat.llm_output_processing.MarkdownStripProcessor` (chapter
    14) — exact same logic, plumbed through `output_processors`.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Make the unbounded queue bite
 
 **Task.** Have the bot answer a long question ("explain the entire
 history of Rome in detail") on a slow speaker — easiest way:
 plug in Bluetooth headphones. Watch the per-sentence latency drift
 over the answer.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -71,6 +89,9 @@ over the answer.
    estimator runs into: "what's in the queue" ≠ "what the user
    heard" because the queue holds future audio.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Cancel between ownership scopes
 
 **Task.** Run the provider-free lifecycle probe:
@@ -81,6 +102,10 @@ uv run python docs/teaching/06-streaming-agent/voice_stack_cleanup_probe.py
 
 Before looking at the JSON, predict the event order for a normal turn,
 a cancellation after `stt.start`, and a failure in `tts.close`.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -94,6 +119,9 @@ a cancellation after `stt.start`, and a failure in `tts.close`.
    sequential `await` calls and observe which events disappear when
    `tts.close` raises.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 5. Follow delivery across sentence boundaries
 
 **Task.** Run the streamed delivery probe:
@@ -105,6 +133,10 @@ uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
 Then change the mixed case from `[False, True]` to `[True, False]` and
 predict which fields change before re-running it.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. Both mixed cases keep the same reply-wide accepted and rejected
@@ -114,6 +146,9 @@ predict which fields change before re-running it.
    first rejected offer.
 3. Compare `all_chunks_rejected` with `no_chunks_produced`. Both lack a
    first-audio gap, but only one proves that TTS produced audio.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 

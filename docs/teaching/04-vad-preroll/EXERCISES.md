@@ -34,6 +34,10 @@ for which in ("preroll", "nopreroll"):
         ])
 ```
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The deterministic guarantee is frame routing: without pre-roll,
@@ -56,6 +60,9 @@ for which in ("preroll", "nopreroll"):
 5. The new failure mode: VAD false-fires on coughs, door slams,
    keyboard typing. Chapter 10's NR is the answer.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 2. Compare against `naive_threshold.py`
 
 **Task.** Run `naive_threshold.py` and try the same breakers.
@@ -67,6 +74,10 @@ uv run python docs/teaching/04-vad-preroll/naive_threshold.py
 For each breaker, note: did the threshold fire early, fire late,
 or fire correctly? Then explain in one sentence why a real VAD
 (Silero) gets the same case right.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -81,12 +92,19 @@ or fire correctly? Then explain in one sentence why a real VAD
    (recorded `.wav`), you'll see Silero's verdicts arrive 50-100
    ms later (it needs context) but be vastly more accurate.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 3. Read the production turn manager
 
 **Task.** Open `src/easycat/turn_manager.py` and find each of the
 five states (`IDLE`, `USER_SPEAKING`, `USER_PAUSED`, `PROCESSING`,
 `BOT_SPEAKING`). For each state, name the *single thing* it
 defends against that your `MiniTurnDetector` can't handle.
+
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
 
 **Hints**
 
@@ -100,6 +118,9 @@ defends against that your `MiniTurnDetector` can't handle.
    chapter 4's `MiniTurnDetector` only has 4 transitions. The
    production FSM has ~15.
 
+</details>
+<!-- END auto:exercise-hints -->
+
 ## 4. Cancel before speech ends
 
 **Task.** Run the provider-free cleanup probe:
@@ -112,6 +133,10 @@ Remove the outer `finally` in `parrot()` and rerun. Which counter changes on
 the cancelled path? Restore it and explain why `end_stream()` and final
 provider cleanup are separate operations.
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. The normal path ends and closes exactly once after draining STT events.
@@ -119,6 +144,9 @@ provider cleanup are separate operations.
    `finally` can end and close its active provider.
 3. `close_if_supported()` is capability-based: providers without a cleanup
    hook remain valid, while persistent providers release their resources.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## 5. Preserve output evidence after fixing input
 
@@ -133,6 +161,10 @@ chunk proves, and what the two accepted chunks do **not** prove. Then remove
 the assignment around `await speak(...)` in a scratch copy of `main.py`. Which
 postmortem question becomes unanswerable?
 
+<!-- BEGIN auto:exercise-hints -->
+<details markdown="1">
+<summary>Reveal hints after your first attempt</summary>
+
 **Hints**
 
 1. `turn.ended` is input-side evidence: VAD ended the turn and STT produced the
@@ -145,6 +177,9 @@ postmortem question becomes unanswerable?
    delivery boundary established in chapter 3.
 5. Chapter 9 adds playback-progress evidence; until then, do not relabel
    accepted chunks as played audio.
+
+</details>
+<!-- END auto:exercise-hints -->
 
 ## Self-check
 
