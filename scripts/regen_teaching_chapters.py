@@ -68,6 +68,9 @@ sync with the chapter's source code and ladder order:
       > uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
       > ```
       >
+      > **Evidence to find:** no chunks, all rejected, and first accepted audio
+      > produce three distinct outcomes.
+      >
       > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
       <!-- END auto:offline-checkpoint -->
 
@@ -89,6 +92,7 @@ import functools
 import importlib.util
 import re
 import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -290,6 +294,12 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         raise ValueError(f"no offline checkpoint for teaching chapter {chapter.slug}")
     concept = checkpoint["concept"]
     command = checkpoint["command"]
+    evidence_lines = textwrap.wrap(
+        f"**Evidence to find:** {checkpoint['evidence']}.",
+        width=95,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
     return (
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
@@ -298,7 +308,9 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         f"> {command}\n"
         "> ```\n"
         ">\n"
-        "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
+        + "".join(f"> {line}\n" for line in evidence_lines)
+        + ">\n"
+        + "> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).\n"
     )
 
 

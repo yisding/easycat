@@ -17,6 +17,9 @@
 > uv run python docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
 > ```
 >
+> **Evidence to find:** both scope paths export postmortem evidence before the caller-owned
+> client closes.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

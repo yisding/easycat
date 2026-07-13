@@ -15,6 +15,9 @@
 > uv run python docs/teaching/03-parrot-naive/parrot_lifecycle_probe.py
 > ```
 >
+> **Evidence to find:** event-stream exhaustion cancels mic receive; every path closes STT before
+> disconnect.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -15,6 +15,9 @@
 > uv run python docs/teaching/00-hello-audio/format_boundaries.py
 > ```
 >
+> **Evidence to find:** wire, provider-input, pipeline, config-default, and media roles use
+> different rates.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

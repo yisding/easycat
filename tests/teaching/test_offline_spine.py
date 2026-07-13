@@ -30,10 +30,12 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
     assert [row["chapter"] for row in rows] == list(range(16))
     assert [row["folder"] for row in rows] == chapter_dirs
     assert len({row["command"] for row in rows}) == len(rows)
+    assert len({row["evidence"] for row in rows}) == len(rows)
     for row in rows:
         path = ROOT / "docs" / "teaching" / row["folder"] / row["script"]
         assert path.is_file()
         assert row["command"] == f"uv run python {path.relative_to(ROOT).as_posix()}"
+        assert row["evidence"].strip()
 
 
 def test_offline_spine_json_list_is_documented() -> None:
@@ -58,6 +60,23 @@ def test_offline_spine_json_list_is_documented() -> None:
         root_readme
     )
     assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in root_readme
+    assert "concepts, evidence cues, and individual commands" in readme
+
+
+def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
+    spine = _load_spine()
+    completed = subprocess.run(
+        [sys.executable, str(SPINE)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.stdout.count("Look for:") == len(spine.catalog())
+    for row in spine.catalog():
+        assert row["command"] in completed.stdout
+        assert row["evidence"] in completed.stdout
 
 
 def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:

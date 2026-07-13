@@ -15,6 +15,9 @@
 > uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
 > ```
 >
+> **Evidence to find:** every path closes STT before transport disconnect; feed failure cancels
+> its sibling task.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

@@ -36,6 +36,7 @@ class Checkpoint:
     folder: str
     script: str
     concept: str
+    evidence: str
 
     @property
     def path(self) -> Path:
@@ -50,41 +51,117 @@ class Checkpoint:
 
 
 CHECKPOINTS = (
-    Checkpoint(0, "00-hello-audio", "format_boundaries.py", "audio format boundaries"),
-    Checkpoint(1, "01-echo", "transport_contract_probe.py", "transport acceptance"),
-    Checkpoint(2, "02-transcribe", "stream_lifecycle_probe.py", "stream lifetime cleanup"),
-    Checkpoint(3, "03-parrot-naive", "parrot_lifecycle_probe.py", "task/resource cleanup"),
-    Checkpoint(4, "04-vad-preroll", "delivery_probe.py", "delivery acceptance"),
-    Checkpoint(5, "05-blocking-agent", "tts_outcome_probe.py", "first-audio outcomes"),
-    Checkpoint(6, "06-streaming-agent", "tts_delivery_probe.py", "streamed TTS delivery"),
-    Checkpoint(7, "07-tools", "action_catalog.py", "session-action catalog"),
-    Checkpoint(8, "08-smart-turn", "endpoint_wait_probe.py", "endpoint wait decomposition"),
-    Checkpoint(9, "09-interruption", "barge_in_turn_probe.py", "barge-in cancellation"),
-    Checkpoint(10, "10-cleaning-signal", "replay_metrics_probe.py", "NR/AEC replay metrics"),
-    Checkpoint(11, "11-journal", "query_coverage_probe.py", "journal query coverage"),
+    Checkpoint(
+        0,
+        "00-hello-audio",
+        "format_boundaries.py",
+        "audio format boundaries",
+        "wire, provider-input, pipeline, config-default, and media roles use different rates",
+    ),
+    Checkpoint(
+        1,
+        "01-echo",
+        "transport_contract_probe.py",
+        "transport acceptance",
+        "two chunks are accepted, one is rejected, and `version_info()` changes full conformance",
+    ),
+    Checkpoint(
+        2,
+        "02-transcribe",
+        "stream_lifecycle_probe.py",
+        "stream lifetime cleanup",
+        "every path closes STT before transport disconnect; feed failure cancels its sibling task",
+    ),
+    Checkpoint(
+        3,
+        "03-parrot-naive",
+        "parrot_lifecycle_probe.py",
+        "task/resource cleanup",
+        "event-stream exhaustion cancels mic receive; every path closes STT before disconnect",
+    ),
+    Checkpoint(
+        4,
+        "04-vad-preroll",
+        "delivery_probe.py",
+        "delivery acceptance",
+        "`parrot.delivery` preserves two accepted and one rejected chunks after STT closes",
+    ),
+    Checkpoint(
+        5,
+        "05-blocking-agent",
+        "tts_outcome_probe.py",
+        "first-audio outcomes",
+        "no chunks, all rejected, and first accepted audio produce three distinct outcomes",
+    ),
+    Checkpoint(
+        6,
+        "06-streaming-agent",
+        "tts_delivery_probe.py",
+        "streamed TTS delivery",
+        "sentence delivery counts roll up to matching turn counts in all three scenarios",
+    ),
+    Checkpoint(
+        7,
+        "07-tools",
+        "action_catalog.py",
+        "session-action catalog",
+        "seven action types separate core-supported from executor-dependent actions",
+    ),
+    Checkpoint(
+        8,
+        "08-smart-turn",
+        "endpoint_wait_probe.py",
+        "endpoint wait decomposition",
+        "smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three components",
+    ),
+    Checkpoint(
+        9,
+        "09-interruption",
+        "barge_in_turn_probe.py",
+        "barge-in cancellation",
+        "triggering speech remains unconsumed while bot cancellation precedes the next STT stream",
+    ),
+    Checkpoint(
+        10,
+        "10-cleaning-signal",
+        "replay_metrics_probe.py",
+        "NR/AEC replay metrics",
+        "aligned reference audio changes RMS by -12.041 dB; missing or short references fail",
+    ),
+    Checkpoint(
+        11,
+        "11-journal",
+        "query_coverage_probe.py",
+        "journal query coverage",
+        "a zero-result intersection has marginal matches, while a misspelled turn has none",
+    ),
     Checkpoint(
         12,
         "12-evals-and-latency",
         "p95_sensitivity_probe.py",
         "small-sample P95 sensitivity",
+        "removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms",
     ),
     Checkpoint(
         13,
         "13-swap-providers-and-transports",
         "session_scope_probe.py",
         "graceful vs forced teardown",
+        "both scope paths export postmortem evidence before the caller-owned client closes",
     ),
     Checkpoint(
         14,
         "14-bring-your-own-agent",
         "workflow_state_probe.py",
         "workflow artifact boundary",
+        "the artifact keeps metadata-only workflow state plus a pending session action",
     ),
     Checkpoint(
         15,
         "15-operate-in-production",
         "postmortem_probe.py",
         "postmortem journal preservation",
+        "one read-only view preserves 15 records and exports a matching bundle after stop",
     ),
 )
 
@@ -171,6 +248,7 @@ def main() -> None:
         for row in rows:
             print(f"{row['chapter']:>2}  {row['concept']}")
             print(f"    {row['command']}")
+            print(f"    Look for: {row['evidence']}")
         return
 
     rows = run_all(jobs=args.jobs, timeout_s=args.timeout_s)
@@ -188,6 +266,7 @@ def main() -> None:
         for row in rows:
             label = str(row["status"]).upper()
             print(f"{label:<7} {row['chapter']:>2}  {row['concept']}")
+            print(f"           Look for: {row['evidence']}")
             if row["detail"]:
                 print(f"           {row['detail']}")
         print(f"{passed}/{len(rows)} checkpoints passed")

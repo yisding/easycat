@@ -16,6 +16,8 @@
 > uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
 > ```
 >
+> **Evidence to find:** removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 

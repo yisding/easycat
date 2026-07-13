@@ -15,6 +15,9 @@
 > uv run python docs/teaching/04-vad-preroll/delivery_probe.py
 > ```
 >
+> **Evidence to find:** `parrot.delivery` preserves two accepted and one rejected chunks after
+> STT closes.
+>
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
 
