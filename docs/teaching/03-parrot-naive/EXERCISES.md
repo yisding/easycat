@@ -1,7 +1,7 @@
 # Chapter 3 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
 <!-- END auto:navigation -->
 
 The whole chapter is one big exercise: feel a bad pipeline
@@ -199,5 +199,6 @@ uv run python docs/teaching/offline_spine.py --run --through 3 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
 <!-- END auto:exercise-completion -->

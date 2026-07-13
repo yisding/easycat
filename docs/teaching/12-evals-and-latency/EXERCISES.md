@@ -1,7 +1,7 @@
 # Chapter 12 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -236,5 +236,6 @@ uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
 <!-- END auto:exercise-completion -->

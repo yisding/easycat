@@ -1,7 +1,7 @@
 # Chapter 2 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -260,5 +260,6 @@ uv run python docs/teaching/offline_spine.py --run --through 2 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
 <!-- END auto:exercise-completion -->

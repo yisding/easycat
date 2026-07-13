@@ -1,7 +1,7 @@
 # Chapter 8 — Smart-turn
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 7 — Tools, Mid-stream](../07-tools/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+[← Chapter 7 — Tools, Mid-stream](../07-tools/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
 <!-- END auto:navigation -->
 
 > A tiny ML model that knows you're done talking before the silence

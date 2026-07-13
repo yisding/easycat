@@ -1,7 +1,7 @@
 # Chapter 10 — Cleaning the Signal
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 9 — Interruption / Barge-in](../09-interruption/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
+[← Chapter 9 — Interruption / Barge-in](../09-interruption/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 11 — The Journal as Mental Model →](../11-journal/)
 <!-- END auto:navigation -->
 
 > Two problems often confused as one. **Noise reduction** removes

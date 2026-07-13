@@ -125,17 +125,20 @@ def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_navigation(chapters[0]) == (
-        "[Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
+        "[Teaching ladder](../) · [Progress](../PROGRESS.md) · "
+        "[Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_navigation(chapters[8]) == (
         "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
         "[Teaching ladder](../) · "
+        "[Progress](../PROGRESS.md) · "
         "[Exercises](./EXERCISES.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_navigation(chapters[-1]) == (
         "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
-        "[Teaching ladder](../) · [Exercises](./EXERCISES.md)"
+        "[Teaching ladder](../) · [Progress](../PROGRESS.md) · "
+        "[Exercises](./EXERCISES.md)"
     )
 
 
@@ -212,15 +215,18 @@ def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> 
     assert render_exercise_navigation(chapters[0]) == (
         "[← Chapter narrative](./README.md) · "
         "[Teaching ladder](../) · "
+        "[Progress](../PROGRESS.md) · "
         "[Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_exercise_navigation(chapters[8]) == (
         "[← Chapter narrative](./README.md) · "
         "[Teaching ladder](../) · "
+        "[Progress](../PROGRESS.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_navigation(chapters[-1]) == (
-        "[← Chapter narrative](./README.md) · [Teaching ladder](../)"
+        "[← Chapter narrative](./README.md) · [Teaching ladder](../) · "
+        "[Progress](../PROGRESS.md)"
     )
 
 
@@ -266,6 +272,7 @@ def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> 
         "--through 0 --jobs 4 --show-evidence\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
+        "- [Update the progress worksheet](../PROGRESS.md)\n"
         "- [Continue to Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_exercise_completion(chapters[8]) == (
@@ -277,6 +284,7 @@ def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> 
         "--through 8 --jobs 4 --show-evidence\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
+        "- [Update the progress worksheet](../PROGRESS.md)\n"
         "- [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_completion(chapters[-1]) == (
@@ -288,6 +296,7 @@ def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> 
         "--through 15 --jobs 4 --show-evidence\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
+        "- [Update the progress worksheet](../PROGRESS.md)\n"
         "- [Return to the teaching ladder](../)"
     )
 
@@ -301,6 +310,16 @@ def test_each_exercise_page_has_one_current_generated_navigation_block() -> None
         assert matches[0].group("body").strip() == render_exercise_navigation(chapter)
         assert matches[0].start() > exercises.index("# ")
         assert matches[0].start() < exercises.find("\n## ")
+
+
+def test_each_chapter_workflow_links_the_progress_worksheet() -> None:
+    for chapter in discover_chapters():
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+
+        assert readme.count("../PROGRESS.md") == 1, chapter.slug
+        assert exercises.count("../PROGRESS.md") == 2, chapter.slug
+        assert "[Update the progress worksheet](../PROGRESS.md)" in exercises
 
 
 def test_each_exercise_page_sets_completion_evidence_before_its_first_task() -> None:

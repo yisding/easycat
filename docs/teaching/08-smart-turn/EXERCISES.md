@@ -1,7 +1,7 @@
 # Chapter 8 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 9 — Interruption / Barge-in →](../09-interruption/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -180,5 +180,6 @@ uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4 --show-e
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)
 <!-- END auto:exercise-completion -->

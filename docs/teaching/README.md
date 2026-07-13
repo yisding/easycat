@@ -190,7 +190,8 @@ Each chapter's README lists its own prerequisites up front.
   `EXERCISES.md`, and a closing self-check. Generated source diffs can make
   a README long; keep the hand-authored explanation skimmable and use focused
   probes to isolate boundary claims. Generated handoffs connect those steps
-  and only then point the learner to the next chapter. Applied-task hints stay
+  and return to the progress worksheet before pointing to the next chapter.
+  Applied-task hints stay
   concealed behind a reveal-after-attempt disclosure so learners take a first
   swing before seeing solution cues. A task is complete when the learner has
   kept an initial plan, the exact command or change plus an observation, and a

@@ -1,7 +1,7 @@
 # Chapter 15 — Operate in production
 
 <!-- BEGIN auto:navigation -->
-[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · [Teaching ladder](../) · [Exercises](./EXERCISES.md)
+[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Exercises](./EXERCISES.md)
 <!-- END auto:navigation -->
 
 > Chapters 0-14 built and generalised a single session. Production

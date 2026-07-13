@@ -1,7 +1,7 @@
 # Chapter 13 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
+[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md) · [Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->
@@ -180,5 +180,6 @@ uv run python docs/teaching/offline_spine.py --run --through 13 --jobs 4 --show-
 ```
 
 - [Review the chapter narrative](./README.md)
+- [Update the progress worksheet](../PROGRESS.md)
 - [Continue to Chapter 14 — Bring your own agent →](../14-bring-your-own-agent/)
 <!-- END auto:exercise-completion -->

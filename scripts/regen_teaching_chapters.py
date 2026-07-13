@@ -48,6 +48,7 @@ sync with the chapter's source code and ladder order:
       <!-- BEGIN auto:navigation -->
       [← Chapter 4 — VAD + Pre-roll](../04-vad-preroll/) ·
       [Teaching ladder](../) ·
+      [Progress](../PROGRESS.md) ·
       [Exercises](./EXERCISES.md) ·
       [Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
       <!-- END auto:navigation -->
@@ -122,6 +123,7 @@ sync with the chapter's source code and ladder order:
       ```
 
       - Review the chapter narrative
+      - Update the progress worksheet
       - Continue to Chapter 6 →
       <!-- END auto:exercise-completion -->
 
@@ -381,6 +383,7 @@ def render_navigation(chapter: Chapter) -> str:
         previous = chapters[index - 1]
         links.append(f"[← {_chapter_title(previous)}](../{previous.slug}/)")
     links.append("[Teaching ladder](../)")
+    links.append("[Progress](../PROGRESS.md)")
     links.append("[Exercises](./EXERCISES.md)")
     if index + 1 < len(chapters):
         following = chapters[index + 1]
@@ -391,7 +394,11 @@ def render_navigation(chapter: Chapter) -> str:
 def render_exercise_navigation(chapter: Chapter) -> str:
     chapters, index = _chapter_position(chapter)
 
-    links = ["[← Chapter narrative](./README.md)", "[Teaching ladder](../)"]
+    links = [
+        "[← Chapter narrative](./README.md)",
+        "[Teaching ladder](../)",
+        "[Progress](../PROGRESS.md)",
+    ]
     if index + 1 < len(chapters):
         following = chapters[index + 1]
         links.append(f"[{_chapter_title(following)} →](../{following.slug}/)")
@@ -425,7 +432,10 @@ def render_practice_handoff() -> str:
 def render_exercise_completion(chapter: Chapter) -> str:
     chapters, index = _chapter_position(chapter)
     checkpoint = _offline_checkpoint_for(chapter)
-    links = ["[Review the chapter narrative](./README.md)"]
+    links = [
+        "[Review the chapter narrative](./README.md)",
+        "[Update the progress worksheet](../PROGRESS.md)",
+    ]
     if index + 1 < len(chapters):
         following = chapters[index + 1]
         links.append(f"[Continue to {_chapter_title(following)} →](../{following.slug}/)")
