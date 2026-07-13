@@ -24,6 +24,7 @@ from scripts.regen_teaching_chapters import (
     OFFLINE_CHECKPOINT_RE,
     PRACTICE_HANDOFF_RE,
     ROOT,
+    SELF_CHECK_PROTOCOL_RE,
     TEACHING,
     Chapter,
     _ensure_exercise_hints,
@@ -39,6 +40,7 @@ from scripts.regen_teaching_chapters import (
     render_navigation,
     render_offline_checkpoint,
     render_practice_handoff,
+    render_self_check_protocol,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -211,6 +213,21 @@ def test_render_exercise_protocol_defines_completion_evidence() -> None:
     )
 
 
+def test_render_self_check_protocol_requires_evidence_backed_retrieval() -> None:
+    assert render_self_check_protocol() == (
+        "> **Closed-book retrieval gate**\n"
+        ">\n"
+        "> 1. Close the chapter narrative and every hint disclosure.\n"
+        "> 2. Answer each outcome below from memory, aloud or in writing.\n"
+        "> 3. Support the answer with at least one observed field, measurement, or behavior\n"
+        ">    from your attempt record.\n"
+        ">\n"
+        "> If an answer needs notes, reopen only the section that owns the weak concept,\n"
+        "> correct your explanation, close it, and retry. Continue only when you can answer\n"
+        "> without looking."
+    )
+
+
 def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
@@ -283,6 +300,19 @@ def test_each_exercise_page_ends_with_current_generated_completion() -> None:
         assert matches[0].group("body").strip() == render_exercise_completion(chapter)
         assert matches[0].start() > exercises.index("## Self-check")
         assert exercises.rstrip().endswith("<!-- END auto:exercise-completion -->")
+
+
+def test_each_self_check_starts_with_current_closed_book_retrieval_gate() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        matches = list(SELF_CHECK_PROTOCOL_RE.finditer(exercises))
+        heading = re.search(r"^## Self-check$", exercises, re.MULTILINE)
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_self_check_protocol()
+        assert heading is not None
+        assert not exercises[heading.end() : matches[0].start()].strip()
+        assert matches[0].end() < exercises.index("<!-- BEGIN auto:exercise-completion -->")
 
 
 def test_exercise_hint_wrapper_preserves_content_and_is_idempotent() -> None:
