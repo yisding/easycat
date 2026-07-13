@@ -10,6 +10,10 @@ Run every checkpoint (captured output stays quiet unless one fails)::
     uv run python docs/teaching/offline_spine.py --run --jobs 4
     uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 
+Replay only the cumulative spine through a completed chapter::
+
+    uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+
 The runner removes every ``*_API_KEY`` variable from child environments and
 disables bytecode-cache writes. The selected scripts are designed not to open
 audio devices, make provider requests, or leave files in the checkout; run an
@@ -166,8 +170,16 @@ CHECKPOINTS = (
 )
 
 
-def catalog() -> list[dict[str, object]]:
-    return [checkpoint.as_row() for checkpoint in CHECKPOINTS]
+def catalog(
+    checkpoints: tuple[Checkpoint, ...] = CHECKPOINTS,
+) -> list[dict[str, object]]:
+    return [checkpoint.as_row() for checkpoint in checkpoints]
+
+
+def _select_checkpoints(through: int | None) -> tuple[Checkpoint, ...]:
+    if through is None:
+        return CHECKPOINTS
+    return tuple(checkpoint for checkpoint in CHECKPOINTS if checkpoint.chapter <= through)
 
 
 def _credential_free_environment() -> dict[str, str]:
@@ -208,19 +220,30 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
     }
 
 
-def run_all(*, jobs: int, timeout_s: float) -> list[dict[str, object]]:
+def run_all(
+    *,
+    jobs: int,
+    timeout_s: float,
+    checkpoints: tuple[Checkpoint, ...] = CHECKPOINTS,
+) -> list[dict[str, object]]:
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         return list(
             executor.map(
                 lambda checkpoint: _run_checkpoint(checkpoint, timeout_s=timeout_s),
-                CHECKPOINTS,
+                checkpoints,
             )
         )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", action="store_true", help="execute every checkpoint")
+    parser.add_argument("--run", action="store_true", help="execute selected checkpoints")
+    parser.add_argument(
+        "--through",
+        type=int,
+        metavar="CHAPTER",
+        help="limit list or run to chapters 0 through CHAPTER",
+    )
     parser.add_argument("--jobs", type=int, default=1, help="parallel checkpoints (default: 1)")
     parser.add_argument(
         "--timeout-s",
@@ -232,16 +255,31 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = _parser().parse_args()
+def _parse_args() -> argparse.Namespace:
+    parser = _parser()
+    args = parser.parse_args()
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
     if args.timeout_s <= 0:
         raise SystemExit("--timeout-s must be positive")
+    final_chapter = CHECKPOINTS[-1].chapter
+    if args.through is not None and not 0 <= args.through <= final_chapter:
+        parser.error(f"--through must be between 0 and {final_chapter}")
+    return args
+
+
+def main() -> None:
+    args = _parse_args()
+    checkpoints = _select_checkpoints(args.through)
 
     if not args.run:
-        rows = catalog()
-        report = {"mode": "list", "count": len(rows), "checkpoints": rows}
+        rows = catalog(checkpoints)
+        report = {
+            "mode": "list",
+            "through": args.through,
+            "count": len(rows),
+            "checkpoints": rows,
+        }
         if args.json:
             print(json.dumps(report, indent=2))
             return
@@ -251,10 +289,11 @@ def main() -> None:
             print(f"    Look for: {row['evidence']}")
         return
 
-    rows = run_all(jobs=args.jobs, timeout_s=args.timeout_s)
+    rows = run_all(jobs=args.jobs, timeout_s=args.timeout_s, checkpoints=checkpoints)
     passed = sum(row["status"] == "pass" for row in rows)
     report = {
         "mode": "run",
+        "through": args.through,
         "count": len(rows),
         "passed": passed,
         "failed": len(rows) - passed,

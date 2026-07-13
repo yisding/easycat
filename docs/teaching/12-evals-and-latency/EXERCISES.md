@@ -160,7 +160,11 @@ production percentile.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Continue to Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)

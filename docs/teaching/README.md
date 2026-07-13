@@ -47,6 +47,14 @@ uv run python docs/teaching/offline_spine.py
 uv run python docs/teaching/offline_spine.py --json
 ```
 
+After finishing a chapter, replay only the cumulative spine you have completed.
+For example, after Chapter 5:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4
+uv run python docs/teaching/offline_spine.py --run --through 5 --jobs 4 --json
+```
+
 After installing the full `quickstart` prerequisites below, execute all 16
 checkpoints as a compact smoke run:
 

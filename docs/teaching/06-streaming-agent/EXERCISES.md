@@ -127,7 +127,11 @@ the README.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete?
+Self-check complete? Replay the hardware-free spine through this chapter:
+
+```bash
+uv run python docs/teaching/offline_spine.py --run --through 6 --jobs 4
+```
 
 - [Review the chapter narrative](./README.md)
 - [Continue to Chapter 7 — Tools, Mid-stream →](../07-tools/)
