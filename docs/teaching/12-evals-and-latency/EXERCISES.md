@@ -237,5 +237,6 @@ uv run python docs/teaching/offline_spine.py --run --through 12 --jobs 4 --show-
 
 - [Review the chapter narrative](./README.md)
 - [Update the progress worksheet](../PROGRESS.md)
+- [Complete the Operate phase review](../PROGRESS.md#operate-phase-review)
 - [Continue to Chapter 13 — Swap Providers AND Transports →](../13-swap-providers-and-transports/)
 <!-- END auto:exercise-completion -->
