@@ -51,7 +51,7 @@ pretending unfinished lessons are runnable.
 | 2 | [`02-providers-and-voices`](./02-providers-and-voices/) | STT/TTS provider specs, voices, and environment preflight | Available |
 | 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Available |
 | 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules | Available |
-| 5 | Bring your agent | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Planned |
+| 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
 | 6 | Control a session | `EasyConfig`, `Session`, events, text turns, and lifecycle | Planned |
 | 7 | See what happened | Journals, bundles, inspect, replay, diff, and the debugger | Planned |
 | 8 | Test the experience | Offline turns, assertions, evals, and latency budgets | Planned |
