@@ -22,6 +22,7 @@ from scripts.regen_teaching_chapters import (
     EXERCISE_PROTOCOL_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
+    PHASE_REVIEWS,
     PRACTICE_HANDOFF_RE,
     PROGRESS_WORKSHEET,
     ROOT,
@@ -107,7 +108,7 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
     labels = ("Predict", "Prepare", "Run", "Find", "Reflect", "Practice", "Retrieve", "Replay")
     for label in labels:
         assert worksheet.count(f"- [ ] **{label}:**") == 16
-    assert worksheet.count("- [ ]") == 130
+    assert worksheet.count("- [ ]") == 136
     assert "- [x]" not in worksheet.lower()
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
@@ -119,6 +120,17 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
         assert str(checkpoint["evidence"]) in normalized_worksheet
         assert str(checkpoint["reflection"]) in normalized_worksheet
         assert f"--through {checkpoint['chapter']} --jobs 4 --show-evidence" in worksheet
+    for final_chapter, (title, integrate, ground) in PHASE_REVIEWS.items():
+        chapter_heading = worksheet.index(f"## Chapter {final_chapter} ")
+        review_heading = worksheet.index(f"## {title}")
+        next_heading = worksheet.index(f"## Chapter {final_chapter + 1} ")
+
+        assert chapter_heading < review_heading < next_heading
+        assert integrate in normalized_worksheet
+        assert ground in normalized_worksheet
+    assert worksheet.count("- [ ] **Integrate:**") == 3
+    assert worksheet.count("- [ ] **Ground it:**") == 3
+    assert "## Ship phase review and finish the ladder" in worksheet
 
 
 def test_render_navigation_handles_first_middle_and_last_chapters() -> None:

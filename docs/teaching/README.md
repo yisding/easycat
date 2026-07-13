@@ -110,6 +110,10 @@ uv run easycat validate report .easycat/validation/latest.json --json
 
 ## The ladder
 
+The [progress worksheet](./PROGRESS.md) pauses for closed-book integration
+reviews after the Build, Operate, and Generalise phases, then closes with a Ship
+review. Complete each phase gate before starting the next group of chapters.
+
 ### Build — assemble the pipeline
 
 | # | Folder | What you add |
