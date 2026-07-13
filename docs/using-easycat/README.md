@@ -52,7 +52,7 @@ pretending unfinished lessons are runnable.
 | 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Available |
 | 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules | Available |
 | 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
-| 6 | Control a session | `EasyConfig`, `Session`, events, text turns, and lifecycle | Planned |
+| 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle | Available |
 | 7 | See what happened | Journals, bundles, inspect, replay, diff, and the debugger | Planned |
 | 8 | Test the experience | Offline turns, assertions, evals, and latency budgets | Planned |
 | 9 | Serve many callers | Per-connection factories, authentication, limits, and supervision | Planned |
