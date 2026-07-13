@@ -33,7 +33,9 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
     assert len({row["evidence"] for row in rows}) == len(rows)
     for row in rows:
         path = ROOT / "docs" / "teaching" / row["folder"] / row["script"]
+        expected_extra = "local" if row["chapter"] <= 1 else "quickstart"
         assert path.is_file()
+        assert row["setup_command"] == f"uv sync --extra {expected_extra} --group dev"
         assert row["command"] == f"uv run python {path.relative_to(ROOT).as_posix()}"
         assert row["evidence"].strip()
 
@@ -61,7 +63,8 @@ def test_offline_spine_json_list_is_documented() -> None:
         root_readme
     )
     assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in root_readme
-    assert "concepts, evidence cues, and individual commands" in readme
+    assert "concepts, setup commands, evidence cues, and individual commands" in readme
+    assert "uv sync --extra quickstart --group dev" in readme
     assert "--run --through 5 --jobs 4" in readme
 
 
@@ -124,10 +127,23 @@ def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
         text=True,
     )
 
+    assert completed.stdout.count("Setup:") == len(spine.catalog())
+    assert completed.stdout.count("Run:") == len(spine.catalog())
     assert completed.stdout.count("Look for:") == len(spine.catalog())
     for row in spine.catalog():
+        assert row["setup_command"] in completed.stdout
         assert row["command"] in completed.stdout
         assert row["evidence"] in completed.stdout
+
+
+def test_offline_chapter_cumulative_replay_restores_quickstart_setup() -> None:
+    for chapter, number in (("11-journal", 11), ("12-evals-and-latency", 12)):
+        readme = (TEACHING / chapter / "README.md").read_text(encoding="utf-8")
+        exercises = (TEACHING / chapter / "EXERCISES.md").read_text(encoding="utf-8")
+
+        assert "uv sync --group dev" in readme
+        assert "uv sync --extra quickstart --group dev" in exercises
+        assert f"--run --through {number} --jobs 4" in exercises
 
 
 def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:

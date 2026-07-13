@@ -186,24 +186,30 @@ def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> 
     chapters = discover_chapters()
 
     assert render_exercise_completion(chapters[0]) == (
-        "---\nSelf-check complete? Replay the hardware-free spine through this chapter:\n\n"
+        "---\nSelf-check complete? Prepare the cumulative spine, then replay it through "
+        "this chapter:\n\n"
         "```bash\n"
+        "uv sync --extra local --group dev\n"
         "uv run python docs/teaching/offline_spine.py --run --through 0 --jobs 4\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
         "- [Continue to Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_exercise_completion(chapters[8]) == (
-        "---\nSelf-check complete? Replay the hardware-free spine through this chapter:\n\n"
+        "---\nSelf-check complete? Prepare the cumulative spine, then replay it through "
+        "this chapter:\n\n"
         "```bash\n"
+        "uv sync --extra quickstart --group dev\n"
         "uv run python docs/teaching/offline_spine.py --run --through 8 --jobs 4\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"
         "- [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_completion(chapters[-1]) == (
-        "---\nSelf-check complete? Replay the hardware-free spine through this chapter:\n\n"
+        "---\nSelf-check complete? Prepare the cumulative spine, then replay it through "
+        "this chapter:\n\n"
         "```bash\n"
+        "uv sync --extra quickstart --group dev\n"
         "uv run python docs/teaching/offline_spine.py --run --through 15 --jobs 4\n"
         "```\n\n"
         "- [Review the chapter narrative](./README.md)\n"

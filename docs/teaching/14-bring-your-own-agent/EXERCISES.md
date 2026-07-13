@@ -188,9 +188,10 @@ deep workflow should define an explicit metadata-only state snapshot.
 
 <!-- BEGIN auto:exercise-completion -->
 ---
-Self-check complete? Replay the hardware-free spine through this chapter:
+Self-check complete? Prepare the cumulative spine, then replay it through this chapter:
 
 ```bash
+uv sync --extra quickstart --group dev
 uv run python docs/teaching/offline_spine.py --run --through 14 --jobs 4
 ```
 
