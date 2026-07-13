@@ -8,15 +8,15 @@
 > latency difference. And meet the journal.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `stream lifetime cleanup` without a microphone,
+> **Hardware-free checkpoint:** prove `partial vs final commitment` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/02-transcribe/stream_lifecycle_probe.py
+> uv run python docs/teaching/02-transcribe/partial_policy_probe.py
 > ```
 >
-> **Evidence to find:** every path closes STT before transport disconnect; feed failure cancels
-> its sibling task.
+> **Evidence to find:** revised partials cancel speculation; only the final `fifty` commits the
+> safe action.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->

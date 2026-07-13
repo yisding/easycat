@@ -11,15 +11,15 @@
 > public lifecycle, the debugger UI, and the CLI.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `postmortem journal preservation` without a microphone,
+> **Hardware-free checkpoint:** prove `multi-session manager rollback` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/15-operate-in-production/postmortem_probe.py
+> uv run python docs/teaching/15-operate-in-production/manager_probe.py
 > ```
 >
-> **Evidence to find:** one read-only view preserves 15 records and exports a matching bundle
-> after stop.
+> **Evidence to find:** failed and cancelled starts release slots; stop-all still attempts both
+> sessions.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->

@@ -40,6 +40,21 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
         assert row["evidence"].strip()
 
 
+def test_offline_spine_prioritizes_primary_chapter_questions() -> None:
+    spine = _load_spine()
+    checkpoints = {row["chapter"]: row for row in spine.catalog()}
+    expected = {
+        2: ("partial_policy_probe.py", "partial vs final commitment"),
+        4: ("preroll_probe.py", "VAD pre-roll frame order"),
+        7: ("filler_delivery_probe.py", "tool filler delivery"),
+        15: ("manager_probe.py", "multi-session manager rollback"),
+    }
+
+    for chapter, (script, concept) in expected.items():
+        assert checkpoints[chapter]["script"] == script
+        assert checkpoints[chapter]["concept"] == concept
+
+
 def test_offline_spine_json_list_is_documented() -> None:
     completed = subprocess.run(
         [sys.executable, str(SPINE), "--json"],
