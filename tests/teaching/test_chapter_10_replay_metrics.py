@@ -12,6 +12,9 @@ CHAPTER = ROOT / "docs" / "teaching" / "10-cleaning-signal"
 
 
 def test_replay_metrics_probe_enforces_reference_and_records_signal_change() -> None:
+    runs_dir = CHAPTER / "runs"
+    runs_dir_existed = runs_dir.exists()
+    before = set(runs_dir.iterdir()) if runs_dir.exists() else set()
     completed = subprocess.run(
         [sys.executable, str(CHAPTER / "replay_metrics_probe.py")],
         cwd=ROOT,
@@ -46,6 +49,9 @@ def test_replay_metrics_probe_enforces_reference_and_records_signal_change() -> 
             "short_reference": "mic and ref frame counts differ for AEC: 2 vs 1",
         },
     }
+    after = set(runs_dir.iterdir()) if runs_dir.exists() else set()
+    assert runs_dir.exists() is runs_dir_existed
+    assert after == before
 
 
 def test_replay_source_records_promised_per_frame_and_summary_metrics() -> None:

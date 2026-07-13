@@ -61,6 +61,8 @@ def test_offline_spine_json_list_is_documented() -> None:
 
 
 def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
+    root_entries_before = {path.name for path in ROOT.iterdir()}
+    before = {path.relative_to(TEACHING) for path in TEACHING.rglob("*")}
     completed = subprocess.run(
         [sys.executable, str(SPINE), "--run", "--jobs", "4", "--json"],
         cwd=ROOT,
@@ -77,3 +79,15 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     assert payload["failed"] == 0
     assert {row["status"] for row in payload["checkpoints"]} == {"pass"}
     assert {row["returncode"] for row in payload["checkpoints"]} == {0}
+    after = {path.relative_to(TEACHING) for path in TEACHING.rglob("*")}
+    assert after == before
+    assert {path.name for path in ROOT.iterdir()} == root_entries_before
+
+
+def test_offline_spine_documents_workspace_hygiene() -> None:
+    source = SPINE.read_text(encoding="utf-8")
+    readme = (TEACHING / "README.md").read_text(encoding="utf-8")
+
+    assert 'environment["PYTHONDONTWRITEBYTECODE"] = "1"' in source
+    assert "leave files in the checkout" in source
+    assert "full run leaves the checkout unchanged" in readme

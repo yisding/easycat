@@ -10,9 +10,10 @@ Run every checkpoint (captured output stays quiet unless one fails)::
     uv run python docs/teaching/offline_spine.py --run --jobs 4
     uv run python docs/teaching/offline_spine.py --run --jobs 4 --json
 
-The runner removes every ``*_API_KEY`` variable from child environments. The
-selected scripts are designed not to open audio devices or make provider
-requests; run an individual printed command when you want its full evidence.
+The runner removes every ``*_API_KEY`` variable from child environments and
+disables bytecode-cache writes. The selected scripts are designed not to open
+audio devices, make provider requests, or leave files in the checkout; run an
+individual printed command when you want its full evidence.
 """
 
 from __future__ import annotations
@@ -93,7 +94,9 @@ def catalog() -> list[dict[str, object]]:
 
 
 def _credential_free_environment() -> dict[str, str]:
-    return {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    environment = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    return environment
 
 
 def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, object]:

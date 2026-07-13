@@ -15,6 +15,7 @@ import json
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 def load_replay():
@@ -110,7 +111,11 @@ async def probe() -> dict[str, object]:
     replay.create_vad = lambda _config: OneStartVAD(replay)
     replay.export_debug_bundle = capture_bundle
 
-    with redirect_stdout(io.StringIO()):
+    # replay.run() always creates its configured output directory, even though
+    # this probe intercepts bundle bytes below. Keep that teaching artifact out
+    # of the checkout so the credential-free spine is workspace-clean.
+    with TemporaryDirectory(dir=Path.cwd()) as temp_dir, redirect_stdout(io.StringIO()):
+        replay.RUNS_DIR = Path(temp_dir)
         summary = await replay.run(Path("mic.wav"), Path("ref.wav"), "on", "on")
 
     records = captured["records"]
