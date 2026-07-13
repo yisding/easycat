@@ -18,7 +18,9 @@ Replay only the cumulative spine through a completed chapter::
 The runner removes every ``*_API_KEY`` variable from child environments and
 disables bytecode-cache writes. The selected scripts are designed not to open
 audio devices, make provider requests, or leave files in the checkout; run an
-individual printed command when you want its full evidence.
+individual printed command when you want its full evidence. A checkpoint passes
+only when it exits zero, emits one JSON document on stdout, and keeps stderr
+empty; intentional failure scenarios belong inside that JSON evidence.
 """
 
 from __future__ import annotations
@@ -176,7 +178,7 @@ CHECKPOINTS = (
         "15-operate-in-production",
         "manager_probe.py",
         "multi-session manager rollback",
-        "failed and cancelled starts release slots; stop-all still attempts both sessions",
+        "failed starts release slots; stop-all records one error and still attempts both sessions",
     ),
 )
 
@@ -223,9 +225,16 @@ def _run_checkpoint(checkpoint: Checkpoint, *, timeout_s: float) -> dict[str, ob
     if completed.returncode:
         lines = [line for line in completed.stderr.splitlines() if line.strip()]
         detail = lines[-1] if lines else "checkpoint exited without stderr"
+    elif stderr_lines := [line for line in completed.stderr.splitlines() if line.strip()]:
+        detail = f"unexpected stderr: {stderr_lines[-1]}"
+    else:
+        try:
+            json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            detail = f"stdout is not one JSON document: {exc.msg}"
     return {
         **checkpoint.as_row(),
-        "status": "pass" if completed.returncode == 0 else "fail",
+        "status": "pass" if not detail else "fail",
         "returncode": completed.returncode,
         "detail": detail,
     }

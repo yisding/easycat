@@ -18,8 +18,8 @@
 > uv run python docs/teaching/15-operate-in-production/manager_probe.py
 > ```
 >
-> **Evidence to find:** failed and cancelled starts release slots; stop-all still attempts both
-> sessions.
+> **Evidence to find:** failed starts release slots; stop-all records one error and still
+> attempts both sessions.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
@@ -458,7 +458,9 @@ active slots, duplicate-key rejection, ordinary and cancelled-start
 rollback, key reuse, and context-managed removal without opening a
 microphone. Its final `stop_all()` sweep also proves that every captured
 session is asked to stop and one stop failure does not abort the rest of
-the sweep.
+the sweep. The intentional failure is evidence under
+`stop_all.expected_error`, not a stray stderr log that looks like the probe
+itself failed.
 
 A real Twilio server using exactly this shape lives in
 `examples/twilio_app.py`. Crack it open after this chapter.
