@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `blocking first-audio gap` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Which sub-gap dominates first-audio latency, and does full TTS enqueue
+> define when the user first hears audio?
+>
 > ```bash
 > uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
 > ```

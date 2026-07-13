@@ -12,6 +12,9 @@
 > **Hardware-free checkpoint:** prove `small-sample P95 sensitivity` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Which bundle controls P95, and how far should P95 move when that bundle is
+> removed?
+>
 > ```bash
 > uv run python docs/teaching/12-evals-and-latency/p95_sensitivity_probe.py
 > ```

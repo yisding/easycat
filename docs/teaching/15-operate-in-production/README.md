@@ -14,6 +14,9 @@
 > **Hardware-free checkpoint:** prove `multi-session manager rollback` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Which failures release manager slots, and does one stop failure prevent the
+> peer stop?
+>
 > ```bash
 > uv run python docs/teaching/15-operate-in-production/manager_probe.py
 > ```

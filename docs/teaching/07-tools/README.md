@@ -12,6 +12,9 @@
 > **Hardware-free checkpoint:** prove `tool filler delivery` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Does a fast tool need filler; when slow filler is rejected, which audio
+> becomes first?
+>
 > ```bash
 > uv run python docs/teaching/07-tools/filler_delivery_probe.py
 > ```

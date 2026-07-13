@@ -64,6 +64,9 @@ sync with the chapter's source code and ladder order:
       > **Hardware-free checkpoint:** prove `first-audio outcomes` without a
       > microphone, speakers, or provider credentials:
       >
+      > **Predict first:** Which delivery outcome will appear when no chunks,
+      > rejected chunks, or accepted audio are produced?
+      >
       > ```bash
       > uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
       > ```
@@ -368,6 +371,12 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
     checkpoint = _offline_checkpoint_for(chapter)
     concept = checkpoint["concept"]
     command = checkpoint["command"]
+    prediction_lines = textwrap.wrap(
+        f"**Predict first:** {checkpoint['prediction']}",
+        width=95,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
     evidence_lines = textwrap.wrap(
         f"**Evidence to find:** {checkpoint['evidence']}.",
         width=95,
@@ -378,7 +387,9 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
         ">\n"
-        "> ```bash\n"
+        + "".join(f"> {line}\n" for line in prediction_lines)
+        + ">\n"
+        + "> ```bash\n"
         f"> {command}\n"
         "> ```\n"
         ">\n"

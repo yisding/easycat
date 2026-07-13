@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `VAD pre-roll frame order` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Which frames disappear when pre-roll is disabled, and does the trigger frame
+> itself remain?
+>
 > ```bash
 > uv run python docs/teaching/04-vad-preroll/preroll_probe.py
 > ```

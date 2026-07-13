@@ -13,6 +13,9 @@
 > **Hardware-free checkpoint:** prove `provider × transport matrix` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** How many cells result from two provider mixes × three transports, and which
+> values stay fixed along each axis?
+>
 > ```bash
 > uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
 > ```

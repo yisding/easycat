@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `barge-in cancellation` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Does the triggering speech event belong to the interrupted turn, and what
+> must finish before the next STT stream?
+>
 > ```bash
 > uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
 > ```

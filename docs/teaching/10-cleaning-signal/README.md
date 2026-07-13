@@ -14,6 +14,9 @@
 > **Hardware-free checkpoint:** prove `NR/AEC replay metrics` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** What changes with aligned AEC reference audio, and what should fail when
+> reference audio is missing or short?
+>
 > ```bash
 > uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
 > ```

@@ -14,6 +14,9 @@
 > **Hardware-free checkpoint:** prove `plain workflow bridge contract` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Can a plain workflow yield both reply text and a session action, and which
+> bridge mode should it report?
+>
 > ```bash
 > uv run python docs/teaching/14-bring-your-own-agent/workflow_state_probe.py
 > ```

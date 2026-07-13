@@ -43,6 +43,7 @@ class Checkpoint:
     folder: str
     script: str
     concept: str
+    prediction: str
     evidence: str
 
     @property
@@ -72,6 +73,8 @@ CHECKPOINTS = (
         "00-hello-audio",
         "format_boundaries.py",
         "audio format boundaries",
+        "Which rates belong to the wire, pipeline/provider input, provider defaults, and "
+        "WebRTC media boundaries?",
         "wire, provider-input, pipeline, config-default, and media roles use different rates",
     ),
     Checkpoint(
@@ -79,6 +82,8 @@ CHECKPOINTS = (
         "01-echo",
         "transport_contract_probe.py",
         "transport acceptance",
+        "How many chunks will be accepted or rejected, and does matching `TransportLike` "
+        "imply full `Transport` conformance?",
         "two chunks are accepted, one is rejected, and `version_info()` changes full conformance",
     ),
     Checkpoint(
@@ -86,6 +91,8 @@ CHECKPOINTS = (
         "02-transcribe",
         "partial_policy_probe.py",
         "partial vs final commitment",
+        "When a partial revises `fifteen` to `fifty`, which effects may happen before `FINAL`, "
+        "and which must wait?",
         "revised partials cancel speculation; only the final `fifty` commits the safe action",
     ),
     Checkpoint(
@@ -93,6 +100,8 @@ CHECKPOINTS = (
         "03-parrot-naive",
         "timeout_policy_probe.py",
         "silence-timeout tradeoff",
+        "Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and added "
+        "commit latency?",
         "500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit wait",
     ),
     Checkpoint(
@@ -100,6 +109,8 @@ CHECKPOINTS = (
         "04-vad-preroll",
         "preroll_probe.py",
         "VAD pre-roll frame order",
+        "Which frames disappear when pre-roll is disabled, and does the trigger frame itself "
+        "remain?",
         "pre-roll restores both cached frames before trigger/live; disabling it starts at trigger",
     ),
     Checkpoint(
@@ -107,6 +118,8 @@ CHECKPOINTS = (
         "05-blocking-agent",
         "gap_decomposition_probe.py",
         "blocking first-audio gap",
+        "Which sub-gap dominates first-audio latency, and does full TTS enqueue define when "
+        "the user first hears audio?",
         "1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes 800 ms",
     ),
     Checkpoint(
@@ -114,6 +127,8 @@ CHECKPOINTS = (
         "06-streaming-agent",
         "tts_delivery_probe.py",
         "sentence-level TTS handoff",
+        "Do per-sentence acceptance counts stay independent, and do they add up to the turn "
+        "totals?",
         "sentence delivery rows preserve acceptance separately and roll up to one matching turn",
     ),
     Checkpoint(
@@ -121,6 +136,7 @@ CHECKPOINTS = (
         "07-tools",
         "filler_delivery_probe.py",
         "tool filler delivery",
+        "Does a fast tool need filler; when slow filler is rejected, which audio becomes first?",
         "fast tools skip filler; rejected filler has zero accepted chunks and reply audio "
         "comes first",
     ),
@@ -129,6 +145,8 @@ CHECKPOINTS = (
         "08-smart-turn",
         "endpoint_wait_probe.py",
         "endpoint wait decomposition",
+        "How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with the "
+        "800 ms VAD baseline?",
         "smart accept takes 240 ms, VAD 800 ms, and fallback 1,040 ms from three components",
     ),
     Checkpoint(
@@ -136,6 +154,8 @@ CHECKPOINTS = (
         "09-interruption",
         "barge_in_turn_probe.py",
         "barge-in cancellation",
+        "Does the triggering speech event belong to the interrupted turn, and what must finish "
+        "before the next STT stream?",
         "triggering speech remains unconsumed while bot cancellation precedes the next STT stream",
     ),
     Checkpoint(
@@ -143,6 +163,8 @@ CHECKPOINTS = (
         "10-cleaning-signal",
         "replay_metrics_probe.py",
         "NR/AEC replay metrics",
+        "What changes with aligned AEC reference audio, and what should fail when reference "
+        "audio is missing or short?",
         "aligned reference audio changes RMS by -12.041 dB; missing or short references fail",
     ),
     Checkpoint(
@@ -150,6 +172,8 @@ CHECKPOINTS = (
         "11-journal",
         "query_coverage_probe.py",
         "journal query coverage",
+        "How can marginal query counts distinguish an empty filter intersection from a "
+        "misspelled turn?",
         "a zero-result intersection has marginal matches, while a misspelled turn has none",
     ),
     Checkpoint(
@@ -157,6 +181,7 @@ CHECKPOINTS = (
         "12-evals-and-latency",
         "p95_sensitivity_probe.py",
         "small-sample P95 sensitivity",
+        "Which bundle controls P95, and how far should P95 move when that bundle is removed?",
         "removing `turn_02_slow_agent.bundle` alone drops P95 by 1,260 ms",
     ),
     Checkpoint(
@@ -164,6 +189,8 @@ CHECKPOINTS = (
         "13-swap-providers-and-transports",
         "matrix_probe.py",
         "provider × transport matrix",
+        "How many cells result from two provider mixes × three transports, and which values "
+        "stay fixed along each axis?",
         "two provider mixes cross three transport configs into six cells without changing axes",
     ),
     Checkpoint(
@@ -171,6 +198,8 @@ CHECKPOINTS = (
         "14-bring-your-own-agent",
         "workflow_state_probe.py",
         "plain workflow bridge contract",
+        "Can a plain workflow yield both reply text and a session action, and which bridge mode "
+        "should it report?",
         "`MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep mode",
     ),
     Checkpoint(
@@ -178,6 +207,7 @@ CHECKPOINTS = (
         "15-operate-in-production",
         "manager_probe.py",
         "multi-session manager rollback",
+        "Which failures release manager slots, and does one stop failure prevent the peer stop?",
         "failed starts release slots; stop-all records one error and still attempts both sessions",
     ),
 )
@@ -315,6 +345,7 @@ def main() -> None:
             return
         for row in rows:
             print(f"{row['chapter']:>2}  {row['concept']}")
+            print(f"    Predict: {row['prediction']}")
             print(f"    Setup: {row['setup_command']}")
             print(f"    Run: {row['command']}")
             print(f"    Look for: {row['evidence']}")
@@ -336,6 +367,7 @@ def main() -> None:
         for row in rows:
             label = str(row["status"]).upper()
             print(f"{label:<7} {row['chapter']:>2}  {row['concept']}")
+            print(f"           Predict: {row['prediction']}")
             print(f"           Look for: {row['evidence']}")
             if args.show_evidence and row["observed"] is not None:
                 print("           Observed:")
