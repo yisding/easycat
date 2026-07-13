@@ -62,7 +62,7 @@ def test_feature_ladder_declares_complete_feature_journey() -> None:
         "Browser, WebSocket, local, and Twilio",
         "STT/TTS provider specs",
         "VAD, smart turn, interruption, push-to-talk",
-        "tools, fillers, session actions, and pronunciation",
+        "tools, tool events, session actions, and pronunciation",
         "OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents",
         "`EasyConfig`, `Session`, events, text turns, and lifecycle",
         "Journals, bundles, inspect, replay, diff, and the debugger",
@@ -280,6 +280,49 @@ def test_conversation_controls_teaches_barge_in_and_push_to_talk_boundaries() ->
         "Noise reduction (NR)",
     ):
         assert concept in readme
+
+
+def test_tools_actions_chapter_keeps_tools_effects_events_and_speech_separate() -> None:
+    chapter = FEATURE_LADDER / "04-tools-actions"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "function_tool",
+        "SessionActions",
+        "context=actions",
+        "session_actions=actions",
+        "PhoneticReplacementProcessor",
+        "PauseProcessor",
+        'style="ellipsis"',
+        "session.on(",
+        "run_session",
+    ):
+        assert surface in script
+    for concept in (
+        "A normal tool returns information",
+        "A session action requests a controlled side effect",
+        "Tool events observe; they do not act",
+        "Output processors change speech, not meaning",
+        "does not synthesize filler speech automatically",
+    ):
+        assert concept in readme
+
+
+def test_tools_actions_pronunciation_preview_runs_without_credentials() -> None:
+    script = FEATURE_LADDER / "04-tools-actions" / "main.py"
+    completed = subprocess.run(
+        [sys.executable, str(script), "preview"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")},
+    )
+
+    assert "Agent text: Siobhan Nguyen's phone number" in completed.stdout
+    assert "Spoken text: shi-vawn win's phone number" in completed.stdout
+    assert "1 ... 5 ... 5 ... 5" in completed.stdout
 
 
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
