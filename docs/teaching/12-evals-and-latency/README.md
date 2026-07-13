@@ -8,6 +8,32 @@
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 10 — Cleaning the Signal**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> What changes with aligned AEC reference audio, and what should fail when reference audio is
+> missing or short?
+>
+> After recording your answer, explain one way `NR/AEC replay metrics` changes how you reason
+> about `small-sample P95 sensitivity`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `small-sample P95 sensitivity` without a microphone,
 > speakers, or provider credentials:

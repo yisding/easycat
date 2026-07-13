@@ -7,6 +7,32 @@
 > Speak, see text. Twice — once batch, once streaming. Feel the
 > latency difference. And meet the journal.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 0 — Hello, Audio**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which rates belong to the wire, pipeline/provider input, provider defaults, and WebRTC media
+> boundaries?
+>
+> After recording your answer, explain one way `audio format boundaries` changes how you reason
+> about `partial vs final commitment`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/00-hello-audio/format_boundaries.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `partial vs final commitment` without a microphone,
 > speakers, or provider credentials:

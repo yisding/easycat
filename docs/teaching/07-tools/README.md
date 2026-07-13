@@ -8,6 +8,32 @@
 > hears "let me check that for you." That choice is the whole
 > chapter.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 5 — The Blocking Agent**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Which sub-gap dominates first-audio latency, and does full TTS enqueue define when the user
+> first hears audio?
+>
+> After recording your answer, explain one way `blocking first-audio gap` changes how you
+> reason about `tool filler delivery`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `tool filler delivery` without a microphone,
 > speakers, or provider credentials:

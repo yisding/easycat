@@ -7,6 +7,31 @@
 > A tiny ML model that knows you're done talking before the silence
 > confirms it.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 6 — Streaming Agent + Sentence TTS**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Do per-sentence acceptance counts stay independent, and do they add up to the turn totals?
+>
+> After recording your answer, explain one way `sentence-level TTS handoff` changes how you
+> reason about `endpoint wait decomposition`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `endpoint wait decomposition` without a microphone,
 > speakers, or provider credentials:

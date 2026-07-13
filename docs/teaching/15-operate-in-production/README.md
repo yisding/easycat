@@ -10,6 +10,32 @@
 > chapter is about the operational surface: `SessionManager`, the
 > public lifecycle, the debugger UI, and the CLI.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 13 — Swap Providers AND Transports**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How many cells result from two provider mixes × three transports, and which values stay fixed
+> along each axis?
+>
+> After recording your answer, explain one way `provider × transport matrix` changes how you
+> reason about `multi-session manager rollback`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `multi-session manager rollback` without a microphone,
 > speakers, or provider credentials:

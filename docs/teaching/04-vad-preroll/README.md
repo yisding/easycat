@@ -7,6 +7,32 @@
 > Real speech detection. And why the buffer *before* the detection
 > matters as much as the detection itself.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 2 — Transcribe**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> When a partial revises `fifteen` to `fifty`, which effects may happen before `FINAL`, and
+> which must wait?
+>
+> After recording your answer, explain one way `partial vs final commitment` changes how you
+> reason about `VAD pre-roll frame order`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/02-transcribe/partial_policy_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `VAD pre-roll frame order` without a microphone,
 > speakers, or provider credentials:

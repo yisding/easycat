@@ -8,9 +8,10 @@ checking boxes; regeneration restores this file to its blank state. Keep command
 record names, measurements, and explanations in your copy—not credentials, raw audio,
 or sensitive transcript text.
 
-A chapter is complete only when all eight boxes on its card are checked. Preserve wrong
-predictions: they are evidence to explain, not history to rewrite. Complete both
-integration checks at each phase boundary before starting the next chapter card.
+A chapter is complete only when every box on its card is checked. Chapters 2-15 begin
+with a two-chapter-lag recall before the new narrative. Preserve wrong predictions:
+they are evidence to explain, not history to rewrite. Complete both integration checks
+at each phase boundary before starting the next chapter card.
 
 ## Chapter 0 — Hello, Audio
 
@@ -52,6 +53,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./02-transcribe/) · [Exercises](./02-transcribe/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 0 — Hello, Audio in [Recall before
+  reading](./02-transcribe/#recall-before-reading); keep the first answer and its evidence-backed
+  repair.
 - [ ] **Predict:** When a partial revises `fifteen` to `fifty`, which effects may happen before
   `FINAL`, and which must wait?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -70,6 +74,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./03-parrot-naive/) · [Exercises](./03-parrot-naive/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 1 — Echo in [Recall before
+  reading](./03-parrot-naive/#recall-before-reading); keep the first answer and its evidence-backed
+  repair.
 - [ ] **Predict:** Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and
   added commit latency?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -86,6 +93,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./04-vad-preroll/) · [Exercises](./04-vad-preroll/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 2 — Transcribe in [Recall before
+  reading](./04-vad-preroll/#recall-before-reading); keep the first answer and its evidence-backed
+  repair.
 - [ ] **Predict:** Which frames disappear when pre-roll is disabled, and does the trigger frame
   itself remain?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -103,6 +113,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./05-blocking-agent/) · [Exercises](./05-blocking-agent/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 3 — Parrot, the Naive Way in
+  [Recall before reading](./05-blocking-agent/#recall-before-reading); keep the first answer and
+  its evidence-backed repair.
 - [ ] **Predict:** Which sub-gap dominates first-audio latency, and does full TTS enqueue define
   when the user first hears audio?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -120,6 +133,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./06-streaming-agent/) · [Exercises](./06-streaming-agent/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 4 — VAD + Pre-roll in [Recall
+  before reading](./06-streaming-agent/#recall-before-reading); keep the first answer and its
+  evidence-backed repair.
 - [ ] **Predict:** Do per-sentence acceptance counts stay independent, and do they add up to the
   turn totals?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -138,6 +154,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./07-tools/) · [Exercises](./07-tools/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 5 — The Blocking Agent in [Recall
+  before reading](./07-tools/#recall-before-reading); keep the first answer and its evidence-backed
+  repair.
 - [ ] **Predict:** Does a fast tool need filler; when slow filler is rejected, which audio becomes
   first?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -156,6 +175,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./08-smart-turn/) · [Exercises](./08-smart-turn/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 6 — Streaming Agent + Sentence TTS
+  in [Recall before reading](./08-smart-turn/#recall-before-reading); keep the first answer and its
+  evidence-backed repair.
 - [ ] **Predict:** How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with
   the 800 ms VAD baseline?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -173,6 +195,9 @@ integration checks at each phase boundary before starting the next chapter card.
 
 [Narrative](./09-interruption/) · [Exercises](./09-interruption/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 7 — Tools, Mid-stream in [Recall
+  before reading](./09-interruption/#recall-before-reading); keep the first answer and its
+  evidence-backed repair.
 - [ ] **Predict:** Does the triggering speech event belong to the interrupted turn, and what must
   finish before the next STT stream?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -201,6 +226,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./10-cleaning-signal/) · [Exercises](./10-cleaning-signal/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 8 — Smart-turn in [Recall before
+  reading](./10-cleaning-signal/#recall-before-reading); keep the first answer and its
+  evidence-backed repair.
 - [ ] **Predict:** What changes with aligned AEC reference audio, and what should fail when
   reference audio is missing or short?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -219,6 +247,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./11-journal/) · [Exercises](./11-journal/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 9 — Interruption / Barge-in in
+  [Recall before reading](./11-journal/#recall-before-reading); keep the first answer and its
+  evidence-backed repair.
 - [ ] **Predict:** How can marginal query counts distinguish an empty filter intersection from a
   misspelled turn?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -236,6 +267,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./12-evals-and-latency/) · [Exercises](./12-evals-and-latency/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 10 — Cleaning the Signal in
+  [Recall before reading](./12-evals-and-latency/#recall-before-reading); keep the first answer and
+  its evidence-backed repair.
 - [ ] **Predict:** Which bundle controls P95, and how far should P95 move when that bundle is
   removed?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -262,6 +296,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./13-swap-providers-and-transports/) · [Exercises](./13-swap-providers-and-transports/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 11 — The Journal as Mental Model
+  in [Recall before reading](./13-swap-providers-and-transports/#recall-before-reading); keep the
+  first answer and its evidence-backed repair.
 - [ ] **Predict:** How many cells result from two provider mixes × three transports, and which
   values stay fixed along each axis?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -282,6 +319,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./14-bring-your-own-agent/) · [Exercises](./14-bring-your-own-agent/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 12 — Evals + the Latency Budget in
+  [Recall before reading](./14-bring-your-own-agent/#recall-before-reading); keep the first answer
+  and its evidence-backed repair.
 - [ ] **Predict:** Can a plain workflow yield both reply text and a session action, and which
   bridge mode should it report?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.
@@ -309,6 +349,9 @@ Complete this closed-book integration gate before entering the next phase.
 
 [Narrative](./15-operate-in-production/) · [Exercises](./15-operate-in-production/EXERCISES.md)
 
+- [ ] **Recall earlier:** before the narrative, retrieve Chapter 13 — Swap Providers AND Transports
+  in [Recall before reading](./15-operate-in-production/#recall-before-reading); keep the first
+  answer and its evidence-backed repair.
 - [ ] **Predict:** Which failures release manager slots, and does one stop failure prevent the peer
   stop?
 - [ ] **Prepare:** from the repository root, run `uv sync --extra quickstart --group dev`.

@@ -9,6 +9,32 @@
 > WebRTC / Twilio). With eval numbers from chapter 12 in hand,
 > every swap is a measured decision.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 11 — The Journal as Mental Model**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How can marginal query counts distinguish an empty filter intersection from a misspelled
+> turn?
+>
+> After recording your answer, explain one way `journal query coverage` changes how you reason
+> about `provider × transport matrix`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/11-journal/query_coverage_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `provider × transport matrix` without a microphone,
 > speakers, or provider credentials:

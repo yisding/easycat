@@ -28,6 +28,7 @@ from scripts.regen_teaching_chapters import (
     ROOT,
     SELF_CHECK_PROTOCOL_RE,
     SHIP_PHASE_REVIEW_TITLE,
+    SPACED_RETRIEVAL_RE,
     TEACHING,
     Chapter,
     _ensure_exercise_hints,
@@ -46,6 +47,7 @@ from scripts.regen_teaching_chapters import (
     render_practice_handoff,
     render_progress_worksheet,
     render_self_check_protocol,
+    render_spaced_retrieval,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -109,9 +111,10 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
     labels = ("Predict", "Prepare", "Run", "Find", "Reflect", "Practice", "Retrieve", "Replay")
     for label in labels:
         assert worksheet.count(f"- [ ] **{label}:**") == 16
-    assert worksheet.count("- [ ]") == 136
+    assert worksheet.count("- [ ] **Recall earlier:**") == 14
+    assert worksheet.count("- [ ]") == 150
     assert "- [x]" not in worksheet.lower()
-    for chapter in discover_chapters():
+    for chapter_number, chapter in enumerate(discover_chapters()):
         checkpoint = _offline_checkpoint_for(chapter)
         assert f"[Narrative](./{chapter.slug}/)" in worksheet
         assert f"[Exercises](./{chapter.slug}/EXERCISES.md)" in worksheet
@@ -121,6 +124,11 @@ def test_progress_worksheet_tracks_every_chapter_and_checkpoint() -> None:
         assert str(checkpoint["evidence"]) in normalized_worksheet
         assert str(checkpoint["reflection"]) in normalized_worksheet
         assert f"--through {checkpoint['chapter']} --jobs 4 --show-evidence" in worksheet
+        recall_link = f"./{chapter.slug}/#recall-before-reading"
+        if chapter_number >= 2:
+            assert recall_link in worksheet
+        else:
+            assert recall_link not in worksheet
     for final_chapter, (title, integrate, ground) in PHASE_REVIEWS.items():
         chapter_heading = worksheet.index(f"## Chapter {final_chapter} ")
         review_heading = worksheet.index(f"## {title}")
@@ -175,6 +183,40 @@ def test_each_chapter_has_one_current_generated_offline_checkpoint() -> None:
         assert matches[0].group("body") == render_offline_checkpoint(chapter)
         assert matches[0].start() > readme.index("<!-- END auto:navigation -->")
         assert matches[0].end() < readme.find("\n## Prerequisites")
+
+
+def test_later_chapters_retrieve_a_two_chapter_old_checkpoint_before_new_material() -> None:
+    chapters = discover_chapters()
+
+    for chapter_number, chapter in enumerate(chapters):
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        matches = list(SPACED_RETRIEVAL_RE.finditer(readme))
+        rendered = render_spaced_retrieval(chapter)
+
+        if chapter_number < 2:
+            assert matches == [], chapter.slug
+            assert rendered is None
+            continue
+
+        assert rendered is not None
+        assert len(matches) == 1, chapter.slug
+        body = matches[0].group("body").strip()
+        earlier = chapters[chapter_number - 2]
+        earlier_heading = (earlier.path / "README.md").read_text(encoding="utf-8").splitlines()[0]
+        earlier_title = earlier_heading.removeprefix("# ")
+        earlier_checkpoint = _offline_checkpoint_for(earlier)
+        current_checkpoint = _offline_checkpoint_for(chapter)
+
+        assert body == rendered.strip()
+        assert matches[0].start() > readme.index("<!-- END auto:navigation -->")
+        assert matches[0].end() < readme.index("<!-- BEGIN auto:offline-checkpoint -->")
+        assert f"Spaced retrieval — {earlier_title}" in body
+        normalized_body = re.sub(r"\s+", " ", body.replace("\n> ", " "))
+        assert str(earlier_checkpoint["prediction"]) in normalized_body
+        assert str(earlier_checkpoint["command"]) in body
+        assert f"`{earlier_checkpoint['concept']}`" in body
+        assert f"`{current_checkpoint['concept']}`" in body
+        assert str(earlier_checkpoint["evidence"]) not in body
 
 
 def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:

@@ -7,6 +7,31 @@
 > Three versions of the same feature. Each one better. Each one
 > teaching something the previous one didn't.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 7 — Tools, Mid-stream**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Does a fast tool need filler; when slow filler is rejected, which audio becomes first?
+>
+> After recording your answer, explain one way `tool filler delivery` changes how you reason
+> about `barge-in cancellation`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/07-tools/filler_delivery_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `barge-in cancellation` without a microphone,
 > speakers, or provider credentials:

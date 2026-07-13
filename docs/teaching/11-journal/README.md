@@ -7,6 +7,32 @@
 > You will not write pipeline code. You will read three bundles
 > with planted bugs and find them.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 9 — Interruption / Barge-in**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Does the triggering speech event belong to the interrupted turn, and what must finish before
+> the next STT stream?
+>
+> After recording your answer, explain one way `barge-in cancellation` changes how you reason
+> about `journal query coverage`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/09-interruption/barge_in_turn_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `journal query coverage` without a microphone,
 > speakers, or provider credentials:

@@ -10,6 +10,32 @@
 > through the microphone. Same pipeline slot; fundamentally
 > different techniques.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 8 — Smart-turn**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare with the 800 ms VAD
+> baseline?
+>
+> After recording your answer, explain one way `endpoint wait decomposition` changes how you
+> reason about `NR/AEC replay metrics`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `NR/AEC replay metrics` without a microphone,
 > speakers, or provider credentials:

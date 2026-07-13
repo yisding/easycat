@@ -7,6 +7,32 @@
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 
+<!-- BEGIN auto:spaced-retrieval -->
+## Recall before reading
+
+> **Following the ladder? Spaced retrieval — Chapter 3 — Parrot, the Naive Way**
+>
+> Close earlier chapters and answer from memory before reading further. If this
+> chapter is your starting point, skip this block.
+>
+> **Answer from memory:**
+>
+> Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and added commit
+> latency?
+>
+> After recording your answer, explain one way `silence-timeout tradeoff` changes how you
+> reason about `blocking first-audio gap`. Keep the first answer visible.
+>
+> **Check only after answering:**
+>
+> ```bash
+> uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py
+> ```
+>
+> Cite one observed field, measurement, or behavior; repair only the part your
+> evidence disproved.
+<!-- END auto:spaced-retrieval -->
+
 <!-- BEGIN auto:offline-checkpoint -->
 > **Hardware-free checkpoint:** prove `blocking first-audio gap` without a microphone,
 > speakers, or provider credentials:
