@@ -571,6 +571,54 @@ def test_testing_evals_suite_passes_and_latency_budget_can_fail_without_credenti
     assert "exceeds budget 0.0 ms" in failing.stderr
 
 
+def test_multi_caller_chapter_uses_public_server_auth_capacity_and_lifecycle_surfaces() -> None:
+    chapter = FEATURE_LADDER / "09-multi-caller"
+    script = (chapter / "main.py").read_text(encoding="utf-8")
+    readme = (chapter / "README.md").read_text(encoding="utf-8")
+
+    for surface in (
+        "BearerTokenAuth",
+        "CapacityGate",
+        "enforce_bind_guard",
+        'authorization_header=f"Bearer {TOKEN}"',
+        "LocalSupervisor(max_sessions=1",
+        '== ("capacity", None, 1)',
+        "gate.start_draining()",
+        "gate.drain(",
+    ):
+        assert surface in script
+    for concept in (
+        "One connection, one fresh session",
+        "Authentication happens before allocation",
+        "Non-loopback binds fail closed",
+        "Capacity rejects instead of queueing callers",
+        "The helper owns connection teardown",
+        "Use `VoiceServer` for one production process policy",
+        "Graceful shutdown is admission control plus a deadline",
+    ):
+        assert concept in readme
+
+
+def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    env = {key: value for key, value in os.environ.items() if not key.endswith("_API_KEY")}
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=10,
+    )
+
+    assert "PASS auth: missing bearer token rejected before session creation" in result.stdout
+    assert "PASS capacity: extra caller rejected instead of queued" in result.stdout
+    assert "PASS isolation: released slot created fresh session 2" in result.stdout
+    assert "PASS shutdown: draining rejected new work and stopped session 2" in result.stdout
+    assert "PASS bind guard: public unauthenticated endpoint failed closed" in result.stdout
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
