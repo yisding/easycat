@@ -142,24 +142,26 @@ async def main() -> None:
     session = create_session(config)
     attach_runtime_feedback(session)
 
-    async with session:
-        print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
-        await wait_for_shutdown_signal(session)
-
-    # Context exit force-stops cancellation paths. The normal signal helper
-    # already stopped gracefully, so that second stop is an idempotent no-op.
-    # The session preserves a read-only journal view for postmortem export.
-    RUNS_DIR.mkdir(exist_ok=True)
-    path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
     try:
-        export_debug_bundle(session, path, overwrite=True)
-        print(f"Wrote bundle → {_display_path(path)}")
-        human_command, json_command = measurement_commands(path)
-        print("Measure this production-shaped bundle directly:")
-        print(f"  {human_command}")
-        print(f"  {json_command}")
-    except Exception as exc:  # noqa: BLE001 — teaching script
-        print(f"(no bundle written: {exc})")
+        async with session:
+            print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+            await wait_for_shutdown_signal(session)
+    finally:
+        # Context exit force-stops cancellation paths. The normal signal helper
+        # already stopped gracefully, so that second stop is an idempotent no-op.
+        # Export from the preserved read-only postmortem view even when shutdown
+        # reached this scope through cancellation.
+        RUNS_DIR.mkdir(exist_ok=True)
+        path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
+        try:
+            export_debug_bundle(session, path, overwrite=True)
+            print(f"Wrote bundle → {_display_path(path)}")
+            human_command, json_command = measurement_commands(path)
+            print("Measure this production-shaped bundle directly:")
+            print(f"  {human_command}")
+            print(f"  {json_command}")
+        except Exception as exc:  # noqa: BLE001 — teaching script
+            print(f"(no bundle written: {exc})")
 
 
 if __name__ == "__main__":

@@ -101,7 +101,7 @@
      uv run easycat doctor
      uv run easycat doctor --env-file .env         # if keys live in .env
      uv run easycat doctor --env-file .env --json  # for parseable checks
-@@ -40,21 +29,31 @@
+@@ -40,21 +29,33 @@
 
  from __future__ import annotations
 
@@ -111,8 +111,7 @@
  import time
 +from collections.abc import AsyncIterator
  from pathlib import Path
-+
-+from openai import AsyncOpenAI
++from typing import TYPE_CHECKING
 
  from easycat import (
      EasyConfig,
@@ -131,11 +130,14 @@
 +from easycat.llm_output_processing import LLMOutputProcessor
 +from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
 +
++if TYPE_CHECKING:
++    from openai import AsyncOpenAI
++
 +MODEL = "gpt-4o-mini"
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,93 +73,150 @@
+@@ -74,95 +75,154 @@
      )
 
 
@@ -278,7 +280,8 @@
 -    ap.add_argument("--provider-mix", choices=("openai", "deepgram-eleven"), default="openai")
 -    ap.add_argument("--transport", choices=("local", "webrtc", "twilio"), default="local")
 -    args = ap.parse_args()
--
++    from openai import AsyncOpenAI
+
      if not os.getenv("OPENAI_API_KEY"):
          raise SystemExit("Set OPENAI_API_KEY.")
 
@@ -295,15 +298,6 @@
 -    session = create_session(config)
 -    attach_runtime_feedback(session)
 -
--    async with session:
--        print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
--        await wait_for_shutdown_signal(session)
--
--    # Context exit force-stops cancellation paths. The normal signal helper
--    # already stopped gracefully, so that second stop is an idempotent no-op.
--    # The session preserves a read-only journal view for postmortem export.
--    RUNS_DIR.mkdir(exist_ok=True)
--    path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
 +    # The custom workflow owns this client; EasyCat only owns providers and
 +    # transports it creates from EasyConfig. Keep the caller-owned scope outer.
 +    async with AsyncOpenAI() as client:
@@ -330,37 +324,50 @@
 +        session = create_session(config)
 +        attach_runtime_feedback(session)
 +
-+        async with session:
-+            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
-+            await wait_for_shutdown_signal(session)
-+
-+        # Session exit preserves the read-only journal view. Export while the
-+        # custom workflow's client is still in its separately owned scope.
-+        RUNS_DIR.mkdir(exist_ok=True)
-+        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
 +        try:
-+            export_debug_bundle(session, path, overwrite=True)
-+            print(f"Wrote bundle → {_display_path(path)}")
-+            human_command, json_command = measurement_commands(path)
-+            print("Measure this production-shaped bundle directly:")
-+            print(f"  {human_command}")
-+            print(f"  {json_command}")
-+            print("Inspect its provider-ready pronunciation payloads:")
-+            print(f"  {pronunciation_command(path)}")
-+        except Exception as exc:  # noqa: BLE001 — teaching script
-+            print(f"(no bundle written: {exc})")
++            async with session:
++                print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
++                await wait_for_shutdown_signal(session)
++        finally:
++            # Session exit preserves the read-only journal view. Export while
++            # the custom workflow's client is still in its separately owned
++            # scope, including when shutdown arrives through cancellation.
++            RUNS_DIR.mkdir(exist_ok=True)
++            path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
++            try:
++                export_debug_bundle(session, path, overwrite=True)
++                print(f"Wrote bundle → {_display_path(path)}")
++                human_command, json_command = measurement_commands(path)
++                print("Measure this production-shaped bundle directly:")
++                print(f"  {human_command}")
++                print(f"  {json_command}")
++                print("Inspect its provider-ready pronunciation payloads:")
++                print(f"  {pronunciation_command(path)}")
++            except Exception as exc:  # noqa: BLE001 — teaching script
++                print(f"(no bundle written: {exc})")
 +
 +
 +if __name__ == "__main__":
      try:
--        export_debug_bundle(session, path, overwrite=True)
--        print(f"Wrote bundle → {_display_path(path)}")
--        human_command, json_command = measurement_commands(path)
--        print("Measure this production-shaped bundle directly:")
--        print(f"  {human_command}")
--        print(f"  {json_command}")
--    except Exception as exc:  # noqa: BLE001 — teaching script
--        print(f"(no bundle written: {exc})")
+-        async with session:
+-            print("Session started. Talk (or connect a client).  Ctrl-C to stop.\n")
+-            await wait_for_shutdown_signal(session)
+-    finally:
+-        # Context exit force-stops cancellation paths. The normal signal helper
+-        # already stopped gracefully, so that second stop is an idempotent no-op.
+-        # Export from the preserved read-only postmortem view even when shutdown
+-        # reached this scope through cancellation.
+-        RUNS_DIR.mkdir(exist_ok=True)
+-        path = RUNS_DIR / f"ch13-{tag}-{int(time.time())}.bundle"
+-        try:
+-            export_debug_bundle(session, path, overwrite=True)
+-            print(f"Wrote bundle → {_display_path(path)}")
+-            human_command, json_command = measurement_commands(path)
+-            print("Measure this production-shaped bundle directly:")
+-            print(f"  {human_command}")
+-            print(f"  {json_command}")
+-        except Exception as exc:  # noqa: BLE001 — teaching script
+-            print(f"(no bundle written: {exc})")
 -
 -
 -if __name__ == "__main__":

@@ -34,8 +34,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-
-from openai import AsyncOpenAI
+from typing import TYPE_CHECKING
 
 from easycat import (
     EasyConfig,
@@ -52,6 +51,9 @@ from easycat.integrations.agents import GenericWorkflowBridge
 from easycat.integrations.agents.base import AgentRecorder, CancellationMode
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.session.actions import CoreSessionActionExecutor, EndCallAction, SessionActions
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
 
 MODEL = "gpt-4o-mini"
 RUNS_DIR = Path(__file__).parent / "runs"
@@ -165,6 +167,8 @@ class MyWorkflow:
 
 
 async def main() -> None:
+    from openai import AsyncOpenAI
+
     if not os.getenv("OPENAI_API_KEY"):
         raise SystemExit("Set OPENAI_API_KEY.")
 
@@ -194,25 +198,27 @@ async def main() -> None:
         session = create_session(config)
         attach_runtime_feedback(session)
 
-        async with session:
-            print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
-            await wait_for_shutdown_signal(session)
-
-        # Session exit preserves the read-only journal view. Export while the
-        # custom workflow's client is still in its separately owned scope.
-        RUNS_DIR.mkdir(exist_ok=True)
-        path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
         try:
-            export_debug_bundle(session, path, overwrite=True)
-            print(f"Wrote bundle → {_display_path(path)}")
-            human_command, json_command = measurement_commands(path)
-            print("Measure this production-shaped bundle directly:")
-            print(f"  {human_command}")
-            print(f"  {json_command}")
-            print("Inspect its provider-ready pronunciation payloads:")
-            print(f"  {pronunciation_command(path)}")
-        except Exception as exc:  # noqa: BLE001 — teaching script
-            print(f"(no bundle written: {exc})")
+            async with session:
+                print("Talk to your custom agent. Say 'goodbye' to have it hang up.\n")
+                await wait_for_shutdown_signal(session)
+        finally:
+            # Session exit preserves the read-only journal view. Export while
+            # the custom workflow's client is still in its separately owned
+            # scope, including when shutdown arrives through cancellation.
+            RUNS_DIR.mkdir(exist_ok=True)
+            path = RUNS_DIR / f"ch14-bridge-{int(time.time())}.bundle"
+            try:
+                export_debug_bundle(session, path, overwrite=True)
+                print(f"Wrote bundle → {_display_path(path)}")
+                human_command, json_command = measurement_commands(path)
+                print("Measure this production-shaped bundle directly:")
+                print(f"  {human_command}")
+                print(f"  {json_command}")
+                print("Inspect its provider-ready pronunciation payloads:")
+                print(f"  {pronunciation_command(path)}")
+            except Exception as exc:  # noqa: BLE001 — teaching script
+                print(f"(no bundle written: {exc})")
 
 
 if __name__ == "__main__":
