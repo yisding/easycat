@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from easycat.cancel import CancelToken
+from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -239,7 +240,7 @@ class GenericWorkflowBridge(BridgeTemplate):
 
     # ── Shallow mode ─────────────────────────────────────────────
 
-    async def _invoke_shallow(
+    async def _invoke_shallow(  # noqa: PLR0912 - explicit close at each stream boundary
         self,
         turn_input: AgentTurnInput,
         cancel_token: CancelToken | None,
@@ -254,22 +255,29 @@ class GenericWorkflowBridge(BridgeTemplate):
             # matches the deep-mode streaming branch, which likewise leaves
             # ``structured_output`` unset for streamed chunks; the awaitable /
             # plain-value branches still expose a real structured object.
-            async for chunk in self._workflow.on_user_turn_streaming(turn_input.text):
-                if cancel_token and cancel_token.is_cancelled:
-                    break
-                if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            stream = self._workflow.on_user_turn_streaming(turn_input.text)
+            try:
+                async for chunk in stream:
+                    if cancel_token and cancel_token.is_cancelled:
+                        break
+                    if chunk:
+                        yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            finally:
+                await aclose_quietly(stream)
             return
 
         result = self._workflow.on_user_turn(turn_input.text)
         if inspect.isasyncgen(result):
             # See streaming note above: leave ``_last_output`` unset for
             # streamed chunks (parity with deep mode, no partial-on-cancel).
-            async for chunk in result:
-                if cancel_token and cancel_token.is_cancelled:
-                    break
-                if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            try:
+                async for chunk in result:
+                    if cancel_token and cancel_token.is_cancelled:
+                        break
+                    if chunk:
+                        yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            finally:
+                await aclose_quietly(result)
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output
@@ -296,11 +304,14 @@ class GenericWorkflowBridge(BridgeTemplate):
         result = self._workflow.on_user_turn(turn_input.text, **kwargs)
         # Deep mode may return str, AsyncIterator[str], or a coroutine.
         if inspect.isasyncgen(result):
-            async for chunk in result:
-                if cancel_token and cancel_token.is_cancelled:
-                    break
-                if chunk:
-                    yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            try:
+                async for chunk in result:
+                    if cancel_token and cancel_token.is_cancelled:
+                        break
+                    if chunk:
+                        yield AgentBridgeEvent(kind="text_delta", text=str(chunk))
+            finally:
+                await aclose_quietly(result)
         elif inspect.isawaitable(result):
             output = await result
             self._last_output = output
