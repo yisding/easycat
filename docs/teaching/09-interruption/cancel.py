@@ -163,18 +163,31 @@ async def coordinator(mic_queue, stt_factory, client, tts, transport, journal):
 
         # Barge-in detection: user speech while bot talks → cancel.
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None:
+            if tag != "speech_started" or active_cancel is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=SESSION_ID,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            # Flush audio already in the speaker queue so the bot
+            # shuts up *now*, not after the current chunk finishes.
+            await transport.clear_audio()
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=SESSION_ID,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                # Flush audio already in the speaker queue so the bot
-                # shuts up *now*, not after the current chunk finishes.
-                await transport.clear_audio()
-            continue
+            bot_task = None
+            active_cancel = None
+            # Fall through: this same start marker must open STT for
+            # the barge-in whose preroll frames are already queued.
 
         if tag == "speech_started":
             if stt is None:

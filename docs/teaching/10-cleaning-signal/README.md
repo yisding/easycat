@@ -234,7 +234,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -155,95 +168,48 @@
+@@ -155,97 +168,61 @@
      await sentence_queue.put(None)
  
  
@@ -294,54 +294,59 @@ hearing.
  
 -        # Barge-in during bot speech → cancel AND rewrite history.
          if bot_task is not None and not bot_task.done():
--            if tag == "speech_started" and active_cancel is not None and active_ledger is not None:
-+            if tag == "speech_started" and active_cancel is not None:
+-            if tag != "speech_started" or active_cancel is None or active_ledger is None:
++            if tag != "speech_started" or active_cancel is None:
+                 continue
+             journal.append(
+                 kind=JournalRecordKind.EVENT,
+                 name="interruption.start",
+-                session_id=SESSION_ID,
++                session_id=session_id,
+                 data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+             )
+             active_cancel.cancel()
+             await transport.clear_audio()
+-
+-            # Let the bot task unwind so the ledger is final. A
+-            # transient agent/TTS error here shouldn't take the
+-            # whole session down mid-barge-in; log it and move on.
+             try:
+                 await bot_task
+             except Exception as exc:
                  journal.append(
                      kind=JournalRecordKind.EVENT,
-                     name="interruption.start",
+                     name="bot_task.error",
 -                    session_id=SESSION_ID,
 +                    session_id=session_id,
-                     data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                     data={"stage": "coordinator", "error": repr(exc)},
                  )
-                 active_cancel.cancel()
-                 await transport.clear_audio()
 -
--                # Let the bot task unwind so the ledger is final. A
--                # transient agent/TTS error here shouldn't take the
--                # whole session down mid-barge-in; log it and move on.
--                try:
--                    await bot_task
--                except Exception as exc:
--                    journal.append(
--                        kind=JournalRecordKind.EVENT,
--                        name="bot_task.error",
--                        session_id=SESSION_ID,
--                        data={"stage": "coordinator", "error": repr(exc)},
--                    )
--
--                heard = active_ledger.heard_text()
--                full = " ".join(active_ledger.sentences_sent)
--                journal.append(
--                    kind=JournalRecordKind.EVENT,
--                    name="interruption.estimate",
--                    session_id=SESSION_ID,
--                    data={
--                        "stage": "interruption",
--                        "full_text": full,
--                        "heard_text": heard,
--                        "bytes_heard": active_ledger.bytes_sent,
--                    },
--                )
--                # Rewrite history: the bot said *only* what the user heard.
--                history.append({"role": "assistant", "content": heard})
--                print(f"  bot (cut): {heard!r}")
--                active_cancel = None
--                active_ledger = None
--                bot_task = None
-             continue
+-            heard = active_ledger.heard_text()
+-            full = " ".join(active_ledger.sentences_sent)
+-            journal.append(
+-                kind=JournalRecordKind.EVENT,
+-                name="interruption.estimate",
+-                session_id=SESSION_ID,
+-                data={
+-                    "stage": "interruption",
+-                    "full_text": full,
+-                    "heard_text": heard,
+-                    "bytes_heard": active_ledger.bytes_sent,
+-                },
+-            )
+-            # Rewrite history: the bot said *only* what the user heard.
+-            history.append({"role": "assistant", "content": heard})
+-            print(f"  bot (cut): {heard!r}")
++            bot_task = None
+             active_cancel = None
+-            active_ledger = None
+-            bot_task = None
+-            # Fall through so this start marker opens the barge-in STT stream.
++            # Keep handling this start marker so the barge-in opens STT.
  
          if tag == "speech_started":
-@@ -262,33 +228,56 @@
+             if stt is None:
+@@ -263,33 +240,56 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -410,7 +415,7 @@ hearing.
      transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -307,13 +296,14 @@
+@@ -308,13 +308,14 @@
          )
  
      await transport.connect()
@@ -428,7 +433,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -321,7 +311,7 @@
+@@ -322,7 +323,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)

@@ -201,16 +201,28 @@ async def coordinator(
         tag, chunk = await mic_queue.get()
 
         if bot_task is not None and not bot_task.done():
-            if tag == "speech_started" and active_cancel is not None:
+            if tag != "speech_started" or active_cancel is None:
+                continue
+            journal.append(
+                kind=JournalRecordKind.EVENT,
+                name="interruption.start",
+                session_id=session_id,
+                data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+            )
+            active_cancel.cancel()
+            await transport.clear_audio()
+            try:
+                await bot_task
+            except Exception as exc:
                 journal.append(
                     kind=JournalRecordKind.EVENT,
-                    name="interruption.start",
+                    name="bot_task.error",
                     session_id=session_id,
-                    data={"stage": "vad", "t_ms": time.monotonic() * 1000},
+                    data={"stage": "coordinator", "error": repr(exc)},
                 )
-                active_cancel.cancel()
-                await transport.clear_audio()
-            continue
+            bot_task = None
+            active_cancel = None
+            # Keep handling this start marker so the barge-in opens STT.
 
         if tag == "speech_started":
             if stt is None:
