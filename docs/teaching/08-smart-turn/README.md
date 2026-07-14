@@ -794,7 +794,8 @@ cancel tokens, and the action queue.
    The newly accepted records are decision changes, not automatically
    false positives. Add `--labels labels.json`, where each record
    sequence maps to whether the user was actually done, before comparing
-   error counts.
+   error counts. The label keys must exactly cover every classification;
+   missing or unknown sequences are rejected rather than scored partially.
 2. Record *"I was thinking… we should order pizza."* Run
    `--backend smart`. Read the journal. Did smart-turn say done
    during the "…" pause? (If yes, that's a 300-500 ms latency

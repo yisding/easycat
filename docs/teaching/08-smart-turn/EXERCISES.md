@@ -15,7 +15,8 @@ Replace `PATH` with the emitted bundle. The report identifies
 `smart_turn.classify` sequence to `true` when you were actually done at
 that pause and `false` when you intended to continue, then rerun with
 `--labels labels.json`. How do the baseline and candidate confusion
-counts differ?
+counts differ? The file must label every classification sequence exactly;
+the sweep rejects missing and unknown keys instead of emitting partial metrics.
 
 **Hints**
 
