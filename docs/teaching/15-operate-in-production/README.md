@@ -643,7 +643,7 @@ already reconstructs the waterfall and percentile distribution directly.
 ```bash
 uv run easycat latency PATH --json \
   | uv run python docs/teaching/15-operate-in-production/latency_gate.py \
-      --metric vad->tts --percentile p95 --max-ms 2000 --min-samples 5
+      --metric 'vad->tts' --percentile p95 --max-ms 2000 --min-samples 5
 ```
 
 The gate fails separately for an exceeded budget and an insufficient

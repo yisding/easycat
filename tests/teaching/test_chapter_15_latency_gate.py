@@ -113,3 +113,10 @@ def test_chapter_does_not_route_production_bundles_through_teaching_fixtures() -
     assert "pipe the output into `evals.py`" not in text
     assert "easycat latency PATH --json" in text
     assert "latency_gate.py" in text
+
+
+def test_shell_examples_quote_latency_metric_redirection() -> None:
+    for name in ("README.md", "EXERCISES.md", "latency_gate.py"):
+        text = (CHAPTER / name).read_text(encoding="utf-8")
+        assert "--metric 'vad->tts'" in text, name
+        assert "--metric vad->tts" not in text, name
