@@ -8,7 +8,11 @@ import pytest
 
 from easycat._turn_context import TurnContext
 from easycat.cancel import CancelToken
-from easycat.integrations.agents.base import AgentBridgeEvent, AgentTurnInput
+from easycat.integrations.agents.base import (
+    AgentBridgeEvent,
+    AgentTurnInput,
+    NullAgentRecorder,
+)
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
 from easycat.stages import (
@@ -693,6 +697,20 @@ class TestStageExecuteRecording:
         assert isinstance(await anext(stream), _OpaqueEvent)
         with pytest.raises(StopAsyncIteration):
             await anext(stream)
+
+    def test_agent_stage_uses_contextual_null_recorder_without_capture(self):
+        stage = AgentStage(
+            _StubAgent(),
+            session_id="session-1",
+            mcp_servers=("weather",),
+        )
+
+        recorder = stage._make_recorder("turn-1", _make_ctx())
+
+        assert isinstance(recorder, NullAgentRecorder)
+        assert recorder.context.session_id == "session-1"
+        assert recorder.context.turn_id == "turn-1"
+        assert recorder.context.mcp_servers == ("weather",)
 
     async def test_constructor_journal_used_when_ctx_journal_is_none(self):
         """Lock the fallback: a constructor journal records even when
