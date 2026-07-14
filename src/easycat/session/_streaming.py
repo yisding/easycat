@@ -27,6 +27,8 @@ from easycat.events import (
     ToolCallStarted,
 )
 from easycat.session.text import (
+    _FIRST_PHRASE_TARGET_CHARS,
+    _split_first_phrase,
     markdown_open_state,
     split_at_sentence_boundaries,
     split_first_clause,
@@ -220,7 +222,16 @@ class _SentenceStreamBuffer:
                 # The first payload may emit at a clause boundary, so a delta
                 # carrying ``,``/``;``/``:`` is also worth a recheck.
                 triggers = triggers | _FIRST_CLAUSE_TRIGGER_CHARS
-            if not had_trailing_numeric_separator and not any(ch in delta for ch in triggers):
+            bounded_first_phrase_ready = (
+                self._first_payload_pending
+                and len(self._text) >= _FIRST_PHRASE_TARGET_CHARS
+                and bool(_split_first_phrase(self._text)[0])
+            )
+            if (
+                not bounded_first_phrase_ready
+                and not had_trailing_numeric_separator
+                and not any(ch in delta for ch in triggers)
+            ):
                 return False
 
         if not self._markdown_window_open and not any(
@@ -266,6 +277,10 @@ class _SentenceStreamBuffer:
         """
         if self._first_payload_pending:
             ready, remaining = split_first_clause(text)
+            if ready:
+                self._first_payload_pending = False
+                return ready, remaining
+            ready, remaining = _split_first_phrase(text)
             if ready:
                 self._first_payload_pending = False
                 return ready, remaining
