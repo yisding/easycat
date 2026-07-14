@@ -54,8 +54,10 @@ uv run python docs/teaching/00-hello-audio/format_boundaries.py
 
 **Hints**
 
-1. Local capture defaults to 24 kHz, while Deepgram's streaming STT target
-   defaults to 16 kHz. The provider adapter resamples at that input boundary.
+1. `LocalTransport` defaults its capture/playback pipeline to 24 kHz, while
+   this chapter's separate raw-`sounddevice` demo explicitly records at 16 kHz.
+   Deepgram's streaming STT target also defaults to 16 kHz, and the provider
+   adapter resamples at that input boundary when its upstream format differs.
 2. WebRTC receives and sends 48 kHz media frames, but its default pipeline
    target is 16 kHz. Those are two boundaries of one transport, not a
    contradiction.
