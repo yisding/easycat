@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -15,6 +16,47 @@ from perf.bench_framework_latency import (
     run_benchmark,
     worker_specs,
 )
+from perf.framework_latency_worker import _shutdown_pipecat_runner, _timed_critical_path
+
+
+def test_timed_critical_path_restores_gc_state_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "perf.framework_latency_worker._begin_critical_path",
+        lambda: (12.5, True),
+    )
+    monkeypatch.setattr(
+        "perf.framework_latency_worker._end_critical_path",
+        lambda was_enabled: calls.append(was_enabled),
+    )
+
+    with pytest.raises(RuntimeError, match="sample failed"):
+        with _timed_critical_path() as started:
+            assert started == 12.5
+            raise RuntimeError("sample failed")
+
+    assert calls == [True]
+
+
+async def test_pipecat_runner_shutdown_is_bounded() -> None:
+    class Task:
+        def __init__(self) -> None:
+            self.frames: list[object] = []
+
+        async def queue_frame(self, frame: object) -> None:
+            self.frames.append(frame)
+
+    task = Task()
+    end_frame = object()
+    runner_task = asyncio.create_task(asyncio.Event().wait())
+
+    with pytest.raises(TimeoutError, match="Pipecat runner did not stop"):
+        await _shutdown_pipecat_runner(task, runner_task, end_frame, timeout_s=0.01)
+
+    assert task.frames == [end_frame]
+    assert runner_task.cancelled()
 
 
 def test_ranking_uses_raw_latency_not_overlap_adjusted_diagnostic() -> None:

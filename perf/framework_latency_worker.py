@@ -15,11 +15,13 @@ import json
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from typing import Any, Literal
 
 Framework = Literal["easycat", "livekit", "pipecat"]
 RESPONSE_TEXT = "Hello there."
+_PIPECAT_SHUTDOWN_TIMEOUT_S = 5.0
 
 
 def _version(framework: Framework) -> str:
@@ -44,6 +46,34 @@ def _end_critical_path(was_enabled: bool) -> float:
     if was_enabled:
         gc.enable()
     return ended
+
+
+@contextmanager
+def _timed_critical_path() -> Iterator[float]:
+    """Time an adapter transition while reliably restoring GC state."""
+    started, gc_was_enabled = _begin_critical_path()
+    try:
+        yield started
+    finally:
+        _end_critical_path(gc_was_enabled)
+
+
+async def _shutdown_pipecat_runner(
+    task: Any,
+    runner_task: asyncio.Task[Any],
+    end_frame: Any,
+    *,
+    timeout_s: float = _PIPECAT_SHUTDOWN_TIMEOUT_S,
+) -> None:
+    """Gracefully stop a Pipecat runner without allowing shutdown to hang."""
+    try:
+        async with asyncio.timeout(timeout_s):
+            if not runner_task.done():
+                await task.queue_frame(end_frame)
+            await runner_task
+    except TimeoutError:
+        runner_task.cancel()
+        raise TimeoutError(f"Pipecat runner did not stop within {timeout_s:g} seconds") from None
 
 
 async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real Session
@@ -179,12 +209,9 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
         if turn is None:
             raise RuntimeError("EasyCat did not create a turn")
         turn.append_stt_segment("Hello")
-        started, gc_was_enabled = _begin_critical_path()
-        try:
+        with _timed_critical_path() as started:
             await session.end_turn()
             first_audio = await asyncio.wait_for(transport.first_audio, timeout=5.0)
-        finally:
-            _end_critical_path(gc_was_enabled)
         await asyncio.wait_for(turn_finished, timeout=5.0)
         request_started_in_timed_path = (
             len(agent_request_started_at) == 1
@@ -310,12 +337,9 @@ async def _sample_livekit(  # noqa: C901 - self-contained adapter mirrors AgentS
     session.output.audio = output
     await session.start(agent=agent, record=False)
     try:
-        started, gc_was_enabled = _begin_critical_path()
-        try:
+        with _timed_critical_path() as started:
             result = session.run(user_input="Hello", input_modality="text")
             first_audio = await asyncio.wait_for(output.first_audio, timeout=5.0)
-        finally:
-            _end_critical_path(gc_was_enabled)
         await result
         return {
             "latency_ms": (first_audio - started) * 1_000.0,
@@ -422,16 +446,13 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
     runner_task = asyncio.create_task(runner.run(task))
     try:
         await asyncio.wait_for(sink.ready.wait(), timeout=5.0)
-        started, gc_was_enabled = _begin_critical_path()
-        try:
+        with _timed_critical_path() as started:
             await task.queue_frame(
                 TranscriptionFrame(
                     text="Hello", user_id="benchmark", timestamp="0", finalized=True
                 )
             )
             first_audio = await asyncio.wait_for(sink.first_audio, timeout=5.0)
-        finally:
-            _end_critical_path(gc_was_enabled)
         return {
             "latency_ms": (first_audio - started) * 1_000.0,
             "provider_elapsed_ms": llm_processor.elapsed_ms + tts_processor.elapsed_ms,
@@ -439,9 +460,7 @@ async def _sample_pipecat(  # noqa: C901 - self-contained adapter mirrors Pipeli
             "audio_bytes": sink.audio_bytes,
         }
     finally:
-        if not runner_task.done():
-            await task.queue_frame(EndFrame())
-        await runner_task
+        await _shutdown_pipecat_runner(task, runner_task, EndFrame())
 
 
 async def _sample(framework: Framework, request: dict[str, Any]) -> dict[str, Any]:
