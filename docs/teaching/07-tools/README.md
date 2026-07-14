@@ -357,8 +357,8 @@
                  "text": sentence,
              },
 @@ -185,7 +305,6 @@
- 
- 
+
+
  async def run_turn(transport, stt, client, tts, journal) -> None:
 -    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
      final_text = ""
@@ -386,10 +386,10 @@
 @@ -285,7 +398,7 @@
          )
          resources.push_async_callback(close_if_supported, tts)
- 
+
 -        print("Streaming agent. Ctrl-C to stop.\n")
 +        print('Ask me "What is the weather in Tokyo?" or "Set a 5-minute timer."\n')
- 
+
          try:
              await collect_turns(transport, detector, stt_factory, client, tts, journal)
 ```
