@@ -339,10 +339,10 @@ you've heard it fail on your own voice, the rest of this chapter
 ## Run it
 
 ```bash
-# With pre-roll: the start of every word survives.
+# With pre-roll: cached leading frames are included in the STT stream.
 uv run python docs/teaching/04-vad-preroll/main.py
 
-# Without pre-roll: "Hello" becomes "ello."
+# Without pre-roll: compare the onset without those cached frames.
 uv run python docs/teaching/04-vad-preroll/main.py --no-preroll
 ```
 
@@ -361,17 +361,19 @@ model is bundled.
 
 ## The pre-roll problem
 
-A VAD is a decision made *after* it has seen enough audio. Fast
-backends fire 100-200 ms late — you said "Hello," but the VAD's
-"speech" verdict lands sometime during the "e." If you only forward
-audio chunks that arrive *after* VAD-on, your STT hears "ello"
-and confidently transcribes "Elo."
+A VAD is a decision made *after* it has seen enough audio. Its
+"speech" verdict can land after the utterance has already started.
+If you only forward chunks from VAD-on onward, the STT stream lacks
+the earlier frames and may mis-hear the leading sound (for example,
+a live run might turn "Hello" into "Elo"). The delay and transcript
+effect depend on the utterance, VAD backend, chunking, and STT provider.
 
 ## The pre-roll fix
 
 Keep a short ring buffer of recent audio (we use 300 ms, about 15
 chunks of 20 ms at 24 kHz). When VAD fires, flush the buffer into
-STT first, then forward live chunks. STT sees the full "Hello."
+STT first, then forward live chunks. STT receives the missing onset
+context as well; whether that changes a transcript is provider-dependent.
 
 ```mermaid
 flowchart LR
