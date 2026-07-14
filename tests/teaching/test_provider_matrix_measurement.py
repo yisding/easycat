@@ -28,8 +28,12 @@ def _load_main_module(chapter: Path = CHAPTER):
     return module
 
 
-def test_measurement_commands_read_production_bundle_directly(tmp_path: Path) -> None:
+def test_measurement_commands_read_production_bundle_directly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bundle = tmp_path / "ch13-openai-local-123.bundle"
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=object))
 
     for slug in (
         "13-swap-providers-and-transports",
