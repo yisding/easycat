@@ -236,10 +236,14 @@ def test_teaching_chapters_follow_documented_learning_contract() -> None:
         exercises = (chapter_dir / "EXERCISES.md").read_text(encoding="utf-8")
         self_check_count = len(re.findall(r"^## Self-check$", exercises, re.M))
         applied_task_count = len(re.findall(r"^## (?:\d+\.|Bonus\b)", exercises, re.M))
-        if self_check_count != 1 or applied_task_count < 1:
+        level_two_headings = re.findall(r"^## .+$", exercises, re.M)
+        has_closing_self_check = bool(level_two_headings) and (
+            level_two_headings[-1] == "## Self-check"
+        )
+        if self_check_count != 1 or applied_task_count < 1 or not has_closing_self_check:
             invalid_exercises.append(
                 f"{chapter_dir.name}: {applied_task_count} applied task(s), "
-                f"{self_check_count} self-check(s)"
+                f"{self_check_count} self-check(s), closing={has_closing_self_check}"
             )
 
     assert not invalid_exercises, "Teaching exercise contract drifted: " + "; ".join(

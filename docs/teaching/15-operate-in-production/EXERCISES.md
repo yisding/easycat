@@ -158,15 +158,6 @@ type changes from `SqliteJournal` to `ReadonlySqliteJournal`.
    stop. Reloading the emitted bundle and matching its record names proves
    the export is not merely an empty ZIP created after teardown.
 
-## Self-check
-
-You should be able to: (a) explain when to use `async with
-session:`, `await session.stop()`, `await session.stop(force=True)`,
-(b) explain why `session.journal.read()` still works after `stop()`,
-including why the cached view keeps its identity, and (c) sketch the
-`SessionManager` usage pattern for a WebSocket server in 10 lines
-without looking at the file.
-
 ## The teaching ladder, complete
 
 If you got here, you've built a voice pipeline from raw PCM to a
@@ -175,3 +166,12 @@ is either a new provider in the existing factories, a new
 transport in the existing config, a new bridge in the existing
 shim, or a new telephony deep-cut in the existing executors. The
 pattern doesn't change.
+
+## Self-check
+
+You should be able to: (a) explain when to use `async with
+session:`, `await session.stop()`, `await session.stop(force=True)`,
+(b) explain why `session.journal.read()` still works after `stop()`,
+including why the cached view keeps its identity, and (c) sketch the
+`SessionManager` usage pattern for a WebSocket server in 10 lines
+without looking at the file.
