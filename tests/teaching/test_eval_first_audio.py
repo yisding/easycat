@@ -51,6 +51,16 @@ def test_checked_in_eval_fixtures_end_turn_gap_at_first_audio() -> None:
     assert tool_names.index("tts.first_audio") < tool_names.index("tool.call.started")
 
 
+def test_eval_p95_includes_the_checked_in_slow_tail() -> None:
+    evals = _load_chapter_module("evals.py")
+
+    p50, p95 = evals._latency_percentiles([650, 670, 710, 910, 1160, 2420])
+
+    assert p50 == 810
+    assert p95 == 2420
+    assert p95 > 1200
+
+
 def test_slow_agent_budget_does_not_blame_all_sentence_tts(capsys) -> None:
     budget = _load_chapter_module("latency_budget.py")
     path = CHAPTER / "bundles" / "turn_02_slow_agent.bundle"

@@ -193,10 +193,11 @@ the number you report.** Voice users remember the bad turns, not
 the good ones; a single stumble poisons an otherwise-fast bot's
 reputation. Track P50 so you know the median, but *target* P95.
 
-> With only five bundles, P95 is approximated by the fourth-
-> slowest — noisy. Real eval sets need dozens of turns for P95 to
-> be stable; re-run this against a directory full of your own
-> chapter-6 or chapter-10 runs for a number you can trend.
+> With only six bundles, the clamped P95 is the slowest observed
+> turn — deliberately noisy, but it catches the 2420 ms fixture.
+> Real eval sets need dozens of turns for P95 to be stable; re-run
+> this against a directory full of your own chapter-6 or chapter-10
+> runs for a number you can trend.
 
 ### WER — word error rate for STT
 
