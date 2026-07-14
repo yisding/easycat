@@ -375,20 +375,11 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     assert inspect.iscoroutinefunction(Session.__aexit__)
     assert inspect.iscoroutinefunction(Session.wait_closed)
     assert inspect.iscoroutinefunction(Session.stop)
-    # ``shutdown`` is wrapped by ``typing_extensions.deprecated``; before
-    # Python 3.12 the wrapper can only carry the legacy ``_is_coroutine``
-    # marker (inspect.markcoroutinefunction is 3.12+), which
-    # ``inspect.iscoroutinefunction`` does not honor -- unwrap to check the
-    # underlying alias is genuinely async on every supported version.
-    assert inspect.iscoroutinefunction(inspect.unwrap(Session.shutdown))
     assert stop_signature.parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
     assert stop_signature.parameters["force"].default is False
-    assert callable(Session.close)
-    assert callable(Session.destroy)
-    assert not inspect.iscoroutinefunction(Session.close)
-    assert not inspect.iscoroutinefunction(Session.destroy)
-    assert callable(Session._close)
-    assert callable(Session._destroy)
+    for removed in ("shutdown", "close", "destroy", "_close", "_destroy"):
+        assert not hasattr(Session, removed)
+    assert callable(Session._finalize_debug_backends)
 
     run_doc = run.__doc__ or ""
     assert "async with session:" in run_doc
@@ -396,26 +387,19 @@ def test_dx_onramp_plan_marks_lifecycle_idiom_landed_with_current_evidence() -> 
     assert "await session.shutdown()" not in run_doc
 
     assert "`async with session:` is the preferred public teardown idiom" in lifecycle
-    assert "`await session.stop()` is the preferred public teardown verb" in lifecycle
+    assert "`await session.stop()` is the single public teardown verb" in lifecycle
     assert "`await session.wait_closed()`" in lifecycle
     assert "await session.shutdown()" not in lifecycle
-    assert "Legacy compatibility aliases" in lifecycle
-    assert "new code should call `stop()`" in lifecycle
-    for stale in ("session.close()", "session.destroy()"):
+    for stale in ("session.shutdown()", "session.close()", "session.destroy()"):
         assert stale not in chapter_15
 
     for guide in (agents, claude):
-        assert "`await session.stop()` is the preferred public teardown verb" in guide
-        assert "`async with session:` is the preferred idiom" in guide
-        assert "session.shutdown()" in guide
-        assert "`@deprecated` thin alias for `stop(force=True)`" in guide
-        assert "Session._destroy()" in guide and "Session._close()" in guide
-        assert "Session.close()" in guide and "Session.destroy()" in guide
-        assert "`@deprecated` legacy compatibility aliases" in guide
-        assert "new code should call `stop()` or use `async with session:`" in guide
+        assert "`await session.stop()` is the single public teardown verb" in guide
+        assert "`async with session:` is the preferred scoped idiom" in guide
+        for removed in ("session.shutdown()", "Session.close()", "Session.destroy()"):
+            assert removed not in guide
 
-    assert "Compatibility alias for `stop(force=True)`" in chapter_15
-    assert "new docs should usually show `stop(...)` or `async with session:`" in chapter_15
+    assert "after `stop()`" in chapter_15
 
 
 # ── Debugger auto-launch on debug="full" ─────────────────────────

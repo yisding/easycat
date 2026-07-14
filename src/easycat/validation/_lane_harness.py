@@ -1,9 +1,9 @@
-"""Shared prologue/epilogue for the four ``validation/runner.py`` lanes.
+"""Shared prologue/epilogue for every validation lane module.
 
-Each ``run_*`` lane in :mod:`easycat.validation.runner` used to carry a
-near-identical run-id/run-dir/report-path prologue and git/env-stamp plus
-triple atomic-write epilogue around its own lane-specific body. This module
-owns just those two shared halves so a report-format change is a one-site edit:
+The lanes in :mod:`easycat.validation.runner` and
+:mod:`easycat.validation._slice_runner` share a run-id/run-dir/report-path
+prologue and git/env-stamp plus triple atomic-write epilogue. This module owns
+just those two shared halves so a report-format change is a one-site edit:
 
 - :func:`_start_lane_run` creates the run id, the run directory, resolves the
   report paths, and seeds the base artifacts dict.
@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from easycat.validation._environment import PROVIDER_ENV_VARS
 from easycat.validation.latency import _is_ci
 from easycat.validation.report import (
     ArtifactRef,
@@ -39,13 +40,6 @@ from easycat.validation.report import (
     ValidationRun,
     ValidationSkip,
     ValidationStatus,
-)
-
-PROVIDER_ENV_VARS = (
-    "OPENAI_API_KEY",
-    "DEEPGRAM_API_KEY",
-    "ELEVENLABS_API_KEY",
-    "CARTESIA_API_KEY",
 )
 
 

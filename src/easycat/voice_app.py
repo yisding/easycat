@@ -418,7 +418,7 @@ class VoiceApp:
 
         The flag is returned (not just consumed by the token pre-check) so the
         run/serve methods can forward it to
-        :func:`~easycat.transports.webrtc.serve_webrtc_config_sessions`, whose
+        :func:`~easycat.server.webrtc_routes.serve_webrtc_config_sessions`, whose
         own non-loopback guard would otherwise re-reject an intentionally
         unauthenticated bind.
         """
@@ -444,7 +444,7 @@ class VoiceApp:
         return self._per_connection_factory("browser")
 
     def _run_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
-        from easycat.transports.webrtc import run_webrtc_config_server
+        from easycat.server.webrtc_routes import run_webrtc_config_server
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
         # ``run_webrtc_config_server`` blocks until shutdown, so the URL must be
@@ -461,7 +461,7 @@ class VoiceApp:
         )
 
     async def _serve_browser(self, *, announce: bool = True, **kwargs: Any) -> None:
-        from easycat.transports.webrtc import serve_webrtc_config_sessions
+        from easycat.server.webrtc_routes import serve_webrtc_config_sessions
 
         transport_config, unsafe_allow_no_auth = self._browser_transport_config(**kwargs)
         # Mirror ``_run_browser``: announce the URL ourselves and suppress the
@@ -531,7 +531,7 @@ class VoiceApp:
         return self._per_connection_factory("websocket")
 
     def _run_websocket(self, **kwargs: Any) -> None:
-        from easycat.transports.websocket import run_websocket_config_server
+        from easycat.server.websocket import run_websocket_config_server
 
         server_config, unsafe_allow_no_auth = self._websocket_server_config(**kwargs)
         run_websocket_config_server(
@@ -541,7 +541,7 @@ class VoiceApp:
         )
 
     async def _serve_websocket(self, **kwargs: Any) -> None:
-        from easycat.transports.websocket import serve_websocket_config_sessions
+        from easycat.server.websocket import serve_websocket_config_sessions
 
         server_config, unsafe_allow_no_auth = self._websocket_server_config(**kwargs)
         await serve_websocket_config_sessions(

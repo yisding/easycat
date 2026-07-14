@@ -7,6 +7,7 @@ import sys
 import threading
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal, Protocol, TextIO
 
 
@@ -26,6 +27,139 @@ class ManagedPushToTalkSession(PushToTalkSession, Protocol):
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...
 
 
+class _LineReader(Protocol):
+    async def read(self) -> bool: ...
+
+    def close(self) -> None: ...
+
+
+class _SelectorLineReader:
+    """Read selectable stdin without blocking the event-loop thread."""
+
+    def __init__(
+        self,
+        stream: TextIO,
+        loop: asyncio.AbstractEventLoop,
+        fd: int,
+    ) -> None:
+        self._stream = stream
+        self._loop = loop
+        self._fd = fd
+        self._pending: deque[bool | Exception] = deque()
+        self._ready = asyncio.Event()
+        self._registered = False
+        loop.add_reader(fd, self._on_readable)
+        self._registered = True
+
+    def _on_readable(self) -> None:
+        try:
+            got_line = bool(self._stream.readline())
+        except Exception as exc:
+            self.close()
+            self._publish(exc)
+            return
+        if not got_line:
+            self.close()
+        self._publish(got_line)
+
+    def _publish(self, result: bool | Exception) -> None:
+        self._pending.append(result)
+        self._ready.set()
+
+    async def read(self) -> bool:
+        while not self._pending:
+            self._ready.clear()
+            await self._ready.wait()
+        result = self._pending.popleft()
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def close(self) -> None:
+        if self._registered:
+            self._loop.remove_reader(self._fd)
+            self._registered = False
+
+
+class _ThreadLineReader:
+    """Read non-selectable stdin on a daemon thread, one line at a time."""
+
+    def __init__(self, stream: TextIO, loop: asyncio.AbstractEventLoop) -> None:
+        self._stream = stream
+        self._loop = loop
+
+    async def read(self) -> bool:
+        future: asyncio.Future[bool] = self._loop.create_future()
+
+        def _complete(result: bool) -> None:
+            if not future.done():
+                future.set_result(result)
+
+        def _fail(error: Exception) -> None:
+            if not future.done():
+                future.set_exception(error)
+
+        def _read_once() -> None:
+            try:
+                result = bool(self._stream.readline())
+            except Exception as exc:
+                try:
+                    self._loop.call_soon_threadsafe(_fail, exc)
+                except RuntimeError:
+                    pass
+            else:
+                try:
+                    self._loop.call_soon_threadsafe(_complete, result)
+                except RuntimeError:
+                    pass
+
+        threading.Thread(
+            target=_read_once,
+            name="easycat-stdin-reader",
+            daemon=True,
+        ).start()
+        return await future
+
+    def close(self) -> None:
+        pass
+
+
+def _stream_fileno(stream: TextIO) -> int:
+    try:
+        return stream.fileno()
+    except (OSError, ValueError):
+        return -1
+
+
+def _create_line_reader(
+    stream: TextIO,
+    loop: asyncio.AbstractEventLoop,
+) -> _LineReader:
+    fd = _stream_fileno(stream)
+    if fd >= 0 and sys.platform != "win32":
+        try:
+            return _SelectorLineReader(stream, loop, fd)
+        except (NotImplementedError, RuntimeError, OSError, ValueError):
+            pass
+    return _ThreadLineReader(stream, loop)
+
+
+@dataclass(slots=True)
+class _PushToTalkController:
+    session: PushToTalkSession
+    print_fn: Callable[[str], None]
+    speaking: bool = False
+
+    async def toggle(self) -> None:
+        if self.speaking:
+            await self.session.end_turn()
+            self.print_fn("  [turn ended - agent is replying]")
+        else:
+            await self.session.start_turn()
+            self.print_fn("  [turn started - speak now]")
+        self.speaking = not self.speaking
+
+
 async def run_stdin_push_to_talk(
     session: PushToTalkSession,
     *,
@@ -42,77 +176,14 @@ async def run_stdin_push_to_talk(
     print_fn("\nPress Enter to START speaking, Enter again to END the turn.")
     print_fn("Press Ctrl+C to quit.\n")
 
-    loop = asyncio.get_running_loop()
-    pending: deque[bool] = deque()
-    ready = asyncio.Event()
-
-    def _enqueue(got_line: bool) -> None:
-        pending.append(got_line)
-        ready.set()
-
+    reader = _create_line_reader(input_stream, asyncio.get_running_loop())
+    controller = _PushToTalkController(session, print_fn)
     try:
-        fd = input_stream.fileno()
-    except (OSError, ValueError):
-        fd = -1
-
-    use_reader = False
-    if fd >= 0 and sys.platform != "win32":
-
-        def _on_stdin() -> None:
-            line = input_stream.readline()
-            if not line:
-                loop.remove_reader(fd)
-            _enqueue(bool(line))
-
-        try:
-            loop.add_reader(fd, _on_stdin)
-            use_reader = True
-        except (NotImplementedError, RuntimeError, OSError, ValueError):
-            pass
-
-    async def _read_from_thread() -> bool:
-        future = loop.create_future()
-
-        def _read_once() -> None:
-            line = input_stream.readline()
-
-            def _complete() -> None:
-                if not future.done():
-                    future.set_result(bool(line))
-
-            try:
-                loop.call_soon_threadsafe(_complete)
-            except RuntimeError:
-                pass
-
-        threading.Thread(target=_read_once, daemon=True).start()
-        return await future
-
-    async def _next_line() -> bool:
-        if not use_reader:
-            return await _read_from_thread()
-        while not pending:
-            ready.clear()
-            await ready.wait()
-        return pending.popleft()
-
-    speaking = False
-    try:
-        while True:
-            got = await _next_line()
-            if not got:
-                print_fn("  [stdin closed - exiting]")
-                return
-            if not speaking:
-                await session.start_turn()
-                print_fn("  [turn started - speak now]")
-            else:
-                await session.end_turn()
-                print_fn("  [turn ended - agent is replying]")
-            speaking = not speaking
+        while await reader.read():
+            await controller.toggle()
+        print_fn("  [stdin closed - exiting]")
     finally:
-        if use_reader:
-            loop.remove_reader(fd)
+        reader.close()
 
 
 def run_stdin_push_to_talk_session(

@@ -61,6 +61,7 @@ async def _sample_easycat(  # noqa: C901 - self-contained adapter mirrors a real
 
     class Transport:
         send_audio_is_nonblocking = True
+        reports_audio_delivery = True
 
         def __init__(self) -> None:
             self.closed = asyncio.Event()

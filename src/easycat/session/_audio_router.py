@@ -415,7 +415,10 @@ class AudioRouter:
                     or not self._outbound_queue.empty()
                 ):
                     return False
-                if self._transport_send_audio_is_nonblocking:
+                if (
+                    self._transport_send_audio_is_nonblocking
+                    and self._transport_reports_audio_delivery
+                ):
                     # This opt-in transport contract guarantees send_audio has
                     # no suspension point, so cancellation cannot land until
                     # the transport has accepted or rejected the frame. Keep
@@ -643,7 +646,7 @@ class AudioRouter:
             #
             # We do NOT close the outbound queue here — an in-flight turn
             # (agent + TTS) may still be producing audio that needs to drain.
-            # Session's stop()/shutdown() handles full cleanup.
+            # Session.stop() handles full cleanup.
             if self._is_running():
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)
