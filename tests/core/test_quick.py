@@ -122,6 +122,24 @@ class TestSpeakResourceOwnership:
         assert transport.received
 
     @pytest.mark.asyncio
+    async def test_legacy_none_transport_result_is_accepted(self):
+        fake = _FakeTTS()
+
+        class _LegacyTransport:
+            def __init__(self) -> None:
+                self.received: list[AudioChunk] = []
+
+            async def send_audio(self, audio: AudioChunk) -> None:
+                self.received.append(audio)
+
+        transport = _LegacyTransport()
+
+        result = await speak(transport, "hello", tts=fake)  # type: ignore[arg-type]
+
+        assert result == (1, 0)
+        assert transport.received
+
+    @pytest.mark.asyncio
     async def test_helper_constructed_tts_closed_even_on_error(self, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
         fake = _FakeTTS()

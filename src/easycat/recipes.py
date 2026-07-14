@@ -130,7 +130,8 @@ async def speak(
     try:
         async for event in tts.synthesize(TTSInput(text=text)):
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                if await transport.send_audio(event.audio):
+                delivered = await transport.send_audio(event.audio)
+                if delivered is None or bool(delivered):
                     accepted_chunks += 1
                 else:
                     rejected_chunks += 1
