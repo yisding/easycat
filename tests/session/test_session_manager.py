@@ -4,7 +4,9 @@ import asyncio
 
 import pytest
 
+from easycat.session import Session
 from easycat.session_manager import SessionManager
+from tests.session._session_core_helpers import FakeTransport, _full_config
 
 
 class _DummySession:
@@ -86,6 +88,38 @@ async def test_session_manager_releases_key_when_start_is_cancelled() -> None:
     assert manager.get("reusable") is replacement
     await manager.remove("reusable")
     assert replacement.stopped == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_real_session_start_rolls_back_before_manager_untracks() -> None:
+    manager: SessionManager[str] = SessionManager()
+
+    class BlockingWarmupTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.warmup_entered = asyncio.Event()
+
+        async def warmup(self) -> None:
+            self.warmup_entered.set()
+            await asyncio.Event().wait()
+
+    transport = BlockingWarmupTransport()
+    session = Session(_full_config(transport=transport))
+    add_task = asyncio.create_task(manager.add("cancelled", session))
+
+    await transport.warmup_entered.wait()
+    assert transport.connected
+    add_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await add_task
+
+    assert manager.get("cancelled") is None
+    assert not session.is_running
+    assert transport.disconnected
+    assert session._health_checkers == []
+    assert session._audio_router.pipeline_task is None
+    assert session._audio_router.outbound_task is None
 
 
 @pytest.mark.asyncio

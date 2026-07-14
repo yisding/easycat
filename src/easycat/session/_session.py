@@ -1044,7 +1044,10 @@ class Session:
                 "pipeline_heartbeat",
                 self._emit_heartbeats(),
             )
-        except Exception:
+        except BaseException:
+            # Startup cancellation must roll back the same resources as an
+            # ordinary failure. Callers such as SessionManager may release
+            # their last registry reference as soon as start() raises.
             self._is_running = False
             self._mark_observability_inactive()
 
