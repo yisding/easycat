@@ -7,7 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from easycat import EasyConfig
 from easycat.cli._app import _docs_entries
+from easycat.stt import OpenAIRealtimeSTTConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURE_LADDER = REPO_ROOT / "docs" / "using-easycat"
@@ -143,6 +145,17 @@ def test_first_feature_chapter_uses_only_the_public_easycat_app_surface() -> Non
     assert easycat_imports[0].module == "easycat"
     assert {alias.name for alias in easycat_imports[0].names} == {"VoiceApp", "require_env"}
     assert 'app.run("local")' in script.read_text(encoding="utf-8")
+
+
+def test_first_feature_chapter_names_the_registered_realtime_stt() -> None:
+    exercises = (FEATURE_LADDER / "00-first-voice-app" / "EXERCISES.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'stt="openai-realtime"' in exercises
+    assert 'stt="openai/realtime"' not in exercises
+    config = EasyConfig(openai_api_key="test-key", stt="openai-realtime")
+    assert isinstance(config.stt, OpenAIRealtimeSTTConfig)
 
 
 def test_runtime_modes_chapter_covers_every_voice_app_mode_and_boundary() -> None:
