@@ -180,13 +180,22 @@ def test_session_lifecycle_reference_matches_lifecycle_contract() -> None:
     assert "docs/reference/session-lifecycle.md" in lifecycle_section
     for marker in (
         "`stop(force=True)`",
-        "`session.shutdown()`",
+        "There are no separate public close/destroy phases",
         "`session.journal.read()`",
         "`session.export_debug_bundle(path)`",
         "`async with session:`",
         "record_to",
     ):
         assert marker in text, f"docs/reference/session-lifecycle.md missing {marker!r}"
+    for stale in (
+        "session.shutdown()",
+        "Session.shutdown()",
+        "session.close()",
+        "Session.close()",
+        "session.destroy()",
+        "Session.destroy()",
+    ):
+        assert stale not in text
 
 
 def test_explain_concept_topics_print_docs_routes() -> None:

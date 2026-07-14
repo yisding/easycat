@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from easycat.events import CallInitiated, CallScreening, CallStateChanged, EventBus, TTSAudio
+from easycat.events import EventBus, TTSAudio
 from easycat.integrations.agents.base import NULL_RECORDER, AgentTurnInput
 from easycat.session.actions import SessionActionExecutor
 
@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from easycat.session._session import Session
     from easycat.telephony.call_state import OutboundCallStateMachine
     from easycat.telephony.compliance import DNCStore
-    from easycat.telephony.outbound import OutboundCallManager
     from easycat.telephony.screening import CallScreeningDetector
 
     from .easy import OutboundCallConfig, TelephonyConfig
@@ -96,170 +95,19 @@ def _build_outbound_helpers(
     dnc_list: DNCStore | None = None,
 ) -> None:
     """Build and wire the outbound call pipeline helpers."""
-    # Telephony runtime classes are imported here (not at module scope) so a
-    # non-telephony session never loads the outbound stack — see the module
-    # docstring.
-    # Resolve the manager through the factory module namespace (PEP 562
-    # ``__getattr__``) rather than a direct ``from ... import`` so tests can
-    # ``monkeypatch`` it via ``easycat.config._factory.OutboundCallManager``.
     from easycat.config import _factory
-    from easycat.telephony.call_state import OutboundCallState, OutboundCallStateMachine
-    from easycat.telephony.ivr import IVRAction, IVRActionType, IVRNavigator
-    from easycat.telephony.number_health import CallDispositionTracker, NumberHealthMonitor
-    from easycat.telephony.retry import RetryStrategy
-    from easycat.telephony.screening import (
-        CallScreeningDetector,
-        screening_patterns_for_languages,
-    )
-    from easycat.telephony.voicemail import (
-        PostScreeningVoicemailDetector,
-        STTAMDFusionClassifier,
-        VoicemailPolicyHandler,
-    )
 
-    outbound_call_manager_cls: type[OutboundCallManager] = _factory.OutboundCallManager
+    from ._outbound_helpers import build_outbound_helpers
 
-    helpers = result.helpers
-
-    # STT+AMD fusion classifier — must be wired before the state machine
-    # so that raw AMD events are intercepted and re-emitted with source="fusion".
-    fusion = STTAMDFusionClassifier(event_bus)
-    helpers.append(fusion)
-
-    # Post-screening voicemail detector — re-classifies after screening.
-    post_screening_vm = PostScreeningVoicemailDetector(event_bus)
-    helpers.append(post_screening_vm)
-
-    # Disposition tracking must subscribe before the state machine: on
-    # CallFailed, the tracker records the specific failure reason before
-    # the state machine emits the terminal ENDED transition.
-    if oc.enable_disposition_tracker:
-        helpers.append(CallDispositionTracker(event_bus))
-
-    def _on_screening_for_post_vm(event: CallScreening) -> None:
-        post_screening_vm.activate()
-
-    event_bus.subscribe(CallScreening, _on_screening_for_post_vm)
-
-    # Build language-aware screening patterns once so both the state
-    # machine and the screening detector share the same set.
-    screening_langs = ["en"]
-    if oc.callee_language and oc.callee_language != "en":
-        screening_langs.append(oc.callee_language)
-    _screening_patterns = screening_patterns_for_languages(screening_langs)
-
-    # State machine — expect fused voicemail events (ignore raw AMD).
-    sm = OutboundCallStateMachine(
+    built = build_outbound_helpers(
         event_bus,
-        classification_timeout_s=float(oc.voicemail_detection.detection_timeout_s),
-        max_call_duration_s=oc.max_call_duration_s,
-        classification_gate=oc.classification_gate,
-        classification_gate_timeout_s=oc.classification_gate_timeout_s,
-        classification_gate_hold_audio=oc.classification_gate_hold_audio,
-        expect_fused_voicemail=True,
-        late_voicemail_window_s=oc.late_voicemail_window_s,
-        voicemail_pickup_window_s=oc.voicemail_pickup_window_s,
-        screening_patterns=_screening_patterns,
+        oc,
+        manager_cls=_factory.OutboundCallManager,
+        dnc_list=dnc_list,
     )
-    helpers.append(sm)
-    result.state_machine = sm
-
-    # Screening detector.
-    if oc.enable_screening_detection:
-        screening = CallScreeningDetector(
-            event_bus,
-            enabled=True,
-            screening_response=oc.screening_response,
-            screening_use_agent=oc.screening_use_agent,
-            max_screening_turns=oc.max_screening_turns,
-            patterns=_screening_patterns,
-            # Defense-in-depth: only analyze inbound (callee) transcripts so
-            # the bot's own speech (when transcription_track="both") cannot
-            # trigger a false screening match — mirroring the hard-coded
-            # inbound filter in call_state._on_stt_final.
-            track_filter="inbound",
-        )
-        helpers.append(screening)
-        result.screening_detector = screening
-
-    # IVR navigator — only created when an agent callback is configured.
-    if oc.ivr_agent_callback is not None:
-        ivr_delivery = oc.ivr_dtmf_delivery
-        ivr = IVRNavigator(
-            event_bus,
-            agent_callback=oc.ivr_agent_callback,
-            dtmf_delivery=ivr_delivery,
-        )
-        helpers.append(ivr)
-
-        # Propagate the live call SID so DTMFDelivery can send digits/speech.
-        if ivr_delivery is not None:
-
-            async def _on_call_initiated_for_ivr(event: CallInitiated) -> None:
-                ivr_delivery.call_sid = event.call_sid
-
-            event_bus.subscribe(CallInitiated, _on_call_initiated_for_ivr)
-
-        def _on_state_changed_for_ivr(event: CallStateChanged) -> None:
-            if event.new == OutboundCallState.IVR:
-                ivr.activate()
-            elif event.new in {OutboundCallState.HUMAN, OutboundCallState.ENDED}:
-                ivr.deactivate()
-
-        event_bus.subscribe(CallStateChanged, _on_state_changed_for_ivr)
-
-        # React to IVR navigator actions: human pickup, speech, and hangup.
-        async def _on_ivr_action(event: IVRAction) -> None:
-            if event.type == IVRActionType.HUMAN_DETECTED:
-                if sm.state == OutboundCallState.IVR:
-                    await sm.transition(OutboundCallState.HUMAN)
-            elif event.type == IVRActionType.HANGUP:
-                if sm.state == OutboundCallState.IVR:
-                    await sm.transition(OutboundCallState.ENDED)
-            elif event.type == IVRActionType.SPEAK:
-                if ivr_delivery is not None:
-                    await ivr_delivery.send_speech(event.text)
-
-        event_bus.subscribe(IVRAction, _on_ivr_action)
-
-    # Voicemail policy handler.
-    helpers.append(VoicemailPolicyHandler(event_bus, expect_fused=True))
-
-    # Observability helpers — pure event-bus listeners, on by default.
-    if oc.enable_number_health:
-        helpers.append(NumberHealthMonitor(event_bus))
-
-    # Outbound call manager (requires Twilio credentials).
-    manager: OutboundCallManager | None = None
-    if oc.twilio_account_sid and oc.twilio_auth_token:
-        try:
-            manager = outbound_call_manager_cls(
-                event_bus,
-                from_number=oc.from_number,
-                enable_realtime_transcription=oc.enable_realtime_transcription,
-                twilio_account_sid=oc.twilio_account_sid,
-                twilio_auth_token=oc.twilio_auth_token,
-                twiml_url=oc.twiml_url,
-                status_callback_url=oc.status_callback_url,
-                **oc.voicemail_detection.to_twilio_params(),
-            )
-            manager.dnc_list = dnc_list
-            helpers.append(manager)
-        except ImportError:
-            logger.warning("twilio package not installed — OutboundCallManager disabled")
-    else:
-        logger.warning(
-            "OutboundCallManager enabled but twilio_account_sid / twilio_auth_token "
-            "are blank — outbound calling is disabled. Set both credentials to place calls."
-        )
-
-    # Retry strategy — stateless object the caller asks
-    # ``strategy.record_attempt(number, reason)`` to decide whether to
-    # re-place a failed call.  We attach it to the manager (when
-    # present) so app code can reach it via
-    # ``session.telephony.outbound_call_manager.retry_strategy``.
-    if oc.enable_retry_strategy and manager is not None:
-        manager.retry_strategy = RetryStrategy(oc.retry_strategy)
+    result.helpers.extend(built.helpers)
+    result.state_machine = built.state_machine
+    result.screening_detector = built.screening_detector
 
 
 class _OutboundPipelineWiring:

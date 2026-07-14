@@ -322,7 +322,7 @@ class LlamaAgentsBridge:
     async def aclose(self) -> None:
         """Release HITL-paused handlers when the session tears down.
 
-        Session.stop()/shutdown() call aclose_if_supported(self.agent) but
+        Session.stop() calls aclose_if_supported(self.agent) but
         not reset(), so a workflow that paused on an InputRequiredEvent
         before the session ended would otherwise leave its live local
         WorkflowHandler or remote server handler waiting forever. Unlike

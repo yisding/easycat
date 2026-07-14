@@ -4,44 +4,42 @@ import argparse
 import json
 import os
 import shlex
-import subprocess
 import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from easycat._provider_catalog import provider_names
+from easycat.validation import _environment, _reliability_policy, _runner_support
 from easycat.validation._lane_harness import (
-    PROVIDER_ENV_VARS,
     ValidationRunResult,
     _finish_lane_run,
     _start_lane_run,
     _write_atomic,
 )
+from easycat.validation._runner_support import (
+    CommandResult,
+    CommandRunner,
+    validation_exit_code_from_pytest,
+)
+from easycat.validation._slice_runner import VALIDATION_SELECTORS, run_validation_slice
 from easycat.validation.latency import (
-    DEFAULT_RELIABILITY_BUDGETS,
     FailureCategory,
     LatencyComparisonThresholds,
     LatencyMode,
     LatencySample,
     LatencyStageDurations,
-    ReliabilityBudget,
-    ReliabilitySample,
     build_latency_artifact,
-    build_reliability_artifact,
     classify_failure_category,
     classify_latency_failure,
     compare_latency_baseline,
-    evaluate_reliability_budgets,
     latency_pytest_args,
     load_latency_samples,
-    load_reliability_samples,
 )
 from easycat.validation.provider_reports import (
     ProviderSurfaceSpec,
@@ -60,26 +58,6 @@ from easycat.validation.report import (
     ValidationStatus,
     redact_runtime_secrets,
 )
-
-VALIDATION_SELECTORS = {
-    "quick": (
-        "not integration_socket and not integration_live and not integration_external "
-        "and not contract and not slow and not stress and not flaky"
-    ),
-    "socket": "integration_socket and not integration_live and not flaky",
-    "stress": "stress and not integration_live and not flaky",
-    "contracts": "contract and not integration_live and not flaky",
-}
-
-# Per-slice pytest arguments beyond the shared -q/junit/marker shape. The
-# quick slice is xdist-safe by design (`just test-fast` runs the same marker
-# expression with the same flags); `loadscope` keeps each module's tests on
-# one worker so event-loop/socket/port state never crosses workers. The
-# socket, stress, and contracts lanes stay serial: socket binds localhost
-# ports and stress measures timing-sensitive saturation signals.
-VALIDATION_SLICE_PYTEST_ARGS: dict[str, tuple[str, ...]] = {
-    "quick": ("-n", "auto", "--dist", "loadscope"),
-}
 
 DEFAULT_RELEASE_EXTRAS = ("openai", "openai-agents")
 DEFAULT_RELEASE_PROVIDERS = ("openai",)
@@ -121,170 +99,6 @@ print(f"validated {len(documented)} documented public API exports")
 """
 
 
-@dataclass(frozen=True)
-class CommandResult:
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
-
-
-CommandRunner = Callable[..., CommandResult]
-
-
-def validation_exit_code_from_pytest(pytest_exit_code: int) -> int:
-    return 0 if pytest_exit_code == 0 else 1
-
-
-def run_validation_slice(
-    slice_name: str,
-    *,
-    artifacts_dir: str | Path = ".easycat/validation",
-    report_path: str | Path | None = None,
-    junit_path: str | Path | None = None,
-    junit_prefix: str | None = None,
-    command_runner: CommandRunner | None = None,
-    started_at: datetime | None = None,
-) -> ValidationRunResult:
-    if slice_name not in VALIDATION_SELECTORS:
-        known = ", ".join(sorted(VALIDATION_SELECTORS))
-        raise ValueError(f"unknown validation slice {slice_name!r}; expected one of: {known}")
-
-    command_runner = command_runner or _run_subprocess
-    started_at = started_at or datetime.now(UTC)
-    artifacts_root = Path(artifacts_dir)
-    ctx = _start_lane_run(
-        slice_name,
-        started_at=started_at,
-        artifacts_root=artifacts_root,
-        report_path=report_path,
-    )
-    run_dir = ctx.run_dir
-
-    junit_path = Path(junit_path) if junit_path is not None else run_dir / "junit.xml"
-    junit_path.parent.mkdir(parents=True, exist_ok=True)
-    stdout_path = run_dir / "stdout.log"
-    stderr_path = run_dir / "stderr.log"
-    reliability_samples_path = run_dir / "reliability" / "samples.json"
-    reliability_samples_path.parent.mkdir(parents=True, exist_ok=True)
-    webrtc_stats_path = run_dir / "webrtc" / "stats.jsonl"
-    if slice_name == "socket":
-        webrtc_stats_path.parent.mkdir(parents=True, exist_ok=True)
-
-    command = [
-        *_pytest_command_prefix(),
-        "-q",
-        *VALIDATION_SLICE_PYTEST_ARGS.get(slice_name, ()),
-        *_validation_test_paths(),
-        f"--junitxml={junit_path}",
-        "-m",
-        VALIDATION_SELECTORS[slice_name],
-    ]
-    if junit_prefix:
-        command.append(f"--junit-prefix={junit_prefix}")
-
-    command_env = {
-        **os.environ,
-        "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
-    }
-    if slice_name == "socket":
-        command_env["EASYCAT_WEBRTC_STATS_PATH"] = str(webrtc_stats_path)
-    runtime_secret_values = _runtime_secret_values()
-    started_monotonic = time.perf_counter()
-    result = command_runner(command, env=command_env)
-    duration_s = time.perf_counter() - started_monotonic
-    finished_at = datetime.now(UTC)
-
-    stdout_path.write_text(redact_runtime_secrets(result.stdout, runtime_secret_values))
-    stderr_path.write_text(redact_runtime_secrets(result.stderr, runtime_secret_values))
-    if junit_path.exists():
-        junit_path.write_text(
-            redact_runtime_secrets(junit_path.read_text(), runtime_secret_values)
-        )
-
-    exit_code = validation_exit_code_from_pytest(result.exit_code)
-    reliability_failure = _load_reliability_failure(reliability_samples_path)
-    reliability_budget_failure: ValidationFailure | None = None
-    reliability_payload: dict[str, object] | None = None
-    if reliability_samples_path.exists() and reliability_failure is None:
-        reliability_samples = load_reliability_samples(reliability_samples_path.read_text())
-        reliability_payload = build_reliability_artifact(
-            samples=reliability_samples,
-            generated_at=finished_at,
-        )
-        reliability_budget_failure = _reliability_budget_failure(reliability_samples)
-    if reliability_failure is not None or reliability_budget_failure is not None:
-        exit_code = 1
-    status: ValidationStatus = "pass" if exit_code == 0 else "fail"
-
-    check_artifacts: dict[str, ArtifactRef] = {
-        "stdout": ArtifactRef(kind="stdout", path=str(stdout_path)),
-        "stderr": ArtifactRef(kind="stderr", path=str(stderr_path)),
-    }
-    if junit_path.exists():
-        check_artifacts["junit"] = ArtifactRef(kind="junit", path=str(junit_path))
-    if reliability_samples_path.exists():
-        check_artifacts["reliability"] = ArtifactRef(
-            kind="reliability",
-            path=str(reliability_samples_path),
-        )
-    if slice_name == "socket" and webrtc_stats_path.exists():
-        check_artifacts["webrtc_stats"] = ArtifactRef(
-            kind="webrtc_stats",
-            path=str(webrtc_stats_path),
-        )
-
-    artifacts: dict[str, ArtifactRef] = {**ctx.artifacts, **check_artifacts}
-    if ctx.requested_report_path is not None:
-        artifacts["requested_report"] = ArtifactRef(
-            kind="validation_report",
-            path=str(ctx.requested_report_path),
-        )
-
-    failures = []
-    if result.exit_code != 0:
-        failures.append(
-            ValidationFailure(
-                name=f"pytest.{slice_name}",
-                message=redact_runtime_secrets(
-                    result.stderr or result.stdout or f"pytest exited {result.exit_code}",
-                    runtime_secret_values,
-                ),
-            )
-        )
-    if reliability_failure is not None:
-        failures.append(reliability_failure)
-    if reliability_budget_failure is not None:
-        failures.append(reliability_budget_failure)
-
-    return _finish_lane_run(
-        ctx,
-        artifacts_root=artifacts_root,
-        command=command,
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_s=duration_s,
-        status=status,
-        exit_code=exit_code,
-        tool_exit_codes={
-            "pytest": result.exit_code,
-            **({"reliability_samples": 1} if reliability_failure is not None else {}),
-            **({"reliability_budget": 1} if reliability_budget_failure is not None else {}),
-        },
-        checks=[
-            ValidationCheck(
-                name=f"pytest.{slice_name}",
-                status=status,
-                duration_s=duration_s,
-                command=command,
-                artifacts=check_artifacts,
-            )
-        ],
-        failures=failures,
-        reliability=reliability_payload,
-        artifacts=artifacts,
-    )
-
-
 def run_latency_validation(
     mode: LatencyMode | str,
     *,
@@ -302,7 +116,7 @@ def run_latency_validation(
     # opt-in. An explicit ``require_samples`` value always wins.
     if require_samples is None:
         require_samples = mode is LatencyMode.SWEEP
-    command_runner = command_runner or _run_subprocess
+    command_runner = command_runner or _runner_support.run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
     ctx = _start_lane_run(
@@ -322,10 +136,10 @@ def run_latency_validation(
     samples_path.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
-        *_pytest_command_prefix(),
+        *_runner_support.pytest_command_prefix(),
         "-q",
         f"--junitxml={junit_path}",
-        *[_resolve_validation_test_arg(arg) for arg in latency_pytest_args(mode)],
+        *[_runner_support.resolve_validation_test_arg(arg) for arg in latency_pytest_args(mode)],
     ]
 
     command_env = {
@@ -333,7 +147,7 @@ def run_latency_validation(
         "EASYCAT_LATENCY_SAMPLES_PATH": str(samples_path),
         "EASYCAT_RELIABILITY_SAMPLES_PATH": str(reliability_samples_path),
     }
-    runtime_secret_values = _runtime_secret_values()
+    runtime_secret_values = _environment.runtime_secret_values()
     started_monotonic = time.perf_counter()
     result = command_runner(command, env=command_env)
     duration_s = time.perf_counter() - started_monotonic
@@ -359,15 +173,16 @@ def run_latency_validation(
             ),
             failure_class="latency_artifact_error",
         )
-    reliability_failure = _redact_validation_failure(
-        _load_reliability_failure(reliability_samples_path),
-        runtime_secret_values,
+    loaded_reliability_samples, reliability_failure = _reliability_policy.load_reliability(
+        reliability_samples_path
     )
-    reliability_samples: list[ReliabilitySample] = []
+    reliability_failure = _redact_validation_failure(reliability_failure, runtime_secret_values)
+    reliability_samples = loaded_reliability_samples or []
     reliability_budget_failure: ValidationFailure | None = None
-    if reliability_samples_path.exists() and reliability_failure is None:
-        reliability_samples = load_reliability_samples(reliability_samples_path.read_text())
-        reliability_budget_failure = _reliability_budget_failure(reliability_samples)
+    if loaded_reliability_samples is not None:
+        reliability_budget_failure = _reliability_policy.reliability_budget_failure(
+            reliability_samples
+        )
 
     required_samples_failure: ValidationFailure | None = None
     if require_samples and not samples:
@@ -533,7 +348,7 @@ def run_live_validation(
     command_runner: CommandRunner | None = None,
     started_at: datetime | None = None,
 ) -> ValidationRunResult:
-    command_runner = command_runner or _run_subprocess
+    command_runner = command_runner or _runner_support.run_subprocess
     started_at = started_at or datetime.now(UTC)
     artifacts_root = Path(artifacts_dir)
     ctx = _start_lane_run(
@@ -551,7 +366,7 @@ def run_live_validation(
 
     selected = select_provider_surfaces(providers=providers, surfaces=surfaces)
     selector_errors = _live_selector_errors(providers=providers, surfaces=surfaces)
-    runtime_secret_values = _runtime_secret_values()
+    runtime_secret_values = _environment.runtime_secret_values()
     explicit_provider_request = bool(providers)
     started_monotonic = time.perf_counter()
     checks: list[ValidationCheck] = []
@@ -776,7 +591,7 @@ def run_release_validation(
     started_at: datetime | None = None,
 ) -> ValidationRunResult:
     """Run the strict release gate against a cleanly installed wheel."""
-    command_runner = command_runner or _run_subprocess
+    command_runner = command_runner or _runner_support.run_subprocess
     started_at = started_at or datetime.now(UTC)
     started_monotonic = time.perf_counter()
     artifacts_root = Path(artifacts_dir)
@@ -805,7 +620,7 @@ def run_release_validation(
     release_providers = tuple(providers) if providers is not None else DEFAULT_RELEASE_PROVIDERS
     release_surfaces = tuple(surfaces) if surfaces is not None else DEFAULT_RELEASE_SURFACES
     latency_mode = LatencyMode(latency_mode)
-    runtime_secret_values = _runtime_secret_values()
+    runtime_secret_values = _environment.runtime_secret_values()
 
     checks: list[ValidationCheck] = []
     failures: list[ValidationFailure] = []
@@ -1025,15 +840,20 @@ def run_release_validation(
             and cli_smoke_ok
         )
 
-    def child_command_runner(command: list[str], *, env: Mapping[str, str]) -> CommandResult:
+    def child_command_runner(
+        command: list[str],
+        *,
+        env: Mapping[str, str] | None = None,
+        cwd: str | Path | None = None,
+    ) -> CommandResult:
         child_env = {
-            **env,
+            **(env or os.environ),
             "PYTHONPATH": "",
             "EASYCAT_VALIDATION_PYTEST_COMMAND": shlex.join([str(venv_python), "-m", "pytest"]),
             "EASYCAT_VALIDATION_TEST_PATHS": str(source_root / "tests"),
             "EASYCAT_VALIDATION_TEST_ROOT": str(source_root / "tests"),
         }
-        return command_runner(command, env=child_env, cwd=outside_dir)
+        return command_runner(command, env=child_env, cwd=cwd or outside_dir)
 
     def record_child_result(name: str, result: ValidationRunResult) -> None:
         artifact_key = name.removeprefix("release.").replace(".", "_") + "_report"
@@ -1139,41 +959,6 @@ def classify_live_failure(message: str) -> str:
     return _LIVE_FAILURE_CLASSES[classify_failure_category(message)]
 
 
-def _load_reliability_failure(path: Path) -> ValidationFailure | None:
-    if not path.exists():
-        return None
-    try:
-        load_reliability_samples(path.read_text())
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        return ValidationFailure(
-            name="reliability.samples",
-            message=f"could not load reliability samples: {exc}",
-            failure_class="reliability_artifact_error",
-        )
-    return None
-
-
-def _reliability_budget_failure(
-    samples: Sequence[ReliabilitySample],
-    budgets: Sequence[ReliabilityBudget] = DEFAULT_RELIABILITY_BUDGETS,
-) -> ValidationFailure | None:
-    """Surface eligible reliability samples that breach a reliability budget.
-
-    Mirrors the latency budget gate: a saturated event loop, a memory leak,
-    dropped audio frames, or a degraded journal in any eligible sample fails
-    the run instead of silently passing once the samples merely parse.
-    """
-    violations = evaluate_reliability_budgets(samples, budgets)
-    if not violations:
-        return None
-    return ValidationFailure(
-        name="reliability.budget",
-        message="reliability budget violated",
-        failure_class="reliability_budget",
-        details={"violations": [violation.to_dict() for violation in violations]},
-    )
-
-
 def _live_selector_errors(
     *,
     providers: Sequence[str] | None,
@@ -1234,10 +1019,6 @@ def _redact_validation_failure(
         failure_class=failure.failure_class,
         details=details,
     )
-
-
-def _runtime_secret_values() -> tuple[str, ...]:
-    return tuple(value for name in PROVIDER_ENV_VARS if (value := os.environ.get(name)))
 
 
 def _latency_checks(
@@ -1550,54 +1331,12 @@ def _temporary_environ(overrides: Mapping[str, str]) -> Iterator[None]:
                 os.environ[name] = previous_value
 
 
-def _run_subprocess(
-    command: list[str],
-    *,
-    env: Mapping[str, str] | None = None,
-    cwd: str | Path | None = None,
-) -> CommandResult:
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=dict(env) if env is not None else None,
-        cwd=str(cwd) if cwd is not None else None,
-    )
-    return CommandResult(
-        exit_code=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
-    )
-
-
 def _live_pytest_command(spec: ProviderSurfaceSpec) -> list[str]:
-    command = [*_pytest_command_prefix(), "-q"]
+    command = [*_runner_support.pytest_command_prefix(), "-q"]
     if spec.live_pytest_target:
-        command.append(_resolve_validation_test_arg(spec.live_pytest_target))
+        command.append(_runner_support.resolve_validation_test_arg(spec.live_pytest_target))
     command.extend(["-m", _live_marker_expression(spec)])
     return command
-
-
-def _pytest_command_prefix() -> list[str]:
-    raw = os.environ.get("EASYCAT_VALIDATION_PYTEST_COMMAND")
-    if raw:
-        return shlex.split(raw)
-    return ["uv", "run", "pytest"]
-
-
-def _validation_test_paths() -> list[str]:
-    raw = os.environ.get("EASYCAT_VALIDATION_TEST_PATHS")
-    if not raw:
-        return []
-    return [path for path in raw.split(os.pathsep) if path]
-
-
-def _resolve_validation_test_arg(arg: str) -> str:
-    test_root = os.environ.get("EASYCAT_VALIDATION_TEST_ROOT")
-    if not test_root or arg.startswith("/") or not arg.startswith("tests/"):
-        return arg
-    return str(Path(test_root) / arg.removeprefix("tests/"))
 
 
 def _live_marker_expression(spec: ProviderSurfaceSpec) -> str:

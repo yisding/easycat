@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-import easycat.transports.webrtc as webrtc_module
-import easycat.transports.websocket as websocket_module
+import easycat.server.webrtc_routes as webrtc_module
+import easycat.server.websocket as websocket_module
 from easycat.config import EasyConfig
 from easycat.voice_app import VoiceApp
 
