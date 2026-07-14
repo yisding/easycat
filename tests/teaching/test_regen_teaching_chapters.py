@@ -51,6 +51,9 @@ from scripts.regen_teaching_chapters import (
     render_spaced_retrieval,
     self_check_questions,
 )
+from scripts.regen_teaching_chapters import (
+    main as regen_main,
+)
 
 SOURCE_PATH_RE = re.compile(
     r"`(?P<path>src/easycat/[A-Za-z0-9_./-]+\.py)"
@@ -289,8 +292,7 @@ def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> 
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_navigation(chapters[-1]) == (
-        "[← Chapter narrative](./README.md) · [Teaching ladder](../) · "
-        "[Progress](../PROGRESS.md)"
+        "[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Progress](../PROGRESS.md)"
     )
 
 
@@ -558,6 +560,25 @@ def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
         "Teaching exercise auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_exercises)
     )
+
+
+def test_check_mode_reports_missing_generated_self_check_gates(monkeypatch, capsys) -> None:
+    exercises_path = TEACHING / "00-hello-audio" / "EXERCISES.md"
+    original_read_text = Path.read_text
+    stale_exercises = original_read_text(exercises_path, encoding="utf-8")
+    stale_exercises = SELF_CHECK_PROTOCOL_RE.sub("", stale_exercises)
+    stale_exercises = EXERCISE_COMPLETION_RE.sub("", stale_exercises)
+
+    def read_with_stale_exercises(path: Path, *args, **kwargs) -> str:
+        if path == exercises_path:
+            return stale_exercises
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_with_stale_exercises)
+
+    assert regen_main(["--check"]) == 1
+    stderr = capsys.readouterr().err
+    assert "would update docs/teaching/00-hello-audio/EXERCISES.md" in stderr
 
 
 def test_resolve_child_path_rejects_traversal_outside_base() -> None:

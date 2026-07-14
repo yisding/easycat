@@ -706,9 +706,10 @@ def _offline_checkpoint_for(chapter: Chapter) -> dict[str, object]:
     return checkpoint
 
 
-def self_check_questions(chapter: Chapter) -> list[str]:
-    exercises_path = chapter.path / "EXERCISES.md"
-    exercises = exercises_path.read_text(encoding="utf-8")
+def self_check_questions(chapter: Chapter, *, exercises: str | None = None) -> list[str]:
+    if exercises is None:
+        exercises_path = chapter.path / "EXERCISES.md"
+        exercises = exercises_path.read_text(encoding="utf-8")
     heading = re.search(r"^## Self-check$", exercises, re.MULTILINE)
     if heading is None:
         raise ValueError(f"{chapter.slug}/EXERCISES.md is missing its self-check")
@@ -761,14 +762,17 @@ def render_progress_worksheet() -> str:
     for chapter in discover_chapters():
         checkpoint = _offline_checkpoint_for(chapter)
         chapter_number = checkpoint["chapter"]
-        question_count = len(self_check_questions(chapter))
+        # Derive progress from the exercise page write mode would produce. In
+        # check mode the on-disk page may still be missing newly generated
+        # gates, because drift reporting deliberately performs no writes.
+        _, regenerated_exercises = regen_exercises(chapter)
+        question_count = len(self_check_questions(chapter, exercises=regenerated_exercises))
         sections.extend(
             [
                 "",
                 f"## {_chapter_title(chapter)}",
                 "",
-                f"[Narrative](./{chapter.slug}/) · "
-                f"[Exercises](./{chapter.slug}/EXERCISES.md)",
+                f"[Narrative](./{chapter.slug}/) · [Exercises](./{chapter.slug}/EXERCISES.md)",
                 "",
             ]
         )
@@ -791,8 +795,14 @@ def render_progress_worksheet() -> str:
                     prefix="from the repository root, run ",
                 ),
                 _progress_command_item("Run", checkpoint["command"]),
-                _progress_item("Find", f"{checkpoint['evidence']}.",),
-                _progress_item("Reflect", f"{checkpoint['reflection']}.",),
+                _progress_item(
+                    "Find",
+                    f"{checkpoint['evidence']}.",
+                ),
+                _progress_item(
+                    "Reflect",
+                    f"{checkpoint['reflection']}.",
+                ),
                 _progress_item(
                     "Practice",
                     f"complete [the chapter exercises](./{chapter.slug}/EXERCISES.md) and keep "
@@ -874,10 +884,7 @@ def render_offline_checkpoint(chapter: Chapter) -> str:
     return (
         f"\n> **Hardware-free checkpoint:** prove `{concept}` without a microphone,\n"
         "> speakers, or provider credentials:\n"
-        ">\n"
-        + "".join(f"> {line}\n" for line in prediction_lines)
-        + ">\n"
-        + "> ```bash\n"
+        ">\n" + "".join(f"> {line}\n" for line in prediction_lines) + ">\n" + "> ```bash\n"
         f"> {command}\n"
         "> ```\n"
         ">\n"
@@ -905,11 +912,7 @@ def _render_spaced_retrieval_block(chapter: Chapter) -> str | None:
     rendered = render_spaced_retrieval(chapter)
     if rendered is None:
         return None
-    return (
-        "<!-- BEGIN auto:spaced-retrieval -->\n"
-        f"{rendered}"
-        "<!-- END auto:spaced-retrieval -->"
-    )
+    return f"<!-- BEGIN auto:spaced-retrieval -->\n{rendered}<!-- END auto:spaced-retrieval -->"
 
 
 def _render_practice_handoff_block() -> str:
@@ -1172,9 +1175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.chapter:
         original = (
-            PROGRESS_WORKSHEET.read_text(encoding="utf-8")
-            if PROGRESS_WORKSHEET.exists()
-            else ""
+            PROGRESS_WORKSHEET.read_text(encoding="utf-8") if PROGRESS_WORKSHEET.exists() else ""
         )
         _update(PROGRESS_WORKSHEET, original, render_progress_worksheet())
 
