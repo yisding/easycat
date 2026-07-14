@@ -20,8 +20,10 @@ from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
+    AgentRecorder,
     AgentTurnInput,
     ExternalAgentBridge,
+    NullAgentRecorder,
     RecorderContext,
 )
 from easycat.runtime.context import RunContext
@@ -152,14 +154,24 @@ class AgentStage:
         """
         return journal_ctx(ctx, self._journal)
 
-    def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> JournalAgentRecorder:
+    def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> AgentRecorder:
         # Prefer the per-run ``ctx.journal`` so the recorder writes to the
         # same sink as ``journal_append_event`` (which always uses
         # ``ctx.journal``).  ``self._journal`` is only a fallback for
         # direct construction where the caller wired a journal into the
         # stage but not into the RunContext.
+        journal = ctx.journal if ctx.journal is not None else self._journal
+        if journal is None and self._artifact_store is None:
+            return NullAgentRecorder(
+                RecorderContext(
+                    run_id="null",
+                    session_id=self._session_id,
+                    turn_id=turn_id,
+                    mcp_servers=self._mcp_servers,
+                )
+            )
         return JournalAgentRecorder(
-            journal=ctx.journal if ctx.journal is not None else self._journal,
+            journal=journal,
             artifact_store=self._artifact_store,
             context=RecorderContext(
                 run_id=f"run-{uuid4().hex[:8]}",
