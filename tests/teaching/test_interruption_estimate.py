@@ -6,6 +6,8 @@ import sys
 import types
 from pathlib import Path
 
+from easycat.transports.local import LocalTransport, LocalTransportConfig
+
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "09-interruption"
 
@@ -30,7 +32,7 @@ async def test_rejected_audio_does_not_enter_heard_text_estimate(monkeypatch) ->
             for data in (b"rejected", b"accepted"):
                 yield types.SimpleNamespace(
                     type=chapter.TTSEventType.AUDIO,
-                    audio=types.SimpleNamespace(data=data),
+                    audio=chapter.AudioChunk(data=data, format=chapter.PCM16_MONO_24K),
                 )
 
     class FakeTransport:
@@ -61,6 +63,49 @@ async def test_rejected_audio_does_not_enter_heard_text_estimate(monkeypatch) ->
     assert ledger.bytes_accepted == len(b"accepted")
     tts_record = next(row["data"] for row in rows if row["name"] == "stage.tts.execute")
     assert tts_record["bytes_accepted_so_far"] == len(b"accepted")
+
+
+async def test_partial_local_transport_chunk_credits_enqueued_head(monkeypatch) -> None:
+    chapter = _load_chapter(monkeypatch)
+    frame_bytes = chapter.TTS_BYTES_PER_SECOND * chapter.LOCAL_OUTPUT_FRAME_MS // 1000
+
+    class FakeTTS:
+        async def synthesize(self, _payload):
+            yield types.SimpleNamespace(
+                type=chapter.TTSEventType.AUDIO,
+                audio=chapter.AudioChunk(
+                    data=bytes(frame_bytes * 2),
+                    format=chapter.PCM16_MONO_24K,
+                ),
+            )
+
+    class FakeJournal:
+        def append(self, **_row) -> None: ...
+
+    transport = LocalTransport(
+        LocalTransportConfig(
+            audio_format=chapter.PCM16_MONO_24K,
+            frame_duration_ms=chapter.LOCAL_OUTPUT_FRAME_MS,
+            max_pending_out_chunks=1,
+        )
+    )
+    transport._connected = True
+    queue: asyncio.Queue = asyncio.Queue()
+    await queue.put("hello world")
+    await queue.put(None)
+    ledger = chapter.TurnLedger()
+
+    await chapter.drain_to_speaker(
+        FakeTTS(),
+        transport,
+        queue,
+        types.SimpleNamespace(is_cancelled=False),
+        ledger,
+        FakeJournal(),
+    )
+
+    assert transport._out_queue.qsize() == 1
+    assert ledger.bytes_accepted == frame_bytes
 
 
 def test_heard_text_uses_accepted_byte_ratio(monkeypatch) -> None:

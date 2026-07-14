@@ -61,6 +61,7 @@ SESSION_ID = f"ch09c-estimate-{int(time.time())}"
 
 # OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
 TTS_BYTES_PER_SECOND = 24_000 * 2
+LOCAL_OUTPUT_FRAME_MS = 20
 
 
 @dataclass
@@ -99,6 +100,19 @@ def _expected_bytes(text: str) -> int:
     chars_per_sec = 15
     seconds = len(text) / chars_per_sec
     return int(seconds * TTS_BYTES_PER_SECOND)
+
+
+def _local_output_frames(chunk: AudioChunk):
+    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
+    frame_bytes = (
+        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
+    )
+    for offset in range(0, len(chunk.data), frame_bytes):
+        yield AudioChunk(
+            data=chunk.data[offset : offset + frame_bytes],
+            format=chunk.format,
+            timestamp=chunk.timestamp,
+        )
 
 
 class MiniTurnDetector:
@@ -165,9 +179,12 @@ async def drain_to_speaker(tts, transport, sentence_queue, cancel, ledger, journ
                 await tts.cancel()
                 break
             if event.type == TTSEventType.AUDIO and event.audio is not None:
-                accepted = await transport.send_audio(event.audio)
-                if accepted:
-                    ledger.bytes_accepted += len(event.audio.data)
+                # LocalTransport reports False for a partial fit. Sending one
+                # callback-sized frame at a time makes acceptance atomic, so
+                # the ledger can still credit an accepted head accurately.
+                for frame in _local_output_frames(event.audio):
+                    if await transport.send_audio(frame):
+                        ledger.bytes_accepted += len(frame.data)
         journal.append(
             kind=JournalRecordKind.EVENT,
             name="stage.tts.execute",
@@ -289,7 +306,12 @@ async def main() -> None:
         raise SystemExit("Set OPENAI_API_KEY and DEEPGRAM_API_KEY.")
 
     journal = InMemoryRingBuffer(capacity=10_000)
-    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
+    transport = LocalTransport(
+        LocalTransportConfig(
+            audio_format=PCM16_MONO_24K,
+            frame_duration_ms=LOCAL_OUTPUT_FRAME_MS,
+        )
+    )
     vad = create_vad(VADConfig())
     detector = MiniTurnDetector(vad)
     client = AsyncOpenAI()

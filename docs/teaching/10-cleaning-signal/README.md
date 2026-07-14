@@ -131,7 +131,7 @@ hearing.
  from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
  from easycat.session import split_at_sentence_boundaries
  from easycat.strip_markdown import strip_markdown
-@@ -57,48 +76,23 @@
+@@ -57,62 +76,23 @@
  MODEL = "gpt-4o-mini"
  PREROLL_FRAMES = 15
  RUNS_DIR = Path(__file__).parent / "runs"
@@ -139,6 +139,7 @@ hearing.
 -
 -# OpenAI TTS emits PCM16 mono at 24 kHz = 48,000 bytes/second.
 -TTS_BYTES_PER_SECOND = 24_000 * 2
+-LOCAL_OUTPUT_FRAME_MS = 20
 -
 -
 -@dataclass
@@ -184,6 +185,19 @@ hearing.
 -    chars_per_sec = 15
 -    seconds = len(text) / chars_per_sec
 -    return int(seconds * TTS_BYTES_PER_SECOND)
+-
+-
+-def _local_output_frames(chunk: AudioChunk):
+-    """Split TTS audio into all-or-nothing LocalTransport queue writes."""
+-    frame_bytes = (
+-        chunk.format.sample_rate * chunk.format.frame_size * LOCAL_OUTPUT_FRAME_MS // 1000
+-    )
+-    for offset in range(0, len(chunk.data), frame_bytes):
+-        yield AudioChunk(
+-            data=chunk.data[offset : offset + frame_bytes],
+-            format=chunk.format,
+-            timestamp=chunk.timestamp,
+-        )
 +    async def process(self, chunk):
 +        return chunk
 +
@@ -195,7 +209,7 @@ hearing.
  
  
  class MiniTurnDetector:
-@@ -127,13 +121,33 @@
+@@ -141,13 +121,33 @@
                  self._preroll.append(chunk)
  
  
@@ -233,7 +247,7 @@ hearing.
      buffer = ""
      async for chunk in stream:
          if cancel.is_cancelled:
-@@ -154,96 +168,48 @@
+@@ -168,99 +168,48 @@
      await sentence_queue.put(None)
  
  
@@ -250,9 +264,12 @@ hearing.
                  await tts.cancel()
                  break
              if event.type == TTSEventType.AUDIO and event.audio is not None:
--                accepted = await transport.send_audio(event.audio)
--                if accepted:
--                    ledger.bytes_accepted += len(event.audio.data)
+-                # LocalTransport reports False for a partial fit. Sending one
+-                # callback-sized frame at a time makes acceptance atomic, so
+-                # the ledger can still credit an accepted head accurately.
+-                for frame in _local_output_frames(event.audio):
+-                    if await transport.send_audio(frame):
+-                        ledger.bytes_accepted += len(frame.data)
 +                await transport.send_audio(event.audio)
 +                # The crucial dual-input line: AEC needs to know what we
 +                # asked the speaker to play, so it can subtract that
@@ -342,7 +359,7 @@ hearing.
              continue
  
          if tag == "speech_started":
-@@ -262,33 +228,56 @@
+@@ -279,39 +228,57 @@
              if not final_text.strip():
                  continue
              print(f"  user: {final_text!r}")
@@ -383,6 +400,11 @@ hearing.
  
 +    session_id = f"ch10-nr{args.nr}-aec{args.aec}-{int(time.time())}"
      journal = InMemoryRingBuffer(capacity=10_000)
+-    transport = LocalTransport(
+-        LocalTransportConfig(
+-            audio_format=PCM16_MONO_24K,
+-            frame_duration_ms=LOCAL_OUTPUT_FRAME_MS,
+-        )
 +
 +    # Factory-wired stages. NR/AEC both fall back to passthrough if the
 +    # optional deps aren't installed; the journal records which one is live.
@@ -406,12 +428,13 @@ hearing.
 +        name="audio.config",
 +        session_id=session_id,
 +        data={"stage": "audio", "nr": nr_backend, "aec": aec_backend},
-+    )
+     )
 +
-     transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
++    transport = LocalTransport(LocalTransportConfig(audio_format=PCM16_MONO_24K))
      vad = create_vad(VADConfig())
      detector = MiniTurnDetector(vad)
-@@ -307,13 +296,14 @@
+     client = AsyncOpenAI()
+@@ -329,13 +296,14 @@
          )
  
      await transport.connect()
@@ -429,7 +452,7 @@ hearing.
          )
      except (KeyboardInterrupt, asyncio.CancelledError):
          pass
-@@ -321,7 +311,7 @@
+@@ -343,7 +311,7 @@
          await transport.disconnect()
  
      RUNS_DIR.mkdir(exist_ok=True)
