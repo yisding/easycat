@@ -75,7 +75,7 @@ A few common sample rates you will meet later in the ladder:
 | Twilio wire | 8 kHz μ-law |
 | Deepgram / Cartesia / ElevenLabs realtime STT target | 16 kHz PCM |
 | WebSocket / WebRTC / Twilio pipeline target | 16 kHz PCM |
-| Local capture + playback | 24 kHz PCM |
+| `LocalTransport` capture/playback pipeline | 24 kHz PCM |
 | OpenAI Realtime STT input | 24 kHz PCM |
 | Bundled TTS output | 24 kHz PCM by default |
 | WebRTC media frames | 48 kHz before Opus encode / after decode |
@@ -96,6 +96,11 @@ without opening hardware or making an API request:
 ```bash
 uv run python docs/teaching/00-hello-audio/format_boundaries.py
 ```
+
+That catalog reports `LocalTransport`'s 24 kHz default. This chapter's
+smaller raw-`sounddevice` demo is a separate path and deliberately sets
+`SAMPLE_RATE = 16_000` so the byte math and speech-band discussion stay
+concrete.
 
 Resampling makes formats compatible; it cannot recreate spectrum that an
 earlier capture, filter, or codec already removed. Name the boundary when
