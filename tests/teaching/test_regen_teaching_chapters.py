@@ -6,6 +6,16 @@ from pathlib import Path
 
 import pytest
 
+from easycat.events import (
+    SessionActionCompleted,
+    SessionActionFailed,
+    SessionActionRequested,
+    SessionActionStarted,
+    ToolCallDelta,
+    ToolCallResult,
+    ToolCallStarted,
+)
+from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
     ROOT,
     TEACHING,
@@ -196,36 +206,38 @@ def test_tools_teaching_plan_tracks_journal_sink_ownership() -> None:
     plan = (ROOT / "plan" / "teaching" / "chapter-plans" / "teaching-07-tools.md").read_text(
         encoding="utf-8"
     )
-    journal_sink = (ROOT / "src" / "easycat" / "session" / "_journal_sink.py").read_text(
-        encoding="utf-8"
-    )
 
     assert "SessionJournalSink" in plan
     assert "src/easycat/session/_journal_sink.py::SessionJournalSink" in plan
-    assert "ToolCallStarted" in journal_sink
-    assert "ToolCallDelta" in journal_sink
-    assert "ToolCallResult" in journal_sink
-    expected_tool_started_sub = (
-        'self._subscribe(ToolCallStarted, self._make_event_handler(evt, "tool_call_started"))'
-    )
-    assert expected_tool_started_sub in journal_sink
+    registered_records = {spec.event_type: spec.name for spec in _SIMPLE_EVENT_RECORDS}
+    tool_call_events = (ToolCallStarted, ToolCallDelta, ToolCallResult)
+    assert {registered_records[event_type] for event_type in tool_call_events} == {
+        "tool_call_started",
+        "tool_call_delta",
+        "tool_call_result",
+    }
+    assert all(registered_records[event_type] in plan for event_type in tool_call_events)
     assert "tool name and call id" in plan
     assert "tool name and args" not in plan
     assert "session/_session.py" not in plan
     assert "_sub(ToolCallStarted" not in plan
     assert "Session._subscribe_journal_sink" not in plan
 
-    # SessionAction lifecycle events are now journaled (same pattern as the
-    # tool-call subscriptions above); the plan must document this instead of
+    # SessionAction lifecycle events are now journaled in the same declarative
+    # registry as tool calls; the plan must document this instead of
     # claiming a journaling gap.
-    action_events = (
-        "SessionActionRequested",
-        "SessionActionStarted",
-        "SessionActionCompleted",
-        "SessionActionFailed",
+    session_action_events = (
+        SessionActionRequested,
+        SessionActionStarted,
+        SessionActionCompleted,
+        SessionActionFailed,
     )
-    assert all(event in journal_sink for event in action_events)
-    assert 'self._make_event_handler(evt, "session_action_failed")' in journal_sink
+    assert {registered_records[event_type] for event_type in session_action_events} == {
+        "session_action_requested",
+        "session_action_started",
+        "session_action_completed",
+        "session_action_failed",
+    }
+    assert all(registered_records[event_type] in plan for event_type in session_action_events)
     assert "*not* currently journaled" not in plan
     assert "`SessionAction` flows are journaled too" in plan
-    assert "session_action_requested" in plan

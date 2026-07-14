@@ -633,7 +633,7 @@ class AudioRouter:
             #
             # We do NOT close the outbound queue here — an in-flight turn
             # (agent + TTS) may still be producing audio that needs to drain.
-            # Session's stop()/shutdown() handles full cleanup.
+            # Session.stop() handles full cleanup.
             if self._is_running():
                 logger.debug("Pipeline exited while session was running; marking session stopped")
                 self._set_running(False)

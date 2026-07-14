@@ -31,7 +31,7 @@ from easycat import (
     WebTransportTransportConfig,
     require_env,
 )
-from easycat.transports import run_webtransport_config_server
+from easycat.server import run_webtransport_config_server
 
 
 def main(args: argparse.Namespace) -> None:

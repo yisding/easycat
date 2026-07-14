@@ -33,6 +33,7 @@ from easycat.integrations.agents.base import (
     ExecutionCursor,
     ExternalAgentBridge,
     FrameworkStateSnapshot,
+    NullAgentRecorder,
     UnitKind,
 )
 from easycat.timeouts import AgentTimeoutError
@@ -237,14 +238,16 @@ class AgentRunner:
                 # already drained, so this is a harmless no-op.
                 await aclose_quietly(inner_iter)
 
-        cursor = ExecutionCursor(
-            unit_id=f"runner-{uuid4().hex[:8]}",
-            unit_kind=UnitKind.AGENT,
-            display_name=type(self._agent).__name__,
-            entered_at=time.monotonic_ns(),
-            committable=False,
-        )
-        recorder.record_unit_entered(cursor)
+        cursor: ExecutionCursor | None = None
+        if not isinstance(recorder, NullAgentRecorder):
+            cursor = ExecutionCursor(
+                unit_id=f"runner-{uuid4().hex[:8]}",
+                unit_kind=UnitKind.AGENT,
+                display_name=type(self._agent).__name__,
+                entered_at=time.monotonic_ns(),
+                committable=False,
+            )
+            recorder.record_unit_entered(cursor)
 
         self._history.append({"role": "user", "content": turn_input.text})
 
@@ -257,11 +260,13 @@ class AgentRunner:
                 response = await self._agent.run(turn_input.text)
         except TimeoutError:
             self._history.pop()
-            recorder.record_unit_exited(cursor, reason="timeout")
+            if cursor is not None:
+                recorder.record_unit_exited(cursor, reason="timeout")
             raise AgentTimeoutError(self._config.timeout or 0)
         except Exception:
             self._history.pop()
-            recorder.record_unit_exited(cursor, reason="error")
+            if cursor is not None:
+                recorder.record_unit_exited(cursor, reason="error")
             raise
         except BaseException:
             # A parent ``aclose()`` (barge-in) injects ``GeneratorExit`` /
@@ -272,11 +277,13 @@ class AgentRunner:
             # invariant for the postmortem journal.  Close it defensively
             # before re-raising.
             self._history.pop()
-            recorder.safe_exit_cursor(cursor)
+            if cursor is not None:
+                recorder.safe_exit_cursor(cursor)
             raise
 
         self._history.append({"role": "assistant", "content": response})
-        recorder.record_unit_exited(cursor.with_committable(True), reason=None)
+        if cursor is not None:
+            recorder.record_unit_exited(cursor.with_committable(True), reason=None)
 
         if cancel_token and cancel_token.is_cancelled:
             # User barged in while run() was executing — history already
