@@ -593,7 +593,10 @@ uv run python docs/teaching/10-cleaning-signal/replay_metrics_probe.py
 ```
 
 The aligned case writes one `replay.frame` record per mic frame with
-input/cleaned RMS, reference-feed presence, and VAD starts. Its
+input/cleaned RMS, reference-feed presence, and VAD starts. The replay
+sizes its in-memory journal from the mic frame count, reserving space
+for `audio.config` and the summary so long recordings cannot evict
+earlier frame evidence. Its
 `replay.summary` adds aggregate `input_rms`, `cleaned_rms`,
 `rms_change_db`, and `reference_frames_fed`.
 
