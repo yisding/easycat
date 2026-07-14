@@ -209,6 +209,30 @@ uv run python docs/using-easycat/01-runtime-modes/main.py twilio
 uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browser
 ```
 
+## Feature providers and voices
+
+- Path: docs/using-easycat/02-providers-and-voices/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/02-providers-and-voices
+- Audience: learners
+- Select STT and TTS providers, models, and provider-specific voices.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run easycat doctor --provider deepgram
+uv run easycat doctor --provider elevenlabs
+uv run python docs/using-easycat/02-providers-and-voices/main.py list
+uv run python docs/using-easycat/02-providers-and-voices/main.py openai --voice alloy
+uv run python docs/using-easycat/02-providers-and-voices/main.py deepgram-stt --voice nova
+uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice
+uv run --env-file .env python docs/using-easycat/02-providers-and-voices/main.py deepgram-stt
+```
+
 ## Examples
 
 - Path: examples/README.md

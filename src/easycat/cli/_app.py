@@ -373,6 +373,36 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature providers and voices",
+        "path": "docs/using-easycat/02-providers-and-voices/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Select STT and TTS providers, models, and provider-specific voices.",
+        "commands": (
+            "uv sync --extra quickstart --extra deepgram --extra elevenlabs --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run easycat doctor --provider deepgram",
+            "uv run easycat doctor --provider elevenlabs",
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py list",
+            (
+                "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+                "openai --voice alloy"
+            ),
+            (
+                "uv run python docs/using-easycat/02-providers-and-voices/main.py "
+                "deepgram-stt --voice nova"
+            ),
+            "uv run python docs/using-easycat/02-providers-and-voices/main.py elevenlabs-voice",
+            (
+                "uv run --env-file .env python "
+                "docs/using-easycat/02-providers-and-voices/main.py deepgram-stt"
+            ),
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

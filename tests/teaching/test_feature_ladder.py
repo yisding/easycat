@@ -261,3 +261,10 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         "uv run python docs/using-easycat/01-runtime-modes/main.py browser"
         in runtime_modes["commands"]
     )
+    providers = entries["docs/using-easycat/02-providers-and-voices/"]
+    assert providers["diataxis"] == "tutorial"
+    assert providers["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/02-providers-and-voices/main.py list"
+        in providers["commands"]
+    )

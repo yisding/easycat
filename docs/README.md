@@ -38,10 +38,11 @@ them. Multi-word audience filters accept hyphens or underscores, so
 - Learning EasyCat's product surface by building an app: follow the
   [EasyCat feature ladder](using-easycat/), starting at
   [00-first-voice-app](using-easycat/00-first-voice-app/), then continue to
-  [01-runtime-modes](using-easycat/01-runtime-modes/). It begins with the public
-  `VoiceApp` API and adds runtime modes, providers, conversation controls,
-  tools, sessions, debugging, evals, servers, telephony, and operations one
-  capability at a time.
+  [01-runtime-modes](using-easycat/01-runtime-modes/) and
+  [02-providers-and-voices](using-easycat/02-providers-and-voices/). It begins
+  with the public `VoiceApp` API and adds runtime modes, providers, conversation
+  controls, tools, sessions, debugging, evals, servers, telephony, and
+  operations one capability at a time.
 - Building an application: scaffold with
   `uv run easycat init my-agent`, or run
   `uv run easycat init --list-templates` to compare templates with best-fit
