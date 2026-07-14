@@ -286,6 +286,29 @@ def test_feature_ladder_docs_route_matches_first_lesson_commands() -> None:
         assert command in ladder_commands
 
 
+def test_feature_runtime_modes_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (
+        REPO_ROOT / "docs" / "using-easycat" / "01-runtime-modes" / "README.md"
+    ).read_text(encoding="utf-8")
+    route = entries["docs/using-easycat/01-runtime-modes/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --extra webrtc --extra telephony --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py local",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py browser",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py websocket",
+        "uv run python docs/using-easycat/01-runtime-modes/main.py twilio",
+        "uv run --env-file .env python docs/using-easycat/01-runtime-modes/main.py browser",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")

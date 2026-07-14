@@ -205,3 +205,10 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
         in entries["docs/using-easycat/"]["commands"]
     )
     assert entries["docs/using-easycat/00-first-voice-app/"]["diataxis"] == "tutorial"
+    runtime_modes = entries["docs/using-easycat/01-runtime-modes/"]
+    assert runtime_modes["diataxis"] == "tutorial"
+    assert runtime_modes["audience"] == "learners"
+    assert (
+        "uv run python docs/using-easycat/01-runtime-modes/main.py browser"
+        in runtime_modes["commands"]
+    )
