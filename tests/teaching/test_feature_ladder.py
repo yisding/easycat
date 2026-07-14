@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import re
@@ -8,6 +9,8 @@ import runpy
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from easycat.cli._app import _docs_entries
 
@@ -617,6 +620,36 @@ def test_multi_caller_checkpoint_proves_isolation_and_bounded_rejection() -> Non
     assert "PASS isolation: released slot created fresh session 2" in result.stdout
     assert "PASS shutdown: draining rejected new work and stopped session 2" in result.stdout
     assert "PASS bind guard: public unauthenticated endpoint failed closed" in result.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+async def test_multi_caller_start_failure_releases_capacity(failure_type) -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    namespace = runpy.run_path(str(script))
+    demo_session = namespace["DemoSession"]
+
+    class FailingSession(demo_session):
+        async def start(self) -> None:
+            raise failure_type("startup failed")
+
+    supervisor_type = namespace["LocalSupervisor"]
+    module_globals = supervisor_type.connect.__globals__
+    module_globals["DemoSession"] = FailingSession
+    supervisor = supervisor_type(max_sessions=1, events=[])
+    authorized = namespace["Request"](authorization_header=f"Bearer {namespace['TOKEN']}")
+
+    with pytest.raises(failure_type, match="startup failed"):
+        await supervisor.connect("failed", authorized)
+
+    assert supervisor.sessions == {}
+    assert supervisor.gate.active_count == 0
+    assert supervisor.gate.reserved_count == 0
+
+    module_globals["DemoSession"] = demo_session
+    outcome, replacement = await supervisor.connect("replacement", authorized)
+    assert outcome == "accepted"
+    assert replacement is not None
 
 
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
