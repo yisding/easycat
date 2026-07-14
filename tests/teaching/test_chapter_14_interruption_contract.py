@@ -25,8 +25,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "14-bring-your-own-agent"
 
 
-def _load_main_module():
+def _load_main_module(monkeypatch: pytest.MonkeyPatch):
     path = CHAPTER / "main.py"
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=object))
     spec = importlib.util.spec_from_file_location("teaching_ch14_interruption", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -36,8 +37,10 @@ def _load_main_module():
 
 
 @pytest.mark.asyncio
-async def test_deep_workflow_rewrites_private_history_to_delivered_text() -> None:
-    chapter = _load_main_module()
+async def test_deep_workflow_rewrites_private_history_to_delivered_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chapter = _load_main_module(monkeypatch)
 
     async def response_stream():
         for text in ("Hello ", "from text the caller never heard"):
@@ -51,20 +54,20 @@ async def test_deep_workflow_rewrites_private_history_to_delivered_text() -> Non
     workflow = chapter.MyWorkflow(client, chapter.SessionActions())
     bridge = GenericWorkflowBridge(workflow)
     token = CancelToken()
-    stream = workflow.on_user_turn(
-        "hello",
-        recorder=NULL_RECORDER,
-        cancel_token=token,
+    stream = bridge.invoke(
+        AgentTurnInput.from_text("hello"),
+        NULL_RECORDER,
+        token,
     )
 
     assert bridge.deep_mode
-    assert await anext(stream) == "Hello "
-    token.cancel()
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
+    first = await anext(stream)
+    assert first.kind == "text_delta"
+    assert first.text == "Hello "
+    await stream.aclose()
     assert workflow._history[-1] == {"role": "assistant", "content": "Hello "}
 
-    workflow.apply_interruption("Hello", CancellationMode.IMMEDIATE_STOP)
+    bridge.apply_interruption("Hello", CancellationMode.IMMEDIATE_STOP)
     assert workflow._history[-1] == {"role": "assistant", "content": "Hello..."}
 
     workflow.replace_last_assistant_text("Hello")
