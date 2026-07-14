@@ -8,14 +8,20 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import importlib
 import io
 import json
+import sys
+import types
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 
-import main as chapter
-
 from easycat.events import STTEvent, STTEventType
+
+# Exercise the real drain/run-turn logic without requiring the optional SDK
+# that the live chapter uses only to construct its client.
+sys.modules.setdefault("openai", types.SimpleNamespace(AsyncOpenAI=object))
+chapter = importlib.import_module("main")
 
 
 class ProbeJournal:
