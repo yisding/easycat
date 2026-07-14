@@ -286,7 +286,6 @@ extend-immutable-calls = ["typer.Option", "typer.Argument"]
 "src/easycat/integrations/agents/openai_agents.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/pydantic_ai.py" = ["C901", "PLR0912", "PLR0915", "B905"]
 "src/easycat/integrations/agents/responses_api.py" = ["C901", "PLR0912", "PLR0915"]
-"src/easycat/push_to_talk.py" = ["C901", "PLR0915"]
 "src/easycat/session/_audio_router.py" = ["C901"]
 "src/easycat/session/_session.py" = ["C901", "PLR0912", "PLR0915"]
 "src/easycat/session/_stt_committer.py" = ["C901", "PLR0912"]
@@ -435,6 +434,7 @@ module = [
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",
+    "easycat.debugger._core_routes.*",
 ]
 disallow_untyped_defs = false
 check_untyped_defs = true
@@ -602,4 +602,17 @@ source_modules = [
 ]
 forbidden_modules = [
     "easycat.validation.latency",
+]
+
+# The app composer owns optional-dependency loading and route assembly. Route
+# leaves depend on source/domain helpers directly and must not reach back into
+# the server facade, which would recreate the monolithic dependency direction.
+[[tool.importlinter.contracts]]
+name = "Debugger route leaves do not import the server facade"
+type = "forbidden"
+source_modules = [
+    "easycat.debugger._core_routes",
+]
+forbidden_modules = [
+    "easycat.debugger.server",
 ]
