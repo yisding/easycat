@@ -195,6 +195,38 @@ class TestMultiContextWSManager:
         assert mgr._ws is good
         await mgr.aclose()
 
+    async def test_concurrent_cold_callers_await_one_initial_connect(self):
+        class SlowConnectWS(FakeMultiContextWS):
+            def __init__(self) -> None:
+                super().__init__()
+                self.connect_calls = 0
+                self.connect_entered = asyncio.Event()
+                self.allow_connect = asyncio.Event()
+
+            async def connect(self) -> None:
+                self.connect_calls += 1
+                self.connect_entered.set()
+                await self.allow_connect.wait()
+
+        ws = SlowConnectWS()
+        mgr = MultiContextWSManager(_make_adapter(ws))
+
+        warmup = asyncio.create_task(mgr.warmup())
+        await ws.connect_entered.wait()
+        first_context = asyncio.create_task(mgr.open_context())
+        await asyncio.sleep(0)
+
+        assert not first_context.done()
+        assert ws.connect_calls == 1
+
+        ws.allow_connect.set()
+        await warmup
+        ctx = await first_context
+
+        assert ctx is not None
+        assert ws.connect_calls == 1
+        await mgr.aclose()
+
     async def test_backpressure_delivers_done_under_full_queue(self):
         # maxsize=1 forces the reader to block on put when the consumer is slow;
         # every frame (incl. the terminal done) must still be delivered, never
