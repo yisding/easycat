@@ -251,6 +251,11 @@ For the six primary fixtures, the full P95 is 2,420 ms. Omitting
 bundle leaves it at 2,420 ms. The printed leave-one-out range is
 therefore 1,160–2,420 ms.
 
+A one-bundle eval set can still report its P50/P95, WER, and barge-in
+metrics, but it cannot omit a sample and retain a distribution. In that
+case the two leave-one-out rows print `n/a` instead of aborting the rest
+of the report.
+
 This is an **influence diagnostic, not a confidence interval**. It
 answers “which observed turn controls this statistic?” It does not
 estimate unseen traffic, sampling bias, or the probability that a
