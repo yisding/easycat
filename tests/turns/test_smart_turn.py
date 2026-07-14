@@ -145,6 +145,19 @@ def test_cgroup_cpu_count_reads_v2_quota(tmp_path: Path) -> None:
     assert _cgroup_cpu_count(tmp_path) == 2
 
 
+def test_cgroup_cpu_count_reads_nested_v2_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("0::/system.slice/easycat.service\n")
+    (tmp_path / "cpu.max").write_text("max 100000\n")
+    service_root = tmp_path / "system.slice" / "easycat.service"
+    service_root.mkdir(parents=True)
+    (service_root / "cpu.max").write_text("50000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 1
+
+
 def test_cgroup_cpu_count_reads_v1_quota(tmp_path: Path) -> None:
     from easycat.smart_turn import _cgroup_cpu_count
 
@@ -154,6 +167,33 @@ def test_cgroup_cpu_count_reads_v1_quota(tmp_path: Path) -> None:
     (cpu_root / "cpu.cfs_period_us").write_text("100000\n")
 
     assert _cgroup_cpu_count(tmp_path) == 3
+
+
+def test_cgroup_cpu_count_reads_nested_v1_cpu_controller_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("7:cpu,cpuacct:/system.slice/easycat.service\n")
+    service_root = tmp_path / "cpu,cpuacct" / "system.slice" / "easycat.service"
+    service_root.mkdir(parents=True)
+    (service_root / "cpu.cfs_quota_us").write_text("150000\n")
+    (service_root / "cpu.cfs_period_us").write_text("100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 2
+
+
+def test_cgroup_cpu_count_uses_tightest_ancestor_quota(tmp_path: Path) -> None:
+    from easycat.smart_turn import _cgroup_cpu_count
+
+    cgroup_file = tmp_path / "self.cgroup"
+    cgroup_file.write_text("0::/parent/child\n")
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    (parent / "cpu.max").write_text("100000 100000\n")
+    (child / "cpu.max").write_text("400000 100000\n")
+
+    assert _cgroup_cpu_count(tmp_path, cgroup_file) == 1
 
 
 @pytest.mark.parametrize("quota", ["max 100000\n", "-1 100000\n", "invalid\n"])
