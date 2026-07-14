@@ -135,7 +135,7 @@
  RUNS_DIR = Path(__file__).parent / "runs"
 
 
-@@ -74,85 +73,133 @@
+@@ -74,105 +73,133 @@
      )
 
 
@@ -170,11 +170,21 @@
 -    raise SystemExit(f"Unknown transport: {name}")
 -
 -
--def provider_mix(name: str) -> dict:
--    """Return the STT/TTS strings for the named mix.
+-def telephony_config(name: str):
+-    """Wire Twilio-backed session actions for the phone transport."""
+-    if name != "twilio":
+-        return None
+-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+-    if not account_sid or not auth_token:
+-        raise SystemExit("Twilio actions need TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN.")
 -
--    All values are string shortcuts — ``EasyConfig.__post_init__``
--    parses them into concrete config objects via the factory.
+-    from easycat import TelephonyConfig, TwilioSessionActionConfig
+-
+-    return TelephonyConfig(
+-        twilio_actions=TwilioSessionActionConfig(
+-            account_sid=account_sid,
+-            auth_token=auth_token,
 +def pronunciation_command(path: Path) -> str:
 +    """Inspect the scheduler's provider-ready pronunciation payloads."""
 +    return f"uv run easycat journal grep {_display_path(path)} --query tts_payload_prepared --json"
@@ -200,14 +210,7 @@
 +    actually need the recorder here (we aren't journalling tool
 +    calls), but naming it is the switch. The history hooks below
 +    keep our private message list aligned with what the caller heard.
-     """
--    if name == "openai":
--        return {"stt": "openai", "tts": "openai"}
--    if name == "deepgram-eleven":
--        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
--            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
--        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
--    raise SystemExit(f"Unknown provider mix: {name}")
++    """
 +
 +    def __init__(self, client: AsyncOpenAI, actions: SessionActions) -> None:
 +        self._client = client
@@ -243,7 +246,23 @@
 +
 +        stream = await self._client.chat.completions.create(
 +            model=MODEL, messages=self._history, stream=True
-+        )
+         )
+-    )
+-
+-
+-def provider_mix(name: str) -> dict:
+-    """Return the STT/TTS strings for the named mix.
+-
+-    All values are string shortcuts — ``EasyConfig.__post_init__``
+-    parses them into concrete config objects via the factory.
+-    """
+-    if name == "openai":
+-        return {"stt": "openai", "tts": "openai"}
+-    if name == "deepgram-eleven":
+-        if not os.getenv("DEEPGRAM_API_KEY") or not os.getenv("ELEVENLABS_API_KEY"):
+-            raise SystemExit("deepgram-eleven mix needs DEEPGRAM_API_KEY + ELEVENLABS_API_KEY.")
+-        return {"stt": "deepgram/nova-2", "tts": "elevenlabs"}
+-    raise SystemExit(f"Unknown provider mix: {name}")
 +        full = ""
 +        async for chunk in stream:
 +            if cancel_token is not None and cancel_token.is_cancelled:
@@ -300,6 +319,7 @@
      config = EasyConfig(
 -        agent=build_agent(),
 -        transport=transport_config(args.transport),
+-        telephony=telephony_config(args.transport),
 -        debug="light",  # journal must be on so export_debug_bundle works
 -        **mix,
 +        agent=bridge,  # ← the whole point of this chapter
@@ -330,7 +350,7 @@
          try:
              export_debug_bundle(session, path, overwrite=True)
              print(f"Wrote bundle → {_display_path(path)}")
-@@ -160,9 +207,14 @@
+@@ -180,9 +207,14 @@
              print("Measure this production-shaped bundle directly:")
              print(f"  {human_command}")
              print(f"  {json_command}")

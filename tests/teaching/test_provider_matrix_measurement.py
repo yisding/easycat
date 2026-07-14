@@ -10,6 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from easycat.cli._app import _register_commands, app
+from easycat.config._telephony_wiring import create_action_executors
 from easycat.debug.export import export_debug_bundle
 from easycat.runtime import JournalRecord, TimingInfo
 
@@ -42,6 +43,22 @@ def test_measurement_commands_read_production_bundle_directly(tmp_path: Path) ->
             f"uv run easycat latency {display_path}",
             f"uv run easycat latency {display_path} --json",
         )
+
+
+def test_twilio_preset_wires_session_action_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chapter = _load_main_module()
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC-test")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "secret")
+
+    telephony = chapter.telephony_config("twilio")
+    executors = create_action_executors(telephony)
+
+    assert chapter.telephony_config("local") is None
+    assert telephony.twilio_actions.account_sid == "AC-test"
+    assert telephony.twilio_actions.auth_token == "secret"
+    assert [type(executor).__name__ for executor in executors] == ["TwilioSessionActionExecutor"]
 
 
 def test_printed_latency_command_accepts_production_journal_shape(tmp_path: Path) -> None:
