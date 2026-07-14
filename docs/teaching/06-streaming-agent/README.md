@@ -608,13 +608,15 @@ Production uses `easycat._bounded_queue.BoundedAudioQueue` with a
 
 ## Sidebar — partials can flap (reprise)
 
-Chapter 2 named the rule: agents fire on `STTFinal`, never on
-`STTPartial`. This is the chapter where it bites: we are finally
-wiring the agent in. `run_turn` only drains `STTEventType.FINAL`
-from the STT event stream. A naïve implementation that kicked
-off `stream_sentences_to_tts` on a partial would commit — in
-audio, audibly — to a guess the provider may have revised away
-by the time the final arrived.
+Chapter 2 named the boundary: reversible consumers such as live
+captions or cancellable speculation may react to `STTPartial`, but
+irreversible agent commits and spoken output wait for `STTFinal`.
+This is the chapter where that boundary bites: we are finally wiring
+the agent to TTS. `run_turn` only drains `STTEventType.FINAL` from the
+STT event stream because a naïve implementation that kicked off
+`stream_sentences_to_tts` on a partial would commit — in audio,
+audibly — to a guess the provider may have revised away by the time
+the final arrived.
 
 ## Try breaking it
 
