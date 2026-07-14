@@ -27,7 +27,7 @@
 - **Modified:** the agent loop now handles `delta.tool_calls` and
   runs a second LLM iteration once tool results return.
 
-<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py -->
+<!-- BEGIN auto:diff prev=06-streaming-agent src=main.py trim_blank_context=true -->
 <details>
 <summary>Full unified diff vs <code>06-streaming-agent/main.py</code> (auto-generated)</summary>
 
@@ -57,7 +57,7 @@
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
 @@ -21,7 +23,9 @@
- 
+
  import asyncio
  import collections
 +import json
@@ -124,18 +124,18 @@
 +]
 +
 +TOOL_IMPLS = {"get_weather": get_weather, "set_timer": set_timer}
- 
- 
+
+
  class MiniTurnDetector:
 -    """Same as chapters 4 & 5."""
 +    """Same as chapters 4-6."""
- 
+
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
 @@ -81,83 +128,150 @@
                  self._preroll.append(chunk)
- 
- 
+
+
 -async def stream_sentences_to_tts(
 +# ── Filler utterance heuristic ────────────────────────────────────
 +
@@ -319,8 +319,8 @@
 +            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": str(result)})
 +
      await sentence_queue.put(None)
- 
- 
+
+
  async def drain_sentences_to_speaker(
 -    tts, transport, sentence_queue: asyncio.Queue[str | None], journal: InMemoryRingBuffer
 +    tts, transport, sentence_queue: asyncio.Queue, journal: InMemoryRingBuffer
@@ -365,8 +365,8 @@
                  "text": sentence,
              },
 @@ -184,7 +303,6 @@
- 
- 
+
+
  async def run_turn(transport, stt, client, tts, journal) -> None:
 -    """STT-final → fan out to LLM-stream → sentence-queue → TTS-drain."""
      final_text = ""
@@ -375,7 +375,7 @@
 @@ -195,16 +313,10 @@
      if not final_text.strip() or stt_final_t is None:
          return
- 
+
 -    journal.append(
 -        kind=JournalRecordKind.EVENT,
 -        name="stt.final",
@@ -474,7 +474,7 @@
 -    print("Streaming agent. Ctrl-C to stop.\n")
 +                await run_turn(transport, stt, client, tts, journal)
 +                stt = None
- 
+
      try:
 -        await collect_turns(transport, detector, stt_factory, client, tts, journal)
 +        await collect_turns()
