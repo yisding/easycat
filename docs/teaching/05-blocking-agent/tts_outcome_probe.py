@@ -8,13 +8,20 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import importlib
 import io
 import json
+import sys
+import types
 from contextlib import redirect_stdout
 
-import main as chapter
-
 from easycat.events import STTEvent, STTEventType
+
+# The probe calls only ``run_turn`` with scripted dependencies. Keep importing
+# that real chapter logic provider-free without requiring the optional SDK used
+# by ``main()`` to construct its live client.
+sys.modules.setdefault("openai", types.SimpleNamespace(AsyncOpenAI=object))
+chapter = importlib.import_module("main")
 
 
 class ProbeJournal:
