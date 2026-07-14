@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import zipfile
 from dataclasses import dataclass, field
@@ -63,6 +64,11 @@ class _ArtifactAccumulator:
             )
 
     def add(self, ref: str, data: bytes) -> None:
+        if hashlib.sha256(data).hexdigest() != ref:
+            raise BundleValidationError(
+                f"Artifact checksum does not match ref {ref!r}",
+                reason_code="CHECKSUM_MISMATCH",
+            )
         self.ensure_capacity(len(data))
         self.total_size += len(data)
         self.index[ref] = ArtifactEntry(ref=ref, size_bytes=len(data))

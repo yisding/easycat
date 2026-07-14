@@ -141,6 +141,32 @@ def test_loader_accepts_real_inline_payload_at_manifest_member_limit(
     assert loaded.artifact_blobs == {ref: data}
 
 
+@pytest.mark.parametrize("representation", ["file", "inline"])
+def test_loader_rejects_artifact_checksum_mismatch(
+    tmp_path: Path,
+    representation: str,
+) -> None:
+    expected_ref = hashlib.sha256(b"expected payload").hexdigest()
+    tampered_data = b"tampered payload"
+    manifest: dict[str, object] = {"format_version": FORMAT_VERSION}
+    if representation == "inline":
+        manifest["inline_artifacts"] = {
+            expected_ref: base64.b64encode(tampered_data).decode("ascii")
+        }
+
+    path = tmp_path / f"tampered-{representation}.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("journal.ndjson", "")
+        if representation == "file":
+            archive.writestr(f"artifacts/{expected_ref}.bin", tampered_data)
+
+    with pytest.raises(BundleValidationError) as exc_info:
+        bundle_loader.load_bundle(path)
+
+    assert exc_info.value.reason_code == "CHECKSUM_MISMATCH"
+
+
 def test_loader_rejects_inline_artifact_count_overflow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
