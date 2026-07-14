@@ -87,10 +87,12 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 3. ElevenLabs cannot request 8 kHz PCM directly. Its Twilio row therefore
    requests 16 kHz from the provider and exposes 8 kHz transport output
    after the adapter's final resample.
-4. The `twilio_explicit_16k_preserved` control proves explicit caller intent
+4. OpenAI returns fixed 24 kHz PCM even when EasyCat's resolved output target
+   is 8 or 16 kHz. `TTSBase` performs that post-provider normalization.
+5. The `twilio_explicit_16k_preserved` control proves explicit caller intent
    wins over automatic default alignment. Twilio still converts that PCM to
    its 8 kHz μ-law wire format later.
-5. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
+6. The `twilio_auto_align_disabled` control keeps the raw 24 kHz default.
    Disable alignment only when you deliberately own the downstream format
    conversion or need a provider-specific output.
 

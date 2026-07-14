@@ -119,11 +119,12 @@ uv run python docs/teaching/00-hello-audio/tts_alignment_probe.py
 ```
 
 The matrix separates the **provider request rate** from the final
-**transport-output rate**. They differ for ElevenLabs on Twilio:
-ElevenLabs' nearest supported PCM request is 16 kHz, then the adapter
-outputs 8 kHz PCM for the Twilio boundary. The other bundled providers
-can request 8 kHz directly. “Transport output” still names a format
-boundary, not proof that a human heard the audio.
+**transport-output rate**. They differ for ElevenLabs and OpenAI on
+Twilio: ElevenLabs' nearest supported PCM request is 16 kHz, while
+OpenAI returns fixed 24 kHz PCM; EasyCat then normalizes either stream
+to the 8 kHz transport target. Deepgram and Cartesia can request 8 kHz
+directly. “Transport output” still names a format boundary, not proof
+that a human heard the audio.
 
 Alignment only rewrites untouched defaults. An explicit non-default output
 format is preserved, and `auto_align_tts_output_to_transport=False` opts out

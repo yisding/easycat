@@ -52,7 +52,7 @@ def test_tts_alignment_probe_uses_public_easyconfig_resolution() -> None:
         "cartesia": 8_000,
         "deepgram": 8_000,
         "elevenlabs": 16_000,
-        "openai": 8_000,
+        "openai": 24_000,
     }
     assert payload["controls"] == {
         "twilio_auto_align_disabled": {
@@ -60,7 +60,7 @@ def test_tts_alignment_probe_uses_public_easyconfig_resolution() -> None:
             "transport_output_rate_hz": 24_000,
         },
         "twilio_explicit_16k_preserved": {
-            "provider_request_rate_hz": 16_000,
+            "provider_request_rate_hz": 24_000,
             "transport_output_rate_hz": 16_000,
         },
     }
@@ -79,3 +79,4 @@ def test_lesson_distinguishes_config_default_from_resolved_output() -> None:
     assert "explicit caller intent wins" in lesson
     assert "auto_align_tts_output_to_transport=False" in lesson
     assert "24 kHz TTS rows" in lesson and "config defaults" in lesson
+    assert "OpenAI returns fixed 24 kHz PCM" in lesson
