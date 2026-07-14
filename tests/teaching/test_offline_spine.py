@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 TEACHING = ROOT / "docs" / "teaching"
 SPINE = TEACHING / "offline_spine.py"
@@ -61,6 +63,10 @@ def test_offline_spine_json_list_is_documented() -> None:
 
 
 def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
+    pytest.importorskip(
+        "openai",
+        reason="running the full spine requires the documented quickstart extras",
+    )
     completed = subprocess.run(
         [sys.executable, str(SPINE), "--run", "--jobs", "4", "--json"],
         cwd=ROOT,
