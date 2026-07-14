@@ -48,11 +48,19 @@ async def probe() -> dict[str, object]:
         clock["now"] = 2.0
         return 1, 0
 
-    chapter.time.monotonic = lambda: clock["now"]
-    chapter.blocking_agent = scripted_agent
-    chapter.speak = scripted_speak
-    with redirect_stdout(io.StringIO()):
-        await chapter.run_turn(AcceptingTransport(), ScriptedSTT(), None, journal)
+    real_monotonic = chapter.time.monotonic
+    real_blocking_agent = chapter.blocking_agent
+    real_speak = chapter.speak
+    try:
+        chapter.time.monotonic = lambda: clock["now"]
+        chapter.blocking_agent = scripted_agent
+        chapter.speak = scripted_speak
+        with redirect_stdout(io.StringIO()):
+            await chapter.run_turn(AcceptingTransport(), ScriptedSTT(), None, journal)
+    finally:
+        chapter.time.monotonic = real_monotonic
+        chapter.blocking_agent = real_blocking_agent
+        chapter.speak = real_speak
 
     gap = next(row["data"] for row in journal.rows if row["name"] == "turn.gap")
     stt_to_agent_ms = round(float(gap["stt_to_agent_ms"]), 3)
