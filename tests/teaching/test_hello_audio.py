@@ -5,7 +5,7 @@ import sys
 import types
 from pathlib import Path
 
-import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "00-hello-audio"
@@ -23,6 +23,7 @@ def _load_chapter(monkeypatch):
 def test_chunk_demo_models_source_wait_without_claiming_acoustic_latency(
     monkeypatch, capsys
 ) -> None:
+    np = pytest.importorskip("numpy")
     chapter = _load_chapter(monkeypatch)
     events: list[object] = []
     now = 10.0
