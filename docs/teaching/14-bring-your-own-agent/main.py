@@ -120,16 +120,21 @@ class MyWorkflow:
             model=MODEL, messages=self._history, stream=True
         )
         full = ""
-        async for chunk in stream:
-            if cancel_token is not None and cancel_token.is_cancelled:
-                break
-            delta = chunk.choices[0].delta.content or ""
-            if not delta:
-                continue
-            full += delta
-            yield delta  # the bridge wraps each chunk as a text_delta event
-        if full:
-            self._history.append({"role": "assistant", "content": full})
+        try:
+            async for chunk in stream:
+                if cancel_token is not None and cancel_token.is_cancelled:
+                    break
+                delta = chunk.choices[0].delta.content or ""
+                if not delta:
+                    continue
+                full += delta
+                yield delta  # the bridge wraps each chunk as a text_delta event
+        finally:
+            # BridgeTemplate closes this generator on barge-in. Commit the
+            # delivered prefix before apply_interruption rewrites it to what
+            # the caller actually heard.
+            if full:
+                self._history.append({"role": "assistant", "content": full})
 
     def apply_interruption(self, delivered_text: str, mode: CancellationMode) -> None:
         """Rewrite private history to the portion the caller actually heard."""
