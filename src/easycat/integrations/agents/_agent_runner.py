@@ -347,12 +347,9 @@ class AgentRunner:
         self._history.append({"role": "user", "content": turn_input.text})
 
         try:
-            if self._config.timeout is not None:
-                response = await _await_with_timeout(
-                    self._agent.run(turn_input.text), self._config.timeout
-                )
-            else:
-                response = await self._agent.run(turn_input.text)
+            response = await _await_with_timeout(
+                self._agent.run(turn_input.text), self._config.timeout
+            )
         except TimeoutError:
             self._history.pop()
             if cursor is not None:

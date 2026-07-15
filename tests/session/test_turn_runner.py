@@ -1271,7 +1271,9 @@ async def test_agent_delta_handler_failure_rejects_speculative_tts() -> None:
     event_bus.subscribe(Error, errors.append)
     session._turn = TurnContext("turn-reject-delta", CancelToken())
 
-    await session._turn_runner.run_streaming_agent("hello", token=None)
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None), timeout=0.5
+    )
 
     assert tts.started.is_set()
     assert bot_started == []
