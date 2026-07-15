@@ -20,6 +20,8 @@ def test_observability_doc_explains_journal_redaction_boundary() -> None:
     assert "selected agent-bridge metadata" in caveats
     assert "obvious secret-like journal fields through `apply_write_filter`" in caveats
     assert "transcript text, agent output, and tool-result text for replay" in caveats
+    assert "Config snapshots are diagnostic rather than lossless" in caveats
+    assert "cannot recurse forever or grow without bound" in caveats
 
 
 def test_observability_doc_lists_journal_cli_entry_points() -> None:

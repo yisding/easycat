@@ -30,6 +30,7 @@ from easycat.events import (
     Event,
     STTEvent,
     STTEventType,
+    STTFinal,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
@@ -39,7 +40,7 @@ from easycat.events import (
     VADStartSpeaking,
     VADStopSpeaking,
 )
-from easycat.integrations.agents._agent_runner import AgentRunner
+from easycat.integrations.agents._agent_runner import AgentRunner, AgentRunnerConfig
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
     AgentRecorder,
@@ -51,12 +52,19 @@ from easycat.session._session import Session
 from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
-from easycat.timeouts import TimeoutConfig
+from easycat.timeouts import AgentTimeoutError, TimeoutConfig
 from easycat.tts.input import TTSInput
 from easycat.turn_manager import TurnManagerConfig, TurnManagerState
 from tests._bridge_helpers import _TestBridgeBase
 
 _FAST_TURN = TurnManagerConfig(end_of_turn_silence_ms=1)
+
+
+def _preemptive_runner(agent: object, *, timeout: float | None = 30.0) -> AgentRunner:
+    return AgentRunner(
+        agent,
+        AgentRunnerConfig(timeout=timeout, preemptive_generation=True),
+    )
 
 
 # ── Test fakes (mirrors _session_streaming_helpers.py) ────────────
@@ -219,6 +227,9 @@ async def test_turn_runner_constructed_with_session() -> None:
     handlers = session.event_bus._handlers.get(TurnStarted, [])
     bound_names = [getattr(h, "__qualname__", "") for h in handlers]
     assert any("TurnRunner.on_turn_started" in name for name in bound_names)
+    stt_handlers = session.event_bus._handlers.get(STTFinal, [])
+    stt_bound_names = [getattr(h, "__qualname__", "") for h in stt_handlers]
+    assert any("TurnRunner.on_stt_final" in name for name in stt_bound_names)
 
 
 @pytest.mark.asyncio
@@ -340,6 +351,402 @@ async def test_handle_end_of_speech_dispatches_agent_with_transcript() -> None:
 
     assert len(finals) == 1
     assert finals[0].text == "Reply."
+
+
+@pytest.mark.asyncio
+async def test_stt_final_prepares_simple_agent_before_endpoint_confirmation() -> None:
+    class BlockingSimpleAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            self.started.set()
+            await self.release.wait()
+            return f"Reply to {text}."
+
+    agent = BlockingSimpleAgent()
+    runner_agent = _preemptive_runner(agent)
+    session = Session(_config(agent=runner_agent))
+    turn = TurnContext("turn-preemptive", CancelToken())
+    session._turn = turn
+    turn.append_stt_segment("hello")
+
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+    assert runner_agent.history == []
+
+    agent.release.set()
+    task = session._turn_runner._preemptive_task
+    assert task is not None
+    await asyncio.wait_for(task, timeout=1)
+    await session._turn_runner.handle_end_of_speech(turn=turn)
+
+    assert agent.calls == ["hello"]
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Reply to hello."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_later_stt_final_cancels_and_replaces_preemptive_generation() -> None:
+    class RestartableSimpleAgent:
+        def __init__(self) -> None:
+            self.first_started = asyncio.Event()
+            self.first_cancelled = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                self.first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.first_cancelled.set()
+                    raise
+            return f"Reply to {text}."
+
+    agent = RestartableSimpleAgent()
+    runner_agent = _preemptive_runner(agent)
+    session = Session(_config(agent=runner_agent))
+    turn = TurnContext("turn-restart", CancelToken())
+    session._turn = turn
+    turn.append_stt_segment("hello")
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_started.wait(), timeout=1)
+
+    turn.append_stt_segment("again")
+    await session._turn_runner.on_stt_final(STTFinal(text="again", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_cancelled.wait(), timeout=1)
+    await session._turn_runner.handle_end_of_speech(turn=turn)
+
+    assert agent.calls == ["hello", "hello again"]
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello again"},
+        {"role": "assistant", "content": "Reply to hello again."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_replaced_turn_does_not_commit_slow_preemptive_response() -> None:
+    class SlowSimpleAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            self.started.set()
+            await self.release.wait()
+            return f"Reply to {text}."
+
+    agent = SlowSimpleAgent()
+    runner_agent = _preemptive_runner(agent)
+    session = Session(_config(agent=runner_agent))
+    old_turn = TurnContext("turn-old", CancelToken())
+    session._turn_runner._turn.set(old_turn)
+    old_turn.append_stt_segment("abandoned")
+    await session._turn_runner.on_stt_final(STTFinal(text="abandoned", turn_id=old_turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    old_turn_task = asyncio.create_task(session._turn_runner.handle_end_of_speech(turn=old_turn))
+    await asyncio.sleep(0)
+    assert session._turn_runner._preemptive_task is None
+
+    old_turn.cancel_token.cancel()
+    new_turn = TurnContext("turn-new", CancelToken())
+    session._turn_runner._turn.set(new_turn)
+    agent.release.set()
+    await asyncio.wait_for(old_turn_task, timeout=1)
+
+    assert agent.calls == ["abandoned"]
+    assert runner_agent.history == []
+
+
+@pytest.mark.asyncio
+async def test_preemptive_wait_uses_session_timeout_then_runs_confirmed_path() -> None:
+    class TimeoutThenRespondAgent:
+        def __init__(self) -> None:
+            self.first_started = asyncio.Event()
+            self.first_cancelled = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            if len(self.calls) == 1:
+                self.first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.first_cancelled.set()
+                    raise
+            return f"Confirmed reply to {text}."
+
+    agent = TimeoutThenRespondAgent()
+    runner_agent = _preemptive_runner(agent, timeout=None)
+    session = Session(
+        _config(
+            agent=runner_agent,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+        )
+    )
+    errors: list[Error] = []
+    session.event_bus.subscribe(Error, errors.append)
+    turn = TurnContext("turn-timeout", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+    await session._turn_runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.first_started.wait(), timeout=1)
+
+    await asyncio.wait_for(session._turn_runner.handle_end_of_speech(turn=turn), timeout=1)
+
+    assert agent.calls == ["hello", "hello"]
+    assert agent.first_cancelled.is_set()
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Confirmed reply to hello."},
+    ]
+    assert any(isinstance(event.exception, AgentTimeoutError) for event in errors)
+
+
+@pytest.mark.asyncio
+async def test_preemptive_wait_propagates_confirmed_turn_cancellation() -> None:
+    class BlockingAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = BlockingAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext("turn-cancel", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("cancel now")
+    await session._turn_runner.on_stt_final(STTFinal(text="cancel now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    confirmed_task = asyncio.create_task(session._turn_runner.handle_end_of_speech(turn=turn))
+    await asyncio.sleep(0)
+    confirmed_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await confirmed_task
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_cancels_preemptive_generation_before_agent_close() -> None:
+    class StopAwareAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = StopAwareAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext("turn-stop", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("stop now")
+    await session._turn_runner.on_stt_final(STTFinal(text="stop now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    await asyncio.wait_for(session.stop(), timeout=1)
+
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+@pytest.mark.parametrize("lifecycle_method", ["cancel_turn", "reset_state"])
+@pytest.mark.asyncio
+async def test_turn_teardown_cancels_preemptive_generation(lifecycle_method: str) -> None:
+    class CancellationAwareAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = CancellationAwareAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext(f"turn-{lifecycle_method}", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("cancel now")
+    await session._turn_runner.on_stt_final(STTFinal(text="cancel now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    await asyncio.wait_for(getattr(session, lifecycle_method)(), timeout=1)
+
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+class _SlowUnwindAgent:
+    """Simple agent whose ``run()`` blocks, then unwinds cancellation slowly.
+
+    On cancellation it sets ``cancel_seen`` and holds the CancelledError
+    until ``release`` is set, giving tests a deterministic drain window in
+    which the *caller* of a cancel-and-drain helper can itself be cancelled.
+    """
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancel_seen = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls: list[str] = []
+
+    async def run(self, text: str) -> str:
+        self.calls.append(text)
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancel_seen.set()
+            await self.release.wait()
+            raise
+        raise AssertionError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_trailing_stt_final_after_take_does_not_restart_preemptive_generation() -> None:
+    """A final flushed during the end-of-speech drain must not spawn a second run().
+
+    Deepgram-style providers can flush two final segments while ``end_stream``
+    drains. Once ``handle_end_of_speech`` passes the turn's take point, a
+    trailing STTFinal must not start new speculative work that would overlap
+    the confirmed ``run()`` for the same turn.
+    """
+
+    class BlockingSimpleAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls: list[str] = []
+
+        async def run(self, text: str) -> str:
+            self.calls.append(text)
+            self.started.set()
+            await self.release.wait()
+            return f"Reply to {text}."
+
+    agent = BlockingSimpleAgent()
+    runner_agent = _preemptive_runner(agent)
+    session = Session(_config(agent=runner_agent))
+    runner = session._turn_runner
+    turn = TurnContext("turn-trailing", CancelToken())
+    runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+
+    await runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    eos_task = asyncio.create_task(runner.handle_end_of_speech(turn=turn))
+    await asyncio.sleep(0)
+    # End-of-speech consumed the speculative task and is awaiting it.
+    assert runner._preemptive_task is None
+
+    # Trailing final #2, processed by the still-running STT consumer while
+    # the take is in flight, must not start a new speculative attempt.
+    await runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    assert runner._preemptive_task is None
+    assert agent.calls == ["hello"]
+
+    agent.release.set()
+    await asyncio.wait_for(eos_task, timeout=1)
+
+    assert agent.calls == ["hello"]
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+    assert runner_agent.history == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Reply to hello."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_preemptive_generation_propagates_host_cancellation() -> None:
+    """Cancelling the caller during the drain window must re-raise, not be swallowed."""
+    agent = _SlowUnwindAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    runner = session._turn_runner
+    turn = TurnContext("turn-drain-cancel", CancelToken())
+    runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+    await runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+    task = runner._preemptive_task
+    assert task is not None
+
+    host = asyncio.create_task(runner.cancel_preemptive_generation())
+    await asyncio.wait_for(agent.cancel_seen.wait(), timeout=1)
+    host.cancel()
+    agent.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(host, timeout=1)
+    # The drained speculative task itself still ends cancelled and discarded.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+    assert runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
+@pytest.mark.asyncio
+async def test_empty_transcript_drain_propagates_turn_task_cancellation() -> None:
+    """A barge-in's hard cancel of the turn task must survive the empty-transcript drain."""
+    agent = _SlowUnwindAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    runner = session._turn_runner
+    turn = TurnContext("turn-empty-cancel", CancelToken())
+    runner._turn.set(turn)
+    turn.append_stt_segment("hello")
+    await runner.on_stt_final(STTFinal(text="hello", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+    # The transcript resolves empty at end of speech, so the turn task takes
+    # the empty path that only drains the speculative attempt.
+    turn.stt_segments.clear()
+
+    eos_task = asyncio.create_task(runner.handle_end_of_speech(turn=turn))
+    await asyncio.wait_for(agent.cancel_seen.wait(), timeout=1)
+    eos_task.cancel()
+    agent.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(eos_task, timeout=1)
+    # The hard-cancelled turn task must not run to completion: the turn
+    # pointer is left for the superseding turn to manage, not reset here.
+    assert runner._turn.current is turn
+    assert runner._preemptive_task is None
 
 
 @pytest.mark.asyncio
