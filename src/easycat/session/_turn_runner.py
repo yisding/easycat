@@ -42,9 +42,11 @@ from easycat.events import (
     Error,
     ErrorStage,
     EventBus,
+    STTFinal,
     TurnEnded,
     TurnStarted,
 )
+from easycat.integrations.agents._agent_runner import PreparedAgentResponse
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
@@ -112,10 +114,19 @@ class _StreamingTtsState:
     error: Exception | None = None
 
 
+@dataclass(frozen=True)
+class _PreemptiveAgentResult:
+    """Terminal result of a history-isolated preemptive agent attempt."""
+
+    response: PreparedAgentResponse | None = None
+    error: Exception | None = None
+
+
 class TurnRunner:
     """Drives the per-turn agent loop."""
 
     _TEXT_TURN_TASK_NAME = "text_turn"
+    _PREEMPTIVE_TASK_NAME = "preemptive_agent_generation"
 
     def __init__(
         self,
@@ -168,6 +179,22 @@ class TurnRunner:
         self._text_turn_accumulated: str = ""
         self._text_turn_lock = asyncio.Lock()
 
+        # Voice-only speculative generation. The task may run while the turn
+        # manager is confirming an endpoint, but its result is not committed
+        # to agent history until ``handle_end_of_speech`` confirms that the
+        # transcript still matches.
+        self._preemptive_task: asyncio.Task[_PreemptiveAgentResult] | None = None
+        self._preemptive_transcript = ""
+        self._preemptive_turn_generation = 0
+        self._preemptive_attempts = 0
+        # Highest turn generation whose end-of-speech take point has passed.
+        # A trailing STTFinal for such a turn (e.g. a provider flushing a
+        # second final segment during the ``end_stream`` drain) must never
+        # spawn new speculative work: the confirmed run for that turn is
+        # already starting, and simple agents must never see overlapping
+        # ``run()`` calls.
+        self._preemptive_finalized_generation = 0
+
     # ── Introspection helpers (kept for Session shutdown paths) ──
 
     @property
@@ -184,6 +211,7 @@ class TurnRunner:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
         if not self._is_running():
             return
+        await self.cancel_preemptive_generation()
         # TurnManager always stamps TurnStarted with a generated id;
         # synthesize one for hand-built events so the TurnContext (and
         # every journal record keyed off it) still gets a real id.
@@ -202,6 +230,8 @@ class TurnRunner:
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token)
         self._turn.set(turn)
+        self._preemptive_turn_generation = turn.generation
+        self._preemptive_attempts = 0
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
         turn_token = bind_turn(turn.id)
@@ -241,6 +271,85 @@ class TurnRunner:
             return
         finally:
             reset_turn(turn_token)
+
+    async def on_stt_final(self, event: STTFinal) -> None:
+        """Start history-isolated agent work while endpointing is still pending."""
+        candidate = self._preemptive_candidate(event)
+        if candidate is None:
+            return
+        turn, transcript = candidate
+        if self._preemptive_matches(turn, transcript):
+            return
+
+        # A later final segment invalidates the previous transcript. Cancel
+        # and drain it before invoking the same simple agent again so agents
+        # never see overlapping ``run()`` calls.
+        await self.cancel_preemptive_generation()
+        # The drain above can suspend; ``handle_end_of_speech`` may reach the
+        # turn's take point meanwhile. Re-check before starting a fresh
+        # attempt that could overlap the confirmed run.
+        if self._preemptive_take_passed(turn):
+            return
+        if self._preemptive_turn_generation != turn.generation:
+            self._preemptive_turn_generation = turn.generation
+            self._preemptive_attempts = 0
+        if self._preemptive_attempts >= self._agent_stage.preemptive_max_retries:
+            return
+
+        self._preemptive_attempts += 1
+        self._preemptive_transcript = transcript
+        self._preemptive_turn_generation = turn.generation
+
+        async def _prepare() -> _PreemptiveAgentResult:
+            try:
+                response = await self._agent_stage.prepare_preemptive(transcript, turn)
+                return _PreemptiveAgentResult(response=response)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return _PreemptiveAgentResult(error=exc)
+
+        self._preemptive_task = self._runtime_scope.create_journaled_task(
+            _prepare(),
+            name=self._PREEMPTIVE_TASK_NAME,
+            journal_sink=self._journal_sink,
+            turn_id=turn.id,
+        )
+
+    def _preemptive_candidate(self, event: STTFinal) -> tuple[TurnContext, str] | None:
+        """Return the active turn/transcript when speculative work is safe."""
+        if not self._agent_stage.supports_preemptive_generation:
+            return None
+        turn = self._turn.current
+        if turn is None or turn.cancel_token.is_cancelled:
+            return None
+        if self._preemptive_take_passed(turn):
+            return None
+        if event.turn_id is not None and event.turn_id != turn.id:
+            return None
+
+        transcript = turn.transcript_text
+        if not transcript:
+            return None
+        return turn, transcript
+
+    def _preemptive_matches(self, turn: TurnContext, transcript: str) -> bool:
+        """Whether the active attempt already targets this exact transcript."""
+        return bool(
+            self._preemptive_task is not None
+            and self._preemptive_turn_generation == turn.generation
+            and self._preemptive_transcript == transcript
+        )
+
+    def _preemptive_take_passed(self, turn: TurnContext) -> bool:
+        """Whether this turn is already past its end-of-speech take point.
+
+        Turn generations increase monotonically, so any generation at or
+        below the recorded finalized generation belongs to a turn whose
+        prepared response was already taken (or discarded) by
+        ``handle_end_of_speech``.
+        """
+        return turn.generation <= self._preemptive_finalized_generation
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -302,16 +411,121 @@ class TurnRunner:
         if turn is None:
             turn = self._turn.current
         token = turn.cancel_token if turn else None
+        turn_generation = self._turn.generation
+        if turn is not None:
+            # This turn is now past its take point: a trailing STTFinal (a
+            # provider can flush a second final segment during the
+            # ``end_stream`` drain below) must not start new speculation
+            # that would overlap the confirmed ``run()`` for this turn.
+            self._preemptive_finalized_generation = max(
+                self._preemptive_finalized_generation, turn.generation
+            )
 
         transcript = await self._finalize_turn_transcript(turn)
 
         if not transcript or (token and token.is_cancelled):
+            await self.cancel_preemptive_generation()
             if self._turn.current is turn:
                 self._reset_turn_state()
             return
 
         await self._emit(AgentRequestStarted())
-        await self.run_streaming_agent(transcript, token, turn=turn)
+        prepared_response = await self._take_preemptive_response(transcript, turn)
+        # The await above spans the remaining model latency. Speech may resume
+        # during it, cancelling/replacing this turn. Never fall through to the
+        # confirmed invocation for an abandoned transcript: even a cancelled
+        # AgentRunner records its user message before it observes the token.
+        if not self._is_active_voice_turn(turn, token, turn_generation):
+            return
+        await self.run_streaming_agent(
+            transcript,
+            token,
+            turn=turn,
+            prepared_response=prepared_response,
+        )
+
+    def _is_active_voice_turn(
+        self,
+        turn: TurnContext | None,
+        token: CancelToken | None,
+        generation: int,
+    ) -> bool:
+        """Whether a post-await voice turn is still the session's active generation."""
+        return bool(
+            turn is not None
+            and not (token and token.is_cancelled)
+            and self._turn.current is turn
+            and self._turn.generation == generation
+        )
+
+    async def cancel_preemptive_generation(self) -> None:
+        """Cancel and drain the current preemptive task, if any."""
+        task = self._preemptive_task
+        self._preemptive_task = None
+        self._preemptive_transcript = ""
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            # ``await task`` raises CancelledError both when the drained
+            # speculative task was cancelled (expected — swallow it) and when
+            # the *calling* task was itself cancelled during the drain window.
+            # Re-raise the latter so a cancelled host (STT event consumer,
+            # ``on_turn_ended``, ``Session.stop``) does not resume past its
+            # cancellation point and keep working on a stale turn.
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+        finally:
+            self._runtime_scope.discard(task)
+
+    async def _take_preemptive_response(
+        self,
+        transcript: str,
+        turn: TurnContext | None,
+    ) -> PreparedAgentResponse | None:
+        """Return a matching prepared response, otherwise discard it safely."""
+        task = self._preemptive_task
+        if (
+            task is None
+            or turn is None
+            or self._preemptive_turn_generation != turn.generation
+            or self._preemptive_transcript != transcript
+        ):
+            await self.cancel_preemptive_generation()
+            return None
+
+        self._preemptive_task = None
+        self._preemptive_transcript = ""
+        try:
+            if self._timeout_config and self._timeout_config.agent_timeout:
+                result = await with_agent_timeout(
+                    task,
+                    timeout=self._timeout_config.agent_timeout,
+                    event_bus=self._event_bus,
+                )
+            else:
+                result = await task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            return None
+        except AgentTimeoutError:
+            logger.debug("Preemptive agent generation timed out; using confirmed path")
+            return None
+        finally:
+            self._runtime_scope.discard(task)
+        if result.error is not None:
+            logger.debug(
+                "Preemptive agent generation failed; using confirmed path: %s",
+                result.error,
+            )
+            return None
+        return result.response
 
     async def _finalize_turn_transcript(self, turn: TurnContext | None) -> str:
         """Stop STT input, drain pending commits, and return the final transcript.
@@ -367,6 +581,7 @@ class TurnRunner:
         token: CancelToken | None,
         *,
         turn: TurnContext | None = None,
+        prepared_response: PreparedAgentResponse | None = None,
     ) -> None:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
@@ -406,6 +621,7 @@ class TurnRunner:
                     turn,
                     cancel_token=token,
                     system_prefix=system_prefix,
+                    prepared_response=prepared_response,
                 ),
                 cancel_token=token,
                 tts_queue=st.queue,
