@@ -62,8 +62,9 @@ class _WSTTSBase(ProviderErrorEmitter, TTSBase):
         """Whether the opt-in persistent multi-context socket is enabled.
 
         Reads ``persistent_ws`` off the provider config by name so providers
-        whose config lacks the field (Deepgram, custom out-of-tree providers)
-        are unaffected and always run the default one-shot path.
+        whose config lacks the field (including custom out-of-tree providers)
+        are unaffected and always run the default one-shot path. Deepgram owns
+        its serialized persistent socket directly and does not call this helper.
         """
         return bool(getattr(self._config, "persistent_ws", False))
 
