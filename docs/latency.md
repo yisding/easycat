@@ -82,6 +82,13 @@ Sources: [`turn_manager.py`](../src/easycat/turn_manager.py),
 [`integrations/agents/_agent_runner.py`](../src/easycat/integrations/agents/_agent_runner.py),
 and [`session/_types.py`](../src/easycat/session/_types.py).
 
+Plain `async run(text) -> str` agents can overlap model work with endpoint
+confirmation by setting
+`AgentRunnerConfig(preemptive_generation=True)`. This is intentionally opt-in:
+the agent may be cancelled and retried when speech resumes, so its `run()`
+implementation must be replayable and must not perform irreversible side
+effects for an unconfirmed transcript.
+
 ## Provider-specific tuning
 
 - **OpenAI Realtime STT connection setup** — the provider keeps its
@@ -90,6 +97,12 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
   turn. A final-transcript timeout discards the reusable socket before the
   next turn so a late final cannot leak into the replacement transcript queue.
+- **Deepgram Nova STT connection setup** — EasyCat keeps Deepgram Nova's STT
+  WebSocket warm across turns by default, sends a provider `KeepAlive` while
+  idle, and uses `Finalize` to delimit each turn; set
+  `DeepgramSTTConfig.persistent_ws=False` to restore one socket per turn.
+  Flux keeps the one-socket-per-turn lifecycle because its v2 endpoint does
+  not support explicit `Finalize`.
 
 ## What is *not* a knob
 
@@ -100,19 +113,36 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   native cadence, releases the first 20 ms of PCM immediately, then coalesces
   steady-state audio into 100 ms frames; this avoids making first audio wait
   for a full steady-state frame without increasing per-frame overhead for the
-  rest of the utterance. The one knob here is
+  rest of the utterance. The bounded final-transcript knobs are
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI
   occasionally stalls several seconds on that event, so the wait caps the
   worst-case end-of-turn pause; lower it to trade a little tail correction for
   snappier handoff, raise it if you see truncated end-of-turn transcripts.
+  `DeepgramSTTConfig.final_transcript_timeout_s` similarly defaults to `2.0`
+  seconds for a persistent Nova `Finalize`; on timeout EasyCat drops the stale
+  socket (a final already buffered in the close window is still delivered to
+  the ending turn), promotes the latest interim only when no final arrived,
+  and reconnects next turn so late text cannot leak across the turn boundary.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
   long as the clause is long enough to not sound clipped) to shave
   time-to-first-audio; every later payload keeps full-sentence granularity.
   That behavior is structural, not configurable delay.
+- **Bot-start lifecycle overlap** — on the first TTS payload, EasyCat starts
+  the provider request while `BotStartedSpeaking` handlers run. A one-shot
+  barrier preserves the public order (`BotStartedSpeaking` before
+  `AgentFinal`/`TTSAudio`) and prevents audio release until every lifecycle
+  handler completes, so handler latency and provider first-byte latency overlap
+  instead of adding together.
+- **Agent-delta observer overlap** — the first complete TTS clause is admitted
+  before asynchronous `AgentDelta` handlers finish, allowing the provider
+  request to begin while observers run. The same first-event barrier holds
+  `BotStartedSpeaking` and audio until delta dispatch succeeds, so public event
+  order and strict handler failures remain safe without putting observer time
+  in front of provider TTFB.
 - **Latency is reported, not gated** — every stage records its `elapsed_ms` to
   the journal and each turn emits a `turn_total_latency_ms` (voice) /
   `text_turn_latency_ms` (text) metric record, so slow turns are findable; see
