@@ -211,15 +211,18 @@ class TestMultiContextWSManager:
         ws = SlowConnectWS()
         mgr = MultiContextWSManager(_make_adapter(ws))
 
-        first_context = asyncio.create_task(mgr.open_context())
+        warmup = asyncio.create_task(mgr.warmup())
         await ws.connect_entered.wait()
+        first_context = asyncio.create_task(mgr.open_context())
         second_context = asyncio.create_task(mgr.open_context())
         await asyncio.sleep(0)
 
+        assert not first_context.done()
         assert not second_context.done()
         assert ws.connect_calls == 1
 
         ws.allow_connect.set()
+        await warmup
         ctx1 = await first_context
         ctx2 = await second_context
 

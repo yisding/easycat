@@ -170,6 +170,17 @@ class MultiContextWSManager:
 
     # ── public surface ────────────────────────────────────────────
 
+    async def warmup(self) -> None:
+        """Open the shared socket without creating a synthesis context.
+
+        Session startup calls this before user traffic, moving DNS, TLS, and
+        WebSocket-upgrade latency out of the first spoken reply. The next
+        :meth:`open_context` reuses the connected socket.
+        """
+        if self._closed:
+            raise RuntimeError("MultiContextWSManager is closed")
+        await self._ensure_socket()
+
     async def open_context(self) -> _Context:
         """Register a fresh context, lazily connecting the socket on first use."""
         if self._closed:

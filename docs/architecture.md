@@ -115,8 +115,9 @@ captured mic signal.
   exporter and the debugger (one serializer, so live views and exported
   bundles cannot drift).
 - `debugger/` — aiohttp debugger UI for live journals and exported bundles.
-  `debugger/server.py` keeps route registration and the HTTP surface; the
-  leaf modules it grew out of are `debugger/_records.py` (record
+  `debugger/server.py` keeps application assembly separate from the
+  class-based HTTP route controller and its explicit per-app state; the leaf
+  modules behind that surface are `debugger/_records.py` (record
   filtering/search), `debugger/_audio.py` (PCM/WAV coercion),
   `debugger/_sources.py` (`DebuggerSource` and journal/bundle sources), and
   `debugger/_aec_routes.py` (AEC diagnostics routes over `debugger/_aec.py`).

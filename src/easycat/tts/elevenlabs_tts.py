@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import enum
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -85,6 +87,10 @@ class ElevenLabsTTSConfig:
     reconnect_max_retries: int = 3
     reconnect_base_delay: float = 1.0
     reconnect_max_delay: float = 30.0
+    # Keep best-effort session startup bounded even when synthesis itself uses
+    # unlimited reconnects or a longer HTTP client timeout. A timed-out attempt
+    # is discarded and first use retries with the normal transport policy.
+    warmup_timeout_s: float = 5.0
     # Persistent multi-context socket policy (WEBSOCKET mode only). ``None``
     # selects the latency-oriented mode default: enabled for WebSocket and
     # disabled for HTTP. When enabled one ``/multi-stream-input`` socket is
@@ -105,6 +111,13 @@ class ElevenLabsTTSConfig:
     def __post_init__(self) -> None:
         if self.persistent_ws is None:
             self.persistent_ws = self.stream_mode == ElevenLabsStreamMode.WEBSOCKET
+        if (
+            isinstance(self.warmup_timeout_s, bool)
+            or not isinstance(self.warmup_timeout_s, int | float)
+            or not math.isfinite(self.warmup_timeout_s)
+            or self.warmup_timeout_s <= 0
+        ):
+            raise ValueError("ElevenLabs warmup_timeout_s must be a finite number > 0")
         if self.output_format not in _ELEVENLABS_FORMAT_MAP:
             supported = ", ".join(sorted(_ELEVENLABS_FORMAT_MAP))
             raise ValueError(
@@ -185,18 +198,26 @@ class ElevenLabsTTS(_WSTTSBase):
 
     async def warmup(self) -> None:
         """Prime the selected transport without requesting synthesized audio."""
-        if self._config.stream_mode == ElevenLabsStreamMode.HTTP:
-            await self._warmup_http()
-        elif self._persistent_enabled():
-            await self._warmup_persistent_ws()
+        try:
+            if self._config.stream_mode == ElevenLabsStreamMode.HTTP:
+                await asyncio.wait_for(
+                    self._warmup_http(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+            elif self._persistent_enabled():
+                await asyncio.wait_for(
+                    self._warmup_persistent_ws(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+        except Exception as exc:
+            # Warmup moves connection setup off the reply path but must never
+            # become a session availability gate. First synthesis retries.
+            logger.debug("ElevenLabs TTS warmup skipped: %s", exc)
 
     async def _warmup_http(self) -> None:
         """Best-effort warm DNS/TLS/keep-alive against the configured voice."""
-        try:
-            response = await self._get_http_client().get(f"/voices/{self._config.voice_id}")
-            await response.aclose()
-        except Exception as exc:
-            logger.debug("ElevenLabs HTTP TTS warmup skipped: %s", exc)
+        response = await self._get_http_client().get(f"/voices/{self._config.voice_id}")
+        await response.aclose()
 
     async def _warmup_persistent_ws(self) -> None:
         """Best-effort connect the shared multi-stream socket before traffic."""
@@ -206,8 +227,6 @@ class ElevenLabsTTS(_WSTTSBase):
             # open_context() lazily establishes the socket. No request frame is
             # sent, so this performs only the authenticated WebSocket handshake.
             context = await manager.open_context()
-        except Exception as exc:
-            logger.debug("ElevenLabs WebSocket TTS warmup skipped: %s", exc)
         finally:
             if context is not None:
                 manager.finish_context(context)

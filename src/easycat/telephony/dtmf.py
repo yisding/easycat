@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeGuard
 
 from easycat.events import DTMF, DTMFAggregated, EventBus
 
@@ -14,6 +14,20 @@ logger = logging.getLogger(__name__)
 
 # Valid DTMF digits per ITU-T Q.23
 VALID_DTMF_DIGITS = frozenset("0123456789*#ABCD")
+
+# Twilio's TwiML ``digits`` attribute also accepts pause markers. Keep this
+# transport-output policy beside the core DTMF alphabet so every serializer and
+# agent boundary uses the same all-or-nothing validation rule.
+VALID_DTMF_OUTPUT_CHARS = VALID_DTMF_DIGITS | frozenset("wW")
+
+
+def is_valid_dtmf_output(value: object) -> TypeGuard[str]:
+    """Return whether *value* is a non-empty, all-or-nothing DTMF output."""
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and all(char in VALID_DTMF_OUTPUT_CHARS for char in value)
+    )
 
 
 def _validate_positive_int(name: str, value: int) -> None:

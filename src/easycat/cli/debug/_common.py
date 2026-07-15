@@ -18,8 +18,9 @@ from rich.markup import escape
 from rich.table import Table
 
 from easycat.cli._output import emit_command_error, stdout_console
+from easycat.debug._bundle_summary import summarise_annotations, summarise_bundle_records
 from easycat.debug._issues import build_issues
-from easycat.debug._turn_timeline import record_wall_ns, safe_turn_id, turn_waterfall
+from easycat.debug._turn_timeline import turn_waterfall
 from easycat.debug.bundle import (
     BundleError,
     BundleInUseError,
@@ -62,36 +63,6 @@ def _record_detail(record: Mapping[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def _annotations_tally(annotations: Mapping[str, Any]) -> dict[str, Any]:
-    """Roll a per-turn verdict sidecar map into a small pass/fail tally.
-
-    ``annotations`` is the ``{turn_id: record}`` map from
-    ``debug/annotations.load_annotations``.  Surfaces the pass/fail counts
-    and a failure-type histogram so ``bundles show`` can show triage state
-    at a glance without listing every turn.
-    """
-    passed = 0
-    failed = 0
-    failure_types: dict[str, int] = {}
-    for record in annotations.values():
-        if not isinstance(record, Mapping):
-            continue
-        verdict = record.get("passed")
-        if verdict is True:
-            passed += 1
-        elif verdict is False:
-            failed += 1
-        failure_type = record.get("failure_type")
-        if isinstance(failure_type, str) and failure_type:
-            failure_types[failure_type] = failure_types.get(failure_type, 0) + 1
-    return {
-        "annotated": len(annotations),
-        "passed": passed,
-        "failed": failed,
-        "failure_types": failure_types,
-    }
-
-
 def _add_annotations_row(table: Table, tally: object) -> None:
     """Append the reviewer-verdict tally row to *table*, or nothing.
 
@@ -117,54 +88,11 @@ def _summarise_bundle(
     bundle: RunBundle, *, annotations: Mapping[str, Any] | None = None
 ) -> dict[str, object]:
     """Collect the high-signal fields we surface in ``bundles show``/``inspect``."""
-    turn_ids: set[str] = set()
-    errors = 0
-    session_id = ""
-    first_wall_ns: int | None = None
-    last_wall_ns: int | None = None
-    tool_calls = 0
-    record_count = 0
-    error_type: str | None = None
-    failing_turn_id: str | None = None
     records = list(bundle.records())
-
-    for record in records:
-        record_count += 1
-        if not session_id and record.get("session_id"):
-            session_id = str(record["session_id"])
-        turn_id = safe_turn_id(record.get("turn_id"))
-        if turn_id is not None:
-            turn_ids.add(turn_id)
-        wall_ns = record_wall_ns(record)
-        if wall_ns is not None:
-            if first_wall_ns is None:
-                first_wall_ns = wall_ns
-            last_wall_ns = wall_ns
-        error = record.get("error")
-        if error:
-            errors += 1
-            # Surface the first error's type + the turn it failed on so the
-            # CLI summary points straight at the failure.  ``error['type']``
-            # is a bare exception/class name (redaction-safe — no payload);
-            # ``_summarise_bundle`` already feeds the redacted export path.
-            if error_type is None and isinstance(error, Mapping):
-                etype = error.get("type")
-                if etype:
-                    error_type = str(etype)
-                    failing_turn_id = turn_id
-        # The journal sink records tool calls under the snake_case name
-        # ``tool_call_started`` (see ``SessionJournalSink``), not the
-        # CamelCase event class name.
-        if record.get("name") == "tool_call_started":
-            tool_calls += 1
-
-    duration_ms: float | None = None
-    if first_wall_ns is not None and last_wall_ns is not None:
-        duration_ms = (last_wall_ns - first_wall_ns) / 1_000_000
+    record_summary = summarise_bundle_records(records)
 
     return {
-        "session_id": session_id,
-        "turn_count": len(turn_ids),
+        **record_summary.to_dict(),
         # Per-turn latency waterfall: per-stage spans plus milestone deltas
         # (VAD endpoint → STT final → agent first token → TTS first byte),
         # shared with the debugger UI via ``debug/_turn_timeline``.
@@ -174,16 +102,10 @@ def _summarise_bundle(
         # ``debug/_issues``.  Always present so the JSON shape is stable; the
         # ``--issues`` flag only toggles the human-readable card table.
         "issues": build_issues(records, artifact_resolver=bundle.artifact_blobs.get),
-        "errors": errors,
-        "error_type": error_type,
-        "failing_turn_id": failing_turn_id,
-        "tool_calls": tool_calls,
-        "records": record_count,
-        "duration_ms": duration_ms,
         # Reviewer verdict tally from the ``<bundle>.annotations.json``
         # sidecar when one exists (always present so the JSON shape is
         # stable; an absent sidecar yields all-zero counts).
-        "annotations": _annotations_tally(annotations or {}),
+        "annotations": summarise_annotations(annotations or {}).to_dict(),
         "provider_versions": dict(bundle.manifest.provider_versions),
         "artifact_count": len(bundle.artifact_index),
         "replay_entry_points": [

@@ -16,6 +16,7 @@ import base64
 import json
 import statistics
 import time
+from collections.abc import AsyncIterator
 
 from easycat.tts.elevenlabs_tts import (
     ElevenLabsStreamMode,
@@ -31,7 +32,7 @@ class _HTTPResponse:
     def raise_for_status(self) -> None:
         return None
 
-    async def aiter_bytes(self, chunk_size: int = 4800):
+    async def aiter_bytes(self, chunk_size: int = 4800) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
 
@@ -95,7 +96,7 @@ class _WSSocket:
         await self._queue.put(json.dumps(response))
         await self._queue.put(json.dumps(terminal))
 
-    async def recv_iter(self):
+    async def recv_iter(self) -> AsyncIterator[str]:
         while True:
             frame = await self._queue.get()
             if frame is None:

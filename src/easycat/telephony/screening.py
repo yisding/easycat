@@ -17,7 +17,7 @@ __all__ = [
 import asyncio
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -185,6 +185,12 @@ _CARRIER_PATTERNS_BY_LANG: dict[str, list[str]] = {
     ],
 }
 
+_LOCALIZED_PATTERN_CATALOGS: tuple[Mapping[str, Sequence[str]], ...] = (
+    _IOS_PATTERNS_BY_LANG,
+    _ANDROID_PATTERNS_BY_LANG,
+    _CARRIER_PATTERNS_BY_LANG,
+)
+
 # Patterns that should NOT match screening (early media, voicemail, etc.)
 EARLY_MEDIA_PHRASES: list[str] = [
     "this call may be monitored",
@@ -287,15 +293,61 @@ COHERENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-@dataclass
-class ScreeningPatternSet:
-    """Configurable pattern sets for screening detection."""
+def _normalize_screening_patterns(patterns: Sequence[str]) -> tuple[str, ...]:
+    normalized = tuple(dict.fromkeys(pattern.strip().casefold() for pattern in patterns))
+    if any(not pattern for pattern in normalized):
+        raise ValueError("screening patterns must not be empty")
+    return normalized
 
-    ios: list[str] = field(default_factory=lambda: list(IOS_PATTERNS))
-    android: list[str] = field(default_factory=lambda: list(ANDROID_PATTERNS))
-    carrier: list[str] = field(default_factory=lambda: list(CARRIER_PATTERNS))
-    third_party: list[str] = field(default_factory=lambda: list(THIRD_PARTY_PATTERNS))
-    exclusions: list[str] = field(default_factory=lambda: list(EARLY_MEDIA_PHRASES))
+
+@dataclass(frozen=True, slots=True)
+class ScreeningPatternSet:
+    """Immutable, normalized pattern policy for screening detection.
+
+    Input sequences are stripped, case-folded, deduplicated, and stored as
+    tuples. Blank patterns are rejected because an empty substring would match
+    every transcript.
+    """
+
+    ios: Sequence[str] = field(default_factory=lambda: tuple(IOS_PATTERNS))
+    android: Sequence[str] = field(default_factory=lambda: tuple(ANDROID_PATTERNS))
+    carrier: Sequence[str] = field(default_factory=lambda: tuple(CARRIER_PATTERNS))
+    third_party: Sequence[str] = field(default_factory=lambda: tuple(THIRD_PARTY_PATTERNS))
+    exclusions: Sequence[str] = field(default_factory=lambda: tuple(EARLY_MEDIA_PHRASES))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "ios", _normalize_screening_patterns(self.ios))
+        object.__setattr__(self, "android", _normalize_screening_patterns(self.android))
+        object.__setattr__(self, "carrier", _normalize_screening_patterns(self.carrier))
+        object.__setattr__(self, "third_party", _normalize_screening_patterns(self.third_party))
+        object.__setattr__(self, "exclusions", _normalize_screening_patterns(self.exclusions))
+
+    def _platform_patterns(
+        self,
+    ) -> tuple[tuple[ScreeningPlatform, Sequence[str]], ...]:
+        """Return match groups in their authoritative precedence order."""
+        return (
+            ("ios", self.ios),
+            ("android", self.android),
+            ("carrier", self.carrier),
+            ("third_party", self.third_party),
+        )
+
+
+_DEFAULT_SCREENING_PATTERNS = ScreeningPatternSet()
+
+
+def _localized_patterns_for_languages(
+    patterns_by_language: Mapping[str, Sequence[str]],
+    languages: set[str],
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            pattern
+            for language in sorted(languages)
+            for pattern in patterns_by_language.get(language, ())
+        )
+    )
 
 
 def screening_patterns_for_languages(
@@ -309,43 +361,18 @@ def screening_patterns_for_languages(
 
     Returns:
         A ``ScreeningPatternSet`` whose ``ios``, ``android``, and ``carrier``
-        lists contain deduplicated patterns for every requested language.
+        sequences contain deduplicated patterns for every requested language.
         Third-party and exclusion patterns are language-independent.
     """
     if languages is None:
-        langs = (
-            set(_IOS_PATTERNS_BY_LANG)
-            | set(_ANDROID_PATTERNS_BY_LANG)
-            | set(_CARRIER_PATTERNS_BY_LANG)
-        )
+        langs = {language for catalog in _LOCALIZED_PATTERN_CATALOGS for language in catalog}
     else:
-        langs = {code.split("-")[0].lower() for code in languages}
-
-    seen_ios: set[str] = set()
-    seen_android: set[str] = set()
-    seen_carrier: set[str] = set()
-    ios: list[str] = []
-    android: list[str] = []
-    carrier: list[str] = []
-
-    for lang in sorted(langs):
-        for p in _IOS_PATTERNS_BY_LANG.get(lang, []):
-            if p not in seen_ios:
-                seen_ios.add(p)
-                ios.append(p)
-        for p in _ANDROID_PATTERNS_BY_LANG.get(lang, []):
-            if p not in seen_android:
-                seen_android.add(p)
-                android.append(p)
-        for p in _CARRIER_PATTERNS_BY_LANG.get(lang, []):
-            if p not in seen_carrier:
-                seen_carrier.add(p)
-                carrier.append(p)
+        langs = {code.split("-")[0].casefold() for code in languages}
 
     return ScreeningPatternSet(
-        ios=ios,
-        android=android,
-        carrier=carrier,
+        ios=_localized_patterns_for_languages(_IOS_PATTERNS_BY_LANG, langs),
+        android=_localized_patterns_for_languages(_ANDROID_PATTERNS_BY_LANG, langs),
+        carrier=_localized_patterns_for_languages(_CARRIER_PATTERNS_BY_LANG, langs),
     )
 
 
@@ -353,35 +380,24 @@ def match_screening_platform(
     text: str,
     patterns: ScreeningPatternSet | None = None,
     *,
-    _pre_lowered: bool = False,
-) -> Literal["ios", "android", "carrier", "third_party"] | None:
+    _pre_casefolded: bool = False,
+) -> ScreeningPlatform | None:
     """Match transcript text against screening patterns.
 
     Returns the platform string (``"ios"``, ``"android"``, ``"carrier"``,
     ``"third_party"``) or ``None`` if no match.
     """
     if patterns is None:
-        patterns = ScreeningPatternSet()
+        patterns = _DEFAULT_SCREENING_PATTERNS
 
-    lower = text if _pre_lowered else text.lower()
+    normalized = text if _pre_casefolded else text.casefold()
 
-    # Check exclusions first.
-    for phrase in patterns.exclusions:
-        if phrase in lower:
-            return None
+    if any(phrase in normalized for phrase in patterns.exclusions):
+        return None
 
-    for phrase in patterns.ios:
-        if phrase in lower:
-            return "ios"
-    for phrase in patterns.android:
-        if phrase in lower:
-            return "android"
-    for phrase in patterns.carrier:
-        if phrase in lower:
-            return "carrier"
-    for phrase in patterns.third_party:
-        if phrase in lower:
-            return "third_party"
+    for platform, platform_patterns in patterns._platform_patterns():
+        if any(phrase in normalized for phrase in platform_patterns):
+            return platform
     return None
 
 
@@ -433,22 +449,22 @@ def is_conversational(
       3. Accept short utterances (≤ *max_words*) that aren't screening.
       4. Reject everything else (long non-question = voicemail greeting, etc.).
     """
-    lower = text.strip().lower()
-    if not lower:
+    normalized = text.strip().casefold()
+    if not normalized:
         return False
 
     # ── Step 1: Reject known screening / IVR prompts ─────────────
-    if match_screening_platform(lower, patterns, _pre_lowered=True) is not None:
+    if match_screening_platform(normalized, patterns, _pre_casefolded=True) is not None:
         return False
 
     # ── Step 2: Reject long interrogative / instructional sentences ──
     # Screening AIs ask follow-up questions; humans don't interrogate
     # the caller.  We detect this structurally rather than matching
     # specific phrases.
-    words = lower.split()
+    words = normalized.split()
     word_count = len(words)
 
-    if word_count >= 6 and any(lower.startswith(q) for q in _INTERROGATIVE_STARTERS):
+    if word_count >= 6 and any(normalized.startswith(q) for q in _INTERROGATIVE_STARTERS):
         return False
 
     # Long sentences (8+ words) that aren't questions are almost never
@@ -456,7 +472,7 @@ def is_conversational(
     # However, we still need the phrase-list backstop for medium-length
     # screening follow-ups (6-7 words) like "one moment" or "tell me more".
     for pattern in _SCREENING_FOLLOW_UP_PATTERNS:
-        if pattern in lower:
+        if pattern in normalized:
             return False
 
     # ── Step 3: Accept short utterances ──────────────────────────
@@ -574,7 +590,7 @@ class CallScreeningDetector:
         self._screening_use_agent = screening_use_agent
         self._agent_timeout_s = agent_timeout_s
         self._max_screening_turns = max_screening_turns
-        self._patterns = patterns or ScreeningPatternSet()
+        self._patterns = patterns if patterns is not None else _DEFAULT_SCREENING_PATTERNS
         self._track_filter = track_filter
 
         self._state = ScreeningState.WAITING
