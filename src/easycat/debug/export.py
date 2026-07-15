@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from easycat.debug._bundle_loader import _ArtifactAccumulator
 from easycat.debug._bundle_models import _INLINE_ARTIFACT_COUNT_CAP
 from easycat.debug._serialize import record_to_dict, safe_config_snapshot_from_session
 from easycat.debug.bundle import (
@@ -61,9 +62,8 @@ def export_debug_bundle(
             journal_lines.append(json.dumps(record_to_dict(record), default=str))
     journal_ndjson = "\n".join(journal_lines).encode("utf-8")
 
-    # Collect artifacts. The refs are already content-addressed
-    # SHA-256 hex digests produced by ``ArtifactStore.put`` — we just
-    # copy the bytes; the bundle does not carry separate checksums.
+    # Collect artifacts. Revalidate the store's content-addressed refs below
+    # so corruption cannot produce an export that ``RunBundle.load`` rejects.
     artifact_data: dict[str, bytes] = {}
     artifact_store = getattr(session, "_artifact_store", None)
     if artifact_store is not None:
@@ -80,6 +80,11 @@ def export_debug_bundle(
                     if f.suffix == ".bin" and f.is_file():
                         ref = f.stem
                         artifact_data[ref] = f.read_bytes()
+
+    validated_artifacts = _ArtifactAccumulator()
+    for ref, data in artifact_data.items():
+        validated_artifacts.add(ref, data)
+    artifact_data = validated_artifacts.blobs
 
     # Provider versions
     provider_versions = _collect_provider_versions(session)

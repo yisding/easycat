@@ -64,6 +64,11 @@ class _ArtifactAccumulator:
             )
 
     def add(self, ref: str, data: bytes) -> None:
+        if not _SHA256_REF.fullmatch(ref):
+            raise BundleValidationError(
+                f"Invalid artifact ref: {ref!r}",
+                reason_code="INVALID_REF",
+            )
         if hashlib.sha256(data).hexdigest() != ref:
             raise BundleValidationError(
                 f"Artifact checksum does not match ref {ref!r}",

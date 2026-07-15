@@ -322,13 +322,26 @@ class TestRunBundleSave:
         assert "journal.ndjson" in names
         assert f"artifacts/{ref}.bin" in names
 
-    def test_save_rejects_non_sha256_artifact_ref(self, tmp_path):
+    @pytest.mark.parametrize("ref", ["not-a-sha", "a" * 64 + "\n"])
+    def test_save_rejects_non_sha256_artifact_ref(self, tmp_path, ref):
         """A tampered in-memory bundle with a bad ref must not be written."""
-        bundle = RunBundle(journal_ndjson=b"", artifact_blobs={"not-a-sha": b"x"})
+        bundle = RunBundle(journal_ndjson=b"", artifact_blobs={ref: b"x"})
         out = tmp_path / "bad.zip"
         with pytest.raises(BundleValidationError) as exc_info:
             bundle.save(out)
         assert exc_info.value.reason_code == "INVALID_REF"
+        assert not out.exists()
+
+    def test_save_rejects_artifact_checksum_mismatch(self, tmp_path):
+        """A blob stored under another payload's digest must not be written."""
+        ref = hashlib.sha256(b"expected").hexdigest()
+        bundle = RunBundle(journal_ndjson=b"", artifact_blobs={ref: b"tampered"})
+        out = tmp_path / "bad-checksum.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            bundle.save(out)
+
+        assert exc_info.value.reason_code == "CHECKSUM_MISMATCH"
         assert not out.exists()
 
     def test_save_is_atomic_on_failure(self, tmp_path, monkeypatch):
@@ -508,6 +521,22 @@ class TestBundleExport:
         with zipfile.ZipFile(path, "r") as zf:
             assert f"artifacts/{ref}.bin" in zf.namelist()
             assert zf.read(f"artifacts/{ref}.bin") == data
+
+    def test_export_rejects_artifact_checksum_mismatch(self, tmp_path):
+        """Export must reject corrupted bytes returned by an artifact store."""
+        ref = hashlib.sha256(b"expected").hexdigest()
+        session = _FakeSession(
+            debug="full",
+            journal=_FakeJournal(),
+            artifact_store=_FakeArtifactStore({ref: b"tampered"}),
+        )
+        path = tmp_path / "bad-checksum.zip"
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            export_debug_bundle(session, path)
+
+        assert exc_info.value.reason_code == "CHECKSUM_MISMATCH"
+        assert not path.exists()
 
     def test_inline_export_rejects_artifact_count_overflow(self, tmp_path, monkeypatch):
         import easycat.debug.export as export_module
@@ -802,6 +831,24 @@ class TestBundlePartialJournal:
         assert ref in bundle.artifact_index
         assert bundle.artifact_index[ref].ref == ref
         assert bundle.artifact_index[ref].size_bytes == len(data)
+
+    def test_from_partial_journal_rejects_artifact_checksum_mismatch(self, tmp_path):
+        """Recovery must not trust corrupted bytes stored under a digest filename."""
+        db_path = tmp_path / "test.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE records (sequence INTEGER PRIMARY KEY, data TEXT)")
+        conn.commit()
+        conn.close()
+
+        art_dir = tmp_path / "artifacts"
+        art_dir.mkdir()
+        ref = hashlib.sha256(b"expected").hexdigest()
+        (art_dir / f"{ref}.bin").write_bytes(b"tampered")
+
+        with pytest.raises(BundleValidationError) as exc_info:
+            RunBundle.from_partial_journal(db_path, artifact_root=art_dir)
+
+        assert exc_info.value.reason_code == "CHECKSUM_MISMATCH"
 
     def test_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):

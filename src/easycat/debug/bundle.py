@@ -23,9 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from easycat.debug._bundle_loader import _reject_traversal, load_bundle
+from easycat.debug._bundle_loader import _ArtifactAccumulator, _reject_traversal, load_bundle
 from easycat.debug._bundle_models import (
-    _ARTIFACT_SIZE_CAP,
     _SHA256_REF,
     FORMAT_VERSION,
     ArtifactEntry,
@@ -210,12 +209,12 @@ class RunBundle:
         is already on this :class:`RunBundle`, including
         :attr:`replay_entry_points` (which the session exporter omits).
 
-        Every artifact ref is validated against :data:`_SHA256_REF` and
-        every archive member name against :func:`_reject_traversal` before a
-        single byte is written, so a tampered in-memory bundle can never
-        emit a traversal path or a non-content-addressed artifact.  The
-        write is atomic: a sibling temp file is renamed into place only on
-        success.
+        Every artifact ref, digest, and aggregate size is validated before a
+        single byte is written, and every archive member name is checked by
+        :func:`_reject_traversal`.  A tampered in-memory bundle therefore
+        cannot emit a traversal path or a non-content-addressed artifact.
+        The write is atomic: a sibling temp file is renamed into place only
+        on success.
         """
         path = Path(path)
 
@@ -233,12 +232,9 @@ class RunBundle:
 
         # Validate artifact refs and member names before opening the archive
         # so a malformed in-memory bundle fails fast and writes nothing.
-        for ref in self.artifact_blobs:
-            if not _SHA256_REF.match(ref):
-                raise BundleValidationError(
-                    f"Invalid artifact ref: {ref!r}",
-                    reason_code="INVALID_REF",
-                )
+        validated_artifacts = _ArtifactAccumulator()
+        for ref, data in self.artifact_blobs.items():
+            validated_artifacts.add(ref, data)
             _reject_traversal(f"artifacts/{ref}.bin")
 
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -250,7 +246,7 @@ class RunBundle:
             with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr("manifest.json", json.dumps(manifest_dict, indent=2))
                 zf.writestr("journal.ndjson", self.journal_ndjson)
-                for ref, data in self.artifact_blobs.items():
+                for ref, data in validated_artifacts.blobs.items():
                     zf.writestr(f"artifacts/{ref}.bin", data)
             Path(tmp_name).rename(path)
         except Exception:
@@ -309,25 +305,17 @@ class RunBundle:
         # Walk artifact directory.  Read blobs so downstream replay has
         # the bytes available; respect the same 500MB cap as ``load`` to
         # avoid OOM on a corrupted artifact tree.
-        artifact_index: dict[str, ArtifactEntry] = {}
-        artifact_blobs: dict[str, bytes] = {}
+        artifacts = _ArtifactAccumulator()
         if artifact_root and Path(artifact_root).exists():
-            total_size = 0
             for f in Path(artifact_root).iterdir():
                 if not f.is_file():
                     continue
                 ref = f.stem
-                if not _SHA256_REF.match(ref):
+                if not _SHA256_REF.fullmatch(ref):
                     continue
                 size = f.stat().st_size
-                if total_size + size > _ARTIFACT_SIZE_CAP:
-                    raise BundleValidationError(
-                        "Total artifact size exceeds 500MB cap",
-                        reason_code="SIZE_EXCEEDED",
-                    )
-                total_size += size
-                artifact_index[ref] = ArtifactEntry(ref=ref, size_bytes=size)
-                artifact_blobs[ref] = f.read_bytes()
+                artifacts.ensure_capacity(size)
+                artifacts.add(ref, f.read_bytes())
 
         manifest = Manifest(format_version=FORMAT_VERSION)
 
@@ -335,8 +323,8 @@ class RunBundle:
             format_version=FORMAT_VERSION,
             manifest=manifest,
             journal_ndjson=journal_ndjson,
-            artifact_index=artifact_index,
-            artifact_blobs=artifact_blobs,
+            artifact_index=artifacts.index,
+            artifact_blobs=artifacts.blobs,
         )
 
 
