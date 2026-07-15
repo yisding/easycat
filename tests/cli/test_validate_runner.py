@@ -438,6 +438,39 @@ def test_release_validation_stops_after_wheel_install_failure(tmp_path: Path) ->
     assert not any(command[-1:] == ["--help"] for command in commands)
 
 
+def test_release_validation_stops_after_metadata_failure(tmp_path: Path) -> None:
+    commands: list[list[str]] = []
+
+    def fake_command_runner(
+        command: list[str],
+        *,
+        env: dict[str, str],
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        commands.append(command)
+        if command[:4] == ["uv", "build", "--sdist", "--wheel"]:
+            out_dir = Path(command[-1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "easycat-0.1.0-py3-none-any.whl").write_text("wheel")
+            (out_dir / "easycat-0.1.0.tar.gz").write_text("sdist")
+        if command[:3] == ["uvx", "twine", "check"]:
+            return CommandResult(exit_code=1, stderr="invalid package metadata")
+        return CommandResult(exit_code=0)
+
+    result = run_release_validation(
+        artifacts_dir=tmp_path,
+        python_version="3.12",
+        command_runner=fake_command_runner,
+        started_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC),
+    )
+
+    payload = json.loads(result.report_path.read_text())
+    assert result.exit_code == 1
+    assert payload["tool_exit_codes"]["release.metadata"] == 1
+    assert "release.venv" not in payload["tool_exit_codes"]
+    assert not any(command[:2] == ["uv", "venv"] for command in commands)
+
+
 def test_release_validation_requires_wheel_and_sdist(tmp_path: Path) -> None:
     commands: list[list[str]] = []
 

@@ -353,8 +353,9 @@ class _ReleaseOrchestrator:
             )
 
         distributions = _release_dist_paths(self.paths.dist)
+        metadata_ok = False
         if distributions:
-            self.recorder.record_command(
+            metadata_ok = self.recorder.record_command(
                 "release.metadata",
                 ["uvx", "twine", "check", *[str(path) for path in distributions]],
                 env={**os.environ},
@@ -366,7 +367,7 @@ class _ReleaseOrchestrator:
                 f"uv build did not create distributions under {self.paths.dist}",
                 details={"dist_dir": str(self.paths.dist)},
             )
-        return wheel if wheel is not None and sdist is not None else None
+        return wheel if wheel is not None and sdist is not None and metadata_ok else None
 
     def _install_wheel(self, wheel: Path) -> bool:
         if not self.recorder.record_command(
