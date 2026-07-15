@@ -8,7 +8,6 @@ containing the journal, artifacts, and manifest metadata.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import tempfile
 import zipfile
@@ -17,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from easycat.debug._bundle_loader import _ArtifactAccumulator
+from easycat.debug._bundle_models import _INLINE_ARTIFACT_COUNT_CAP
 from easycat.debug._serialize import record_to_dict, safe_config_snapshot_from_session
 from easycat.debug.bundle import (
     FORMAT_VERSION,
@@ -100,8 +101,10 @@ def _capture_session_bundle(
     session: object,
     journal: _JournalReader | None,
 ) -> _CapturedSessionBundle:
-    artifacts = _collect_artifacts(session)
-    _validate_artifacts(artifacts)
+    collected_artifacts = _collect_artifacts(session)
+    validated_artifacts = _ArtifactAccumulator()
+    for ref, data in collected_artifacts.items():
+        validated_artifacts.add(ref, data)
     manifest = Manifest(
         format_version=FORMAT_VERSION,
         provider_versions=_collect_provider_versions(session),
@@ -111,7 +114,7 @@ def _capture_session_bundle(
     return _CapturedSessionBundle(
         manifest=manifest,
         journal_ndjson=_serialize_journal(journal),
-        artifacts=artifacts,
+        artifacts=validated_artifacts.blobs,
     )
 
 
@@ -144,20 +147,6 @@ def _collect_artifacts(session: object) -> dict[str, bytes]:
     }
 
 
-def _validate_artifacts(artifacts: dict[str, bytes]) -> None:
-    for ref, data in artifacts.items():
-        if len(ref) != 64 or any(char not in "0123456789abcdef" for char in ref):
-            raise BundleValidationError(
-                f"Invalid artifact ref: {ref!r}",
-                reason_code="INVALID_REF",
-            )
-        if hashlib.sha256(data).hexdigest() != ref:
-            raise BundleValidationError(
-                f"Artifact content does not match ref: {ref!r}",
-                reason_code="CHECKSUM_MISMATCH",
-            )
-
-
 def _sharing_banner() -> str:
     try:
         from easycat.runtime.safe_defaults import DEV_BUNDLE_BANNER
@@ -175,6 +164,11 @@ def _write_bundle_archive(
 ) -> None:
     manifest_dict = _manifest_to_dict(captured.manifest)
     if inline_artifacts and captured.artifacts:
+        if len(captured.artifacts) > _INLINE_ARTIFACT_COUNT_CAP:
+            raise BundleValidationError(
+                f"Bundle has more than {_INLINE_ARTIFACT_COUNT_CAP} inline artifacts",
+                reason_code="SIZE_EXCEEDED",
+            )
         manifest_dict["inline_artifacts"] = {
             ref: base64.b64encode(data).decode("ascii") for ref, data in captured.artifacts.items()
         }
@@ -191,7 +185,7 @@ def _write_bundle_archive(
             if not inline_artifacts:
                 for ref, data in captured.artifacts.items():
                     zf.writestr(f"artifacts/{ref}.bin", data)
-        Path(tmp_name).rename(path)
+        Path(tmp_name).replace(path)
     except Exception:
         if tmp_name and Path(tmp_name).exists():
             Path(tmp_name).unlink()

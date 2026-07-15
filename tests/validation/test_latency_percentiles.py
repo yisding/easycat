@@ -263,7 +263,7 @@ def test_build_latency_artifact_percentiles_empty_when_no_eligible_samples() -> 
 def test_default_budgets_cover_required_stages() -> None:
     # Budgets are calibrated against the live-stack SLOs in
     # tests/e2e/test_plan_7_latency_benchmark.py — see the comment above
-    # DEFAULT_BUDGETS in src/easycat/validation/latency.py for the rationale.
+    # DEFAULT_BUDGETS in _latency_budgets.py for the rationale.
     by_stage = {budget.stage: budget for budget in DEFAULT_BUDGETS}
 
     assert "total_ms" in by_stage

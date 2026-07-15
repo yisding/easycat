@@ -26,6 +26,33 @@ def test_observability_is_noop_without_otel(monkeypatch: pytest.MonkeyPatch) -> 
     observability.observe_gauge("easycat.queue.depth", 3, {"easycat.stage": "tts"})
 
 
+def test_no_sdk_path_validates_without_materializing_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(observability, "_get_tracer", lambda: None)
+    monkeypatch.setattr(observability, "_get_meter", lambda: None)
+    monkeypatch.setattr(
+        observability,
+        "sanitize_attributes",
+        lambda *args, **kwargs: pytest.fail("no exporter payload should be built"),
+    )
+
+    with observability.span("easycat.agent.invoke", {"easycat.stage": "agent"}):
+        pass
+    observability.record_histogram(
+        "easycat.stage.latency",
+        0.01,
+        {"easycat.stage": "agent", "easycat.result": "pass"},
+    )
+    observability.observe_gauge("easycat.queue.depth", 1, {"easycat.stage": "tts"})
+
+    with pytest.raises(ValueError, match="forbidden observability attribute: raw_text"):
+        with observability.span("easycat.agent.invoke", {"raw_text": "secret"}):
+            pass
+    with pytest.raises(ValueError, match="unsupported observability attribute: unknown"):
+        observability.increment_counter("easycat.turns.total", attributes={"unknown": "x"})
+
+
 def test_opentelemetry_handles_are_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
     from types import ModuleType

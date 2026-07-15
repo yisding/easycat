@@ -6,10 +6,11 @@ audio queueing — into one reusable helper.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,6 +30,32 @@ class TTSSynthResult:
     first_audio_time: float | None = None
     audio_bytes: int = 0
     completed: bool = True
+
+
+async def _iter_after_start_barrier(
+    stream: AsyncIterator[Any],
+    barrier: asyncio.Event | None,
+) -> AsyncGenerator[Any, None]:
+    """Prefetch one provider event, hold it if requested, then stream directly."""
+    try:
+        first_event = await anext(stream)
+    except StopAsyncIteration:
+        return
+    if barrier is not None:
+        await barrier.wait()
+    yield first_event
+    async for event in stream:
+        yield event
+
+
+def _with_start_barrier(
+    stream: AsyncIterator[Any],
+    barrier: asyncio.Event | None,
+) -> AsyncIterator[Any]:
+    """Keep the established direct iterator path when no barrier is needed."""
+    if barrier is None:
+        return stream
+    return _iter_after_start_barrier(stream, barrier)
 
 
 class TTSSynthesizer:
@@ -94,6 +121,7 @@ class TTSSynthesizer:
         *,
         is_active: Callable[[], bool] | None = None,
         bypass_gate: bool = False,
+        start_barrier: asyncio.Event | None = None,
     ) -> TTSSynthResult:
         """Synthesize text and stream audio to the outbound queue.
 
@@ -105,6 +133,10 @@ class TTSSynthesizer:
             token: CancelToken to check between chunks.
             is_active: Optional predicate; iteration stops when it returns False.
             bypass_gate: Whether to bypass the audio gate.
+            start_barrier: Optional one-shot barrier held before the first
+                provider event is processed. The provider request and first
+                receive can run while the barrier is closed, but no EasyCat
+                event or outbound audio is released until it opens.
 
         Returns:
             TTSSynthResult indicating whether audio was produced.
@@ -141,7 +173,7 @@ class TTSSynthesizer:
         # wrapper and the underlying provider stream instead of deferring
         # their cleanup to non-deterministic GC.
         async with contextlib.aclosing(tts_iter) as tts_stream:
-            async for tts_event in tts_stream:
+            async for tts_event in _with_start_barrier(tts_stream, start_barrier):
                 if token and token.is_cancelled:
                     result.completed = False
                     break

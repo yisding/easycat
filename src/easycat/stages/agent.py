@@ -10,14 +10,20 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._turn_context import TurnContext
-from easycat.integrations.agents._agent_runner import AgentRunner, close_stream_after_done
+from easycat.integrations.agents._agent_runner import (
+    AgentRunner,
+    PreparedAgentResponse,
+    close_stream_after_done,
+)
 from easycat.integrations.agents._factory import auto_adapt_agent
 from easycat.integrations.agents._helpers import aclose_quietly
 from easycat.integrations.agents._recorder import JournalAgentRecorder
 from easycat.integrations.agents.base import (
     AgentBridgeEvent,
+    AgentRecorder,
     AgentTurnInput,
     ExternalAgentBridge,
+    NullAgentRecorder,
     RecorderContext,
 )
 from easycat.runtime.context import RunContext
@@ -113,6 +119,30 @@ class AgentStage:
         self._tracks_history = self._should_track_history(self._provider)
         self.reset_history()
 
+    @property
+    def supports_preemptive_generation(self) -> bool:
+        """Whether the provider can prepare a voice response transactionally."""
+        return bool(
+            isinstance(self._provider, AgentRunner)
+            and self._provider.supports_preemptive_generation
+        )
+
+    @property
+    def preemptive_max_retries(self) -> int:
+        """Maximum preemptive attempts allowed for one voice turn."""
+        if isinstance(self._provider, AgentRunner):
+            return self._provider.preemptive_max_retries
+        return 0
+
+    async def prepare_preemptive(self, input: Any, turn: TurnContext) -> PreparedAgentResponse:
+        """Prepare a simple-agent response without committing conversation state."""
+        if not isinstance(self._provider, AgentRunner):
+            raise RuntimeError("agent provider does not support preemptive generation")
+        input_text = input if isinstance(input, str) else str(input)
+        return await self._provider.prepare_response(
+            AgentTurnInput.from_text(input_text, turn_id=turn.id)
+        )
+
     # ── Recorder construction ───────────────────────────────────
 
     def _journal_ctx(self, ctx: RunContext) -> RunContext:
@@ -124,14 +154,24 @@ class AgentStage:
         """
         return journal_ctx(ctx, self._journal)
 
-    def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> JournalAgentRecorder:
+    def _make_recorder(self, turn_id: str | None, ctx: RunContext) -> AgentRecorder:
         # Prefer the per-run ``ctx.journal`` so the recorder writes to the
         # same sink as ``journal_append_event`` (which always uses
         # ``ctx.journal``).  ``self._journal`` is only a fallback for
         # direct construction where the caller wired a journal into the
         # stage but not into the RunContext.
+        journal = ctx.journal if ctx.journal is not None else self._journal
+        if journal is None and self._artifact_store is None:
+            return NullAgentRecorder(
+                RecorderContext(
+                    run_id="null",
+                    session_id=self._session_id,
+                    turn_id=turn_id,
+                    mcp_servers=self._mcp_servers,
+                )
+            )
         return JournalAgentRecorder(
-            journal=ctx.journal if ctx.journal is not None else self._journal,
+            journal=journal,
             artifact_store=self._artifact_store,
             context=RecorderContext(
                 run_id=f"run-{uuid4().hex[:8]}",
@@ -163,6 +203,7 @@ class AgentStage:
         *,
         cancel_token: Any | None = None,
         system_prefix: str | None = None,
+        prepared_response: PreparedAgentResponse | None = None,
     ) -> AsyncGenerator[AgentBridgeEvent, None]:
         """Drive ``bridge.invoke()`` while journaling a stage_start/complete.
 
@@ -215,7 +256,14 @@ class AgentStage:
                 "easycat.agent.invoke",
                 {"easycat.stage": self.name, "easycat.surface": "agent_bridge"},
             ):
-                stream = bridge.invoke(turn_input, recorder, cancel_token)
+                if prepared_response is not None:
+                    if not isinstance(bridge, AgentRunner):
+                        raise RuntimeError("prepared response requires AgentRunner")
+                    if prepared_response.input_text != input_text:
+                        raise RuntimeError("prepared response transcript does not match input")
+                    stream = bridge.invoke_prepared(prepared_response, recorder, cancel_token)
+                else:
+                    stream = bridge.invoke(turn_input, recorder, cancel_token)
                 try:
                     async for event in stream:
                         kind = getattr(event, "kind", None)
