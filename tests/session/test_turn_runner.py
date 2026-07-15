@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from easycat._log_context import CorrelationFilter, bind_turn
+from easycat._tts_synthesizer import TTSSynthResult
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
@@ -48,7 +49,7 @@ from easycat.integrations.agents.base import (
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.records import JournalRecordKind
 from easycat.session._session import Session
-from easycat.session._turn_runner import TurnRunner
+from easycat.session._turn_runner import TurnRunner, _StreamingTtsState
 from easycat.session._types import SessionConfig
 from easycat.session.actions import SessionActions
 from easycat.timeouts import AgentTimeoutError, TimeoutConfig
@@ -767,6 +768,21 @@ async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> N
 
 
 @pytest.mark.asyncio
+async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    session._turn = TurnContext("turn-cancelled-tts", CancelToken())
+
+    async def _cancel_tts_consumer(_st: _StreamingTtsState) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(session._turn_runner, "_consume_tts_payloads", _cancel_tts_consumer)
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_action_drain_triggers_stop() -> None:
     """A drained EndCallAction must call ``session.stop()`` once."""
     actions = SessionActions()
@@ -931,6 +947,21 @@ async def test_tts_streaming_failure_emits_error_event() -> None:
     await session._turn_runner.run_streaming_agent("hello", token=None)
 
     assert any(e.stage == ErrorStage.TTS for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_tts_lifecycle_failure_finishes_bot_speaking_turn() -> None:
+    session = Session(_config())
+
+    async def _fail_after_bot_start(_event: BotStartedSpeaking) -> None:
+        raise RuntimeError("bot start handler failed")
+
+    session.event_bus.subscribe(BotStartedSpeaking, _fail_after_bot_start)
+    session._turn = TurnContext("turn-bot-start-err", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("hello", token=None)
+
+    assert session._turn_manager.state == TurnManagerState.IDLE
 
 
 @pytest.mark.asyncio
@@ -1117,14 +1148,189 @@ async def test_tts_consumer_starts_before_agent_consumer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_tts_lifecycle_wait_is_outside_agent_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.session._turn_runner as turn_runner_module
+
+    lifecycle_started = asyncio.Event()
+    release_lifecycle = asyncio.Event()
+    agent_wait_finished = asyncio.Event()
+    session = Session(_config(timeout_config=TimeoutConfig(agent_timeout=0.01)))
+
+    async def _block_lifecycle(_event: BotStartedSpeaking) -> None:
+        lifecycle_started.set()
+        await release_lifecycle.wait()
+
+    async def _observe_agent_wait(task: asyncio.Task[None], **_kwargs: object) -> None:
+        await task
+        agent_wait_finished.set()
+
+    session.event_bus.subscribe(BotStartedSpeaking, _block_lifecycle)
+    monkeypatch.setattr(turn_runner_module, "with_agent_timeout", _observe_agent_wait)
+    session._turn = TurnContext("turn-lifecycle-timeout", CancelToken())
+
+    run_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    try:
+        await asyncio.wait_for(lifecycle_started.wait(), timeout=0.5)
+        await asyncio.wait_for(agent_wait_finished.wait(), timeout=0.5)
+        assert not run_task.done()
+    finally:
+        release_lifecycle.set()
+
+    await asyncio.wait_for(run_task, timeout=0.5)
+
+
+async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_started = asyncio.Event()
+    provider_finalized = asyncio.Event()
+    never_release = asyncio.Event()
+    provider_tasks: list[asyncio.Task[TTSSynthResult]] = []
+    session = Session(_config())
+    turn = TurnContext("turn-owned-first-synthesis", CancelToken())
+    session._turn = turn
+    state = _StreamingTtsState(
+        turn=turn,
+        turn_gen=session._turn.generation,
+        token=turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.queue.put_nowait(TTSInput("Reply."))
+
+    async def _begin_synthesis(
+        _payload: TTSInput,
+        _token: CancelToken | None,
+        *,
+        is_active: object,
+    ) -> asyncio.Task[TTSSynthResult]:
+        _ = is_active
+
+        async def _blocked_provider() -> TTSSynthResult:
+            provider_started.set()
+            try:
+                await never_release.wait()
+                return TTSSynthResult()
+            finally:
+                provider_finalized.set()
+
+        task = asyncio.create_task(_blocked_provider())
+        provider_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(
+        session._tts_scheduler,
+        "begin_synthesis_with_bot_start",
+        _begin_synthesis,
+    )
+
+    consumer = asyncio.create_task(session._turn_runner._synthesize_queued_payloads(state))
+    await asyncio.wait_for(provider_started.wait(), timeout=0.5)
+    consumer.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+
+    assert provider_finalized.is_set()
+    assert len(provider_tasks) == 1
+    assert provider_tasks[0].cancelled()
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_emits_bot_stopped_after_drain() -> None:
     """``bot_stopped_speaking`` must be emitted after drain when not stopping."""
     stopped: list[BotStoppedSpeaking] = []
+    order: list[str] = []
     session = Session(_config())
-    session.event_bus.subscribe(BotStoppedSpeaking, lambda e: stopped.append(e))
+    session.event_bus.subscribe(AgentFinal, lambda _e: order.append("agent_final"))
+
+    def _record_stopped(event: BotStoppedSpeaking) -> None:
+        stopped.append(event)
+        order.append("bot_stopped")
+
+    session.event_bus.subscribe(BotStoppedSpeaking, _record_stopped)
     session._turn = TurnContext("turn-stop2", CancelToken())
     await session._turn_runner.run_streaming_agent("hello", token=None)
     assert len(stopped) == 1
+    assert order == ["agent_final", "bot_stopped"]
+
+
+async def test_agent_phase_failure_releases_tts_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = Session(_config())
+    turn = TurnContext("turn-agent-phase-failure", CancelToken())
+    session._turn = turn
+    captured_tts_task: asyncio.Task[None] | None = None
+
+    async def _fail_lifecycle_wait(
+        _state: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        nonlocal captured_tts_task
+        captured_tts_task = tts_task
+        await asyncio.sleep(0)
+        raise RuntimeError("lifecycle wait failed")
+
+    monkeypatch.setattr(
+        session._turn_runner,
+        "_await_first_tts_lifecycle_ready",
+        _fail_lifecycle_wait,
+    )
+
+    with pytest.raises(RuntimeError, match="lifecycle wait failed"):
+        await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+
+    assert captured_tts_task is not None
+    await asyncio.wait_for(
+        asyncio.gather(captured_tts_task, return_exceptions=True),
+        timeout=0.5,
+    )
+    assert captured_tts_task.done()
+
+
+async def test_agent_final_cancellation_drains_tts_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_handler_started = asyncio.Event()
+    tts_consumer_started = asyncio.Event()
+    tts_consumer_finalized = asyncio.Event()
+    never_release = asyncio.Event()
+    session = Session(_config())
+    turn = TurnContext("turn-agent-final-cancel", CancelToken())
+    session._turn = turn
+
+    async def _blocked_tts_consumer(state: _StreamingTtsState) -> None:
+        tts_consumer_started.set()
+        state.first_tts_lifecycle_ready.set()
+        try:
+            await never_release.wait()
+        finally:
+            tts_consumer_finalized.set()
+
+    async def _blocked_final_handler(_event: AgentFinal) -> None:
+        final_handler_started.set()
+        await never_release.wait()
+
+    monkeypatch.setattr(
+        session._turn_runner,
+        "_consume_tts_payloads",
+        _blocked_tts_consumer,
+    )
+    session.event_bus.subscribe(AgentFinal, _blocked_final_handler)
+
+    run_task = asyncio.create_task(
+        session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+    )
+    await asyncio.wait_for(tts_consumer_started.wait(), timeout=0.5)
+    await asyncio.wait_for(final_handler_started.wait(), timeout=0.5)
+    run_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert tts_consumer_finalized.is_set()
 
 
 @pytest.mark.asyncio

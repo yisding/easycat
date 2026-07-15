@@ -131,6 +131,12 @@ effects for an unconfirmed transcript.
   long as the clause is long enough to not sound clipped) to shave
   time-to-first-audio; every later payload keeps full-sentence granularity.
   That behavior is structural, not configurable delay.
+- **Bot-start lifecycle overlap** — on the first TTS payload, EasyCat starts
+  the provider request while `BotStartedSpeaking` handlers run. A one-shot
+  barrier preserves the public order (`BotStartedSpeaking` before
+  `AgentFinal`/`TTSAudio`) and prevents audio release until every lifecycle
+  handler completes, so handler latency and provider first-byte latency overlap
+  instead of adding together.
 - **Latency is reported, not gated** — every stage records its `elapsed_ms` to
   the journal and each turn emits a `turn_total_latency_ms` (voice) /
   `text_turn_latency_ms` (text) metric record, so slow turns are findable; see
