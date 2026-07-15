@@ -79,11 +79,13 @@ async def test_session_basic_agent_still_works():
     session = Session(config)
 
     events_received: list[Event] = []
+    turn_finished = asyncio.Event()
     for et in [AgentDelta, AgentFinal, BotStartedSpeaking, BotStoppedSpeaking]:
         session.event_bus.subscribe(et, lambda e: events_received.append(e))
+    session.event_bus.subscribe(BotStoppedSpeaking, lambda _e: turn_finished.set())
 
     await session.start()
-    await asyncio.sleep(0.2)
+    await asyncio.wait_for(turn_finished.wait(), timeout=1.0)
     await session.stop()
 
     type_names = [type(e).__name__ for e in events_received]
