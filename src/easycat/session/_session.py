@@ -1254,6 +1254,7 @@ class Session:
                 cause="barge_in",
             )
 
+        await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
         self._outbound_queue.flush_for_new_turn()
@@ -1292,6 +1293,7 @@ class Session:
         if turn:
             turn.cancel_token.cancel()
 
+        await self._turn_runner.cancel_preemptive_generation()
         await self._stt_committer.cancel(turn)
         await self._tts_scheduler.cancel()
         self._outbound_queue.flush_for_new_turn()

@@ -579,6 +579,38 @@ async def test_graceful_stop_cancels_preemptive_generation_before_agent_close() 
     assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
 
 
+@pytest.mark.parametrize("lifecycle_method", ["cancel_turn", "reset_state"])
+@pytest.mark.asyncio
+async def test_turn_teardown_cancels_preemptive_generation(lifecycle_method: str) -> None:
+    class CancellationAwareAgent:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.cancelled = asyncio.Event()
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled.set()
+                raise
+
+    agent = CancellationAwareAgent()
+    session = Session(_config(agent=_preemptive_runner(agent, timeout=None)))
+    turn = TurnContext(f"turn-{lifecycle_method}", CancelToken())
+    session._turn_runner._turn.set(turn)
+    turn.append_stt_segment("cancel now")
+    await session._turn_runner.on_stt_final(STTFinal(text="cancel now", turn_id=turn.id))
+    await asyncio.wait_for(agent.started.wait(), timeout=1)
+
+    await asyncio.wait_for(getattr(session, lifecycle_method)(), timeout=1)
+
+    assert agent.cancelled.is_set()
+    assert session._turn_runner._preemptive_task is None
+    assert not session._runtime_scope.tasks(TurnRunner._PREEMPTIVE_TASK_NAME)
+
+
 class _SlowUnwindAgent:
     """Simple agent whose ``run()`` blocks, then unwinds cancellation slowly.
 
