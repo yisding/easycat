@@ -683,8 +683,7 @@ class TurnRunner:
             # the agent wait but before the guarded TTS wait. Keep both spawned
             # tasks owned across that gap so provider work cannot outlive the
             # turn and leak stale audio into a later one.
-            self._cancel_pending(agent_task, tts_task)
-            await asyncio.gather(agent_task, tts_task, return_exceptions=True)
+            await self._cancel_and_drain(agent_task, tts_task)
             raise
 
         if agent_error is not None and st.error is not None:
