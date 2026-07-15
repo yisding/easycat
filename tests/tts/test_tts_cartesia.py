@@ -183,6 +183,66 @@ class TestCartesiaPersistent:
         assert all(len(c) >= 32 for c in sent_ctx)
         await provider.close()
 
+    async def test_warmup_connects_once_and_first_synthesis_reuses_socket(self):
+        provider = self._make_provider()
+        fake = FakePersistentWS()
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_build_ws", factory):
+            await provider.warmup()
+            async for _ in provider.synthesize("first"):
+                pass
+
+        assert factory.call_count == 1
+        await provider.close()
+
+    async def test_warmup_failure_is_retried_by_synthesis(self):
+        provider = self._make_provider()
+
+        class FailingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                raise RuntimeError("connect boom")
+
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[FailingConnectWS(), working])
+        with patch.object(provider, "_build_ws", factory):
+            await provider.warmup()
+            async for _ in provider.synthesize("retry"):
+                pass
+
+        assert factory.call_count == 2
+        await provider.close()
+
+    async def test_unlimited_retry_warmup_times_out_before_synthesis_retry(self):
+        provider = self._make_provider(reconnect_max_retries=-1, warmup_timeout_s=0.01)
+
+        class HangingConnectWS(FakePersistentWS):
+            async def connect(self) -> None:
+                await asyncio.Event().wait()
+
+        hanging = HangingConnectWS()
+        working = FakePersistentWS()
+        factory = MagicMock(side_effect=[hanging, working])
+
+        with patch.object(provider, "_build_ws", factory):
+            await asyncio.wait_for(provider.warmup(), timeout=0.1)
+            async for _ in provider.synthesize("retry after warmup timeout"):
+                pass
+
+        assert hanging.closed is True
+        assert factory.call_count == 2
+        await provider.close()
+
+    async def test_warmup_is_noop_when_persistent_disabled(self):
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=False))
+        factory = MagicMock(return_value=FakePersistentWS())
+
+        with patch.object(provider, "_build_ws", factory):
+            await provider.warmup()
+
+        assert factory.call_count == 0
+        await provider.close()
+
     async def test_synthesize_yields_audio(self):
         provider = self._make_provider()
         fake = FakePersistentWS()
@@ -294,8 +354,8 @@ class TestCartesiaPersistentEquivalence:
     async def test_decoded_pcm_identical_persistent_vs_default(self):
         audio_chunks = [_pcm16_bytes(241), _pcm16_bytes(239)]  # odd splits
 
-        # Default one-shot path.
-        default_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
+        # Explicit one-shot path.
+        default_provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", persistent_ws=False))
         default_msgs = [_chunk_msg(c) for c in audio_chunks] + [_done_msg()]
         default_ws = FakeReconnectingWS(messages=default_msgs)
         with patch.object(default_provider, "_create_ws", return_value=default_ws):
@@ -355,6 +415,7 @@ class TestCartesiaTTSConfig:
         assert config.sample_rate == 24000
         assert config.output_format == PCM16_MONO_24K
         assert config.add_timestamps is True
+        assert config.persistent_ws is True
         assert config.base_url.startswith("wss://api.cartesia.ai")
 
     def test_rejects_unsupported_encoding(self):
@@ -368,6 +429,11 @@ class TestCartesiaTTSConfig:
     def test_rejects_out_of_range_volume(self):
         with pytest.raises(ValueError, match="volume must be in"):
             CartesiaTTSConfig(api_key="k", volume=0.1)
+
+    @pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
+    def test_rejects_invalid_warmup_timeout(self, timeout):
+        with pytest.raises(ValueError, match="warmup_timeout_s"):
+            CartesiaTTSConfig(api_key="k", warmup_timeout_s=timeout)
 
     def test_generation_config_omitted_when_unset(self):
         provider = CartesiaTTS(CartesiaTTSConfig(api_key="k"))
@@ -393,7 +459,7 @@ class TestCartesiaTTSConfig:
 
 class TestCartesiaTTS:
     def _make_provider(self, **kwargs) -> CartesiaTTS:
-        return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", **kwargs))
+        return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=False, **kwargs))
 
     async def test_synthesize_yields_audio_events(self):
         provider = self._make_provider()
@@ -478,7 +544,7 @@ class TestCartesiaTTS:
         errors: list[Error] = []
         bus.subscribe(Error, lambda e: errors.append(e))
 
-        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", event_bus=bus))
+        provider = CartesiaTTS(CartesiaTTSConfig(api_key="k", event_bus=bus, persistent_ws=False))
         fake_ws = FakeReconnectingWS(messages=[_error_msg()])
 
         with patch.object(provider, "_create_ws", return_value=fake_ws):
