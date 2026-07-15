@@ -28,12 +28,14 @@ from easycat.events import (
     Error,
     ErrorStage,
     Event,
+    EventBus,
     STTEvent,
     STTEventType,
     STTFinal,
     ToolCallDelta,
     ToolCallResult,
     ToolCallStarted,
+    TTSAudio,
     TTSEvent,
     TTSEventType,
     TurnStarted,
@@ -768,6 +770,32 @@ async def test_run_streaming_agent_happy_path_emits_final_and_synthesizes() -> N
 
 
 @pytest.mark.asyncio
+async def test_done_only_agent_releases_first_tts_payload_gate() -> None:
+    class DoneOnlyAgent(_TestBridgeBase):
+        async def run(self, text: str) -> str:
+            return "Done only."
+
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            yield AgentBridgeEvent(kind="done", text="Done only.")
+
+    tts = FakeTTS()
+    session = Session(_config(agent=DoneOnlyAgent(), tts=tts))
+    session._turn = TurnContext("turn-done-only", CancelToken())
+
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None), timeout=0.5
+    )
+
+    assert tts.synthesized_texts == ["Done only."]
+
+
+@pytest.mark.asyncio
 async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -780,6 +808,35 @@ async def test_run_streaming_agent_ignores_independently_cancelled_tts_task(
     monkeypatch.setattr(session._turn_runner, "_consume_tts_payloads", _cancel_tts_consumer)
 
     await session._turn_runner.run_streaming_agent("hello", token=None)
+
+
+@pytest.mark.asyncio
+async def test_stale_tts_settlement_preserves_successor_turn() -> None:
+    session = Session(_config())
+    runner = session._turn_runner
+    old_turn = TurnContext("turn-before-barge-in", CancelToken())
+    runner._turn.set(old_turn)
+    state = _StreamingTtsState(
+        turn=old_turn,
+        turn_gen=old_turn.generation,
+        token=old_turn.cancel_token,
+        queue=asyncio.Queue(),
+    )
+    state.synth_started = True
+    state.playback_started = False
+    state.gated = False
+    state.agent_output_settled.set()
+
+    successor = TurnContext("turn-after-barge-in", CancelToken())
+    runner._turn.set(successor)
+    session._turn_manager._state = TurnManagerState.USER_SPEAKING
+
+    await runner._settle_turn_after_tts(state)
+
+    assert session._turn is successor
+    assert session._turn_generation == successor.generation
+    assert not successor.cancel_token.is_cancelled
+    assert session._turn_manager.state == TurnManagerState.USER_SPEAKING
 
 
 @pytest.mark.asyncio
@@ -1148,6 +1205,83 @@ async def test_tts_consumer_starts_before_agent_consumer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_first_tts_provider_overlaps_agent_delta_handler() -> None:
+    class StartSignalingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(payload):
+                yield event
+
+    tts = StartSignalingTTS()
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    order: list[str] = []
+    session = Session(_config(tts=tts))
+
+    async def _slow_delta_handler(_event: AgentDelta) -> None:
+        handler_started.set()
+        await release_handler.wait()
+        order.append("agent_delta")
+
+    session.event_bus.subscribe(AgentDelta, _slow_delta_handler)
+    session.event_bus.subscribe(BotStartedSpeaking, lambda _event: order.append("bot_started"))
+    session._turn = TurnContext("turn-overlap-delta", CancelToken())
+
+    run_task = asyncio.create_task(session._turn_runner.run_streaming_agent("hello", token=None))
+    try:
+        await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+        await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+        assert order == []
+    finally:
+        release_handler.set()
+
+    await asyncio.wait_for(run_task, timeout=0.5)
+    assert order[:2] == ["agent_delta", "bot_started"]
+
+
+@pytest.mark.asyncio
+async def test_agent_delta_handler_failure_rejects_speculative_tts() -> None:
+    class StartSignalingTTS(FakeTTS):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def synthesize(self, payload: TTSInput) -> AsyncIterator[TTSEvent]:
+            self.started.set()
+            async for event in super().synthesize(payload):
+                yield event
+
+    tts = StartSignalingTTS()
+    event_bus = EventBus(handler_error_policy="raise")
+    bot_started: list[BotStartedSpeaking] = []
+    audio: list[TTSAudio] = []
+    errors: list[Error] = []
+    session = Session(_config(tts=tts, event_bus=event_bus))
+
+    async def _fail_delta_handler(_event: AgentDelta) -> None:
+        raise RuntimeError("delta handler failed")
+
+    event_bus.subscribe(AgentDelta, _fail_delta_handler)
+    event_bus.subscribe(BotStartedSpeaking, bot_started.append)
+    event_bus.subscribe(TTSAudio, audio.append)
+    event_bus.subscribe(Error, errors.append)
+    session._turn = TurnContext("turn-reject-delta", CancelToken())
+
+    await asyncio.wait_for(
+        session._turn_runner.run_streaming_agent("hello", token=None), timeout=0.5
+    )
+
+    assert tts.started.is_set()
+    assert bot_started == []
+    assert audio == []
+    assert any(event.stage == ErrorStage.AGENT for event in errors)
+
+
+@pytest.mark.asyncio
 async def test_first_tts_lifecycle_wait_is_outside_agent_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1204,8 +1338,9 @@ async def test_first_synthesis_is_cancelled_and_drained_with_consumer(
         _token: CancelToken | None,
         *,
         is_active: object,
+        lifecycle_ready: asyncio.Future[bool] | None = None,
     ) -> asyncio.Task[TTSSynthResult]:
-        _ = is_active
+        _ = is_active, lifecycle_ready
 
         async def _blocked_provider() -> TTSSynthResult:
             provider_started.set()

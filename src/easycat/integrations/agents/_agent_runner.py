@@ -16,9 +16,9 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from easycat.cancel import CancelToken
@@ -41,6 +41,28 @@ from easycat.timeouts import AgentTimeoutError
 logger = logging.getLogger(__name__)
 
 _POST_DONE_STREAM_DRAIN_TIMEOUT_S = 0.01
+_T = TypeVar("_T")
+
+
+async def _await_with_timeout(awaitable: Awaitable[_T], timeout: float | None) -> _T:
+    """Await in the caller task while enforcing an optional deadline.
+
+    ``asyncio.wait_for`` schedules a coroutine as a child task even when it
+    completes immediately. Agent streaming invokes this guard for every
+    provider event, so that task hand-off becomes framework-owned latency on
+    the path to first text. ``asyncio.timeout`` enforces the same cancellation
+    deadline on the current task without adding a scheduler round trip.
+    """
+    if timeout is None:
+        return await awaitable
+    if timeout <= 0:
+        # Preserve ``wait_for``'s established zero/negative-timeout behavior:
+        # a newly-created coroutine is cancelled before it gets a loop turn.
+        # ``asyncio.timeout(0)`` instead lets a coroutine that never suspends
+        # complete successfully, which changes the public timeout contract.
+        return await asyncio.wait_for(awaitable, timeout=timeout)
+    async with asyncio.timeout(timeout):
+        return await awaitable
 
 
 async def close_stream_after_done(stream: AsyncIterator[Any]) -> None:
@@ -263,9 +285,7 @@ class AgentRunner:
                             if remaining <= 0:
                                 timed_out = True
                                 break
-                            event = await asyncio.wait_for(
-                                inner_iter.__anext__(), timeout=remaining
-                            )
+                            event = await _await_with_timeout(inner_iter.__anext__(), remaining)
                         else:
                             event = await inner_iter.__anext__()
                     except StopAsyncIteration:
@@ -327,13 +347,9 @@ class AgentRunner:
         self._history.append({"role": "user", "content": turn_input.text})
 
         try:
-            if self._config.timeout is not None:
-                response = await asyncio.wait_for(
-                    self._agent.run(turn_input.text),
-                    timeout=self._config.timeout,
-                )
-            else:
-                response = await self._agent.run(turn_input.text)
+            response = await _await_with_timeout(
+                self._agent.run(turn_input.text), self._config.timeout
+            )
         except TimeoutError:
             self._history.pop()
             if cursor is not None:

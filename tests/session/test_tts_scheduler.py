@@ -378,6 +378,68 @@ async def test_begin_synthesis_overlaps_provider_with_bot_start_handlers() -> No
 
 
 @pytest.mark.asyncio
+async def test_begin_synthesis_prefetches_while_waiting_for_agent_delta() -> None:
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    lifecycle_ready: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+    bot_started: list[BotStartedSpeaking] = []
+    ctx["bus"].subscribe(BotStartedSpeaking, bot_started.append)
+
+    begin_task = asyncio.create_task(
+        scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+            lifecycle_ready=lifecycle_ready,
+        )
+    )
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    tts.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert bot_started == []
+    assert ctx["audio_emissions"] == []
+    assert not begin_task.done()
+
+    lifecycle_ready.set_result(True)
+    synthesis_task = await begin_task
+    result = await synthesis_task
+
+    assert result.audio_produced is True
+    assert len(bot_started) == 1
+    assert len(ctx["audio_emissions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_begin_synthesis_rejects_failed_agent_delta_dispatch() -> None:
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    lifecycle_ready: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+    bot_started: list[BotStartedSpeaking] = []
+    ctx["bus"].subscribe(BotStartedSpeaking, bot_started.append)
+
+    begin_task = asyncio.create_task(
+        scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+            lifecycle_ready=lifecycle_ready,
+        )
+    )
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    tts.release.set()
+    lifecycle_ready.set_result(False)
+
+    synthesis_task = await begin_task
+
+    assert synthesis_task.cancelled()
+    assert tts.finalized.is_set()
+    assert bot_started == []
+    assert ctx["audio_emissions"] == []
+
+
+@pytest.mark.asyncio
 async def test_begin_synthesis_cancels_provider_when_lifecycle_dispatch_is_cancelled() -> None:
     tts = _CoordinatedTTS()
     scheduler, ctx = _build_scheduler(tts=tts)

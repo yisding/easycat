@@ -87,6 +87,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _new_first_tts_payload_gate() -> asyncio.Future[bool]:
+    """Create the per-turn first-payload admission future on the active loop."""
+    return asyncio.get_running_loop().create_future()
+
+
 @dataclass
 class _StreamingTtsState:
     """Mutable per-turn TTS state shared between the streaming phases.
@@ -102,6 +107,11 @@ class _StreamingTtsState:
     #: Released after first-payload lifecycle dispatch (or a no-audio terminal
     #: path) so AgentFinal cannot overtake BotStartedSpeaking.
     first_tts_lifecycle_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Resolves after the AgentDelta dispatch that admitted the first TTS
+    #: payload. False rejects speculative provider work after dispatch failure.
+    first_tts_payload_ready: asyncio.Future[bool] = field(
+        default_factory=_new_first_tts_payload_gate
+    )
     #: Released after the outer task has emitted (or intentionally skipped)
     #: AgentFinal so fast TTS completion cannot overtake agent output ordering.
     agent_output_settled: asyncio.Event = field(default_factory=asyncio.Event)
@@ -636,6 +646,7 @@ class TurnRunner:
                 prepare_tts_payload=self._tts.prepare,
                 strip_md=self._tts.strip_markdown_enabled,
                 turn=turn,
+                first_tts_payload_ready=st.first_tts_payload_ready,
             )
 
         agent_task = asyncio.create_task(_run_agent_consumer())
@@ -767,8 +778,16 @@ class TurnRunner:
                             is_active=lambda: (
                                 self._turn_manager.state == TurnManagerState.BOT_SPEAKING
                             ),
+                            lifecycle_ready=st.first_tts_payload_ready,
                         )
-                        st.playback_started = True
+                        st.playback_started = (
+                            self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                        )
+                    elif not await asyncio.shield(st.first_tts_payload_ready):
+                        st.chunks.append(
+                            TtsChunk(_text_for_estimation_timeline(payload), 0, False)
+                        )
+                        break
                 finally:
                     st.synth_started = True
                     st.first_tts_lifecycle_ready.set()
@@ -813,6 +832,11 @@ class TurnRunner:
         current_task = asyncio.current_task()
         if current_task is None or current_task.cancelling() == 0:
             await st.agent_output_settled.wait()
+        # Cancellation can unwind this old consumer while barge-in has already
+        # installed a successor turn. Never finalize or reset shared turn state
+        # on behalf of a stale generation.
+        if self._turn.current is not st.turn or self._turn.generation != st.turn_gen:
+            return
         if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             st.should_stop = await self._tts.finalize_speaking_turn(
                 st.turn, turn_generation=st.turn_gen

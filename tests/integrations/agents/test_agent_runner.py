@@ -224,6 +224,37 @@ async def test_timeout_rolls_back_history():
 
 
 @pytest.mark.asyncio
+async def test_zero_timeout_rejects_immediate_plain_agent():
+    runner = AgentRunner(EchoAgent(), AgentRunnerConfig(timeout=0.0))
+
+    with pytest.raises(AgentTimeoutError) as exc:
+        await _drain(runner, "test")
+
+    assert exc.value.timeout == 0.0
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_configured_timeout_keeps_plain_agent_in_caller_task():
+    caller_task = asyncio.current_task()
+
+    class TaskCapturingAgent:
+        task: asyncio.Task[object] | None = None
+
+        async def run(self, text: str) -> str:
+            _ = text
+            self.task = asyncio.current_task()
+            return "ok"
+
+    agent = TaskCapturingAgent()
+    runner = AgentRunner(agent, AgentRunnerConfig(timeout=1.0))
+
+    await _drain(runner, "hello")
+
+    assert agent.task is caller_task
+
+
+@pytest.mark.asyncio
 async def test_agent_exception_rolls_back_history():
     runner = AgentRunner(FailingAgent())
     with pytest.raises(ValueError, match="agent broke"):
@@ -480,6 +511,26 @@ async def test_bridge_delegation_honors_configured_timeout():
         await _drain(runner, "hello")
     assert exc.value.timeout == 0.05
     assert runner.history == []
+
+
+@pytest.mark.asyncio
+async def test_configured_timeout_keeps_bridge_iteration_in_caller_task():
+    caller_task = asyncio.current_task()
+
+    class TaskCapturingBridge(_FakeBridge):
+        task: asyncio.Task[object] | None = None
+
+        async def invoke(self, turn_input, recorder, cancel_token=None):
+            _ = turn_input, recorder, cancel_token
+            self.task = asyncio.current_task()
+            yield AgentBridgeEvent(kind="done", text="ok")
+
+    bridge = TaskCapturingBridge()
+    runner = AgentRunner(bridge, AgentRunnerConfig(timeout=1.0))
+
+    await _drain(runner, "hello")
+
+    assert bridge.task is caller_task
 
 
 class _SucceedThenHangBridge:

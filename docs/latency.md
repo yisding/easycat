@@ -137,6 +137,12 @@ effects for an unconfirmed transcript.
   `AgentFinal`/`TTSAudio`) and prevents audio release until every lifecycle
   handler completes, so handler latency and provider first-byte latency overlap
   instead of adding together.
+- **Agent-delta observer overlap** — the first complete TTS clause is admitted
+  before asynchronous `AgentDelta` handlers finish, allowing the provider
+  request to begin while observers run. The same first-event barrier holds
+  `BotStartedSpeaking` and audio until delta dispatch succeeds, so public event
+  order and strict handler failures remain safe without putting observer time
+  in front of provider TTFB.
 - **Latency is reported, not gated** — every stage records its `elapsed_ms` to
   the journal and each turn emits a `turn_total_latency_ms` (voice) /
   `text_turn_latency_ms` (text) metric record, so slow turns are findable; see
