@@ -15,7 +15,7 @@ For non-local deployments, set EASYCAT_WS_TOKEN and send it as:
 """
 
 from easycat import EasyConfig, require_env
-from easycat.transports import run_websocket_config_server
+from easycat.server import run_websocket_config_server
 
 
 def main() -> None:

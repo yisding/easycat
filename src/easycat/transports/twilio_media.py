@@ -16,7 +16,7 @@ import logging
 import secrets
 import struct
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -44,6 +44,19 @@ _DEGRADED_TWILIO_SEQUENCE_GAP = "twilio_sequence_gap"
 _DEGRADED_TWILIO_TIMESTAMP_GAP = "twilio_timestamp_gap"
 _TWILIO_MULAW_BYTES_PER_MS = 8
 TWILIO_STREAM_TOKEN_PARAMETER = "EasyCatStreamToken"
+
+
+def _parse_twilio_message(raw: str) -> dict[str, Any] | None:
+    """Parse one Twilio WebSocket message and require a JSON object."""
+    try:
+        msg = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Ignoring invalid JSON from Twilio")
+        return None
+    if not isinstance(msg, dict):
+        logger.warning("Ignoring non-object JSON from Twilio")
+        return None
+    return msg
 
 
 class TwilioStreamTokenStore:
@@ -529,62 +542,19 @@ class _TwilioProtocolMixin:
 
     async def _handle_message(self, raw: str) -> None:
         """Route a Twilio JSON message to the appropriate handler."""
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Ignoring invalid JSON from Twilio")
-            return
-        if not isinstance(msg, dict):
-            logger.warning("Ignoring non-object JSON from Twilio")
+        msg = _parse_twilio_message(raw)
+        if msg is None:
             return
 
-        event = msg.get("event", "")
-        if event == "connected":
-            logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
-        elif event == "start":
-            await self._handle_start(msg)
-        elif event == "media":
-            await self._handle_media(msg)
-        elif event == "stop":
-            if not _is_active_twilio_stream_event(
-                msg,
-                active_stream_sid=self._stream_sid,
-                event_name="stop",
-            ):
-                return
-            self._diagnostics.observe_sequence(msg)
-            logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
-            # Emit the inbound-direction mirror of the outbound call
-            # manager's ``CallEnded`` event so observers like
-            # ``CallDispositionTracker`` and ``NumberHealthMonitor``
-            # see the same lifecycle regardless of direction.
-            await self._emit_call_ended_once()
-            # Explicitly end the current audio stream so receive_audio() can terminate.
-            self._stream_sid = None
-            self._call_sid = None
-            self._answered_at = None
-            self._diagnostics.reset()
-            self._enqueue_sentinel()
-        elif event == "mark":
-            if not _is_active_twilio_stream_event(
-                msg,
-                active_stream_sid=self._stream_sid,
-                event_name="mark",
-            ):
-                return
-            self._diagnostics.observe_sequence(msg)
-            mark = msg.get("mark", {})
-            if not isinstance(mark, dict):
-                logger.debug("Ignoring Twilio mark with non-object payload")
-                return
-            mark_name = mark.get("name", "")
-            logger.debug("Twilio mark acknowledged: %s", mark_name)
-            if mark_name and self._event_bus is not None:
-                await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
-        elif event == "dtmf":
-            await self._handle_dtmf(msg)
-        else:
+        event = msg.get("event")
+        handler = self._MESSAGE_HANDLERS.get(event) if isinstance(event, str) else None
+        if handler is None:
             logger.debug("Unknown Twilio event: %s", event)
+            return
+        await handler(self, msg)
+
+    async def _handle_connected(self, msg: dict[str, Any]) -> None:
+        logger.debug("Twilio connected event: protocol=%s", msg.get("protocol"))
 
     async def _handle_start(self, msg: dict[str, Any]) -> None:
         """Extract stream metadata from the ``start`` message.
@@ -678,6 +648,43 @@ class _TwilioProtocolMixin:
         chunk = AudioChunk(data=pcm_data, format=self._audio_format)
         self._enqueue_chunk(chunk, context="Twilio")
 
+    async def _handle_stop(self, msg: dict[str, Any]) -> None:
+        if not _is_active_twilio_stream_event(
+            msg,
+            active_stream_sid=self._stream_sid,
+            event_name="stop",
+        ):
+            return
+        self._diagnostics.observe_sequence(msg)
+        logger.info("Twilio stream stopped (streamSid=%s)", self._stream_sid)
+        # Mirror the outbound call manager lifecycle for inbound calls.
+        await self._emit_call_ended_once()
+        self._stream_sid = None
+        self._call_sid = None
+        self._answered_at = None
+        self._diagnostics.reset()
+        self._enqueue_sentinel()
+
+    async def _handle_mark(self, msg: dict[str, Any]) -> None:
+        if not _is_active_twilio_stream_event(
+            msg,
+            active_stream_sid=self._stream_sid,
+            event_name="mark",
+        ):
+            return
+        self._diagnostics.observe_sequence(msg)
+        mark = msg.get("mark")
+        if not isinstance(mark, dict):
+            logger.debug("Ignoring Twilio mark with non-object payload")
+            return
+        mark_name = mark.get("name")
+        if not isinstance(mark_name, str) or not mark_name:
+            logger.debug("Ignoring Twilio mark with invalid name")
+            return
+        logger.debug("Twilio mark acknowledged: %s", mark_name)
+        if self._event_bus is not None:
+            await self._event_bus.emit(PlaybackMarkAck(mark_name=mark_name))
+
     async def _emit_call_ended_once(self) -> None:
         if self._call_ended_emitted:
             return
@@ -698,6 +705,16 @@ class _TwilioProtocolMixin:
         ):
             self._diagnostics.observe_sequence(msg)
             await _emit_parsed_twilio_dtmf(msg, self._event_bus)
+
+    _MessageHandler = Callable[["_TwilioProtocolMixin", dict[str, Any]], Awaitable[None]]
+    _MESSAGE_HANDLERS: ClassVar[dict[str, _MessageHandler]] = {
+        "connected": _handle_connected,
+        "start": _handle_start,
+        "media": _handle_media,
+        "dtmf": _handle_dtmf,
+        "stop": _handle_stop,
+        "mark": _handle_mark,
+    }
 
 
 class TwilioTransport(_TwilioProtocolMixin, ServerTransportBase):

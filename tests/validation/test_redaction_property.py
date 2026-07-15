@@ -10,9 +10,13 @@ output), and any explicit runtime secret passed to
 
 from __future__ import annotations
 
+import re
+
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from easycat.validation import redaction as redaction_module
 from easycat.validation.redaction import (
     REDACTED_SECRET,
     contains_unredacted_sensitive_text,
@@ -45,6 +49,64 @@ def test_redact_text_is_idempotent(value: str) -> None:
 def test_redact_text_is_idempotent_arbitrary(value: str) -> None:
     once = redact_text(value)
     assert redact_text(once) == once
+
+
+@pytest.mark.parametrize(
+    ("value", "redacted_marker"),
+    [
+        ("https://api.openai.com/v1", "[REDACTED_URL]"),
+        ("Authorization: Bearer short-secret", "[REDACTED_SECRET]"),
+        ("bearer short-secret", "[REDACTED_SECRET]"),
+        ("token=short-secret", "[REDACTED_SECRET]"),
+        ("eyJabcdefghijk.abcdefghijk.abcdefghijk", "[REDACTED_SECRET]"),
+        ("sk-abcdefghijkl", "[REDACTED_SECRET]"),
+        ("request_abcdef", "[REDACTED_REQUEST_ID]"),
+        ("+1 (415) 555-0123", "[REDACTED_PHONE]"),
+        ("failed in /Users/alice/project", "~"),
+    ],
+)
+def test_redact_text_prefilter_covers_every_pattern_family(
+    value: str,
+    redacted_marker: str,
+) -> None:
+    assert redacted_marker in redact_text(value)
+
+
+def test_redact_text_prefilter_covers_midword_bearer_policy() -> None:
+    assert redact_text("clientBearer abc123") == f"clientBearer {REDACTED_SECRET}"
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [pattern for pattern, _replacement in redaction_module._TEXT_REDACTIONS],
+)
+@given(data=st.data())
+def test_text_redaction_trigger_is_policy_superset(
+    pattern: re.Pattern[str],
+    data: st.DataObject,
+) -> None:
+    value = data.draw(st.from_regex(pattern, fullmatch=True))
+    assert redaction_module._TEXT_REDACTION_TRIGGER_RE.search(value) is not None
+
+
+def test_redact_text_preserves_ordinary_text() -> None:
+    for value in (
+        "ordinary transcript without sensitive material",
+        "partial transcript word 123",
+    ):
+        assert redact_text(value) is value
+
+
+def test_secret_key_classification_cache_is_bounded() -> None:
+    redaction_module._is_secret_value_key.cache_clear()
+    try:
+        for index in range(512):
+            redact_value("ordinary value", f"field_{index}")
+        cache_info = redaction_module._is_secret_value_key.cache_info()
+        assert cache_info.maxsize == 256
+        assert cache_info.currsize == 256
+    finally:
+        redaction_module._is_secret_value_key.cache_clear()
 
 
 @given(
