@@ -33,6 +33,7 @@ from uuid import uuid4
 
 from easycat import _observability as observability
 from easycat._log_context import bind_turn, reset_turn
+from easycat._tts_synthesizer import TTSSynthResult
 from easycat._turn_context import TurnContext, TurnHandle
 from easycat.cancel import CancelToken
 from easycat.events import (
@@ -42,9 +43,11 @@ from easycat.events import (
     Error,
     ErrorStage,
     EventBus,
+    STTFinal,
     TurnEnded,
     TurnStarted,
 )
+from easycat.integrations.agents._agent_runner import PreparedAgentResponse
 from easycat.runtime.context import RunContext
 from easycat.runtime.records import JournalRecordKind
 from easycat.runtime.scope import RuntimeScope
@@ -96,6 +99,12 @@ class _StreamingTtsState:
     turn_gen: int
     token: CancelToken | None
     queue: asyncio.Queue[TTSInput | None]
+    #: Released after first-payload lifecycle dispatch (or a no-audio terminal
+    #: path) so AgentFinal cannot overtake BotStartedSpeaking.
+    first_tts_lifecycle_ready: asyncio.Event = field(default_factory=asyncio.Event)
+    #: Released after the outer task has emitted (or intentionally skipped)
+    #: AgentFinal so fast TTS completion cannot overtake agent output ordering.
+    agent_output_settled: asyncio.Event = field(default_factory=asyncio.Event)
     #: The consumer received its first payload and decided gating/playback.
     synth_started: bool = False
     #: Gate state snapshotted at first-payload time (see ``_settle_turn_after_tts``).
@@ -112,10 +121,19 @@ class _StreamingTtsState:
     error: Exception | None = None
 
 
+@dataclass(frozen=True)
+class _PreemptiveAgentResult:
+    """Terminal result of a history-isolated preemptive agent attempt."""
+
+    response: PreparedAgentResponse | None = None
+    error: Exception | None = None
+
+
 class TurnRunner:
     """Drives the per-turn agent loop."""
 
     _TEXT_TURN_TASK_NAME = "text_turn"
+    _PREEMPTIVE_TASK_NAME = "preemptive_agent_generation"
 
     def __init__(
         self,
@@ -168,6 +186,22 @@ class TurnRunner:
         self._text_turn_accumulated: str = ""
         self._text_turn_lock = asyncio.Lock()
 
+        # Voice-only speculative generation. The task may run while the turn
+        # manager is confirming an endpoint, but its result is not committed
+        # to agent history until ``handle_end_of_speech`` confirms that the
+        # transcript still matches.
+        self._preemptive_task: asyncio.Task[_PreemptiveAgentResult] | None = None
+        self._preemptive_transcript = ""
+        self._preemptive_turn_generation = 0
+        self._preemptive_attempts = 0
+        # Highest turn generation whose end-of-speech take point has passed.
+        # A trailing STTFinal for such a turn (e.g. a provider flushing a
+        # second final segment during the ``end_stream`` drain) must never
+        # spawn new speculative work: the confirmed run for that turn is
+        # already starting, and simple agents must never see overlapping
+        # ``run()`` calls.
+        self._preemptive_finalized_generation = 0
+
     # ── Introspection helpers (kept for Session shutdown paths) ──
 
     @property
@@ -184,6 +218,7 @@ class TurnRunner:
         """Handle TurnStarted from TurnManager: start STT and prime pre-roll."""
         if not self._is_running():
             return
+        await self.cancel_preemptive_generation()
         # TurnManager always stamps TurnStarted with a generated id;
         # synthesize one for hand-built events so the TurnContext (and
         # every journal record keyed off it) still gets a real id.
@@ -202,6 +237,8 @@ class TurnRunner:
         cancel_token = self._turn_manager.cancel_token or CancelToken()
         turn = TurnContext(turn_id=turn_id, cancel_token=cancel_token)
         self._turn.set(turn)
+        self._preemptive_turn_generation = turn.generation
+        self._preemptive_attempts = 0
         # Tag startup records for this turn without leaving the EventBus task
         # pinned to the turn after this handler returns.
         turn_token = bind_turn(turn.id)
@@ -241,6 +278,85 @@ class TurnRunner:
             return
         finally:
             reset_turn(turn_token)
+
+    async def on_stt_final(self, event: STTFinal) -> None:
+        """Start history-isolated agent work while endpointing is still pending."""
+        candidate = self._preemptive_candidate(event)
+        if candidate is None:
+            return
+        turn, transcript = candidate
+        if self._preemptive_matches(turn, transcript):
+            return
+
+        # A later final segment invalidates the previous transcript. Cancel
+        # and drain it before invoking the same simple agent again so agents
+        # never see overlapping ``run()`` calls.
+        await self.cancel_preemptive_generation()
+        # The drain above can suspend; ``handle_end_of_speech`` may reach the
+        # turn's take point meanwhile. Re-check before starting a fresh
+        # attempt that could overlap the confirmed run.
+        if self._preemptive_take_passed(turn):
+            return
+        if self._preemptive_turn_generation != turn.generation:
+            self._preemptive_turn_generation = turn.generation
+            self._preemptive_attempts = 0
+        if self._preemptive_attempts >= self._agent_stage.preemptive_max_retries:
+            return
+
+        self._preemptive_attempts += 1
+        self._preemptive_transcript = transcript
+        self._preemptive_turn_generation = turn.generation
+
+        async def _prepare() -> _PreemptiveAgentResult:
+            try:
+                response = await self._agent_stage.prepare_preemptive(transcript, turn)
+                return _PreemptiveAgentResult(response=response)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return _PreemptiveAgentResult(error=exc)
+
+        self._preemptive_task = self._runtime_scope.create_journaled_task(
+            _prepare(),
+            name=self._PREEMPTIVE_TASK_NAME,
+            journal_sink=self._journal_sink,
+            turn_id=turn.id,
+        )
+
+    def _preemptive_candidate(self, event: STTFinal) -> tuple[TurnContext, str] | None:
+        """Return the active turn/transcript when speculative work is safe."""
+        if not self._agent_stage.supports_preemptive_generation:
+            return None
+        turn = self._turn.current
+        if turn is None or turn.cancel_token.is_cancelled:
+            return None
+        if self._preemptive_take_passed(turn):
+            return None
+        if event.turn_id is not None and event.turn_id != turn.id:
+            return None
+
+        transcript = turn.transcript_text
+        if not transcript:
+            return None
+        return turn, transcript
+
+    def _preemptive_matches(self, turn: TurnContext, transcript: str) -> bool:
+        """Whether the active attempt already targets this exact transcript."""
+        return bool(
+            self._preemptive_task is not None
+            and self._preemptive_turn_generation == turn.generation
+            and self._preemptive_transcript == transcript
+        )
+
+    def _preemptive_take_passed(self, turn: TurnContext) -> bool:
+        """Whether this turn is already past its end-of-speech take point.
+
+        Turn generations increase monotonically, so any generation at or
+        below the recorded finalized generation belongs to a turn whose
+        prepared response was already taken (or discarded) by
+        ``handle_end_of_speech``.
+        """
+        return turn.generation <= self._preemptive_finalized_generation
 
     def schedule_turn_ended(self, event: TurnEnded) -> None:
         """Schedule end-of-turn processing without blocking other handlers.
@@ -302,16 +418,121 @@ class TurnRunner:
         if turn is None:
             turn = self._turn.current
         token = turn.cancel_token if turn else None
+        turn_generation = self._turn.generation
+        if turn is not None:
+            # This turn is now past its take point: a trailing STTFinal (a
+            # provider can flush a second final segment during the
+            # ``end_stream`` drain below) must not start new speculation
+            # that would overlap the confirmed ``run()`` for this turn.
+            self._preemptive_finalized_generation = max(
+                self._preemptive_finalized_generation, turn.generation
+            )
 
         transcript = await self._finalize_turn_transcript(turn)
 
         if not transcript or (token and token.is_cancelled):
+            await self.cancel_preemptive_generation()
             if self._turn.current is turn:
                 self._reset_turn_state()
             return
 
         await self._emit(AgentRequestStarted())
-        await self.run_streaming_agent(transcript, token, turn=turn)
+        prepared_response = await self._take_preemptive_response(transcript, turn)
+        # The await above spans the remaining model latency. Speech may resume
+        # during it, cancelling/replacing this turn. Never fall through to the
+        # confirmed invocation for an abandoned transcript: even a cancelled
+        # AgentRunner records its user message before it observes the token.
+        if not self._is_active_voice_turn(turn, token, turn_generation):
+            return
+        await self.run_streaming_agent(
+            transcript,
+            token,
+            turn=turn,
+            prepared_response=prepared_response,
+        )
+
+    def _is_active_voice_turn(
+        self,
+        turn: TurnContext | None,
+        token: CancelToken | None,
+        generation: int,
+    ) -> bool:
+        """Whether a post-await voice turn is still the session's active generation."""
+        return bool(
+            turn is not None
+            and not (token and token.is_cancelled)
+            and self._turn.current is turn
+            and self._turn.generation == generation
+        )
+
+    async def cancel_preemptive_generation(self) -> None:
+        """Cancel and drain the current preemptive task, if any."""
+        task = self._preemptive_task
+        self._preemptive_task = None
+        self._preemptive_transcript = ""
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            # ``await task`` raises CancelledError both when the drained
+            # speculative task was cancelled (expected — swallow it) and when
+            # the *calling* task was itself cancelled during the drain window.
+            # Re-raise the latter so a cancelled host (STT event consumer,
+            # ``on_turn_ended``, ``Session.stop``) does not resume past its
+            # cancellation point and keep working on a stale turn.
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+        finally:
+            self._runtime_scope.discard(task)
+
+    async def _take_preemptive_response(
+        self,
+        transcript: str,
+        turn: TurnContext | None,
+    ) -> PreparedAgentResponse | None:
+        """Return a matching prepared response, otherwise discard it safely."""
+        task = self._preemptive_task
+        if (
+            task is None
+            or turn is None
+            or self._preemptive_turn_generation != turn.generation
+            or self._preemptive_transcript != transcript
+        ):
+            await self.cancel_preemptive_generation()
+            return None
+
+        self._preemptive_task = None
+        self._preemptive_transcript = ""
+        try:
+            if self._timeout_config and self._timeout_config.agent_timeout:
+                result = await with_agent_timeout(
+                    task,
+                    timeout=self._timeout_config.agent_timeout,
+                    event_bus=self._event_bus,
+                )
+            else:
+                result = await task
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            return None
+        except AgentTimeoutError:
+            logger.debug("Preemptive agent generation timed out; using confirmed path")
+            return None
+        finally:
+            self._runtime_scope.discard(task)
+        if result.error is not None:
+            logger.debug(
+                "Preemptive agent generation failed; using confirmed path: %s",
+                result.error,
+            )
+            return None
+        return result.response
 
     async def _finalize_turn_transcript(self, turn: TurnContext | None) -> str:
         """Stop STT input, drain pending commits, and return the final transcript.
@@ -367,6 +588,7 @@ class TurnRunner:
         token: CancelToken | None,
         *,
         turn: TurnContext | None = None,
+        prepared_response: PreparedAgentResponse | None = None,
     ) -> None:
         """Streaming agent path with incremental TTS on sentence boundaries.
 
@@ -406,6 +628,7 @@ class TurnRunner:
                     turn,
                     cancel_token=token,
                     system_prefix=system_prefix,
+                    prepared_response=prepared_response,
                 ),
                 cancel_token=token,
                 tts_queue=st.queue,
@@ -418,25 +641,40 @@ class TurnRunner:
         agent_task = asyncio.create_task(_run_agent_consumer())
         tts_task = asyncio.create_task(self._consume_tts_payloads(st))
 
-        caught_exc = await self._await_agent_task_recording_cancel(st, agent_task, tts_task)
-        agent_error = agent_result.error if agent_result else caught_exc
-        interrupted = agent_result.interrupted if agent_result else False
-        accumulated_text = agent_result.text if agent_result else ""
-        structured_output = agent_result.structured_output if agent_result else None
-        stream_succeeded = agent_error is None and not (token and token.is_cancelled)
-
-        if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
-            accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
-
-        if (accumulated_text or structured_output is not None) and stream_succeeded:
-            await self._emit(
-                AgentFinal(text=accumulated_text, structured_output=structured_output)
-            )
-
         try:
-            await tts_task
-        except asyncio.CancelledError:
-            pass
+            try:
+                caught_exc = await self._await_agent_task_recording_cancel(
+                    st, agent_task, tts_task
+                )
+                # Lifecycle ordering is not agent execution time. Wait outside
+                # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
+                # the agent timeout after the agent has already completed.
+                await self._await_first_tts_lifecycle_ready(st, tts_task)
+                agent_error = agent_result.error if agent_result else caught_exc
+                interrupted = agent_result.interrupted if agent_result else False
+                accumulated_text = agent_result.text if agent_result else ""
+                structured_output = agent_result.structured_output if agent_result else None
+                stream_succeeded = agent_error is None and not (token and token.is_cancelled)
+
+                if self._tts.strip_markdown_enabled and accumulated_text and stream_succeeded:
+                    accumulated_text = self._finalize_streamed_text(turn, accumulated_text)
+
+                if (accumulated_text or structured_output is not None) and stream_succeeded:
+                    await self._emit(
+                        AgentFinal(text=accumulated_text, structured_output=structured_output)
+                    )
+            finally:
+                st.agent_output_settled.set()
+
+            await self._await_tts_task_recording_cancel(st, tts_task)
+        except BaseException:
+            # Cancellation or a strict event-handler failure can land after
+            # the agent wait but before the guarded TTS wait. Keep both spawned
+            # tasks owned across that gap so provider work cannot outlive the
+            # turn and leak stale audio into a later one.
+            self._cancel_pending(agent_task, tts_task)
+            await asyncio.gather(agent_task, tts_task, return_exceptions=True)
+            raise
 
         if agent_error is not None and st.error is not None:
             await self._emit(
@@ -478,6 +716,10 @@ class TurnRunner:
             logger.exception("TTS streaming error")
             await self._emit(Error(exception=exc, stage=ErrorStage.TTS))
 
+        # Safety release for cancellation/error paths that exit before the
+        # first queue item can make the more precise release below.
+        st.first_tts_lifecycle_ready.set()
+
         # Decide whether playback was cut short by a barge-in *now* — while
         # still inside the consumer task and before ``finalize_speaking_turn``
         # emits bot_stopped_speaking (after which the next turn can start and
@@ -496,13 +738,17 @@ class TurnRunner:
     async def _synthesize_queued_payloads(self, st: _StreamingTtsState) -> None:
         """Drain the payload queue through the synthesizer until the sentinel."""
         while True:
+            first_synthesis_task = None
             payload = await st.queue.get()
             if payload is None:
+                st.first_tts_lifecycle_ready.set()
                 break
             if st.token and st.token.is_cancelled:
+                st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
             if self._tts.is_playback_suppressed:
+                st.first_tts_lifecycle_ready.set()
                 st.chunks.append(TtsChunk(_text_for_estimation_timeline(payload), 0, False))
                 break
 
@@ -512,21 +758,33 @@ class TurnRunner:
                 # (the classification gate can flush mid-synthesis); re-reading
                 # it live later would tear down the turn pointer the gated
                 # replay still needs for mark accounting.
-                st.gated = self._is_gated()
-                if not st.gated:
-                    await self._turn_manager.bot_started_speaking()
-                    st.playback_started = True
-                st.synth_started = True
+                try:
+                    st.gated = self._is_gated()
+                    if not st.gated:
+                        first_synthesis_task = await self._tts.begin_synthesis_with_bot_start(
+                            payload,
+                            st.token,
+                            is_active=lambda: (
+                                self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                            ),
+                        )
+                        st.playback_started = True
+                finally:
+                    st.synth_started = True
+                    st.first_tts_lifecycle_ready.set()
 
-            result = await self._tts.synthesizer.synthesize(
-                payload,
-                st.token,
-                is_active=(
-                    None
-                    if self._is_gated()
-                    else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
-                ),
-            )
+            if first_synthesis_task is not None:
+                result = await self._await_owned_first_synthesis(first_synthesis_task)
+            else:
+                result = await self._tts.synthesizer.synthesize(
+                    payload,
+                    st.token,
+                    is_active=(
+                        None
+                        if self._is_gated()
+                        else lambda: self._turn_manager.state == TurnManagerState.BOT_SPEAKING
+                    ),
+                )
             st.chunks.append(
                 TtsChunk(
                     _text_for_estimation_timeline(payload),
@@ -537,8 +795,24 @@ class TurnRunner:
             if result.first_audio_time is not None and st.turn.first_tts_audio_time is None:
                 st.turn.first_tts_audio_time = result.first_audio_time
 
+    @staticmethod
+    async def _await_owned_first_synthesis(
+        task: asyncio.Task[TTSSynthResult],
+    ) -> TTSSynthResult:
+        """Propagate consumer cancellation and drain provider cleanup."""
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+
     async def _settle_turn_after_tts(self, st: _StreamingTtsState) -> None:
         """Return the TurnManager toward IDLE (or keep the gated turn alive)."""
+        current_task = asyncio.current_task()
+        if current_task is None or current_task.cancelling() == 0:
+            await st.agent_output_settled.wait()
         if st.synth_started and self._turn_manager.state == TurnManagerState.BOT_SPEAKING:
             st.should_stop = await self._tts.finalize_speaking_turn(
                 st.turn, turn_generation=st.turn_gen
@@ -575,24 +849,93 @@ class TurnRunner:
             )
             raise
 
+    async def _await_tts_task_recording_cancel(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        """Await final TTS without letting its cancellation consume ours."""
+        try:
+            await asyncio.shield(tts_task)
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is None or current_task.cancelling() == 0:
+                # The TTS task was cancelled independently. Preserve the
+                # historical behavior of treating that as a settled consumer.
+                return
+
+            await self._cancel_tts_for_streaming_turn(st, tts_task)
+            raise
+
+    async def _await_first_tts_lifecycle_ready(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        """Preserve event order without charging lifecycle work to the agent."""
+        ready_task = asyncio.create_task(st.first_tts_lifecycle_ready.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                (ready_task, tts_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if ready_task in done:
+                await ready_task
+        except asyncio.CancelledError:
+            await self._cancel_tts_for_streaming_turn(st, tts_task)
+            raise
+        finally:
+            if not ready_task.done():
+                ready_task.cancel()
+                await asyncio.gather(ready_task, return_exceptions=True)
+
+    async def _cancel_tts_for_streaming_turn(
+        self,
+        st: _StreamingTtsState,
+        tts_task: asyncio.Task[None],
+    ) -> None:
+        self._cancel_pending(tts_task)
+        try:
+            await tts_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._record_streaming_interruption(
+            st,
+            interrupted=st.turn.last_barge_in_time is not None,
+            source="streaming_turn_cancelled",
+        )
+
     async def _await_agent_task(
         self,
         agent_task: asyncio.Task[None],
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
         """Await the agent under its timeout; cancel both tasks on failure."""
+        timeout_task: asyncio.Task[None] | None = None
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
-                await with_agent_timeout(
-                    agent_task,
-                    timeout=self._timeout_config.agent_timeout,
-                    event_bus=self._event_bus,
+                timeout_task = asyncio.create_task(
+                    with_agent_timeout(
+                        agent_task,
+                        timeout=self._timeout_config.agent_timeout,
+                        event_bus=self._event_bus,
+                    )
                 )
+                await asyncio.shield(timeout_task)
             else:
-                await agent_task
+                await asyncio.shield(agent_task)
         except asyncio.CancelledError:
-            self._cancel_pending(agent_task, tts_task)
-            for t in (agent_task, tts_task):
+            tasks = (
+                (agent_task, tts_task)
+                if timeout_task is None
+                else (
+                    timeout_task,
+                    agent_task,
+                    tts_task,
+                )
+            )
+            self._cancel_pending(*tasks)
+            for t in tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):

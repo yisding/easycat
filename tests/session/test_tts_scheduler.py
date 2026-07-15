@@ -11,7 +11,7 @@ from easycat._bounded_queue import BoundedAudioQueue
 from easycat._turn_context import TurnContext
 from easycat.audio_format import PCM16_MONO_16K, AudioChunk
 from easycat.cancel import CancelToken
-from easycat.events import EventBus, TTSAudio
+from easycat.events import BotStartedSpeaking, EventBus, TTSAudio
 from easycat.llm_output_processing import LLMOutputProcessor
 from easycat.runtime import InMemoryRingBuffer
 from easycat.runtime.context import RunContext
@@ -62,6 +62,25 @@ class _RecordingTTS:
 
     async def cancel(self) -> None:
         self.cancelled += 1
+
+
+class _CoordinatedTTS(_RecordingTTS):
+    """Expose provider start/release/finalization for lifecycle overlap tests."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finalized = asyncio.Event()
+
+    async def synthesize(self, payload: TTSInput) -> AsyncIterator[_FakeTTSEvent]:
+        self.synthesized.append(payload)
+        self.started.set()
+        try:
+            await self.release.wait()
+            yield _FakeTTSEvent(audio=_chunk())
+        finally:
+            self.finalized.set()
 
 
 class _SSMLTTS(_RecordingTTS):
@@ -315,6 +334,133 @@ async def test_synthesize_bypass_emits_chunks() -> None:
     assert len(ctx["audio_emissions"]) == 2
     for emission in ctx["audio_emissions"]:
         assert emission.bypass_gate is True
+
+
+@pytest.mark.asyncio
+async def test_begin_synthesis_overlaps_provider_with_bot_start_handlers() -> None:
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    order: list[str] = []
+
+    async def _slow_bot_started(_event: BotStartedSpeaking) -> None:
+        assert tts.started.is_set()
+        order.append("bot_started")
+        handler_started.set()
+        await release_handler.wait()
+
+    ctx["bus"].subscribe(BotStartedSpeaking, _slow_bot_started)
+    ctx["bus"].subscribe(TTSAudio, lambda _event: order.append("tts_audio"))
+
+    begin_task = asyncio.create_task(
+        scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+        )
+    )
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+
+    tts.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert ctx["audio_emissions"] == []
+    assert not begin_task.done()
+
+    release_handler.set()
+    synthesis_task = await begin_task
+    result = await synthesis_task
+
+    assert result.audio_produced is True
+    assert order == ["bot_started", "tts_audio"]
+
+
+@pytest.mark.asyncio
+async def test_begin_synthesis_cancels_provider_when_lifecycle_dispatch_is_cancelled() -> None:
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    handler_started = asyncio.Event()
+    never_release = asyncio.Event()
+
+    async def _blocked_bot_started(_event: BotStartedSpeaking) -> None:
+        handler_started.set()
+        await never_release.wait()
+
+    ctx["bus"].subscribe(BotStartedSpeaking, _blocked_bot_started)
+    begin_task = asyncio.create_task(
+        scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+        )
+    )
+    await asyncio.wait_for(tts.started.wait(), timeout=0.5)
+    await asyncio.wait_for(handler_started.wait(), timeout=0.5)
+
+    begin_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await begin_task
+
+    assert tts.finalized.is_set()
+    assert ctx["audio_emissions"] == []
+
+
+@pytest.mark.asyncio
+async def test_begin_synthesis_cleans_up_when_cancelled_during_initial_yield(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easycat.session._tts_scheduler as scheduler_module
+
+    tts = _CoordinatedTTS()
+    scheduler, ctx = _build_scheduler(tts=tts)
+    created_tasks: list[asyncio.Task[object]] = []
+    real_create_task = asyncio.create_task
+
+    def _capture_task(coro: Awaitable[object]) -> asyncio.Task[object]:
+        task = real_create_task(coro)
+        created_tasks.append(task)
+        return task
+
+    async def _cancel_initial_yield(_delay: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(scheduler_module.asyncio, "create_task", _capture_task)
+    monkeypatch.setattr(scheduler_module.asyncio, "sleep", _cancel_initial_yield)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+        )
+
+    assert len(created_tasks) == 1
+    assert created_tasks[0].cancelled()
+    assert ctx["audio_emissions"] == []
+
+
+@pytest.mark.asyncio
+async def test_begin_synthesis_cancels_provider_when_lifecycle_dispatch_fails() -> None:
+    tts = _CoordinatedTTS()
+    tts.release.set()
+    scheduler, ctx = _build_scheduler(tts=tts)
+
+    async def _fail_bot_started() -> None:
+        raise RuntimeError("lifecycle failed")
+
+    ctx["turn_manager"].bot_started_speaking = _fail_bot_started
+
+    with pytest.raises(RuntimeError, match="lifecycle failed"):
+        await scheduler.begin_synthesis_with_bot_start(
+            TTSInput("hello"),
+            None,
+            is_active=lambda: True,
+        )
+
+    assert tts.finalized.is_set()
+    assert ctx["audio_emissions"] == []
 
 
 @pytest.mark.asyncio
