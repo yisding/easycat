@@ -224,6 +224,17 @@ async def test_timeout_rolls_back_history():
 
 
 @pytest.mark.asyncio
+async def test_zero_timeout_rejects_immediate_plain_agent():
+    runner = AgentRunner(EchoAgent(), AgentRunnerConfig(timeout=0.0))
+
+    with pytest.raises(AgentTimeoutError) as exc:
+        await _drain(runner, "test")
+
+    assert exc.value.timeout == 0.0
+    assert runner.history == []
+
+
+@pytest.mark.asyncio
 async def test_configured_timeout_keeps_plain_agent_in_caller_task():
     caller_task = asyncio.current_task()
 

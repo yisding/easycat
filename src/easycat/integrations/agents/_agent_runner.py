@@ -55,6 +55,12 @@ async def _await_with_timeout(awaitable: Awaitable[_T], timeout: float | None) -
     """
     if timeout is None:
         return await awaitable
+    if timeout <= 0:
+        # Preserve ``wait_for``'s established zero/negative-timeout behavior:
+        # a newly-created coroutine is cancelled before it gets a loop turn.
+        # ``asyncio.timeout(0)`` instead lets a coroutine that never suspends
+        # complete successfully, which changes the public timeout contract.
+        return await asyncio.wait_for(awaitable, timeout=timeout)
     async with asyncio.timeout(timeout):
         return await awaitable
 
