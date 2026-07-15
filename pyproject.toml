@@ -429,6 +429,7 @@ module = [
     "easycat.session.*",
     "easycat.integrations.*",
     "easycat.validation._lane_harness.*",
+    "easycat.validation._live_runner.*",
     "easycat.debugger._records.*",
     "easycat.debugger._sources.*",
     "easycat.debugger._aec_routes.*",
@@ -573,6 +574,33 @@ type = "layers"
 layers = [
     "easycat.session_manager",
     "easycat.transports",
+]
+
+# `validation.latency` is the documented outward-facing facade. Internal
+# validation code imports focused domain leaves directly so the facade cannot
+# regress into a god module or create cycles between policy and orchestration.
+[[tool.importlinter.contracts]]
+name = "Validation internals do not depend on the public latency facade"
+type = "forbidden"
+source_modules = [
+    "easycat.validation._environment",
+    "easycat.validation._failure_classification",
+    "easycat.validation._lane_harness",
+    "easycat.validation._latency_artifacts",
+    "easycat.validation._latency_baseline",
+    "easycat.validation._latency_budgets",
+    "easycat.validation._latency_models",
+    "easycat.validation._latency_runner",
+    "easycat.validation._latency_selectors",
+    "easycat.validation._live_runner",
+    "easycat.validation._release_runner",
+    "easycat.validation._reliability_policy",
+    "easycat.validation._runner_support",
+    "easycat.validation._slice_runner",
+    "easycat.validation.reliability",
+]
+forbidden_modules = [
+    "easycat.validation.latency",
 ]
 
 # The app composer owns optional-dependency loading and route assembly. Route
