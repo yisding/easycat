@@ -36,6 +36,15 @@ def _batched_runtime(fn: Callable[[str], object], payload: str, *, iterations: i
     return (perf_counter() - start) / iterations
 
 
+def _min_runtime(fn: Callable[[str], object], payload: str, *, repeats: int = 5) -> float:
+    """Return the fastest batched runtime of *repeats* runs of *fn* (seconds).
+
+    Taking the minimum filters out scheduler/GC noise so the size-vs-size
+    ratio reflects algorithmic scaling rather than one-off jitter.
+    """
+    return min(_batched_runtime(fn, payload) for _ in range(repeats))
+
+
 def _assert_subquadratic(
     fn: Callable[[str], object], build: Callable[[int], str], *, n: int = 4000
 ) -> None:
@@ -43,7 +52,11 @@ def _assert_subquadratic(
 
     A quadratic algorithm yields a time(2n)/time(n) ratio near 4; a linear one
     near 2. We require the ratio to stay comfortably below 3 so the assertion
-    is robust to noise while still catching a regression to O(n^2).
+    still catches a regression to O(n^2).
+
+    Timing on shared runners is noisy, so aggregate several independent ratios
+    by their median. This filters isolated scheduler spikes without allowing a
+    single unusually favorable measurement to hide quadratic behavior.
     """
     small_payload = build(n)
     large_payload = build(2 * n)
@@ -51,12 +64,15 @@ def _assert_subquadratic(
     fn(large_payload)
     ratios: list[float] = []
     for _ in range(5):
-        small = _batched_runtime(fn, small_payload)
-        large = _batched_runtime(fn, large_payload)
-        if small > 0:
-            ratios.append(large / small)
-    ratio = median(ratios)
-    assert ratio < 3.0, f"scaling ratio {ratio:.2f} suggests quadratic blowup"
+        small = _min_runtime(fn, small_payload)
+        large = _min_runtime(fn, large_payload)
+        # Guard against divide-by-zero on extremely fast (sub-microsecond) runs.
+        if small <= 0:
+            continue
+        ratios.append(large / small)
+    assert ratios, "timing resolution produced no usable scaling samples"
+    median_ratio = median(ratios)
+    assert median_ratio < 3.0, f"scaling ratio {median_ratio:.2f} suggests quadratic blowup"
 
 
 # ── has_markdown detection ─────────────────────────────────────────
@@ -130,6 +146,7 @@ class TestHasMarkdown:
     def test_adversarial_brackets_not_detected(self, build: Callable[[int], str]) -> None:
         assert has_markdown(build(2000)) is False
 
+    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )
@@ -289,6 +306,7 @@ class TestStripMarkdown:
         payload = build(2000)
         assert strip_markdown(payload) == payload
 
+    @pytest.mark.stress
     @pytest.mark.parametrize(
         "build", [b for _, b in _ADVERSARIAL_PAYLOADS], ids=[n for n, _ in _ADVERSARIAL_PAYLOADS]
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
@@ -51,6 +52,10 @@ class DeepgramSTTConfig:
     # Deepgram closes an idle streaming socket after 10 seconds. Its documented
     # recommendation is one text-frame KeepAlive every 3-5 seconds.
     keepalive_interval_s: float = 4.0
+    # Keep best-effort session startup bounded independently of the socket's
+    # reconnect/backoff policy. A timed-out attempt is discarded and first use
+    # retries through the normal stream lifecycle.
+    warmup_timeout_s: float = 5.0
     # Bound the wait for the Finalize-triggered result. On timeout the socket
     # is discarded (draining any result already buffered in the close window)
     # and the latest interim transcript is promoted only if no final arrived
@@ -71,10 +76,19 @@ class DeepgramSTTConfig:
                 "Deepgram persistent_ws=True is not supported for Flux; "
                 "the v2 endpoint does not support Finalize"
             )
-        if self.keepalive_interval_s <= 0:
-            raise ValueError("Deepgram keepalive_interval_s must be positive")
-        if self.final_transcript_timeout_s <= 0:
-            raise ValueError("Deepgram final_transcript_timeout_s must be positive")
+        for name in (
+            "keepalive_interval_s",
+            "warmup_timeout_s",
+            "final_transcript_timeout_s",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"Deepgram {name} must be positive and finite")
 
     @property
     def is_flux(self) -> bool:
@@ -101,7 +115,7 @@ class DeepgramSTT(WebSocketSTTBase):
             provider_error_name="deepgram",
             expected_sample_rate=None,
             close_timeout=5.0,
-            dynamic_event_queue=True,
+            dynamic_event_queue=bool(config.persistent_ws and not config.is_flux),
         )
         self._config = config
         self._keepalive_task: asyncio.Task[None] | None = None
@@ -125,12 +139,17 @@ class DeepgramSTT(WebSocketSTTBase):
         """Best-effort establish the reusable Nova socket before user audio."""
         if not self._persistent_enabled():
             return
-        try:
-            async with self._lifecycle_lock:
-                await self._ensure_persistent_connection()
-        except Exception as exc:
-            logger.debug("Deepgram STT warmup skipped: %s", exc)
-            await self._discard_connection()
+        async with self._lifecycle_lock:
+            try:
+                await asyncio.wait_for(
+                    self._ensure_persistent_connection(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+            except Exception as exc:
+                logger.debug("Deepgram STT warmup skipped: %s", exc)
+                # Keep cleanup serialized with a concurrently queued first
+                # stream so it cannot close that stream's replacement socket.
+                await self._discard_connection()
 
     async def _on_start(self) -> None:
         self._partial_text = ""

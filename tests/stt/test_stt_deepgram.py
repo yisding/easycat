@@ -390,6 +390,7 @@ def test_deepgram_config_constructs_without_api_key():
     assert config.api_key == ""
     assert config.model == "nova-2"
     assert config.persistent_ws is True
+    assert config.warmup_timeout_s == 5.0
 
 
 def test_deepgram_flux_disables_persistence_by_default():
@@ -403,11 +404,12 @@ def test_deepgram_flux_rejects_explicit_persistence():
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
-    (("keepalive_interval_s", 0.0), ("final_transcript_timeout_s", -1.0)),
+    "field",
+    ("keepalive_interval_s", "warmup_timeout_s", "final_transcript_timeout_s"),
 )
-def test_deepgram_rejects_non_positive_persistent_timing(field: str, value: float):
-    with pytest.raises(ValueError, match="must be positive"):
+@pytest.mark.parametrize("value", (0.0, -1.0, float("inf"), float("nan"), True))
+def test_deepgram_rejects_invalid_persistent_timing(field: str, value: float):
+    with pytest.raises(ValueError, match=field):
         DeepgramSTTConfig(**{field: value})
 
 
@@ -505,6 +507,49 @@ async def test_deepgram_warmup_reuses_one_socket_across_turns():
         for frame in ws.sent
         if isinstance(frame, str)
     )
+
+
+@pytest.mark.asyncio
+async def test_deepgram_warmup_timeout_retries_on_first_stream():
+    connect_count = 0
+    first_connect_started = asyncio.Event()
+    working = PersistentMockWebSocket()
+
+    async def mock_connect(url, **kwargs):
+        nonlocal connect_count
+        connect_count += 1
+        if connect_count == 1:
+            first_connect_started.set()
+            await asyncio.Event().wait()
+        return working
+
+    stt = DeepgramSTT(
+        DeepgramSTTConfig(
+            api_key="k",
+            warmup_timeout_s=0.01,
+            ws_connect=mock_connect,
+        )
+    )
+
+    warmup_task = asyncio.create_task(stt.warmup())
+    await first_connect_started.wait()
+    # Queue the first real stream behind warmup. Failed warmup cleanup must
+    # finish under the lifecycle lock before this stream creates its socket.
+    start_task = asyncio.create_task(stt.start_stream())
+    await asyncio.wait_for(warmup_task, timeout=0.1)
+    await asyncio.wait_for(start_task, timeout=0.1)
+
+    async def collect_events():
+        return [event async for event in stt.events()]
+
+    collector = asyncio.create_task(collect_events())
+    await stt.send_audio(make_audio_chunks(generate_pcm_sine(duration_ms=100))[0])
+    await stt.end_stream()
+    events = await collector
+
+    assert [event.text for event in events if event.type == STTEventType.FINAL] == ["turn 1"]
+    assert connect_count == 2
+    await stt.aclose()
 
 
 @pytest.mark.asyncio
