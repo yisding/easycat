@@ -468,6 +468,100 @@ async def test_streaming_agent_timeout_does_not_poison_next_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_agent_timeout_cancels_before_error_dispatch() -> None:
+    """Late agent success must not overtake a slow timeout error handler."""
+
+    class LateSuccessAgent(_TestBridgeBase):
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            await asyncio.sleep(0.02)
+            yield AgentBridgeEvent(kind="text_delta", text="Late success.")
+            yield AgentBridgeEvent(kind="done", text="Late success.")
+
+    tts = FakeTTS()
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=LateSuccessAgent(),
+            tts=tts,
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+        )
+    )
+
+    errors: list[Error] = []
+    finals: list[AgentFinal] = []
+
+    async def record_error_slowly(event: Error) -> None:
+        await asyncio.sleep(0.03)
+        errors.append(event)
+
+    session.event_bus.subscribe(Error, record_error_slowly)
+    session.event_bus.subscribe(AgentFinal, lambda event: finals.append(event))
+    session._turn = TurnContext("turn-1", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("first", token=None)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0].exception, AgentTimeoutError)
+    assert finals == []
+    assert tts.synthesized_texts == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_agent_timeout_drains_cleanup_before_error_dispatch() -> None:
+    cleanup_finished = asyncio.Event()
+
+    class SlowCleanupAgent(_TestBridgeBase):
+        async def invoke(
+            self,
+            turn_input: AgentTurnInput,
+            recorder: AgentRecorder,
+            cancel_token: CancelToken | None = None,
+        ) -> AsyncIterator[AgentBridgeEvent]:
+            _ = turn_input, recorder, cancel_token
+            try:
+                await asyncio.Event().wait()
+                yield AgentBridgeEvent(kind="done", text="unreachable")
+            finally:
+                await asyncio.sleep(0.02)
+                cleanup_finished.set()
+
+    session = Session(
+        SessionConfig(
+            transport=FakeTransport(),
+            vad=FakeVAD(),
+            stt=FakeSTT(transcript="ignored"),
+            agent=SlowCleanupAgent(),
+            tts=FakeTTS(),
+            noise_reducer=FakeNoiseReducer(),
+            turn_manager_config=_FAST_TURN,
+            timeout_config=TimeoutConfig(agent_timeout=0.01),
+        )
+    )
+    cleanup_seen_by_handler: list[bool] = []
+
+    def record_error(event: Error) -> None:
+        _ = event
+        cleanup_seen_by_handler.append(cleanup_finished.is_set())
+
+    session.event_bus.subscribe(Error, record_error)
+    session._turn = TurnContext("turn-1", CancelToken())
+
+    await session._turn_runner.run_streaming_agent("first", token=None)
+
+    assert cleanup_seen_by_handler == [True]
+
+
+@pytest.mark.asyncio
 async def test_streaming_tts_timeout_does_not_poison_next_turn() -> None:
     """A first-byte TTS timeout should still allow a later turn to synthesize."""
 

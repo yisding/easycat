@@ -661,7 +661,7 @@ class TurnRunner:
                 # ``_await_agent_task`` so slow BotStartedSpeaking handlers cannot trip
                 # the agent timeout after the agent has already completed.
                 await self._await_first_tts_lifecycle_ready(st, tts_task)
-                agent_error = agent_result.error if agent_result else caught_exc
+                agent_error = caught_exc or (agent_result.error if agent_result else None)
                 interrupted = agent_result.interrupted if agent_result else False
                 accumulated_text = agent_result.text if agent_result else ""
                 structured_output = agent_result.structured_output if agent_result else None
@@ -683,8 +683,7 @@ class TurnRunner:
             # the agent wait but before the guarded TTS wait. Keep both spawned
             # tasks owned across that gap so provider work cannot outlive the
             # turn and leak stale audio into a later one.
-            self._cancel_pending(agent_task, tts_task)
-            await asyncio.gather(agent_task, tts_task, return_exceptions=True)
+            await self._cancel_and_drain(agent_task, tts_task)
             raise
 
         if agent_error is not None and st.error is not None:
@@ -918,11 +917,7 @@ class TurnRunner:
         st: _StreamingTtsState,
         tts_task: asyncio.Task[None],
     ) -> None:
-        self._cancel_pending(tts_task)
-        try:
-            await tts_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await self._cancel_and_drain(tts_task)
         self._record_streaming_interruption(
             st,
             interrupted=st.turn.last_barge_in_time is not None,
@@ -935,50 +930,35 @@ class TurnRunner:
         tts_task: asyncio.Task[None],
     ) -> Exception | None:
         """Await the agent under its timeout; cancel both tasks on failure."""
-        timeout_task: asyncio.Task[None] | None = None
         try:
             if self._timeout_config and self._timeout_config.agent_timeout:
-                timeout_task = asyncio.create_task(
-                    with_agent_timeout(
-                        agent_task,
-                        timeout=self._timeout_config.agent_timeout,
-                        event_bus=self._event_bus,
-                    )
+                await with_agent_timeout(
+                    asyncio.shield(agent_task),
+                    timeout=self._timeout_config.agent_timeout,
                 )
-                await asyncio.shield(timeout_task)
             else:
                 await asyncio.shield(agent_task)
         except asyncio.CancelledError:
-            tasks = (
-                (agent_task, tts_task)
-                if timeout_task is None
-                else (
-                    timeout_task,
-                    agent_task,
-                    tts_task,
-                )
-            )
-            self._cancel_pending(*tasks)
-            for t in tasks:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
+            await self._cancel_and_drain(agent_task, tts_task)
             raise
         except Exception as exc:
-            # AgentTimeoutError is already logged and emitted by with_agent_timeout.
-            if not isinstance(exc, AgentTimeoutError):
+            await self._cancel_and_drain(agent_task, tts_task)
+            if isinstance(exc, AgentTimeoutError):
+                # Drain the shielded agent before dispatching handlers so its
+                # cleanup is complete before the turn can advance.
+                await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
+            else:
                 logger.exception("Streaming agent error")
                 await self._emit(Error(exception=exc, stage=ErrorStage.AGENT))
-            self._cancel_pending(agent_task, tts_task)
             return exc
         return None
 
     @staticmethod
-    def _cancel_pending(*tasks: asyncio.Task[None]) -> None:
+    async def _cancel_and_drain(*tasks: asyncio.Task[None]) -> None:
         for t in tasks:
             if not t.done():
                 t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     def _finalize_streamed_text(self, turn: TurnContext, accumulated_text: str) -> str:
         """Apply the final markdown strip and sync the agent framework state."""

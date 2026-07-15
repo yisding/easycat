@@ -58,6 +58,43 @@ no VAD endpoint, and a turn that errored before synthesis has no TTS byte. The
 `user_speech_start_to_bot_stopped_ms` barge-in delta is `null` for turns the
 user never interrupted.
 
+## Compare framework-owned scheduling
+
+The deterministic cross-framework harness compares EasyCat, LiveKit Agents,
+and Pipecat at one external boundary: an accepted transcript/text turn to the
+first audio frame accepted by the framework's transport or output sink.
+Provider behavior is normalized with the same delayed LLM and TTS doubles, so
+the result isolates framework scheduling rather than network or model speed.
+
+```bash
+uv run python perf/bench_framework_latency.py \
+  --iterations 30 \
+  --warmups 5 \
+  --output /tmp/framework-latency.json
+```
+
+The harness runs EasyCat from the checkout and starts LiveKit and Pipecat
+workers from committed, fully resolved `uv.lock` graphs in isolated
+environments using the exact same Python interpreter as EasyCat. Workers stay alive while
+the orchestrator randomizes their order on every warmup and measured round;
+process startup and dependency installation are outside the metric. Every
+sample must deliver its framework-specific expected TTS payload plus nonempty
+audio before it is eligible. (The expectation records punctuation normalization,
+such as LiveKit omitting terminal punctuation from its TTS chunk.) The JSON
+artifact includes raw transcript-to-audio latency and a
+framework-overhead value that subtracts each fake provider's measured elapsed
+time, with P50/P95/P99 for both. It also records pins, revision state, and the
+random seed, plus SHA-256 hashes of both environment locks. Rankings and the
+`easycat_fastest` result use framework overhead,
+so host sleep drift cannot masquerade as framework work. Add
+`--require-easycat-fastest` when a comparison should return a nonzero status
+unless EasyCat wins overhead at both P50 and P95.
+
+This is a framework-overhead benchmark, not a provider leaderboard or a claim
+about full microphone-to-speaker latency. Use the live validation lane and the
+per-turn waterfall for provider, endpointing, transport, and deployment
+comparisons.
+
 ## Latency-adding defaults
 
 These are the defaults that *add waiting time* on the response path. Each
