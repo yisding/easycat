@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -48,12 +49,27 @@ class DeepgramTTSConfig:
     # to acknowledge Clear. A missing boundary leaves the stream ambiguous, so
     # timeout recovery closes it before the next synthesis cycle.
     clear_timeout_s: float = 1.0
+    # Keep best-effort session startup bounded even when synthesis itself uses
+    # unlimited reconnects. A timed-out attempt is discarded and first use
+    # retries with the normal synthesis policy.
+    warmup_timeout_s: float = 5.0
     # Aura's streaming API supports repeated sequential Speak/Flush cycles on
     # one connection. Keep it warm by default so DNS/TLS/WebSocket setup stays
     # off the reply path. Set False for the legacy one-socket-per-utterance
     # behavior. Deepgram has no context IDs, so EasyCat serializes synthesis
     # calls on the shared socket and uses Clear for context-free barge-in.
     persistent_ws: bool = True
+
+    def __post_init__(self) -> None:
+        for name in ("clear_timeout_s", "warmup_timeout_s"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"Deepgram {name} must be a finite number > 0")
 
 
 class DeepgramTTS(_WSTTSBase):
@@ -147,13 +163,17 @@ class DeepgramTTS(_WSTTSBase):
         """Best-effort connect the persistent socket before the first reply."""
         if not self._config.persistent_ws:
             return
-        try:
-            await self._ensure_ws()
-        except Exception as exc:
-            # Warmup is a latency optimization, not an availability gate. Drop
-            # the failed wrapper so the first synthesis gets a clean retry.
-            logger.debug("Deepgram TTS warmup skipped: %s", exc)
-            await self._close_ws()
+        async with self._stream_lock:
+            try:
+                await asyncio.wait_for(
+                    self._ensure_ws(),
+                    timeout=self._config.warmup_timeout_s,
+                )
+            except Exception as exc:
+                # Warmup is a latency optimization, not an availability gate. Drop
+                # the failed wrapper so the first synthesis gets a clean retry.
+                logger.debug("Deepgram TTS warmup skipped: %s", exc)
+                await self._close_ws()
 
     async def _replay_request(self) -> None:
         """Re-send the Speak + Flush frames after a reconnect.
@@ -346,7 +366,11 @@ class DeepgramTTS(_WSTTSBase):
         was_active = self.is_active
         await super().cancel()
         ws = self._ws
-        if self._config.persistent_ws and was_active and ws is not None:
+        if self._config.persistent_ws:
+            # Session resets may cancel every provider even when TTS is idle.
+            # Preserve an already-warmed socket when there is no active cycle.
+            if not was_active or ws is None:
+                return
             owner = self._synthesis_owner
             cycle_done = self._cycle_done
             try:

@@ -12,15 +12,9 @@ from urllib.parse import parse_qsl
 from xml.sax.saxutils import escape, quoteattr
 
 from easycat.events import DTMF, EventBus
-from easycat.telephony.dtmf import VALID_DTMF_DIGITS
+from easycat.telephony.dtmf import VALID_DTMF_OUTPUT_CHARS
 
 logger = logging.getLogger(__name__)
-
-# Characters allowed in TwiML ``digits``/``sendDigits`` attributes: standard
-# DTMF digits (ITU-T Q.23) plus ``W``/``w`` inter-digit pause markers.  This is
-# the single source of truth shared with :class:`DTMFDelivery` so both DTMF
-# output paths enforce the same anti-injection whitelist.
-VALID_DTMF_OUTPUT_CHARS = VALID_DTMF_DIGITS | frozenset("wW")
 
 
 def sanitize_dtmf_digits(digits: str) -> str:

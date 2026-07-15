@@ -17,13 +17,15 @@ import asyncio
 import logging
 import math
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from easycat.events import EventBus, IVRAction, IVRActionType, STTFinal
+from easycat.telephony._ivr_decision import IVRAgentDecision, parse_ivr_agent_decision
+from easycat.telephony.dtmf import is_valid_dtmf_output
 from easycat.telephony.screening import EARLY_MEDIA_PHRASES as _EARLY_MEDIA_PATTERNS
-from easycat.telephony.twiml import VALID_DTMF_OUTPUT_CHARS, twiml_play_digits
+from easycat.telephony.twiml import twiml_play_digits
 
 logger = logging.getLogger(__name__)
 
@@ -159,13 +161,13 @@ class DTMFDelivery:
             return False
 
         # Validate against the shared whitelist (VALID_DTMF_OUTPUT_CHARS, the
-        # single source of truth in twiml.py) to prevent TwiML injection via the
+        # single source of truth in dtmf.py) to prevent TwiML injection via the
         # agent callback.  This is an all-or-nothing contract: if any character
         # is invalid the whole input is suspect, so reject it rather than play a
         # partial.  We check the charset directly (rather than calling
         # sanitize_dtmf_digits, which logs its own "stripped" warning) so this
         # rejection path emits exactly one, accurate log line.
-        if not digits or any(c not in VALID_DTMF_OUTPUT_CHARS for c in digits):
+        if not is_valid_dtmf_output(digits):
             logger.warning("Invalid DTMF digits rejected: %r", digits)
             return False
 
@@ -196,7 +198,8 @@ class DTMFDelivery:
 
 
 # Type alias for the agent callback.
-AgentCallback = Callable[[dict[str, object]], Awaitable[dict[str, str]]]
+AgentCallback = Callable[[dict[str, object]], Awaitable[Mapping[str, object]]]
+_AGENT_CALL_FAILED = object()
 
 
 class IVRNavigator:
@@ -294,62 +297,50 @@ class IVRNavigator:
         }
 
         result = await self._call_agent_with_retry(context)
-        if result is None:
+        if result is _AGENT_CALL_FAILED:
             # Retry path already handled escalation (hangup) or re-arm (wait).
             return
 
-        action_str = result.get("action", "wait")
+        await self._apply_agent_decision(event.text, parse_ivr_agent_decision(result))
 
-        if action_str in ("dtmf", "speak"):
-            if action_str == "dtmf":
-                payload = result.get("digits", "")
-                action_type = IVRActionType.DTMF
-                history_entry = {"action": "dtmf", "digits": payload}
-            else:
-                payload = result.get("text", "")
-                action_type = IVRActionType.SPEAK
-                history_entry = {"action": "speak", "text": payload}
+    async def _apply_agent_decision(self, prompt: str, decision: IVRAgentDecision) -> None:
+        if decision.advances_menu:
+            await self._advance_menu(prompt, decision)
+        elif decision.type is IVRActionType.HANGUP:
+            await self._escalate_to_hangup()
+        else:
+            self._start_prompt_timeout()
 
-            self._history.append((event.text, history_entry))
-            self._menu_depth += 1
+    async def _advance_menu(self, prompt: str, decision: IVRAgentDecision) -> None:
+        self._history.append((prompt, decision.history_entry()))
+        self._menu_depth += 1
+        if self._menu_depth > self._config.max_depth:
+            await self._escalate_to_hangup()
+            return
 
-            if self._menu_depth > self._config.max_depth:
-                await self._escalate_to_hangup()
-                return
+        await self._event_bus.emit(decision.to_event(menu_depth=self._menu_depth))
+        self._start_prompt_timeout()
+        await self._deliver_dtmf_or_fallback(decision)
 
-            action = IVRAction(
-                type=action_type,
-                digits=payload if action_str == "dtmf" else "",
-                text=payload if action_str == "speak" else "",
+    async def _deliver_dtmf_or_fallback(self, decision: IVRAgentDecision) -> None:
+        if decision.type is not IVRActionType.DTMF or self._dtmf_delivery is None:
+            return
+        if await self._dtmf_delivery.send_dtmf_with_retry(decision.payload):
+            return
+        await self._event_bus.emit(
+            IVRAction(
+                type=IVRActionType.SPEAK,
+                text=decision.payload,
                 menu_depth=self._menu_depth,
             )
-            await self._event_bus.emit(action)
-            self._start_prompt_timeout()
+        )
 
-            # Deliver DTMF via REST API if available.
-            if action_str == "dtmf" and self._dtmf_delivery:
-                success = await self._dtmf_delivery.send_dtmf_with_retry(payload)
-                if not success:
-                    await self._event_bus.emit(
-                        IVRAction(
-                            type=IVRActionType.SPEAK,
-                            text=payload,
-                            menu_depth=self._menu_depth,
-                        )
-                    )
-
-        elif action_str == "hangup":
-            await self._escalate_to_hangup()
-
-        else:
-            # "wait" — do nothing, wait for next prompt.
-            self._start_prompt_timeout()
-
-    async def _call_agent_with_retry(self, context: dict[str, object]) -> dict[str, str] | None:
+    async def _call_agent_with_retry(self, context: dict[str, object]) -> object:
         """Call the agent callback with one delayed retry.
 
-        Returns the agent's result dict on success. Returns ``None`` when the
-        attempt could not be completed and escalation has already been handled:
+        Returns the agent's raw result on success. Returns a private sentinel
+        when the attempt could not be completed and escalation has already
+        been handled:
 
         * A slow/timed-out retry is treated as **transient** — the prompt
           timeout is re-armed and we wait for the next prompt.
@@ -381,13 +372,13 @@ class IVRNavigator:
             # timeout and wait for the next prompt rather than hanging up.
             logger.warning("IVR agent retry timed out")
             self._start_prompt_timeout()
-            return None
+            return _AGENT_CALL_FAILED
         except Exception:
             # Deterministic failure (e.g. a crashing callback) on the retry too:
             # escalate to hangup instead of pointlessly re-arming.
             logger.exception("IVR agent retry crashed; escalating to hangup")
             await self._escalate_to_hangup()
-            return None
+            return _AGENT_CALL_FAILED
 
     async def _escalate_to_hangup(self) -> None:
         """Deactivate navigation and emit a terminal HANGUP action."""

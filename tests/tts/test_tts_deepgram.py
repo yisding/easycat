@@ -103,6 +103,34 @@ class TestDeepgramPersistent:
         assert working.connect_calls == 1
         await provider.close()
 
+    async def test_unlimited_retry_warmup_times_out_before_synthesis_retry(self):
+        provider = DeepgramTTS(
+            DeepgramTTSConfig(
+                api_key="test-key",
+                reconnect_max_retries=-1,
+                warmup_timeout_s=0.01,
+            )
+        )
+
+        class HangingConnectSocket(QueueDeepgramSocket):
+            async def connect(self) -> None:
+                self.connect_calls += 1
+                await asyncio.Event().wait()
+
+        hanging = HangingConnectSocket()
+        working = QueueDeepgramSocket(audio=_pcm16_bytes(120))
+        factory = MagicMock(side_effect=[hanging, working])
+
+        with patch.object(provider, "_create_ws", factory):
+            await asyncio.wait_for(provider.warmup(), timeout=0.1)
+            events = [event async for event in provider.synthesize("retry")]
+
+        assert events
+        assert factory.call_count == 2
+        assert hanging._closed
+        assert working.connect_calls == 1
+        await provider.close()
+
     async def test_cancel_uses_clear_and_keeps_socket_for_next_turn(self):
         provider = self._make_provider()
         fake = QueueDeepgramSocket(audio=_pcm16_bytes(120), hold_first_flush=True)
@@ -138,6 +166,22 @@ class TestDeepgramPersistent:
             await provider.stop()
 
         assert fake.sent == []
+        assert not fake._closed
+        await provider.close()
+
+    async def test_idle_cancel_keeps_warmed_persistent_socket_open(self):
+        provider = self._make_provider()
+        fake = QueueDeepgramSocket(audio=_pcm16_bytes(120))
+        factory = MagicMock(return_value=fake)
+
+        with patch.object(provider, "_create_ws", factory):
+            await provider.warmup()
+            await provider.cancel()
+            events = [event async for event in provider.synthesize("next turn")]
+
+        assert events
+        assert factory.call_count == 1
+        assert fake.connect_calls == 1
         assert not fake._closed
         await provider.close()
 
@@ -264,6 +308,13 @@ class TestDeepgramTTSConfig:
         assert config.output_format == PCM16_MONO_24K
         assert config.persistent_ws is True
         assert config.clear_timeout_s == 1.0
+        assert config.warmup_timeout_s == 5.0
+
+    @pytest.mark.parametrize("name", ["clear_timeout_s", "warmup_timeout_s"])
+    @pytest.mark.parametrize("value", [0, -1, float("inf"), True])
+    def test_rejects_invalid_timeouts(self, name, value):
+        with pytest.raises(ValueError, match=name):
+            DeepgramTTSConfig(api_key="test-key", **{name: value})
 
     def test_custom_values(self):
         config = DeepgramTTSConfig(

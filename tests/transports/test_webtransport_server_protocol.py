@@ -7,13 +7,15 @@ from typing import Any
 
 import pytest
 
+from easycat.server.webtransport import (
+    run_webtransport_config_server,
+    serve_webtransport_config_sessions,
+)
 from easycat.transports.webtransport import (
     WebTransportConnectionTransport,
     WebTransportServer,
     WebTransportTransportConfig,
     _get_protocol_class,
-    run_webtransport_config_server,
-    serve_webtransport_config_sessions,
 )
 
 from ._webtransport_helpers import _aioquic_available, _FakeH3, _FakeQuicProtocol
@@ -169,7 +171,7 @@ async def test_serve_webtransport_config_sessions_manages_session_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import easycat.config as config_module
-    import easycat.transports.webtransport as webtransport_module
+    import easycat.server.webtransport as webtransport_module
 
     config = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
     stop_event = asyncio.Event()
@@ -237,7 +239,7 @@ async def test_serve_webtransport_config_sessions_manages_session_lifecycle(
 def test_run_webtransport_config_server_delegates_to_async_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import easycat.transports.webtransport as webtransport_module
+    import easycat.server.webtransport as webtransport_module
 
     config = WebTransportTransportConfig(certfile="cert.pem", keyfile="key.pem")
     calls: list[dict[str, object]] = []

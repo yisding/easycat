@@ -259,8 +259,8 @@ def run_twilio_voice_app(
     """Run a Twilio voice app from a synchronous entry point.
 
     Thin ``asyncio.run`` wrapper around :func:`serve_twilio_voice_app`,
-    mirroring :func:`~easycat.transports.webrtc.run_webrtc_config_server` and
-    :func:`~easycat.transports.websocket.run_websocket_config_server` so the
+    mirroring :func:`~easycat.server.webrtc_routes.run_webrtc_config_server` and
+    :func:`~easycat.server.websocket.run_websocket_config_server` so the
     loop ownership lives next to the async server rather than in the caller.
     """
     asyncio.run(serve_twilio_voice_app(config_factory, config))

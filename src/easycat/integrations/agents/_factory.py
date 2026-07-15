@@ -4,14 +4,29 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from easycat.integrations.agents.base import BridgeInputError, ExternalAgentBridge
 
-# Registered (predicate, bridge_factory) pairs consulted by
-# ``auto_adapt_agent`` — after the AgentRunner unwrap and the bridge
-# passthrough, before the built-in framework branches.
-_AGENT_DETECTORS: list[tuple[Callable[[Any], bool], Callable[[Any], Any]]] = []
+
+@dataclass(frozen=True, slots=True)
+class _AgentDetector:
+    predicate: Callable[[Any], bool]
+    bridge_factory: Callable[[Any], Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _AdaptedAgent:
+    value: Any
+
+
+_AgentAdapter = Callable[[Any, str | None], _AdaptedAgent | None]
+
+
+# Custom detectors run after the AgentRunner/bridge guards and before the
+# ordered built-in adapter pipeline.
+_AGENT_DETECTORS: list[_AgentDetector] = []
 
 
 def register_agent_detector(
@@ -34,7 +49,7 @@ def register_agent_detector(
     mechanism.  Predicate exceptions propagate — keep predicates cheap
     and defensive (``isinstance`` / duck-type checks).
     """
-    _AGENT_DETECTORS.append((predicate, bridge_factory))
+    _AGENT_DETECTORS.append(_AgentDetector(predicate, bridge_factory))
 
 
 def clear_agent_detectors() -> None:
@@ -69,21 +84,9 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
 
     Unknown agent types are returned unchanged.
     """
-    # 0. URL string -> RemoteResponsesAPIBridge.
-    if isinstance(agent, str):
-        from urllib.parse import urlparse
-
-        parsed = urlparse(agent)
-        if parsed.scheme in ("http", "https") and parsed.netloc:
-            if model is None:
-                raise BridgeInputError(
-                    "auto_adapt_agent() requires model= when agent is a URL. "
-                    "Pass model= explicitly or use create_session(agent=url, "
-                    "agent_model=...) instead."
-                )
-            from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
-
-            return RemoteResponsesAPIBridge(base_url=agent, model=model)
+    url_match = _adapt_url(agent, model)
+    if url_match is not None:
+        return url_match.value
 
     # 1. AgentRunner wrapping a framework object — adapt the inner agent.
     # This must run before the generic ExternalAgentBridge passthrough
@@ -103,146 +106,15 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     if isinstance(agent, ExternalAgentBridge):
         return agent
 
-    # 2b. Custom detectors (register_agent_detector) — consulted before
-    # the built-in framework branches so user detectors win.
-    for predicate, bridge_factory in _AGENT_DETECTORS:
-        if predicate(agent):
-            return bridge_factory(agent)
+    # Custom detectors retain precedence over every built-in framework.
+    for detector in _AGENT_DETECTORS:
+        if detector.predicate(agent):
+            return detector.bridge_factory(agent)
 
-    # 3. LlamaAgents / LlamaIndex Workflow -> LlamaAgentsBridge.
-    from easycat.integrations.agents.llama_agents import is_llama_workflow_instance
-
-    if is_llama_workflow_instance(agent):
-        from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
-
-        return LlamaAgentsBridge(workflow=agent)
-
-    # 4. Workflow with on_user_turn(...) -> GenericWorkflowBridge.
-    on_user_turn = getattr(agent, "on_user_turn", None)
-    if callable(on_user_turn) and not isinstance(agent, type):
-        try:
-            sig = inspect.signature(on_user_turn)
-            positional = [
-                p
-                for p in sig.parameters.values()
-                if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
-            ]
-            _BRIDGE_SUPPLIED_KW = {"recorder", "cancel_token"}
-            required_kw_only = [
-                p
-                for p in sig.parameters.values()
-                if p.kind == p.KEYWORD_ONLY and p.default is p.empty
-            ]
-            unsupplied_kw = [p for p in required_kw_only if p.name not in _BRIDGE_SUPPLIED_KW]
-            if len(positional) == 1 and not unsupplied_kw:
-                from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
-
-                return GenericWorkflowBridge(workflow=agent)
-            elif len(positional) > 1:
-                raise BridgeInputError(
-                    f"on_user_turn() has {len(positional)} required positional "
-                    f"parameters but GenericWorkflowBridge only passes (text). "
-                    f"Remove extra required parameters or construct the bridge "
-                    f"explicitly."
-                )
-            elif unsupplied_kw:
-                names = ", ".join(p.name for p in unsupplied_kw)
-                raise BridgeInputError(
-                    f"on_user_turn() has required keyword-only parameter(s) "
-                    f"({names}) that GenericWorkflowBridge cannot supply. "
-                    f"Remove required keyword-only parameters or construct "
-                    f"the bridge explicitly."
-                )
-        except (ValueError, TypeError) as exc:
-            if isinstance(exc, BridgeInputError):
-                raise
-            from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
-
-            return GenericWorkflowBridge(workflow=agent)
-
-    # 5. pydantic_graph.Graph -> error (requires explicit PydanticAIBridge).
-    try:
-        from pydantic_graph import Graph as PydanticGraph
-
-        if isinstance(agent, PydanticGraph):
-            raise BridgeInputError(
-                "pydantic_graph.Graph requires explicit bridge construction: "
-                "PydanticAIBridge(graph=..., state_factory=..., "
-                "initial_node_factory=...)"
-            )
-    except ImportError:
-        pass
-
-    # 6. pydantic_ai.Agent -> PydanticAIBridge (Agent mode).
-    try:
-        from pydantic_ai import Agent as PydanticAgent
-
-        if isinstance(agent, PydanticAgent):
-            from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
-
-            return PydanticAIBridge(agent=agent)
-    except ImportError:
-        pass
-
-    # 7. OpenAI Agents SDK -> OpenAIAgentsBridge.
-    try:
-        from agents import Agent as OpenAIAgent
-
-        if isinstance(agent, OpenAIAgent):
-            from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
-
-            return OpenAIAgentsBridge(agent=agent)
-    except ImportError:
-        pass
-
-    # 7b. LangGraph compiled graph -> LangGraphBridge (check before
-    # plain LangChain Runnable since CompiledStateGraph *is* a Runnable).
-    # A graph wrapped by a generic Runnable combinator
-    # (``graph.with_types(...)`` / ``.with_retry(...)``) is a
-    # ``RunnableBinding`` / ``RunnableRetry`` whose real graph sits on
-    # ``.bound`` — peel those so it still routes here instead of falling
-    # through to the plain LangChainBridge, which would feed it
-    # ``configurable.session_id`` instead of LangGraph's required
-    # ``thread_id`` and crash a checkpointed graph on the first turn.
-    compiled_graph = _unwrap_compiled_state_graph(agent)
-    if compiled_graph is not None:
-        if getattr(compiled_graph, "checkpointer", None) is None:
-            raise BridgeInputError(
-                "LangGraph graphs must be compiled with a checkpointer "
-                "to be auto-adapted. Call graph.compile("
-                "checkpointer=InMemorySaver()) or construct "
-                "LangGraphBridge(graph=..., ...) explicitly."
-            )
-        from easycat.integrations.agents.langgraph import LangGraphBridge
-
-        return LangGraphBridge(graph=compiled_graph)
-
-    # 7c. LangChain Runnable -> LangChainBridge.
-    try:
-        from langchain_core.runnables import Runnable
-
-        if isinstance(agent, Runnable):
-            from easycat.integrations.agents.langchain import LangChainBridge
-
-            # Bare language models (``ChatOpenAI(...)``, any
-            # ``BaseChatModel`` / ``BaseLLM``) are Runnables too, but they
-            # reject the default ``{"input": ..., "history": ...}`` dict
-            # with ``Invalid input type <class 'dict'>``.  Feed them a
-            # message sequence instead so ``EasyConfig.mic(agent=...)``
-            # works on the first turn while history still threads through.
-            messages_input = _is_language_model(agent)
-            return LangChainBridge(runnable=agent, messages_input=messages_input)
-    except ImportError:
-        pass
-
-    # 8. Realtime-API-shaped objects -> error.
-    cls_name = type(agent).__name__
-    if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
-        raise BridgeInputError(
-            "Voice-to-voice / realtime API objects cannot be auto-adapted. "
-            "EasyCat is a chained voice runtime; use the provider SDK directly "
-            "for realtime speech-to-speech."
-        )
+    for adapter in _BUILTIN_AGENT_ADAPTERS:
+        match = adapter(agent, model)
+        if match is not None:
+            return match.value
 
     # Plain ``async run(text)`` agents are returned unchanged.  The
     # factory (create_session / create_text_session) decides whether to
@@ -252,10 +124,194 @@ def auto_adapt_agent(agent: Any, *, model: str | None = None) -> Any:
     return agent
 
 
+def _adapt_url(agent: Any, model: str | None) -> _AdaptedAgent | None:
+    if not isinstance(agent, str):
+        return None
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(agent)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    if model is None:
+        raise BridgeInputError(
+            "auto_adapt_agent() requires model= when agent is a URL. "
+            "Pass model= explicitly or use create_session(agent=url, "
+            "agent_model=...) instead."
+        )
+    from easycat.integrations.agents.responses_api import RemoteResponsesAPIBridge
+
+    return _AdaptedAgent(RemoteResponsesAPIBridge(base_url=agent, model=model))
+
+
+def _adapt_llama_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    from easycat.integrations.agents.llama_agents import is_llama_workflow_instance
+
+    if not is_llama_workflow_instance(agent):
+        return None
+    from easycat.integrations.agents.llama_agents import LlamaAgentsBridge
+
+    return _AdaptedAgent(LlamaAgentsBridge(workflow=agent))
+
+
+_BRIDGE_SUPPLIED_WORKFLOW_KWARGS = frozenset({"recorder", "cancel_token"})
+
+
+def _adapt_generic_workflow(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    on_user_turn = getattr(agent, "on_user_turn", None)
+    if not callable(on_user_turn) or isinstance(agent, type):
+        return None
+    if not _workflow_signature_is_supported(on_user_turn):
+        return None
+    from easycat.integrations.agents.generic_workflow import GenericWorkflowBridge
+
+    return _AdaptedAgent(GenericWorkflowBridge(workflow=agent))
+
+
+def _workflow_signature_is_supported(on_user_turn: Callable[..., Any]) -> bool:
+    try:
+        parameters = inspect.signature(on_user_turn).parameters.values()
+    except (ValueError, TypeError):
+        return True
+
+    positional = [
+        parameter
+        for parameter in parameters
+        if parameter.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        and parameter.default is inspect.Parameter.empty
+    ]
+    required_keyword_only = [
+        parameter
+        for parameter in parameters
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        and parameter.default is inspect.Parameter.empty
+    ]
+    unsupplied_keyword_only = [
+        parameter
+        for parameter in required_keyword_only
+        if parameter.name not in _BRIDGE_SUPPLIED_WORKFLOW_KWARGS
+    ]
+    if len(positional) > 1:
+        raise BridgeInputError(
+            f"on_user_turn() has {len(positional)} required positional "
+            "parameters but GenericWorkflowBridge only passes (text). "
+            "Remove extra required parameters or construct the bridge explicitly."
+        )
+    if unsupplied_keyword_only:
+        names = ", ".join(parameter.name for parameter in unsupplied_keyword_only)
+        raise BridgeInputError(
+            "on_user_turn() has required keyword-only parameter(s) "
+            f"({names}) that GenericWorkflowBridge cannot supply. "
+            "Remove required keyword-only parameters or construct the bridge explicitly."
+        )
+    return len(positional) == 1
+
+
+def _reject_pydantic_graph(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    try:
+        from pydantic_graph import Graph as PydanticGraph
+    except ImportError:
+        return None
+    if not isinstance(agent, PydanticGraph):
+        return None
+    raise BridgeInputError(
+        "pydantic_graph.Graph requires explicit bridge construction: "
+        "PydanticAIBridge(graph=..., state_factory=..., initial_node_factory=...)"
+    )
+
+
+def _adapt_pydantic_agent(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    try:
+        from pydantic_ai import Agent as PydanticAgent
+    except ImportError:
+        return None
+    if not isinstance(agent, PydanticAgent):
+        return None
+    from easycat.integrations.agents.pydantic_ai import PydanticAIBridge
+
+    return _AdaptedAgent(PydanticAIBridge(agent=agent))
+
+
+def _adapt_openai_agent(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    try:
+        from agents import Agent as OpenAIAgent
+    except ImportError:
+        return None
+    if not isinstance(agent, OpenAIAgent):
+        return None
+    from easycat.integrations.agents.openai_agents import OpenAIAgentsBridge
+
+    return _AdaptedAgent(OpenAIAgentsBridge(agent=agent))
+
+
+def _adapt_langgraph(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    compiled_graph = _unwrap_compiled_state_graph(agent)
+    if compiled_graph is None:
+        return None
+    if getattr(compiled_graph, "checkpointer", None) is None:
+        raise BridgeInputError(
+            "LangGraph graphs must be compiled with a checkpointer "
+            "to be auto-adapted. Call graph.compile("
+            "checkpointer=InMemorySaver()) or construct "
+            "LangGraphBridge(graph=..., ...) explicitly."
+        )
+    from easycat.integrations.agents.langgraph import LangGraphBridge
+
+    return _AdaptedAgent(LangGraphBridge(graph=compiled_graph))
+
+
+def _adapt_langchain(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    try:
+        from langchain_core.runnables import Runnable
+    except ImportError:
+        return None
+    if not isinstance(agent, Runnable):
+        return None
+    from easycat.integrations.agents.langchain import LangChainBridge
+
+    # Bare language models need a message sequence rather than the default
+    # ``{"input": ..., "history": ...}`` mapping accepted by compositions.
+    messages_input = _is_language_model(agent)
+    return _AdaptedAgent(LangChainBridge(runnable=agent, messages_input=messages_input))
+
+
+def _reject_realtime_agent(agent: Any, _model: str | None) -> _AdaptedAgent | None:
+    cls_name = type(agent).__name__
+    if "Realtime" in cls_name or hasattr(agent, f"create_{'realtime'}_session"):
+        raise BridgeInputError(
+            "Voice-to-voice / realtime API objects cannot be auto-adapted. "
+            "EasyCat is a chained voice runtime; use the provider SDK directly "
+            "for realtime speech-to-speech."
+        )
+    return None
+
+
+# Order is policy: LangGraph must precede LangChain because a compiled graph is
+# also a Runnable, while realtime rejection deliberately comes after every
+# supported framework adapter.
+_BUILTIN_AGENT_ADAPTERS: tuple[_AgentAdapter, ...] = (
+    _adapt_llama_workflow,
+    _adapt_generic_workflow,
+    _reject_pydantic_graph,
+    _adapt_pydantic_agent,
+    _adapt_openai_agent,
+    _adapt_langgraph,
+    _adapt_langchain,
+    _reject_realtime_agent,
+)
+
+
 # ``configurable`` keys that pin a runnable to one conversation. A bound value
 # for any of these is resolved identically by every per-session bridge, so the
 # spec cannot be safely shared across concurrent connections.
 _CONVERSATION_PIN_KEYS = ("thread_id", "checkpoint_id", "session_id")
+
+
+@dataclass(frozen=True, slots=True)
+class _RunnableLayer:
+    wrapper: Any
+    preserves_graph_api: bool
 
 
 def _runnable_pins_conversation(agent: Any) -> bool:
@@ -421,55 +477,88 @@ def _unwrap_compiled_state_graph(agent: Any) -> Any | None:
     streaming path).  Returns ``None`` (caller falls back to the plain
     Runnable branch) when ``langgraph`` is unavailable.
     """
+    runtime_types = _langgraph_runtime_types()
+    if runtime_types is None:
+        return None
+    graph_type, binding_types, binding_base_types = runtime_types
+    chain = _walk_compiled_graph_chain(
+        agent,
+        graph_type=graph_type,
+        binding_types=binding_types,
+        binding_base_types=binding_base_types,
+    )
+    if chain is None:
+        return None
+    graph, layers = chain
+    target, peeled_layers = _select_graph_target(graph, layers)
+    return _restore_peeled_wrapper_config(target, peeled_layers)
+
+
+def _langgraph_runtime_types() -> (
+    tuple[type[Any], tuple[type[Any], ...], tuple[type[Any], ...]] | None
+):
     try:
-        from langgraph.graph.state import (
-            CompiledStateGraph,
-        )
+        from langgraph.graph.state import CompiledStateGraph
     except ImportError:
         return None
     try:
-        from langchain_core.runnables.base import (
-            RunnableBinding,
-            RunnableBindingBase,
-        )
+        from langchain_core.runnables.base import RunnableBinding, RunnableBindingBase
     except ImportError:
-        runnable_binding_types: tuple[type[Any], ...] = ()
-        runnable_binding_base_types: tuple[type[Any], ...] = ()
-    else:
-        runnable_binding_types = (RunnableBinding,)
-        runnable_binding_base_types = (RunnableBindingBase,)
-    # Walk outer→inner collecting wrapper layers (``seen`` guards a
-    # pathological self-referential ``.bound``) until the real graph.
+        return CompiledStateGraph, (), ()
+    return CompiledStateGraph, (RunnableBinding,), (RunnableBindingBase,)
+
+
+def _walk_compiled_graph_chain(
+    agent: Any,
+    *,
+    graph_type: type[Any],
+    binding_types: tuple[type[Any], ...],
+    binding_base_types: tuple[type[Any], ...],
+) -> tuple[Any, list[_RunnableLayer]] | None:
+    """Return the concrete graph and its outer-to-inner wrapper chain."""
     seen: set[int] = set()
-    layers: list[tuple[Any, bool]] = []  # (wrapper, is_runnable_binding)
-    graph: Any = None
+    layers: list[_RunnableLayer] = []
     node = agent
     while node is not None and id(node) not in seen:
         seen.add(id(node))
-        if isinstance(node, CompiledStateGraph):
-            graph = node
-            break
-        if isinstance(node, runnable_binding_base_types):
-            layers.append((node, isinstance(node, runnable_binding_types)))
+        if isinstance(node, graph_type):
+            return node, layers
+        if isinstance(node, binding_base_types):
+            layers.append(
+                _RunnableLayer(
+                    wrapper=node,
+                    preserves_graph_api=isinstance(node, binding_types),
+                )
+            )
             node = getattr(node, "bound", None)
             continue
         break
-    if graph is None:
-        return None
+    return None
 
+
+def _select_graph_target(
+    graph: Any,
+    layers: list[_RunnableLayer],
+) -> tuple[Any, list[_RunnableLayer]]:
+    """Choose the deepest target with an intact graph-state API proxy."""
     # The longest innermost run of consecutive ``RunnableBinding`` layers
     # (those directly above the graph) is drivable through-the-wrapper:
     # its ``astream_events`` applies every binding and ``__getattr__``
-    # proxies the state API down to the graph.  ``j`` = index of the
-    # outermost such binding; everything before ``j`` is non-preservable
-    # (a retry, or a binding whose proxy a retry below it has broken).
-    j = len(layers)
-    while j > 0 and layers[j - 1][1]:
-        j -= 1
-    target = layers[j][0] if j < len(layers) else graph
+    # proxies the state API down to the graph. ``target_index`` identifies
+    # the outermost such binding; everything before it is non-preservable (a
+    # retry, or a binding whose proxy a retry below it has broken).
+    target_index = len(layers)
+    while target_index > 0 and layers[target_index - 1].preserves_graph_api:
+        target_index -= 1
+    target = layers[target_index].wrapper if target_index < len(layers) else graph
+    return target, layers[:target_index]
 
+
+def _restore_peeled_wrapper_config(target: Any, layers: list[_RunnableLayer]) -> Any:
+    """Reject lost behavior and reapply config from wrappers that were peeled."""
     peeled_configs: list[dict[str, Any]] = []
-    for wrapper, _ in layers[:j]:
+    for layer in layers:
+        wrapper = layer.wrapper
         if getattr(wrapper, "kwargs", None) or getattr(wrapper, "config_factories", None):
             raise BridgeInputError(
                 "Cannot auto-adapt a LangGraph graph whose .bind(**kwargs) / "

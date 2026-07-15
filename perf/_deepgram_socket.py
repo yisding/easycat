@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 
 
 class QueueDeepgramSocket:
@@ -70,7 +70,7 @@ class QueueDeepgramSocket:
             if self._acknowledge_clear:
                 await self._queue.put(json.dumps({"type": "Cleared"}))
 
-    async def recv_iter(self):
+    async def recv_iter(self) -> AsyncIterator[bytes | str]:
         while True:
             message = await self._queue.get()
             if message is None:
