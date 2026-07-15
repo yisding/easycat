@@ -90,6 +90,12 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   `OpenAIRealtimeSTTConfig.persistent_ws=False` to restore one socket per
   turn. A final-transcript timeout discards the reusable socket before the
   next turn so a late final cannot leak into the replacement transcript queue.
+- **Deepgram Nova STT connection setup** — EasyCat keeps Deepgram Nova's STT
+  WebSocket warm across turns by default, sends a provider `KeepAlive` while
+  idle, and uses `Finalize` to delimit each turn; set
+  `DeepgramSTTConfig.persistent_ws=False` to restore one socket per turn.
+  Flux keeps the one-socket-per-turn lifecycle because its v2 endpoint does
+  not support explicit `Finalize`.
 
 ## What is *not* a knob
 
@@ -100,13 +106,18 @@ and [`session/_types.py`](../src/easycat/session/_types.py).
   native cadence, releases the first 20 ms of PCM immediately, then coalesces
   steady-state audio into 100 ms frames; this avoids making first audio wait
   for a full steady-state frame without increasing per-frame overhead for the
-  rest of the utterance. The one knob here is
+  rest of the utterance. The bounded final-transcript knobs are
   `OpenAIRealtimeSTTConfig.final_transcript_timeout_s` (default `0.9` s): the
   bounded wait for OpenAI's end-of-turn `...transcription.completed` before the
   provider promotes its delta-accumulated partial to the turn's final. OpenAI
   occasionally stalls several seconds on that event, so the wait caps the
   worst-case end-of-turn pause; lower it to trade a little tail correction for
   snappier handoff, raise it if you see truncated end-of-turn transcripts.
+  `DeepgramSTTConfig.final_transcript_timeout_s` similarly defaults to `2.0`
+  seconds for a persistent Nova `Finalize`; on timeout EasyCat drops the stale
+  socket (a final already buffered in the close window is still delivered to
+  the ending turn), promotes the latest interim only when no final arrived,
+  and reconnects next turn so late text cannot leak across the turn boundary.
 - **Sentence-boundary TTS streaming** — EasyCat starts synthesis early in the
   agent stream rather than waiting for the full reply. The *first* payload of a
   turn is cut at the first natural clause boundary (comma/semicolon/colon, as
