@@ -1283,8 +1283,54 @@ async def test_agent_phase_failure_releases_tts_settlement(
         await session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
 
     assert captured_tts_task is not None
-    await asyncio.wait_for(asyncio.shield(captured_tts_task), timeout=0.5)
+    await asyncio.wait_for(
+        asyncio.gather(captured_tts_task, return_exceptions=True),
+        timeout=0.5,
+    )
     assert captured_tts_task.done()
+
+
+async def test_agent_final_cancellation_drains_tts_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_handler_started = asyncio.Event()
+    tts_consumer_started = asyncio.Event()
+    tts_consumer_finalized = asyncio.Event()
+    never_release = asyncio.Event()
+    session = Session(_config())
+    turn = TurnContext("turn-agent-final-cancel", CancelToken())
+    session._turn = turn
+
+    async def _blocked_tts_consumer(state: _StreamingTtsState) -> None:
+        tts_consumer_started.set()
+        state.first_tts_lifecycle_ready.set()
+        try:
+            await never_release.wait()
+        finally:
+            tts_consumer_finalized.set()
+
+    async def _blocked_final_handler(_event: AgentFinal) -> None:
+        final_handler_started.set()
+        await never_release.wait()
+
+    monkeypatch.setattr(
+        session._turn_runner,
+        "_consume_tts_payloads",
+        _blocked_tts_consumer,
+    )
+    session.event_bus.subscribe(AgentFinal, _blocked_final_handler)
+
+    run_task = asyncio.create_task(
+        session._turn_runner.run_streaming_agent("hello", token=None, turn=turn)
+    )
+    await asyncio.wait_for(tts_consumer_started.wait(), timeout=0.5)
+    await asyncio.wait_for(final_handler_started.wait(), timeout=0.5)
+    run_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert tts_consumer_finalized.is_set()
 
 
 @pytest.mark.asyncio
