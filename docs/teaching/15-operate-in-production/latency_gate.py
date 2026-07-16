@@ -11,12 +11,32 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections.abc import Mapping
 from typing import Any
 
 METRICS = ("vad->stt", "stt->req", "req->token", "token->tts", "vad->tts")
 PERCENTILES = ("p50", "p90", "p95", "p99")
+
+
+def _sample_count(stats: Mapping[str, Any]) -> int:
+    raw_count = stats.get("count")
+    if isinstance(raw_count, bool) or not isinstance(raw_count, int) or raw_count < 0:
+        raise ValueError("latency metric count must be a non-negative integer")
+    return raw_count
+
+
+def _observed_ms(stats: Mapping[str, Any], percentile: str) -> float | None:
+    raw_observed = stats.get(percentile)
+    if raw_observed is None:
+        return None
+    if isinstance(raw_observed, bool) or not isinstance(raw_observed, (int, float)):
+        raise ValueError(f"latency metric {percentile} must be a number or null")
+    observed_ms = float(raw_observed)
+    if not math.isfinite(observed_ms) or observed_ms < 0:
+        raise ValueError(f"latency metric {percentile} must be a finite non-negative number")
+    return observed_ms
 
 
 def evaluate(
@@ -28,6 +48,10 @@ def evaluate(
     min_samples: int,
 ) -> dict[str, Any]:
     """Return a stable pass/fail result for one captured-bundle metric."""
+    if not math.isfinite(max_ms) or max_ms <= 0:
+        raise ValueError("max_ms must be finite and positive")
+    if min_samples <= 0:
+        raise ValueError("min_samples must be positive")
     if not isinstance(report, Mapping):
         raise ValueError("stdin is not a JSON object")
     if report.get("command") != "latency":
@@ -39,9 +63,8 @@ def evaluate(
     if not isinstance(stats, Mapping):
         raise ValueError(f"latency report has no {metric!r} metric")
 
-    count = int(stats.get("count") or 0)
-    raw_observed = stats.get(percentile)
-    observed_ms = float(raw_observed) if raw_observed is not None else None
+    count = _sample_count(stats)
+    observed_ms = _observed_ms(stats, percentile)
 
     if count < min_samples:
         status = "fail"
@@ -77,8 +100,8 @@ def main() -> int:
     parser.add_argument("--min-samples", type=int, default=20)
     args = parser.parse_args()
 
-    if args.max_ms <= 0:
-        parser.error("--max-ms must be positive")
+    if not math.isfinite(args.max_ms) or args.max_ms <= 0:
+        parser.error("--max-ms must be finite and positive")
     if args.min_samples <= 0:
         parser.error("--min-samples must be positive")
 

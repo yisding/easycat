@@ -1,5 +1,7 @@
 # Chapter 15 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Probe `SessionManager` without two microphones
 
 **Task.** Run the provider-free manager probe:
@@ -9,9 +11,9 @@ uv run python docs/teaching/15-operate-in-production/manager_probe.py
 ```
 
 It keeps two fake connection sessions active together, attempts a
-duplicate key, injects a third session's start failure, and then exits
-both connection contexts. Which guarantees belong to the manager, and
-which cleanup remains the session's responsibility?
+duplicate key, injects a `RuntimeError` from a third session's start,
+and then exits both connection contexts. Which guarantees belong to
+the manager, and which cleanup remains the session's responsibility?
 
 **Hints**
 
@@ -21,11 +23,11 @@ which cleanup remains the session's responsibility?
    records from the manager; those are not runtime record names.
 2. `add(key, session)` reserves a unique key before awaiting
    `session.start()`. A duplicate raises `ValueError` without starting
-   the duplicate. If start raises, the manager removes the reserved key
-   before re-raising, so a later connection can reuse it. The session's
-   own `start()` implementation must roll back resources it opened
-   before failing; the manager does not call `stop()` on that failed
-   object.
+   the duplicate. If start raises an ordinary `Exception`, the manager
+   removes the reserved key before re-raising, so a later connection
+   can reuse it. The session's own `start()` implementation must roll
+   back resources it opened before failing; the manager does not call
+   `stop()` on that failed object.
 3. Each `connection(...)` context calls `remove()` in `finally`, which
    removes the slot and awaits graceful `session.stop()`. Do not race
    `remove()` or `stop_all()` against code still running inside an

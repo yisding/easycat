@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -17,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = REPO_ROOT / "docs" / "teaching" / "13-swap-providers-and-transports"
 
 
-def _load_main_module(chapter: Path = CHAPTER):
+def _load_main_module(chapter: Path = CHAPTER) -> ModuleType:
     path = chapter / "main.py"
     module_name = f"teaching_{chapter.name.replace('-', '_')}_main"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -28,8 +29,12 @@ def _load_main_module(chapter: Path = CHAPTER):
     return module
 
 
-def test_measurement_commands_read_production_bundle_directly(tmp_path: Path) -> None:
-    bundle = tmp_path / "ch13-openai-local-123.bundle"
+def test_measurement_commands_read_production_bundle_directly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = tmp_path / "bundle output" / "ch13-openai-local-123.bundle"
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=object))
 
     for slug in (
         "13-swap-providers-and-transports",
@@ -38,9 +43,10 @@ def test_measurement_commands_read_production_bundle_directly(tmp_path: Path) ->
     ):
         chapter = _load_main_module(REPO_ROOT / "docs" / "teaching" / slug)
         display_path = chapter._display_path(bundle)
+        base = ["uv", "run", "easycat", "latency", str(display_path)]
         assert chapter.measurement_commands(bundle) == (
-            f"uv run easycat latency {display_path}",
-            f"uv run easycat latency {display_path} --json",
+            shlex.join(base),
+            shlex.join([*base, "--json"]),
         )
 
 
