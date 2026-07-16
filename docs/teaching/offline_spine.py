@@ -89,9 +89,9 @@ CHECKPOINTS = (
     Checkpoint(
         3,
         "03-parrot-naive",
-        "parrot_lifecycle_probe.py",
-        "task/resource cleanup",
-        "event-stream exhaustion cancels mic receive; every path closes STT before disconnect",
+        "timeout_policy_probe.py",
+        "silence-timeout tradeoff",
+        "500 ms fires 45 ms before the next word; 2,000 ms adds a 2,005 ms commit wait",
     ),
     Checkpoint(
         4,
@@ -103,16 +103,16 @@ CHECKPOINTS = (
     Checkpoint(
         5,
         "05-blocking-agent",
-        "tts_outcome_probe.py",
-        "first-audio outcomes",
-        "no chunks, all rejected, and first accepted audio produce three distinct outcomes",
+        "gap_decomposition_probe.py",
+        "blocking first-audio gap",
+        "1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes 800 ms",
     ),
     Checkpoint(
         6,
         "06-streaming-agent",
         "tts_delivery_probe.py",
-        "streamed TTS delivery",
-        "sentence delivery counts roll up to matching turn counts in all three scenarios",
+        "sentence-level TTS handoff",
+        "sentence delivery rows preserve acceptance separately and roll up to one matching turn",
     ),
     Checkpoint(
         7,
@@ -160,16 +160,16 @@ CHECKPOINTS = (
     Checkpoint(
         13,
         "13-swap-providers-and-transports",
-        "session_scope_probe.py",
-        "graceful vs forced teardown",
-        "both scope paths export postmortem evidence before the caller-owned client closes",
+        "matrix_probe.py",
+        "provider × transport matrix",
+        "two provider mixes cross three transport configs into six cells without changing axes",
     ),
     Checkpoint(
         14,
         "14-bring-your-own-agent",
         "workflow_state_probe.py",
-        "workflow artifact boundary",
-        "the artifact keeps metadata-only workflow state plus a pending session action",
+        "plain workflow bridge contract",
+        "`MyWorkflow` yields a reply plus `EndCallAction`; the bridge reports deep mode",
     ),
     Checkpoint(
         15,

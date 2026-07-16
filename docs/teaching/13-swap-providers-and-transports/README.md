@@ -10,15 +10,15 @@
 > every swap is a measured decision.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `graceful vs forced teardown` without a microphone,
+> **Hardware-free checkpoint:** prove `provider × transport matrix` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/13-swap-providers-and-transports/session_scope_probe.py
+> uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
 > ```
 >
-> **Evidence to find:** both scope paths export postmortem evidence before the caller-owned
-> client closes.
+> **Evidence to find:** two provider mixes cross three transport configs into six cells without
+> changing axes.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
@@ -59,9 +59,9 @@ debug bundles — see the
   first chapter that uses the production wiring); WebRTC and
   Twilio transport options; `--provider-mix
   {openai,deepgram-eleven}` and `--transport {local,webrtc,twilio}`
-  CLI matrix; `event_bus_probe.py` for the provider observability
-  contract; bundle-shape note explaining the teaching → production
-  journal-shape transition.
+  CLI matrix; `matrix_probe.py` for all six provider-free config cells;
+  `event_bus_probe.py` for the provider observability contract; bundle-shape
+  note explaining the teaching → production journal-shape transition.
 - **Removed:** every hand-rolled coroutine from chapters 6-10.
   `Session` orchestrates the pipeline now.
 
@@ -71,6 +71,17 @@ debug bundles — see the
 |------------------|:-----------:|:----------------:|:--------------:|
 | **`openai`**         | ✓ runnable  | needs browser    | needs a call   |
 | **`deepgram-eleven`**| ✓ runnable  | needs browser    | needs a call   |
+
+Materialize all six configuration cells without keys, clients, or provider
+calls:
+
+```bash
+uv run python docs/teaching/13-swap-providers-and-transports/matrix_probe.py
+```
+
+The output keeps the provider mapping constant across three transports and
+the transport config constant across two provider mixes—the Protocol payoff
+in data rather than a live demo.
 
 ## Run two axes
 

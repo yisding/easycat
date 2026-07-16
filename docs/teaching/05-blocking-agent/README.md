@@ -8,15 +8,15 @@
 > seconds. This is on purpose.
 
 <!-- BEGIN auto:offline-checkpoint -->
-> **Hardware-free checkpoint:** prove `first-audio outcomes` without a microphone,
+> **Hardware-free checkpoint:** prove `blocking first-audio gap` without a microphone,
 > speakers, or provider credentials:
 >
 > ```bash
-> uv run python docs/teaching/05-blocking-agent/tts_outcome_probe.py
+> uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
 > ```
 >
-> **Evidence to find:** no chunks, all rejected, and first accepted audio produce three distinct
-> outcomes.
+> **Evidence to find:** 1,200 ms agent plus 450 ms TTS equals 1,650 ms total; full enqueue takes
+> 800 ms.
 >
 > [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
 <!-- END auto:offline-checkpoint -->
@@ -47,6 +47,7 @@ build movement (chapters 6-9) exists to close this gap.
 - **Added:** an `AsyncOpenAI` client + `blocking_agent` function
   between STT and TTS; three `turn.gap` sub-spans
   (`stt_to_agent_ms`, `agent_ms`, `tts_ms`) journaled per turn;
+  `gap_decomposition_probe.py` for deterministic gap arithmetic;
   `tts_outcome_probe.py` for first-audio failure attribution.
 - **Preserved:** TTS accepted/rejected chunk counts from chapter 4 now appear
   in both `stage.tts.execute` and `turn.gap`.
@@ -503,6 +504,16 @@ It is also unshippable. This is what most naïve voice demos do.
 > via the real `Agent` surface.
 
 ## Decompose the gap
+
+Run the provider-free decomposition first:
+
+```bash
+uv run python docs/teaching/05-blocking-agent/gap_decomposition_probe.py
+```
+
+Its scripted clock makes the arithmetic inspectable: 1,200 ms in the agent
+plus 450 ms to first TTS audio produces a 1,650 ms total gap, while full TTS
+enqueue finishes later.
 
 The journal records three sub-spans between STT-final and the first
 bot-audio chunk, plus the time required to enqueue the complete reply.
