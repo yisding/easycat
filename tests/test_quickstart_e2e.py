@@ -221,8 +221,10 @@ def test_readme_choose_your_path_routes_primary_onboarding_surfaces() -> None:
         "Run a local mic/speaker voice bot": ("[Install](#install)", "uv run easycat doctor"),
         "No mic or API key yet": (
             "[Journal demo](examples/journal_demo.py)",
+            "[hardware-free teaching spine](docs/teaching/#hardware-free-checkpoint-spine)",
             "uv run easycat console",
             "uv run python examples/journal_demo.py",
+            "uv run python docs/teaching/offline_spine.py --run --jobs 4",
         ),
         "Learn the pipeline step by step": (
             "[Teaching ladder](docs/teaching/)",

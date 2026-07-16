@@ -1,7 +1,31 @@
 # Chapter 1 — Echo
 
+<!-- BEGIN auto:navigation -->
+**Progress: 2 of 16** · [← Chapter 0 — Hello, Audio](../00-hello-audio/) · [Ladder index](../) · [Progress worksheet](../PROGRESS.md) · [Exercises](./EXERCISES.md) · [Chapter 2 — Transcribe →](../02-transcribe/)
+<!-- END auto:navigation -->
+
 > Mic to speaker, continuously, through the `Transport` protocol.
 > First encounter with EasyCat and with async audio streams.
+
+<!-- BEGIN auto:offline-checkpoint -->
+> **Hardware-free checkpoint:** prove `transport acceptance` without a microphone,
+> speakers, or provider credentials:
+>
+> **Predict first:** How many chunks will be accepted or rejected, and does matching
+> `TransportLike` imply full `Transport` conformance?
+>
+> ```bash
+> uv run python docs/teaching/01-echo/transport_contract_probe.py
+> ```
+>
+> **Evidence to find:** two chunks are accepted, one is rejected, and `version_info()` changes
+> full conformance.
+>
+> **Explain the result:** Explain why structural compatibility can pass while full runtime
+> conformance fails.
+>
+> [See all 16 checkpoints](../#hardware-free-checkpoint-spine).
+<!-- END auto:offline-checkpoint -->
 
 ## Prerequisites
 
@@ -18,7 +42,8 @@
 
 - **Added:** the `Transport` protocol (`src/easycat/providers.py`);
   `LocalTransport` driving the mic + speaker as async streams; the
-  first `async for chunk in stream:` loop.
+  first `async for chunk in stream:` loop; `transport_contract_probe.py`
+  for acceptance and structural-protocol evidence without audio hardware.
 - **Removed:** chapter 0's synchronous `sd.rec` / `sd.play`.
   PortAudio now lives behind `LocalTransport`.
 
@@ -34,14 +59,14 @@
 +"""Chapter 1 — Echo.
  
 -Record 3 seconds of mic audio, play it back, show the byte math,
--then replay at different chunk sizes so the reader can *hear* the
--latency difference.
+-then replay at different chunk sizes while simulating the wait for
+-the first live chunk so the reader can *hear* the latency difference.
 +Mic → speaker, continuously, through EasyCat's ``Transport`` protocol.
 +Runs until Ctrl-C.
  
  Dependency:
      uv sync --extra local --group dev
-@@ -10,100 +9,42 @@
+@@ -10,112 +9,49 @@
  
  from __future__ import annotations
  
@@ -70,22 +95,28 @@
 -    )
 -    sd.wait()
 -    return samples[:, 0]  # drop the channel dim; we're mono
-+async def echo(transport) -> None:
++async def echo(transport) -> tuple[int, int]:
 +    """Pipe every inbound audio chunk straight to the outbound side.
 +
 +    ``transport`` is deliberately untyped. Any object that matches
-+    the ``Transport`` protocol (the four methods in
-+    ``easycat.providers.Transport``) will work — that is the whole
-+    point of duck-typed protocols. Chapter 13 swaps in a different
-+    transport without changing this function.
++    the inbound/outbound audio shape of ``easycat.providers.Transport``
++    will work — that is the whole point of duck-typed protocols.
++    Chapter 13 swaps in a different transport without changing this
++    function.
 +
 +    ``transport.receive_audio()`` is an *async generator* of audio
-+    chunks. ``await transport.send_audio(chunk)`` hands the chunk to
-+    the speaker. No buffer, no turn detection, no STT — the point
-+    of this chapter is the shape of the loop itself.
++    chunks. ``await transport.send_audio(chunk)`` returns whether the
++    transport accepted each chunk for delivery; it does not prove speaker
++    playback. No turn detection or STT — the point of this chapter is the
++    shape of the loop itself.
 +    """
++    accepted = rejected = 0
 +    async for chunk in transport.receive_audio():
-+        await transport.send_audio(chunk)
++        if await transport.send_audio(chunk):
++            accepted += 1
++        else:
++            rejected += 1
++    return accepted, rejected
  
  
 -def play_one_shot(samples: np.ndarray) -> None:
@@ -95,35 +126,46 @@
 -
 -
 -def play_chunked(samples: np.ndarray, chunk_ms: int) -> None:
--    """Play the buffer in fixed-size chunks so the reader can feel
--    the chunking tradeoff.
+-    """Play the buffer in fixed-size chunks with a live-source startup delay.
+-
+-    This recording is already complete, so every chunk would otherwise
+-    be ready immediately. A real source has to collect one full chunk
+-    before it can hand that chunk downstream. Sleeping once before the
+-    first write makes that source-buffering cost explicit in the demo.
 -
 -    ``latency='low'`` and a matching ``blocksize`` keep PortAudio
--    from pre-buffering a full second of audio before it starts —
--    which would hide the whole point of the demo.
+-    from letting a large host buffer hide the source-side delay that
+-    this demo is meant to expose.
 -    """
 -    chunk_samples = SAMPLE_RATE * chunk_ms // 1000
--    stream = sd.OutputStream(
+-    requested_at = time.monotonic()
+-    print(f"  chunk_ms={chunk_ms:>4}  collecting first chunk...", flush=True)
+-
+-    # The recording is already in memory, so its first chunk would otherwise
+-    # be available instantly. Model the time a live source needs to accumulate
+-    # one complete chunk before downstream playback can begin.
+-    time.sleep(chunk_ms / 1000)
+-
+-    # OutputStream's context starts the stream on entry and stops + closes it
+-    # on every exit, including a failed write or Ctrl-C.
+-    with sd.OutputStream(
 -        samplerate=SAMPLE_RATE,
 -        channels=CHANNELS,
 -        dtype="int16",
 -        blocksize=chunk_samples,
 -        latency="low",
--    )
--    stream.start()
--    open_time = time.monotonic()
--    first_chunk = samples[:chunk_samples].reshape(-1, CHANNELS)
--    stream.write(first_chunk)
--    first_sound = time.monotonic()
--    for offset in range(chunk_samples, len(samples), chunk_samples):
--        block = samples[offset : offset + chunk_samples].reshape(-1, CHANNELS)
--        stream.write(block)
--    stream.stop()
--    stream.close()
--    total = time.monotonic() - open_time
+-    ) as stream:
+-        first_chunk = samples[:chunk_samples].reshape(-1, CHANNELS)
+-        stream.write(first_chunk)
+-        first_write_return = time.monotonic()
+-        for offset in range(chunk_samples, len(samples), chunk_samples):
+-            block = samples[offset : offset + chunk_samples].reshape(-1, CHANNELS)
+-            stream.write(block)
+-
+-    total = time.monotonic() - requested_at
 -    print(
--        f"  chunk_ms={chunk_ms:>4}  "
--        f"time-to-first-sound={1000 * (first_sound - open_time):6.1f}ms  "
+-        "    "
+-        f"time-to-first-write-return={1000 * (first_write_return - requested_at):6.1f}ms  "
 -        f"total={total:.2f}s"
 -    )
 -
@@ -151,9 +193,10 @@
 -    print("\nPlayback — one-shot:")
 -    play_one_shot(samples)
 -
--    # Chunk-size demo. 10ms feels instant; 200ms feels slow-start.
--    # We're not changing the audio — only how we *feed it* to the
--    # speaker. Perceived latency = chunk size + scheduling jitter.
+-    # Chunk-size demo. The full recording is already in memory, so each
+-    # replay waits one chunk before its first write to model the time a
+-    # live source spends filling that chunk. 10 ms feels instant; 200 ms
+-    # feels slow-start. Device scheduling adds latency of its own.
 -    print("\nPlayback — chunked:")
 -    for chunk_ms in (10, 50, 200):
 -        play_chunked(samples, chunk_ms)
@@ -162,7 +205,8 @@
 +    await transport.connect()
 +    print("Echoing mic to speakers. Ctrl-C to stop.")
 +    try:
-+        await echo(transport)
++        accepted, rejected = await echo(transport)
++        print(f"Echo stream ended: accepted={accepted}, rejected={rejected}")
 +    finally:
 +        await transport.disconnect()
  
@@ -191,28 +235,34 @@ Ctrl-C to stop.
 
 <!-- BEGIN auto:snippet src=main.py symbol=echo -->
 ```python
-async def echo(transport) -> None:
+async def echo(transport) -> tuple[int, int]:
     """Pipe every inbound audio chunk straight to the outbound side.
 
     ``transport`` is deliberately untyped. Any object that matches
-    the ``Transport`` protocol (the four methods in
-    ``easycat.providers.Transport``) will work — that is the whole
-    point of duck-typed protocols. Chapter 13 swaps in a different
-    transport without changing this function.
+    the inbound/outbound audio shape of ``easycat.providers.Transport``
+    will work — that is the whole point of duck-typed protocols.
+    Chapter 13 swaps in a different transport without changing this
+    function.
 
     ``transport.receive_audio()`` is an *async generator* of audio
-    chunks. ``await transport.send_audio(chunk)`` hands the chunk to
-    the speaker. No buffer, no turn detection, no STT — the point
-    of this chapter is the shape of the loop itself.
+    chunks. ``await transport.send_audio(chunk)`` returns whether the
+    transport accepted each chunk for delivery; it does not prove speaker
+    playback. No turn detection or STT — the point of this chapter is the
+    shape of the loop itself.
     """
+    accepted = rejected = 0
     async for chunk in transport.receive_audio():
-        await transport.send_audio(chunk)
+        if await transport.send_audio(chunk):
+            accepted += 1
+        else:
+            rejected += 1
+    return accepted, rejected
 ```
 <!-- END auto:snippet -->
 
-Three lines of actual logic, wrapped in a docstring that names
-what each line does. That's the point of this chapter. The rest
-is the setup that gets you to "three lines."
+The loop is still tiny, but it now checks the transport's acceptance bit
+instead of silently crediting a dropped frame. The rest is setup that gets you
+to this shape.
 
 ## The Transport protocol
 
@@ -222,23 +272,48 @@ form:
 
 ```python
 @runtime_checkable
-class Transport(Protocol):
+class Transport(VersionedProvider, Protocol):
     async def connect(self) -> None: ...
     async def disconnect(self) -> None: ...
     def receive_audio(self) -> AsyncIterator[AudioChunk]: ...
-    async def send_audio(self, chunk: AudioChunk) -> None: ...
+    async def send_audio(self, chunk: AudioChunk) -> bool: ...
+
+    # Inherited from VersionedProvider:
+    def version_info(self) -> dict[str, str]: ...
 ```
 
-Four methods. Any class that provides those four — with compatible
-signatures — *is* a `Transport`. No inheritance, no registration,
-no base class to inherit from. This is `typing.Protocol` doing
-structural typing: "duck typing, but the type checker verifies."
+Five methods including inherited version metadata. Any class that provides
+those methods with compatible signatures *is* a `Transport`: no inheritance
+or registration is required. EasyCat also exposes a narrow `TransportLike`
+protocol containing only the four connection/audio methods so older custom
+transports without `version_info()` can still be passed to `EasyConfig`.
+This is `typing.Protocol` doing structural typing: "duck typing, but the type
+checker verifies."
 
 `LocalTransport` (mic + speaker via PortAudio), `TwilioTransport`
 (telephony), `WebRTCTransport` (browser), `WebSocketTransport`
 (custom clients) all satisfy the same protocol. Your `echo`
 function doesn't care which one it got. Chapter 13 will swap them
 and you will not touch `echo` to do it.
+
+### Acceptance is not playback
+
+`await transport.send_audio(chunk)` waits for that send operation to finish and
+returns `True` when the transport accepted the chunk for delivery. It returns
+`False` when there is no peer, the transport is disconnected, or an outbound
+queue drops some or all of the chunk. `True` still does **not** prove that a
+speaker rendered the audio; playback evidence is transport-specific and
+arrives later, if that transport can report it.
+
+Run the provider-free probe:
+
+```bash
+uv run python docs/teaching/01-echo/transport_contract_probe.py
+```
+
+It sends three scripted chunks through the real `echo()` loop, accepts two,
+rejects one, and shows that a legacy four-method object satisfies
+`TransportLike` but not the full versioned `Transport`.
 
 ## Why async, not callbacks
 
@@ -260,7 +335,9 @@ write `async for chunk in stream:` — hence the choice at this layer.
 ```mermaid
 flowchart LR
     Mic([Mic]) -- "receive_audio()<br/>AudioChunks" --> echo([echo])
-    echo -- "send_audio()<br/>AudioChunks" --> Speaker([Speaker])
+    echo -- "send_audio()<br/>accepted?" --> Queue{Transport output}
+    Queue -- "true: scheduled" --> Speaker([Speaker])
+    Queue -. "false: rejected" .-> Drop([Drop evidence])
 ```
 
 ## Pocket note
@@ -280,13 +357,23 @@ async for chunk in transport.receive_audio():
     buffer.append(chunk)
     if sum(c.duration_ms for c in buffer) >= 500:
         old = buffer.pop(0)
-        await transport.send_audio(old)
+        accepted = await transport.send_audio(old)
+        if not accepted:
+            print("delayed chunk rejected")
 ```
 
 Now you have a delay line. Why does that create the sensation of
 an *echo* rather than just "a delay"? (Hint: your brain is
 comparing direct sound reaching your skull with delayed sound
 reaching your ears.)
+
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
 
 ## What's next
 

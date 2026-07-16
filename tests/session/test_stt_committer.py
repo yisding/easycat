@@ -341,6 +341,47 @@ async def test_cancel_invokes_on_speech_detection_reset_and_clears_state() -> No
 
 
 @pytest.mark.asyncio
+async def test_cancel_drains_overlapped_final_close_before_provider_teardown() -> None:
+    class _TrackedCloseSTT(_RecordingSTT):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_started = asyncio.Event()
+            self.first_cancelled = asyncio.Event()
+            self.active_closes = 0
+            self.max_active_closes = 0
+
+        async def end_stream(self) -> None:
+            self.end_stream_calls += 1
+            self.active_closes += 1
+            self.max_active_closes = max(self.max_active_closes, self.active_closes)
+            try:
+                if self.end_stream_calls == 1:
+                    self.first_started.set()
+                    try:
+                        await asyncio.Future()
+                    except asyncio.CancelledError:
+                        self.first_cancelled.set()
+                        raise
+            finally:
+                self.active_closes -= 1
+
+    stt = _TrackedCloseSTT()
+    committer, _stt, _emitted, _no_turn, _tm = _make_committer(stt=stt)
+    close_task = committer._runtime_scope.create_task(
+        committer.FINAL_CLOSE_TASK_NAME,
+        stt.end_stream(),
+    )
+    await asyncio.wait_for(stt.first_started.wait(), timeout=1)
+
+    await committer.cancel(_new_turn())
+
+    assert close_task.cancelled()
+    assert stt.first_cancelled.is_set()
+    assert stt.end_stream_calls == 2
+    assert stt.max_active_closes == 1
+
+
+@pytest.mark.asyncio
 async def test_cancel_logs_when_end_stream_raises(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
