@@ -32,6 +32,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "teaching/00-hello-audio/",
         "using-easycat/",
         "using-easycat/00-first-voice-app/",
+        "using-easycat/01-runtime-modes/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -129,6 +130,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "First lesson",
         "EasyCat feature ladder",
         "Feature first lesson",
+        "Feature runtime modes",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -270,6 +272,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     assert entries["docs/using-easycat/"]["url"].endswith("/tree/main/docs/using-easycat")
     assert entries["docs/using-easycat/00-first-voice-app/"]["url"].endswith(
         "/tree/main/docs/using-easycat/00-first-voice-app"
+    )
+    assert entries["docs/using-easycat/01-runtime-modes/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/01-runtime-modes"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]
