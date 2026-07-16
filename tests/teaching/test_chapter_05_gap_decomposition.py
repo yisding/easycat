@@ -52,6 +52,16 @@ def test_gap_decomposition_probe_accounts_for_first_audio_latency() -> None:
     }
 
 
+def test_gap_probe_import_does_not_require_or_leak_openai() -> None:
+    previous_openai = sys.modules.pop("openai", _MISSING)
+    try:
+        load_probe()
+        assert "openai" not in sys.modules
+    finally:
+        if previous_openai is not _MISSING:
+            sys.modules["openai"] = previous_openai
+
+
 def test_gap_probe_restores_chapter_globals_on_success_and_failure(monkeypatch) -> None:
     probe = load_probe()
     chapter = probe.chapter

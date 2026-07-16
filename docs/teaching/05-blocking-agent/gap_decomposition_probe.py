@@ -10,10 +10,23 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import sys
+import types
 from contextlib import redirect_stdout
 from types import SimpleNamespace
 
-import main as chapter
+# Import the chapter's real turn path without requiring the optional SDK that
+# only its live ``main()`` uses to construct a client. Keep the stub scoped to
+# this import so in-process checkpoint harnesses retain their original module
+# state.
+_had_openai = "openai" in sys.modules
+if not _had_openai:
+    sys.modules["openai"] = types.SimpleNamespace(AsyncOpenAI=object)
+try:
+    import main as chapter
+finally:
+    if not _had_openai:
+        sys.modules.pop("openai", None)
 
 
 class ProbeJournal:
