@@ -12,14 +12,41 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
-
-from main import MyWorkflow
 
 from easycat.integrations.agents import GenericWorkflowBridge
 from easycat.integrations.agents.base import NULL_RECORDER
 from easycat.session.actions import EndCallAction, SessionActions
+
+_MISSING = object()
+
+
+def _load_workflow_class():
+    """Load the lesson with a temporary stand-in for its optional SDK."""
+    module_name = "easycat_teaching_chapter_14_main"
+    spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name("main.py"))
+    if spec is None or spec.loader is None:  # pragma: no cover - importlib contract guard
+        raise RuntimeError("could not load Chapter 14")
+    module = importlib.util.module_from_spec(spec)
+    previous_openai = sys.modules.get("openai", _MISSING)
+    sys.modules["openai"] = SimpleNamespace(AsyncOpenAI=object)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+        if previous_openai is _MISSING:
+            sys.modules.pop("openai", None)
+        else:
+            sys.modules["openai"] = previous_openai
+    return module.MyWorkflow
+
+
+MyWorkflow = _load_workflow_class()
 
 
 async def probe() -> dict[str, object]:
