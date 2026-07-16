@@ -42,10 +42,11 @@ the session's responsibility?
    overlapping connection block—cancel/finish those handler tasks first,
    then use `stop_all()` as the final sweep.
 4. `stop_all()` clears the registry before awaiting every captured
-   session's `stop()` concurrently. One stop failure is logged but does
-   not prevent the other stop or escape from `stop_all()`. This isolates
-   shutdown failures; it does not make a failed session's own cleanup
-   successful.
+   session's `stop()` concurrently. The probe captures one expected failure
+   under `stop_all.expected_error`; it does not leak an alarming log line to
+   stderr. That failure does not prevent the other stop or escape from
+   `stop_all()`. This isolates shutdown failures; it does not make a failed
+   session's own cleanup successful.
 5. The right shape for a real multi-session demo is a *server*
    transport: `WebSocketTransport`, `WebRTCTransport`, or
    `TwilioConnectionTransport`. Each connection gets its own

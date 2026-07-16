@@ -139,6 +139,37 @@ def test_offline_spine_rejects_out_of_range_chapter() -> None:
         assert "--through must be between 0 and 15" in completed.stderr
 
 
+def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
+    spine = _load_spine()
+    script = tmp_path / "docs" / "teaching" / "probe.py"
+    script.parent.mkdir(parents=True)
+    checkpoint = spine.Checkpoint(0, ".", "probe.py", "concept", "evidence")
+    spine.REPO_ROOT = tmp_path
+
+    script.write_text("print('not json')\n", encoding="utf-8")
+    invalid_json = spine._run_checkpoint(checkpoint, timeout_s=5)
+    assert invalid_json["status"] == "fail"
+    assert str(invalid_json["detail"]).startswith("stdout is not one JSON document:")
+
+    script.write_text(
+        "import json, sys\n"
+        "print(json.dumps({'ok': True}))\n"
+        "print('unexpected noise', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    noisy = spine._run_checkpoint(checkpoint, timeout_s=5)
+    assert noisy["status"] == "fail"
+    assert noisy["detail"] == "unexpected stderr: unexpected noise"
+
+    script.write_text(
+        "import json, sys\nprint(json.dumps({'ok': True}))\nprint(' ', file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+    whitespace_only_stderr = spine._run_checkpoint(checkpoint, timeout_s=5)
+    assert whitespace_only_stderr["status"] == "fail"
+    assert whitespace_only_stderr["detail"] == "unexpected stderr: ' \\n'"
+
+
 def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
     spine = _load_spine()
     completed = subprocess.run(
@@ -197,6 +228,7 @@ def test_offline_spine_runs_every_checkpoint_without_credentials() -> None:
     assert payload["failed"] == 0
     assert {row["status"] for row in payload["checkpoints"]} == {"pass"}
     assert {row["returncode"] for row in payload["checkpoints"]} == {0}
+    assert {row["detail"] for row in payload["checkpoints"]} == {""}
     after = {
         path.relative_to(TEACHING): path.read_bytes() if path.is_file() else None
         for path in TEACHING.rglob("*")

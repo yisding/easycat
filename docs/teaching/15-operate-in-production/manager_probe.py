@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 from dataclasses import dataclass, field
@@ -41,6 +42,24 @@ class BlockingStartSession(ProbeSession):
         self.start_calls += 1
         self.start_entered.set()
         await asyncio.Event().wait()
+
+
+async def _stop_all_with_captured_error(manager: SessionManager[str]) -> str:
+    error_output = io.StringIO()
+    manager_logger = logging.getLogger("easycat.session_manager")
+    previous_handlers = manager_logger.handlers
+    previous_level = manager_logger.level
+    previous_propagate = manager_logger.propagate
+    manager_logger.handlers = [logging.StreamHandler(error_output)]
+    manager_logger.setLevel(logging.ERROR)
+    manager_logger.propagate = False
+    try:
+        await manager.stop_all()
+    finally:
+        manager_logger.handlers = previous_handlers
+        manager_logger.setLevel(previous_level)
+        manager_logger.propagate = previous_propagate
+    return error_output.getvalue().strip()
 
 
 async def probe() -> dict[str, object]:
@@ -91,7 +110,7 @@ async def probe() -> dict[str, object]:
 
     await manager.add("sweep-healthy", sweep_healthy)  # type: ignore[arg-type]
     await manager.add("sweep-failing", sweep_failing)  # type: ignore[arg-type]
-    await manager.stop_all()
+    expected_stop_error = await _stop_all_with_captured_error(manager)
 
     return {
         "active_together": active_together,
@@ -124,6 +143,7 @@ async def probe() -> dict[str, object]:
             "all_slots_released": (
                 manager.get("sweep-healthy") is None and manager.get("sweep-failing") is None
             ),
+            "expected_error": expected_stop_error,
             "start_calls": {
                 "sweep-failing": sweep_failing.start_calls,
                 "sweep-healthy": sweep_healthy.start_calls,
@@ -137,5 +157,4 @@ async def probe() -> dict[str, object]:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.ERROR, format="%(levelname)s %(name)s: %(message)s")
     print(json.dumps(asyncio.run(probe()), indent=2, sort_keys=True))
