@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - Windows fallback
     _resource = None  # type: ignore[assignment]
 
-from easycat.validation.latency import (
+from easycat.validation._latency_models import (
     LatencyMode,
     ReliabilitySample,
     ReliabilitySignals,
