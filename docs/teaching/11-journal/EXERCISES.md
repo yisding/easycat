@@ -1,5 +1,7 @@
 # Chapter 11 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 The README's three planted-bug investigations *are* the chapter's
 core exercises. This file adds two follow-ups for once you've
 worked through them.
