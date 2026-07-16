@@ -21,11 +21,24 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from pathlib import Path
 
 from easycat.debug.testing import load_bundle
+
+
+def _nearest_rank_percentile(values: list[float], percentile: float) -> float:
+    """Return a nearest-rank percentile without interpolating the observed tail."""
+    if not values:
+        raise ValueError("values must not be empty")
+    if not 0 < percentile <= 1:
+        raise ValueError("percentile must be greater than 0 and at most 1")
+
+    ordered = sorted(values)
+    rank = math.ceil(percentile * len(ordered))
+    return ordered[rank - 1]
 
 
 def _wer_words(ref: str, hyp: str) -> tuple[int, int]:
@@ -75,6 +88,13 @@ def _bundle_stats(path: Path) -> dict:
     }
 
 
+def _latency_percentiles(values: list[float]) -> tuple[float, float]:
+    """Return median P50 and nearest-rank P95 for observed eval turns."""
+    if not values:
+        raise ValueError("at least one latency value is required")
+    return statistics.median(values), _nearest_rank_percentile(values, 0.95)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("bundles_dir", type=Path)
@@ -101,9 +121,7 @@ def main() -> None:
             lat_ms.append(val)
             print(f"  {b.name:38}  {val:>6.0f} ms")
     if lat_ms:
-        lat_ms.sort()
-        p50 = statistics.median(lat_ms)
-        p95 = lat_ms[max(0, int(0.95 * len(lat_ms)) - 1)] if len(lat_ms) > 1 else lat_ms[0]
+        p50, p95 = _latency_percentiles(lat_ms)
         print(f"  {'P50':38}  {p50:>6.0f} ms")
         print(f"  {'P95':38}  {p95:>6.0f} ms")
         print(f"  {'P95 / P50 ratio':38}  {p95 / p50:>6.2f}")

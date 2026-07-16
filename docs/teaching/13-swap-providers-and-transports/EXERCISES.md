@@ -1,5 +1,7 @@
 # Chapter 13 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Add a Cartesia provider preset
 
 **Task.** Add a `--provider-mix cartesia` preset (both STT and TTS
@@ -59,7 +61,9 @@ on the Twilio preset? What does a user on the phone hear?
    to update the active call with `<Play digits="1">`. A successful
    journal path is `session_action_requested`,
    `session_action_started`, then `session_action_completed`; the
-   started record names `TwilioSessionActionExecutor`.
+   started record names `TwilioSessionActionExecutor`. The Twilio
+   preset wires it through `TelephonyConfig.twilio_actions` using
+   `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`.
 2. The user on the phone hears the DTMF tone before the call yields
    back to the bot's audio.
 3. On the `local` transport, `CoreSessionActionExecutor` does not

@@ -1,5 +1,9 @@
 # Chapter 4 — VAD + Pre-roll
 
+<!-- BEGIN auto:navigation -->
+**Progress: 5 of 16** · [← Chapter 3](../03-parrot-naive/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 5 →](../05-blocking-agent/)
+<!-- END auto:navigation -->
+
 > Real speech detection. And why the buffer *before* the detection
 > matters as much as the detection itself.
 
@@ -10,6 +14,11 @@
 - `uv sync --extra quickstart --extra deepgram --group dev` — the `quickstart`
   extra pulls in `onnxruntime`, which Silero VAD needs.
 - `OPENAI_API_KEY` (TTS) and `DEEPGRAM_API_KEY` (STT).
+- Running this chapter makes live provider calls that may incur charges.
+  Review your provider billing and usage limits first.
+- Provider-backed scripts may send audio, transcripts, or prompts to configured
+  services. Use non-sensitive test content and review provider data-handling
+  policies first.
 - After setting provider keys, run `uv run easycat doctor` from the repo root; if keys live in `.env`, run `uv run easycat doctor --env-file .env`. Use `uv run easycat doctor --env-file .env --json` for parseable checks.
 - If keys live in `.env`, also add `--env-file .env` after `uv run`
   in the chapter command you run.
@@ -48,8 +57,8 @@
  
 -Run it and break it — "The capital of France is... uh... Paris" is
 -the canonical killer. Chapter 4 replaces this with a real VAD.
-+Run with ``--no-preroll`` to hear the start-of-utterance truncation
-+this chapter was designed to fix.
++Run with ``--no-preroll`` to compare a stream that omits cached audio
++received before VAD-on.
  
  Dependencies:
      uv sync --extra quickstart --extra deepgram --group dev
@@ -195,7 +204,7 @@
 +    parser.add_argument(
 +        "--no-preroll",
 +        action="store_true",
-+        help="Disable pre-roll; start-of-utterance will be clipped.",
++        help="Disable pre-roll; omit cached frames received before VAD-on.",
 +    )
 +    args = parser.parse_args()
 +
@@ -339,10 +348,10 @@ you've heard it fail on your own voice, the rest of this chapter
 ## Run it
 
 ```bash
-# With pre-roll: the start of every word survives.
+# With pre-roll: cached leading frames are included in the STT stream.
 uv run python docs/teaching/04-vad-preroll/main.py
 
-# Without pre-roll: "Hello" becomes "ello."
+# Without pre-roll: compare the onset without those cached frames.
 uv run python docs/teaching/04-vad-preroll/main.py --no-preroll
 ```
 
@@ -361,17 +370,19 @@ model is bundled.
 
 ## The pre-roll problem
 
-A VAD is a decision made *after* it has seen enough audio. Fast
-backends fire 100-200 ms late — you said "Hello," but the VAD's
-"speech" verdict lands sometime during the "e." If you only forward
-audio chunks that arrive *after* VAD-on, your STT hears "ello"
-and confidently transcribes "Elo."
+A VAD is a decision made *after* it has seen enough audio. Its
+"speech" verdict can land after the utterance has already started.
+If you only forward chunks from VAD-on onward, the STT stream lacks
+the earlier frames and may mis-hear the leading sound (for example,
+a live run might turn "Hello" into "Elo"). The delay and transcript
+effect depend on the utterance, VAD backend, chunking, and STT provider.
 
 ## The pre-roll fix
 
 Keep a short ring buffer of recent audio (we use 300 ms, about 15
 chunks of 20 ms at 24 kHz). When VAD fires, flush the buffer into
-STT first, then forward live chunks. STT sees the full "Hello."
+STT first, then forward live chunks. STT receives the missing onset
+context as well; whether that changes a transcript is provider-dependent.
 
 ```mermaid
 flowchart LR

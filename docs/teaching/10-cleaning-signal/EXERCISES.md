@@ -1,5 +1,7 @@
 # Chapter 10 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Type while you talk
 
 **Task.** Type loudly on your keyboard while saying "hello." Run
