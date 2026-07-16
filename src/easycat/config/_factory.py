@@ -21,8 +21,10 @@ import copy
 import inspect
 import logging
 from collections.abc import Callable
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from easycat.echo_cancellation import EchoCancellationConfig, create_echo_canceller
@@ -37,7 +39,8 @@ from easycat.runtime.capabilities import bind_identity_sink_if_supported
 from easycat.runtime.journal_factory import create_journal
 from easycat.session._session import Session
 from easycat.session._types import Agent as _AgentProto
-from easycat.session._types import SessionConfig
+from easycat.session._types import SessionConfig, SessionHelper
+from easycat.session.actions import SessionActionExecutor
 from easycat.smart_turn import create_smart_turn
 from easycat.stt.factory import create_stt_provider_from_config
 from easycat.stubs import NoopAgent
@@ -47,7 +50,7 @@ from easycat.transports.webrtc import WebRTCTransportConfig
 from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.transports.webtransport import WebTransportTransportConfig
 from easycat.tts.factory import create_tts_provider_from_config
-from easycat.turn_manager import TurnMode
+from easycat.turn_manager import TurnManagerConfig, TurnMode
 from easycat.vad import create_vad
 
 from .easy import (
@@ -57,6 +60,12 @@ from .easy import (
     TransportConfig,
     _inject_agent_runtime,
 )
+
+if TYPE_CHECKING:
+    from easycat.runtime.journal import ExecutionJournal
+    from easycat.telephony.call_state import OutboundCallStateMachine
+
+    from ._telephony_wiring import TelephonyHelpers
 
 logger = logging.getLogger("easycat.config")
 
@@ -344,6 +353,334 @@ def _emit_provider_versions(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _DebugResources:
+    """Journal resources acquired before session assembly."""
+
+    artifact_store: InMemoryArtifactStore | FilesystemArtifactStore | None
+    journal: ExecutionJournal | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AudioPipeline:
+    """Resolved provider instances and their derived runtime flags."""
+
+    # These remain gradual because the public factory deliberately accepts
+    # pre-version_info provider shapes in addition to the full protocols.
+    stt: Any
+    tts: Any
+    vad: Any
+    noise_reducer: Any
+    echo_canceller: Any
+    transport: Any
+    auto_turn_from_stt_final: bool
+    enable_vad: bool
+    enable_echo_cancellation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _TelephonyPipeline:
+    """Lazy telephony result plus the sequence fields consumed by Session."""
+
+    bundle: TelephonyHelpers | None
+    helpers: tuple[SessionHelper, ...]
+    outbound_state_machine: OutboundCallStateMachine | None
+    action_executors: tuple[SessionActionExecutor, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BuiltAudioSession:
+    """Session plus collaborators needed by post-construction wiring."""
+
+    session: Session
+    event_bus: EventBus
+    telephony: _TelephonyPipeline
+
+
+def _create_debug_resources(config: EasyConfig, session_id: str) -> _DebugResources:
+    artifact_store = _create_artifact_store(session_id, config.debug)
+    if config.debug == "off":
+        return _DebugResources(artifact_store=artifact_store, journal=None)
+    journal = create_journal(
+        session_id,
+        debug=config.debug,
+        backend=config.journal_backend,
+        artifact_store=(
+            artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
+        ),
+        retention_mode=config.journal_retention,
+    )
+    return _DebugResources(artifact_store=artifact_store, journal=journal)
+
+
+def _resolve_audio_pipeline(config: EasyConfig, event_bus: EventBus) -> _AudioPipeline:
+    stt = _create_stt(config.stt, event_bus)
+    tts = _create_tts(config.tts, event_bus)
+    auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
+    enable_vad = not auto_turn_from_stt_final
+    vad = _create_vad(config.vad) if enable_vad else None
+    noise_reducer = (
+        _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
+        if config.enable_noise_reduction or config.noise_reduction is not None
+        else None
+    )
+    # EasyConfig fills this default while preserving pre-built providers.
+    echo_config_or_provider = config.echo_cancellation
+    assert echo_config_or_provider is not None
+    echo_canceller = _resolve_echo_canceller(echo_config_or_provider)
+    enable_echo_cancellation = (
+        echo_config_or_provider.enabled
+        if isinstance(echo_config_or_provider, EchoCancellationConfig)
+        else False
+    )
+    return _AudioPipeline(
+        stt=stt,
+        tts=tts,
+        vad=vad,
+        noise_reducer=noise_reducer,
+        echo_canceller=echo_canceller,
+        transport=_create_transport(config.transport, event_bus),
+        auto_turn_from_stt_final=auto_turn_from_stt_final,
+        enable_vad=enable_vad,
+        enable_echo_cancellation=enable_echo_cancellation,
+    )
+
+
+def _resolve_agent(config: EasyConfig, mcp_servers: tuple[str, ...]) -> Any | None:
+    if config.agent is None:
+        return None
+    agent = auto_adapt_agent(config.agent, model=config.agent_model)
+    _inject_agent_runtime(
+        agent,
+        mcp_servers=mcp_servers,
+        agent_model=config.agent_model,
+        remote_agent_api_key=config.remote_agent_api_key,
+    )
+    _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
+    if config.wrap_agent and not isinstance(agent, AgentRunner):
+        agent = AgentRunner(agent, config.agent_runner or AgentRunnerConfig())
+    return agent
+
+
+def _resolve_turn_config(config: EasyConfig) -> TurnManagerConfig:
+    turn_config = config.turn_taking
+    smart_turn = create_smart_turn(config.smart_turn)
+    if smart_turn is None:
+        return turn_config
+    turn_config = replace(turn_config, endpoint_detector=smart_turn)
+    if turn_config.endpoint_threshold is None:
+        return replace(turn_config, endpoint_threshold=config.smart_turn.threshold)
+    if turn_config.endpoint_threshold != config.smart_turn.threshold:
+        logger.warning(
+            "Both turn_taking.endpoint_threshold (%.3f) and "
+            "smart_turn.threshold (%.3f) are set to different values; "
+            "the manager-level endpoint_threshold wins and the provider "
+            "threshold is ignored. Set only one to avoid confusion.",
+            turn_config.endpoint_threshold,
+            config.smart_turn.threshold,
+        )
+    return turn_config
+
+
+def _resolve_telephony(config: EasyConfig, event_bus: EventBus) -> _TelephonyPipeline:
+    if config.telephony is None:
+        return _TelephonyPipeline(
+            bundle=None,
+            helpers=(),
+            outbound_state_machine=None,
+            action_executors=tuple(config.action_executors),
+        )
+    from easycat.config import _telephony_wiring
+
+    bundle = _telephony_wiring.create_telephony_helpers(
+        event_bus,
+        config.telephony,
+        dnc_list=config.dnc_list,
+    )
+    return _TelephonyPipeline(
+        bundle=bundle,
+        helpers=tuple(bundle.helpers),
+        outbound_state_machine=bundle.state_machine,
+        action_executors=(
+            *config.action_executors,
+            *_telephony_wiring.create_action_executors(config.telephony),
+        ),
+    )
+
+
+def _audio_gate_for(
+    state_machine: OutboundCallStateMachine | None,
+) -> Callable[[], bool] | None:
+    if state_machine is None:
+        return None
+
+    def audio_gate() -> bool:
+        return bool(state_machine.gate.is_buffering)
+
+    return audio_gate
+
+
+def _make_session_config(
+    config: EasyConfig,
+    session_id: str,
+    debug: _DebugResources,
+    audio: _AudioPipeline,
+    telephony: _TelephonyPipeline,
+    event_bus: EventBus,
+    agent: Any | None,
+    mcp_servers: tuple[str, ...],
+) -> SessionConfig:
+    return SessionConfig(
+        stt=audio.stt,
+        tts=audio.tts,
+        vad=audio.vad,
+        noise_reducer=audio.noise_reducer,
+        echo_canceller=audio.echo_canceller,
+        transport=audio.transport,
+        agent=agent,
+        event_bus=event_bus,
+        turn_manager_config=_resolve_turn_config(config),
+        timeout_config=config.timeouts,
+        journal=debug.journal,
+        artifact_store=debug.artifact_store,
+        warmup=config.warmup,
+        record_to=config.record_to,
+        session_id=session_id,
+        telephony_helpers=telephony.helpers,
+        enable_vad=audio.enable_vad,
+        enable_noise_reduction=config.enable_noise_reduction,
+        enable_echo_cancellation=audio.enable_echo_cancellation,
+        capture_aec_reference=bool(getattr(config.observability, "capture_aec_reference", False)),
+        auto_turn_from_stt_final=audio.auto_turn_from_stt_final,
+        strip_markdown=config.strip_markdown,
+        output_processors=config.output_processors,
+        session_actions=config.session_actions,
+        action_executors=telephony.action_executors,
+        audio_gate=_audio_gate_for(telephony.outbound_state_machine),
+        mcp_servers=mcp_servers,
+        caller_id_exposure=config.caller_id_exposure,
+        greeting=config.greeting,
+        dnc_list=config.dnc_list,
+    )
+
+
+def _bind_transport_identity(session: Session, transport: Any) -> None:
+    def on_identity(identity: Any) -> None:
+        session.call_identity = _merge_twilio_identity(
+            session._caller_id.private_identity, identity
+        )
+
+    bind_identity_sink_if_supported(transport, on_identity)
+
+
+def _build_audio_session(
+    config: EasyConfig,
+    session_id: str,
+    debug: _DebugResources,
+) -> _BuiltAudioSession:
+    event_bus = EventBus()
+    audio = _resolve_audio_pipeline(config, event_bus)
+    mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
+    agent = _resolve_agent(config, mcp_servers)
+    if debug.journal is not None:
+        _emit_provider_versions(
+            debug.journal,
+            session_id,
+            stt=audio.stt,
+            tts=audio.tts,
+            transport=audio.transport,
+            vad=audio.vad,
+            noise_reducer=audio.noise_reducer,
+            echo_canceller=audio.echo_canceller,
+        )
+    telephony = _resolve_telephony(config, event_bus)
+    session_config = _make_session_config(
+        config,
+        session_id,
+        debug,
+        audio,
+        telephony,
+        event_bus,
+        agent,
+        mcp_servers,
+    )
+    session = Session(session_config)
+    _bind_transport_identity(session, audio.transport)
+    return _BuiltAudioSession(
+        session=session,
+        event_bus=event_bus,
+        telephony=telephony,
+    )
+
+
+def _subscribe_outbound_identity(session: Session, event_bus: EventBus) -> None:
+    from easycat.events import CallInitiated
+    from easycat.session._types import CallIdentity
+
+    def on_call_initiated(event: CallInitiated) -> None:
+        identity = session._caller_id.private_identity
+        if identity is not None and identity.direction == "inbound":
+            return
+        session.call_identity = CallIdentity(
+            caller_number=event.to,
+            called_number=event.from_,
+            direction="outbound",
+            call_sid=event.call_sid,
+        )
+
+    event_bus.subscribe(CallInitiated, on_call_initiated)
+
+
+def _wire_outbound_pipeline(built: _BuiltAudioSession) -> None:
+    telephony = built.telephony
+    if telephony.outbound_state_machine is None or telephony.bundle is None:
+        return
+    from easycat.config import _telephony_wiring
+
+    _telephony_wiring.wire_outbound_pipeline(
+        built.session,
+        telephony.bundle,
+        built.event_bus,
+    )
+
+
+def _maybe_launch_debugger(config: EasyConfig, session: Session) -> None:
+    if config.debug != "full":
+        return
+    from easycat.debugger._autolaunch import maybe_launch_debugger_ui
+
+    maybe_launch_debugger_ui(
+        session,
+        config_opt_in=bool(getattr(config.observability, "debugger_autolaunch", False)),
+    )
+
+
+def _maybe_arm_dev_session(session: Session) -> None:
+    import os
+    import sys
+
+    from easycat._env import is_truthy
+
+    if not (is_truthy(os.getenv("EASYCAT_DEV")) or "easycat.debugger.dev" in sys.modules):
+        return
+    from easycat.debugger.dev import arm_dev_session
+
+    arm_dev_session(session)
+
+
+def _finalize_audio_session(config: EasyConfig, built: _BuiltAudioSession) -> None:
+    session = built.session
+    session._easycat_config = _safe_config_ns(config)
+    session._agent_model = config.agent_model
+    session._remote_agent_api_key = config.remote_agent_api_key
+    _wire_outbound_pipeline(built)
+    _subscribe_outbound_identity(session, built.event_bus)
+    _maybe_launch_debugger(config, session)
+    _maybe_arm_dev_session(session)
+    if config.debug != "off" and _emergency_export_enabled(config):
+        install_emergency_export(session)
+
+
 def create_session(config: EasyConfig) -> Session:
     """Create a fully wired :class:`Session` from an :class:`EasyConfig`.
 
@@ -365,257 +702,16 @@ def create_session(config: EasyConfig) -> Session:
     an :class:`easycat.errors.EasyCatError` subclass when a selected
     provider's credentials or optional extra are missing.
     """
-    from dataclasses import replace
-
     session_id = f"session-{uuid4().hex[:12]}"
-    artifact_store = _create_artifact_store(session_id, config.debug)
-    journal = (
-        create_journal(
-            session_id,
-            debug=config.debug,
-            backend=config.journal_backend,
-            artifact_store=(
-                artifact_store if isinstance(artifact_store, InMemoryArtifactStore) else None
-            ),
-            retention_mode=config.journal_retention,
-        )
-        if config.debug != "off"
-        else None
-    )
-
-    try:
-        event_bus = EventBus()
-        stt = _create_stt(config.stt, event_bus)
-        tts = _create_tts(config.tts, event_bus)
-        auto_turn_from_stt_final = _should_auto_turn_from_stt_final(config)
-        enable_vad = not auto_turn_from_stt_final
-        vad = _create_vad(config.vad) if enable_vad else None
-        noise_reducer = (
-            _resolve_noise_reducer(config.noise_reduction or NoiseReducerConfig())
-            if config.enable_noise_reduction or config.noise_reduction is not None
-            else None
-        )
-        # ``EasyConfig.__post_init__`` fills the default echo-cancellation
-        # config when the field is unset, but preserves already-built provider
-        # instances. Either way, the field is never None here.
-        echo_cfg_or_provider = config.echo_cancellation
-        assert echo_cfg_or_provider is not None
-        echo_canceller = _resolve_echo_canceller(echo_cfg_or_provider)
-        enable_echo_cancellation = (
-            echo_cfg_or_provider.enabled
-            if isinstance(echo_cfg_or_provider, EchoCancellationConfig)
-            else False
-        )
-        transport = _create_transport(config.transport, event_bus)
-
-        mcp_servers = tuple(config.mcp_servers) if config.mcp_servers else ()
-
-        if config.agent is not None:
-            agent = auto_adapt_agent(config.agent, model=config.agent_model)
-            _inject_agent_runtime(
-                agent,
-                mcp_servers=mcp_servers,
-                agent_model=config.agent_model,
-                remote_agent_api_key=config.remote_agent_api_key,
-            )
-            _validate_agent_shape(agent, wrap_agent=config.wrap_agent)
-            if config.wrap_agent and not isinstance(agent, AgentRunner):
-                runner_cfg = config.agent_runner or AgentRunnerConfig()
-                agent = AgentRunner(agent, runner_cfg)
-        else:
-            agent = None
-
-        # Emit provider versions into the journal at session start.
-        if journal is not None:
-            _emit_provider_versions(
-                journal,
-                session_id,
-                stt=stt,
-                tts=tts,
-                transport=transport,
-                vad=vad,
-                noise_reducer=noise_reducer,
-                echo_canceller=echo_canceller,
-            )
-
-        turn_config = config.turn_taking
-        smart_turn = create_smart_turn(config.smart_turn)
-        if smart_turn is not None:
-            turn_config = replace(turn_config, endpoint_detector=smart_turn)
-            # There are two decision knobs for the same endpoint call:
-            # ``SmartTurnConfig.threshold`` (used by the provider to compute
-            # ``prediction``) and ``TurnManagerConfig.endpoint_threshold``
-            # (re-decides on ``probability`` at the manager and wins when set).
-            # To stop them diverging silently, when the user has not set an
-            # explicit manager threshold (default ``None``), derive it from the
-            # provider threshold so the single ``smart_turn.threshold`` knob is
-            # authoritative. An explicit ``endpoint_threshold`` still wins, but
-            # we warn when it disagrees with the provider threshold so the
-            # precedence is never a hidden footgun.
-            if turn_config.endpoint_threshold is None:
-                turn_config = replace(turn_config, endpoint_threshold=config.smart_turn.threshold)
-            elif turn_config.endpoint_threshold != config.smart_turn.threshold:
-                logger.warning(
-                    "Both turn_taking.endpoint_threshold (%.3f) and "
-                    "smart_turn.threshold (%.3f) are set to different values; "
-                    "the manager-level endpoint_threshold wins and the provider "
-                    "threshold is ignored. Set only one to avoid confusion.",
-                    turn_config.endpoint_threshold,
-                    config.smart_turn.threshold,
-                )
-
-        # Telephony wiring is imported lazily so a non-telephony session never
-        # loads the outbound stack (preserving the no-eager-telephony-import
-        # property). ``create_telephony_helpers`` returns a typed bundle whose
-        # ``state_machine`` / ``screening_detector`` we read by name.
-        telephony = None
-        if config.telephony is not None:
-            from easycat.config import _telephony_wiring
-
-            telephony = _telephony_wiring.create_telephony_helpers(
-                event_bus,
-                config.telephony,
-                dnc_list=config.dnc_list,
-            )
-            action_executors = [
-                *config.action_executors,
-                *_telephony_wiring.create_action_executors(config.telephony),
-            ]
-        else:
-            action_executors = [*config.action_executors]
-
-        telephony_helpers = telephony.helpers if telephony is not None else []
-        outbound_sm = telephony.state_machine if telephony is not None else None
-
-        # Extract audio gate from the outbound call state machine, if present.
-        audio_gate = None
-        if outbound_sm is not None:
-
-            def audio_gate() -> bool:
-                return outbound_sm.gate.is_buffering
-
-        session = Session(
-            SessionConfig(
-                stt=stt,
-                tts=tts,
-                vad=vad,
-                noise_reducer=noise_reducer,
-                echo_canceller=echo_canceller,
-                transport=transport,
-                agent=agent,
-                event_bus=event_bus,
-                turn_manager_config=turn_config,
-                timeout_config=config.timeouts,
-                journal=journal,
-                artifact_store=artifact_store,
-                warmup=config.warmup,
-                record_to=config.record_to,
-                session_id=session_id,
-                telephony_helpers=telephony_helpers,
-                enable_vad=enable_vad,
-                enable_noise_reduction=config.enable_noise_reduction,
-                enable_echo_cancellation=enable_echo_cancellation,
-                capture_aec_reference=bool(
-                    getattr(config.observability, "capture_aec_reference", False)
-                ),
-                auto_turn_from_stt_final=auto_turn_from_stt_final,
-                strip_markdown=config.strip_markdown,
-                output_processors=config.output_processors,
-                session_actions=config.session_actions,
-                action_executors=action_executors,
-                audio_gate=audio_gate,
-                mcp_servers=mcp_servers,
-                caller_id_exposure=config.caller_id_exposure,
-                greeting=config.greeting,
-                dnc_list=config.dnc_list,
-            )
-        )
-
-        # Bridge the Twilio start-event customParameters through to
-        # ``session.call_identity`` so the agent (or its tools) sees
-        # who's calling without every app reimplementing the plumbing.
-        def _on_twilio_identity(identity: Any) -> None:
-            session.call_identity = _merge_twilio_identity(
-                session._caller_id.private_identity, identity
-            )
-
-        bind_identity_sink_if_supported(transport, _on_twilio_identity)
-    except Exception:
-        if journal is not None and hasattr(journal, "close"):
-            journal.close()
-        raise
-    # Stash a lightweight snapshot of user-facing config fields so debug
-    # bundle export can serialise settings (debug, journal_backend,
-    # turn_taking, etc.) without touching live provider instances.
-    # We intentionally avoid ``copy.deepcopy(config)`` because configs
-    # may carry non-picklable objects (httpx clients, agent instances).
-    session._easycat_config = _safe_config_ns(config)
-    session._agent_model = config.agent_model
-    session._remote_agent_api_key = config.remote_agent_api_key
-
-    if outbound_sm is not None and telephony is not None:
-        from easycat.config import _telephony_wiring
-
-        _telephony_wiring.wire_outbound_pipeline(session, telephony, event_bus)
-
-    # Outbound-call caller identity: when :class:`OutboundCallManager`
-    # emits :class:`CallInitiated`, stamp the session with a
-    # direction="outbound" identity so the agent/tools know who they're
-    # calling without having to peek into the event bus themselves.
-    from easycat.events import CallInitiated as _CallInitiatedEv
-    from easycat.session._types import CallIdentity as _CallIdentity
-
-    def _on_outbound_initiated(event: _CallInitiatedEv) -> None:
-        # Don't clobber an existing inbound identity — a session that
-        # places an outbound call while an inbound call is live is
-        # unusual but shouldn't silently lose the inbound number.
-        identity = session._caller_id.private_identity
-        if identity is not None and identity.direction == "inbound":
-            return
-        session.call_identity = _CallIdentity(
-            caller_number=event.to,
-            called_number=event.from_,
-            direction="outbound",
-            call_sid=event.call_sid,
-        )
-
-    event_bus.subscribe(_CallInitiatedEv, _on_outbound_initiated)
-
-    if config.debug == "full":
-        from easycat.debugger._autolaunch import maybe_launch_debugger_ui
-
-        # Strictly opt-in: ``debug="full"`` keeps a durable journal but only
-        # auto-launches the UI when explicitly requested via the config knob
-        # (or the EASYCAT_DEBUGGER_AUTOLAUNCH env var, checked inside).
-        observability = getattr(config, "observability", None)
-        config_opt_in = bool(getattr(observability, "debugger_autolaunch", False))
-        maybe_launch_debugger_ui(session, config_opt_in=config_opt_in)
-
-    if config.debug != "off" and _emergency_export_enabled(config):
-        install_emergency_export(session)
-
-    # Dev debugger mode: register every session built through this funnel so the
-    # live session selector lists them across ALL modes (the per-connection
-    # server modes build sessions here too). A no-op unless dev registration is
-    # armed; the UI launch itself stays the separate, additive opt-in.
-    #
-    # Gate the import so an off/light production session never loads the debugger
-    # module graph (``easycat.debugger`` eagerly imports the ~3k-line server +
-    # numpy). ``EASYCAT_DEV`` covers the env opt-in; the ``sys.modules`` check
-    # covers ``VoiceApp(dev=True)`` server modes whose launch hook already
-    # imported ``dev`` before any connection builds a session. Local
-    # ``VoiceApp(dev=True)`` still registers via its own ``_arm_dev_debugger``.
-    import os
-    import sys
-
-    from easycat._env import is_truthy
-
-    if is_truthy(os.getenv("EASYCAT_DEV")) or "easycat.debugger.dev" in sys.modules:
-        from easycat.debugger.dev import arm_dev_session
-
-        arm_dev_session(session)
-
-    return session
+    debug = _create_debug_resources(config, session_id)
+    with ExitStack() as rollback:
+        close_journal = getattr(debug.journal, "close", None)
+        if callable(close_journal):
+            rollback.callback(close_journal)
+        built = _build_audio_session(config, session_id, debug)
+        _finalize_audio_session(config, built)
+        rollback.pop_all()
+        return built.session
 
 
 def _emergency_export_enabled(config: Any) -> bool:

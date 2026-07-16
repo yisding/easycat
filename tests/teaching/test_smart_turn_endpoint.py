@@ -132,7 +132,40 @@ async def test_turn_gap_keeps_post_stt_and_endpoint_intervals_separate(
 
     gap = next(row["data"] for row in journal.rows if row["name"] == "turn.gap")
     assert gap["total_gap_ms"] == pytest.approx(600.0)
-    assert gap["endpoint_to_stt_final_ms"] == pytest.approx(400.0)
+    assert gap["estimated_speech_end_to_stt_final_ms"] == pytest.approx(400.0)
     assert gap["estimated_speech_end_to_first_audio_ms"] == pytest.approx(1_000.0)
     assert gap["reply_enqueue_gap_ms"] == pytest.approx(1_100.0)
     assert "estimated user speech end → first audio: 1000 ms" in capsys.readouterr().out
+
+
+async def test_turn_gap_keeps_nullable_audio_intervals_when_no_audio_is_accepted(
+    monkeypatch, capsys
+) -> None:
+    chapter = _load_chapter(monkeypatch)
+    clock = {"now": 1.0}
+    journal = FakeJournal()
+
+    class FakeSTT:
+        async def events(self):
+            clock["now"] = 1.4
+            yield types.SimpleNamespace(type=chapter.STTEventType.FINAL, text="hello")
+
+    async def fake_agent(_client, _text: str, _queue) -> None:
+        return None
+
+    async def fake_drain(_tts, _transport, _queue, _journal, _session_id) -> None:
+        clock["now"] = 2.5
+        return None
+
+    monkeypatch.setattr(chapter.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(chapter, "run_agent_streaming", fake_agent)
+    monkeypatch.setattr(chapter, "drain_sentences_to_speaker", fake_drain)
+
+    await chapter.run_turn(None, FakeSTT(), None, None, journal, "session", 1.0)
+
+    gap = next(row["data"] for row in journal.rows if row["name"] == "turn.gap")
+    assert gap["total_gap_ms"] is None
+    assert gap["estimated_speech_end_to_first_audio_ms"] is None
+    assert gap["estimated_speech_end_to_stt_final_ms"] == pytest.approx(400.0)
+    assert gap["reply_enqueue_gap_ms"] == pytest.approx(1_100.0)
+    assert "turn gap unavailable — TTS produced no accepted audio" in capsys.readouterr().out
