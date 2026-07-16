@@ -371,6 +371,20 @@ uv run easycat doctor --json
 uv run easycat validate latency --smoke --json
 ```
 
+## Feature multi-caller servers
+
+- Path: docs/using-easycat/09-multi-caller/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/09-multi-caller
+- Audience: learners
+- Serve isolated callers with auth, capacity limits, and draining.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/09-multi-caller/main.py
+```
+
 ## Examples
 
 - Path: examples/README.md

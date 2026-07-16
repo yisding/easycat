@@ -82,9 +82,13 @@ class LocalSupervisor:
 
     async def disconnect(self, key: str) -> None:
         session = self.sessions.pop(key)
-        await session.stop()
-        self.gate.untrack(key)
-        self.gate.release()
+        try:
+            await session.stop()
+        finally:
+            # Admission bookkeeping cannot depend on provider/session teardown
+            # succeeding; cancellation and stop failures must free the slot.
+            self.gate.untrack(key)
+            self.gate.release()
 
     async def shutdown(self) -> None:
         self.gate.start_draining()

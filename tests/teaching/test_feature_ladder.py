@@ -667,6 +667,39 @@ async def test_multi_caller_start_failure_releases_capacity(failure_type) -> Non
     assert replacement is not None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [RuntimeError, asyncio.CancelledError])
+async def test_multi_caller_stop_failure_releases_capacity(failure_type) -> None:
+    script = FEATURE_LADDER / "09-multi-caller" / "main.py"
+    namespace = runpy.run_path(str(script))
+    demo_session = namespace["DemoSession"]
+
+    class FailingStopSession(demo_session):
+        async def stop(self, *, force: bool = False) -> None:
+            raise failure_type("shutdown failed")
+
+    supervisor_type = namespace["LocalSupervisor"]
+    module_globals = supervisor_type.connect.__globals__
+    module_globals["DemoSession"] = FailingStopSession
+    supervisor = supervisor_type(max_sessions=1, events=[])
+    authorized = namespace["Request"](authorization_header=f"Bearer {namespace['TOKEN']}")
+
+    outcome, session = await supervisor.connect("failed", authorized)
+    assert outcome == "accepted"
+    assert session is not None
+    with pytest.raises(failure_type, match="shutdown failed"):
+        await supervisor.disconnect("failed")
+
+    assert supervisor.sessions == {}
+    assert supervisor.gate.active_count == 0
+    assert supervisor.gate.reserved_count == 0
+
+    module_globals["DemoSession"] = demo_session
+    outcome, replacement = await supervisor.connect("replacement", authorized)
+    assert outcome == "accepted"
+    assert replacement is not None
+
+
 def test_feature_scripts_do_not_import_easycat_internals() -> None:
     internal_imports: list[str] = []
 
@@ -750,3 +783,5 @@ def test_feature_ladder_is_discoverable_from_public_docs_surfaces() -> None:
     )
     testing_evals = entries["docs/using-easycat/08-testing-evals/"]
     assert "uv run python docs/using-easycat/08-testing-evals/main.py" in testing_evals["commands"]
+    multi_caller = entries["docs/using-easycat/09-multi-caller/"]
+    assert "uv run python docs/using-easycat/09-multi-caller/main.py" in multi_caller["commands"]

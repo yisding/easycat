@@ -532,6 +532,17 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature multi-caller servers",
+        "path": "docs/using-easycat/09-multi-caller/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Serve isolated callers with auth, capacity limits, and draining.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/09-multi-caller/main.py",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

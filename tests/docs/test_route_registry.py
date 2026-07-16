@@ -40,6 +40,7 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "using-easycat/06-session-control/",
         "using-easycat/07-observability/",
         "using-easycat/08-testing-evals/",
+        "using-easycat/09-multi-caller/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -145,6 +146,7 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Feature session control",
         "Feature observability",
         "Feature testing and evals",
+        "Feature multi-caller servers",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -310,6 +312,9 @@ def test_cli_docs_routes_have_online_urls() -> None:
     )
     assert entries["docs/using-easycat/08-testing-evals/"]["url"].endswith(
         "/tree/main/docs/using-easycat/08-testing-evals"
+    )
+    assert entries["docs/using-easycat/09-multi-caller/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/09-multi-caller"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]
