@@ -1,5 +1,9 @@
 # Chapter 12 — Evals + the Latency Budget
 
+<!-- BEGIN auto:navigation -->
+**Progress: 13 of 16** · [← Chapter 11](../11-journal/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 13 →](../13-swap-providers-and-transports/)
+<!-- END auto:navigation -->
+
 > The difference between *building* a voice bot and *operating* one
 > is measurement. This chapter produces four concrete numbers:
 > P50/P95 latency, WER, barge-in F1, and an LLM-as-judge score.

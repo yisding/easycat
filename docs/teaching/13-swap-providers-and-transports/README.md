@@ -1,5 +1,9 @@
 # Chapter 13 — Swap Providers AND Transports
 
+<!-- BEGIN auto:navigation -->
+**Progress: 14 of 16** · [← Chapter 12](../12-evals-and-latency/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 14 →](../14-bring-your-own-agent/)
+<!-- END auto:navigation -->
+
 > The same `Session`, run with **two orthogonal axes of choice**:
 > the providers (STT/agent/TTS) *and* the transport (Local /
 > WebRTC / Twilio). With eval numbers from chapter 12 in hand,

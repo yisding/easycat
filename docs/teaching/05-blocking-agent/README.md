@@ -1,5 +1,9 @@
 # Chapter 5 — The Blocking Agent
 
+<!-- BEGIN auto:navigation -->
+**Progress: 6 of 16** · [← Chapter 4](../04-vad-preroll/) · [Ladder index](../) · [Exercises](./EXERCISES.md) · [Chapter 6 →](../06-streaming-agent/)
+<!-- END auto:navigation -->
+
 > Swap the parrot for an LLM. The bot falls silent for three
 > seconds. This is on purpose.
 

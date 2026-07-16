@@ -12,6 +12,14 @@ with the chapter's source code:
       ```
       <!-- END auto:snippet -->
 
+* Previous/index/next navigation derived from the chapter folders::
+
+      <!-- BEGIN auto:navigation -->
+      **Progress: 2 of 16** · [← Chapter 0](../00-hello-audio/) ·
+      [Ladder index](../) · [Exercises](./EXERCISES.md) ·
+      [Chapter 2 →](../02-transcribe/)
+      <!-- END auto:navigation -->
+
 * The unified diff against the previous chapter's source::
 
       <!-- BEGIN auto:diff prev=04-vad-preroll src=main.py -->
@@ -64,6 +72,12 @@ SNIPPET_RE = re.compile(
     r"(?P<begin><!-- BEGIN auto:snippet (?P<attrs>[^>]*?) -->)"
     r"(?P<body>.*?)"
     r"(?P<end><!-- END auto:snippet -->)",
+    re.DOTALL,
+)
+NAVIGATION_RE = re.compile(
+    r"(?P<begin><!-- BEGIN auto:navigation -->)"
+    r"(?P<body>.*?)"
+    r"(?P<end><!-- END auto:navigation -->)",
     re.DOTALL,
 )
 DIFF_RE = re.compile(
@@ -138,6 +152,29 @@ def render_snippet(chapter: Chapter, attrs: dict[str, str]) -> str:
     return f"\n```{lang}\n{body}```\n"
 
 
+def render_navigation(chapter: Chapter) -> str:
+    chapters = discover_chapters()
+    try:
+        position = next(
+            i for i, candidate in enumerate(chapters) if candidate.slug == chapter.slug
+        )
+    except StopIteration as exc:
+        raise ValueError(f"chapter {chapter.slug!r} is not in the teaching ladder") from exc
+
+    links: list[str] = []
+    if position > 0:
+        previous = chapters[position - 1]
+        links.append(f"[← Chapter {position - 1}](../{previous.slug}/)")
+    links.append("[Ladder index](../)")
+    links.append("[Exercises](./EXERCISES.md)")
+    if position + 1 < len(chapters):
+        following = chapters[position + 1]
+        links.append(f"[Chapter {position + 1} →](../{following.slug}/)")
+
+    progress = f"**Progress: {position + 1} of {len(chapters)}**"
+    return f"\n{progress} · {' · '.join(links)}\n"
+
+
 def render_diff(chapter: Chapter, attrs: dict[str, str]) -> str:
     prev_slug = attrs["prev"]
     src_name = attrs.get("src", "main.py")
@@ -176,6 +213,9 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return m.group("begin") + render_snippet(chapter, attrs) + m.group("end")
 
+    def _navigation_sub(m: re.Match[str]) -> str:
+        return m.group("begin") + render_navigation(chapter) + m.group("end")
+
     def _diff_sub(m: re.Match[str]) -> str:
         attrs = parse_attrs(m.group("attrs"))
         return m.group("begin") + render_diff(chapter, attrs) + m.group("end")
@@ -188,7 +228,8 @@ def regen_readme(chapter: Chapter) -> tuple[str, str]:
         attrs = parse_attrs(m.group("attrs"))
         return render_linkhash(chapter, attrs, m.group(1))
 
-    updated = SNIPPET_RE.sub(_snippet_sub, original)
+    updated = NAVIGATION_RE.sub(_navigation_sub, original)
+    updated = SNIPPET_RE.sub(_snippet_sub, updated)
     updated = DIFF_RE.sub(_diff_sub, updated)
     updated = LINERANGE_RE.sub(_linerange_sub, updated)
     updated = LINKHASH_RE.sub(_linkhash_sub, updated)
