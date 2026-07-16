@@ -315,6 +315,295 @@ async def test_outbound_drain_sends_queued_chunks_to_transport():
 
 
 @pytest.mark.asyncio
+async def test_first_audio_sends_inline_only_when_outbound_path_is_idle():
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport)
+    first = _make_chunk(byte_value=5)
+    queued = _make_chunk(byte_value=6)
+
+    # A live session without its outbound drain is not a valid direct-send
+    # path (before Session.start or after outbound teardown).
+    assert await router.try_send_first_audio_inline(first) is False
+
+    hold_active = asyncio.Event()
+    active_task = asyncio.create_task(hold_active.wait())
+    router._outbound_task = active_task
+    try:
+        assert await router.try_send_first_audio_inline(first) is True
+        assert transport.sent == [first]
+
+        await router.queue_outbound(queued)
+        assert await router.try_send_first_audio_inline(_make_chunk(byte_value=7)) is False
+        assert transport.sent == [first]
+        assert state["queue"].qsize() == 1
+    finally:
+        active_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active_task
+        router._outbound_task = None
+
+
+@pytest.mark.asyncio
+async def test_nonblocking_transport_keeps_inline_send_in_caller_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ImmediateTransport(_FakeTransport):
+        send_audio_is_nonblocking = True
+        reports_audio_delivery = True
+
+    transport = _ImmediateTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    def _unexpected_task(*args, **kwargs):
+        _ = args, kwargs
+        pytest.fail("nonblocking inline send should not create a child task")
+
+    monkeypatch.setattr("easycat.session._audio_router.asyncio.create_task", _unexpected_task)
+
+    assert await router.try_send_first_audio_inline(_make_chunk()) is True
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_nonblocking_send_keeps_shield_when_delivery_handler_can_suspend() -> None:
+    class _ImmediateTransport(_FakeTransport):
+        send_audio_is_nonblocking = True
+
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
+    handler_finished = asyncio.Event()
+    transport = _ImmediateTransport()
+    router, state = _make_router(transport=transport)
+
+    async def _handle_audio_out(_event: AudioOut) -> None:
+        handler_started.set()
+        await release_handler.wait()
+        handler_finished.set()
+
+    state["bus"].subscribe(AudioOut, _handle_audio_out)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(handler_started.wait(), timeout=1)
+    inline.cancel()
+    await asyncio.sleep(0)
+
+    assert not inline.done()
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 1
+
+    release_handler.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert handler_finished.is_set()
+    assert router._outbound_in_flight == 0
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_inline_send_defers_caller_cancellation_until_transport_finishes():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    transport_cancelled = False
+
+    class _SlowTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            nonlocal transport_cancelled
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                transport_cancelled = True
+                raise
+            self.sent.append(chunk)
+            return True
+
+    transport = _SlowTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk()))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    inline.cancel()
+    await asyncio.sleep(0)
+
+    assert not inline.done()
+    assert not transport_cancelled
+    assert router._outbound_in_flight == 1
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(inline, timeout=1)
+
+    assert not transport_cancelled
+    assert len(transport.sent) == 1
+    assert router._outbound_in_flight == 0
+    assert router._outbound_idle.is_set()
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_inline_send_keeps_turn_when_shield_task_starts_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_turn = TurnContext(turn_id="original", cancel_token=CancelToken())
+    next_turn = TurnContext(turn_id="next", cancel_token=CancelToken())
+    transport = _FakeTransport()
+    router, state = _make_router(transport=transport, current_turn=original_turn)
+    hold_active = asyncio.Event()
+    active_task = asyncio.create_task(hold_active.wait())
+    router._outbound_task = active_task
+
+    real_create_task = asyncio.create_task
+    child_created = asyncio.Event()
+    release_child = asyncio.Event()
+
+    def _delayed_create_task(coro, *, name=None, **kwargs):
+        async def _run_later():
+            child_created.set()
+            await release_child.wait()
+            return await coro
+
+        return real_create_task(_run_later(), name=name, **kwargs)
+
+    monkeypatch.setattr(
+        "easycat.session._audio_router.asyncio.create_task",
+        _delayed_create_task,
+    )
+    chunk = _make_chunk()
+    inline = real_create_task(router.try_send_first_audio_inline(chunk))
+
+    try:
+        await asyncio.wait_for(child_created.wait(), timeout=1)
+        state["current_turn"] = next_turn
+        release_child.set()
+
+        assert await asyncio.wait_for(inline, timeout=1) is True
+        assert chunk._easycat_turn_ref is original_turn
+        assert chunk._easycat_turn_id == "original"
+        audio_outs = [evt for evt in state["emitted"] if isinstance(evt, AudioOut)]
+        assert [evt.turn_id for evt in audio_outs] == ["original"]
+    finally:
+        release_child.set()
+        if not inline.done():
+            inline.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await inline
+        active_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await active_task
+        router._outbound_task = None
+
+
+@pytest.mark.asyncio
+async def test_dequeued_chunk_is_claimed_before_waiting_for_send_lock():
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    class _ContendedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            if not self.sent:
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_started.set()
+                await release_second.wait()
+            self.sent.append(chunk)
+            return True
+
+    transport = _ContendedTransport()
+    router, state = _make_router(transport=transport)
+    router.start_outbound()
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(_make_chunk(byte_value=1)))
+    await asyncio.wait_for(first_started.wait(), timeout=1)
+    await router.queue_outbound(_make_chunk(byte_value=2))
+    for _ in range(20):
+        if state["queue"].empty() and router._outbound_in_flight == 2:
+            break
+        await asyncio.sleep(0)
+
+    # The inline send holds the lock; the drain has dequeued the second chunk.
+    # Both must count as in flight before either transport send completes.
+    assert state["queue"].empty()
+    assert router._outbound_in_flight == 2
+    assert not router._outbound_idle.is_set()
+
+    release_first.set()
+    assert await asyncio.wait_for(inline, timeout=1) is True
+    await asyncio.wait_for(second_started.wait(), timeout=1)
+    assert router._outbound_in_flight == 1
+    assert not router._outbound_idle.is_set()
+
+    release_second.set()
+    await router.await_drain(timeout=1)
+    assert len(transport.sent) == 2
+
+    state["running"] = False
+    await router.stop_outbound()
+
+
+@pytest.mark.asyncio
+async def test_dequeued_chunk_keeps_turn_while_waiting_for_send_lock() -> None:
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _ContendedTransport(_FakeTransport):
+        async def send_audio(self, chunk: AudioChunk) -> bool:
+            if not self.sent:
+                first_started.set()
+                await release_first.wait()
+            self.sent.append(chunk)
+            return True
+
+    original_turn = TurnContext(turn_id="original", cancel_token=CancelToken())
+    next_turn = TurnContext(turn_id="next", cancel_token=CancelToken())
+    transport = _ContendedTransport()
+    router, state = _make_router(transport=transport, current_turn=original_turn)
+    router.start_outbound()
+    first = _make_chunk(byte_value=1)
+    second = _make_chunk(byte_value=2)
+
+    inline = asyncio.create_task(router.try_send_first_audio_inline(first))
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        await router.queue_outbound(second)
+        for _ in range(20):
+            if state["queue"].empty() and router._outbound_in_flight == 2:
+                break
+            await asyncio.sleep(0)
+
+        assert state["queue"].empty()
+        assert router._outbound_in_flight == 2
+        state["current_turn"] = next_turn
+        release_first.set()
+
+        assert await asyncio.wait_for(inline, timeout=1) is True
+        await router.await_drain(timeout=1)
+        assert second._easycat_turn_ref is original_turn
+        assert second._easycat_turn_id == "original"
+        audio_outs = [evt for evt in state["emitted"] if isinstance(evt, AudioOut)]
+        assert [evt.turn_id for evt in audio_outs] == ["original", "original"]
+    finally:
+        release_first.set()
+        state["running"] = False
+        await router.stop_outbound()
+
+
+@pytest.mark.asyncio
 async def test_playback_mark_emitted_after_byte_interval():
     transport = _AckTransport()
     turn = TurnContext(turn_id="t", cancel_token=CancelToken())

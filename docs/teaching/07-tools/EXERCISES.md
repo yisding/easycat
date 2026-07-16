@@ -1,7 +1,7 @@
 # Chapter 7 — Exercises
 
 <!-- BEGIN auto:navigation -->
-[← Chapter narrative](./README.md) · [Teaching ladder](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
+[← Back to chapter](./README.md) · [Ladder index](../) · [Chapter 8 — Smart-turn →](../08-smart-turn/)
 <!-- END auto:navigation -->
 
 <!-- BEGIN auto:exercise-protocol -->

@@ -27,7 +27,10 @@ from scripts.regen_teaching_chapters import (
     SELF_CHECK_PROTOCOL_RE,
     TEACHING,
     Chapter,
+    _ensure_exercise_completion,
     _ensure_exercise_hints,
+    _ensure_navigation,
+    _ensure_practice_handoff,
     _resolve_child_path,
     discover_chapters,
     regen_exercises,
@@ -99,17 +102,51 @@ def test_render_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_navigation(chapters[0]) == (
-        "[Teaching ladder](../) · [Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
+        "**Progress: 1 of 16** · [Ladder index](../) · "
+        "[Exercises](./EXERCISES.md) · [Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_navigation(chapters[8]) == (
+        "**Progress: 9 of 16** · "
         "[← Chapter 7 — Tools, Mid-stream](../07-tools/) · "
-        "[Teaching ladder](../) · "
-        "[Exercises](./EXERCISES.md) · "
+        "[Ladder index](../) · [Exercises](./EXERCISES.md) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_navigation(chapters[-1]) == (
+        "**Progress: 16 of 16** · "
         "[← Chapter 14 — Bring your own agent](../14-bring-your-own-agent/) · "
-        "[Teaching ladder](../) · [Exercises](./EXERCISES.md)"
+        "[Ladder index](../) · [Exercises](./EXERCISES.md)"
+    )
+
+
+def test_missing_navigation_is_inserted_immediately_after_h1() -> None:
+    chapter = discover_chapters()[0]
+
+    updated = _ensure_navigation(
+        chapter,
+        "# Temporary chapter\n\nIntro text.\n",
+        render_navigation(chapter),
+    )
+
+    assert updated.startswith("# Temporary chapter\n\n<!-- BEGIN auto:navigation -->")
+    assert updated.count("<!-- BEGIN auto:navigation -->") == 1
+    assert updated.count("<!-- END auto:navigation -->") == 1
+    assert updated.index("<!-- END auto:navigation -->") < updated.index("Intro text.")
+
+
+def test_teaching_readmes_have_one_generated_navigation_block() -> None:
+    missing_or_duplicated: list[str] = []
+
+    for chapter in discover_chapters():
+        readme = chapter.path / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        if text.count("<!-- BEGIN auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+        if text.count("<!-- END auto:navigation -->") != 1:
+            missing_or_duplicated.append(chapter.slug)
+
+    assert not missing_or_duplicated, (
+        "Teaching chapter navigation markers are missing or duplicated: "
+        + ", ".join(sorted(set(missing_or_duplicated)))
     )
 
 
@@ -119,7 +156,7 @@ def test_each_chapter_has_one_current_generated_navigation_block() -> None:
         matches = list(NAVIGATION_RE.finditer(readme))
 
         assert len(matches) == 1, chapter.slug
-        assert matches[0].group("body").strip() == render_navigation(chapter)
+        assert matches[0].group("body").strip() == render_navigation(chapter).strip()
         assert matches[0].start() > readme.index("# ")
         assert matches[0].start() < readme.find("\n## ")
 
@@ -180,21 +217,41 @@ def test_each_chapter_has_one_current_generated_practice_handoff() -> None:
         assert matches[0].end() < closing_heading.start()
 
 
+def test_practice_handoff_is_moved_before_the_closing_section() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:practice-handoff -->\n"
+        f"{render_practice_handoff()}\n"
+        "<!-- END auto:practice-handoff -->"
+    )
+    text = (
+        f"# Temporary chapter\n\n{misplaced}\n\n"
+        "## Try breaking it\n\nTry this.\n\n"
+        "## What's next\n\nContinue.\n"
+    )
+
+    updated = _ensure_practice_handoff(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:practice-handoff -->") == 1
+    assert updated.index("## Try breaking it") < updated.index(misplaced)
+    assert updated.index(misplaced) < updated.index("## What's next")
+
+
 def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
     assert render_exercise_navigation(chapters[0]) == (
-        "[← Chapter narrative](./README.md) · "
-        "[Teaching ladder](../) · "
+        "[← Back to chapter](./README.md) · "
+        "[Ladder index](../) · "
         "[Chapter 1 — Echo →](../01-echo/)"
     )
     assert render_exercise_navigation(chapters[8]) == (
-        "[← Chapter narrative](./README.md) · "
-        "[Teaching ladder](../) · "
+        "[← Back to chapter](./README.md) · "
+        "[Ladder index](../) · "
         "[Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
     )
     assert render_exercise_navigation(chapters[-1]) == (
-        "[← Chapter narrative](./README.md) · [Teaching ladder](../)"
+        "[← Back to chapter](./README.md) · [Ladder index](../)"
     )
 
 
@@ -345,6 +402,22 @@ def test_every_exercise_hint_is_concealed_until_after_an_attempt() -> None:
         for match in matches:
             assert match.group("body").strip(), chapter.slug
             assert "Reveal hints after your first attempt" in match.group(0)
+
+
+def test_exercise_completion_is_moved_after_the_self_check() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:exercise-completion -->\n"
+        f"{render_exercise_completion(chapter)}\n"
+        "<!-- END auto:exercise-completion -->"
+    )
+    text = f"# Exercises\n\n{misplaced}\n\n## Self-check\n\nAnswer from memory.\n"
+
+    updated = _ensure_exercise_completion(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:exercise-completion -->") == 1
+    assert updated.index("## Self-check") < updated.index(misplaced)
+    assert updated.rstrip().endswith("<!-- END auto:exercise-completion -->")
 
 
 def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
