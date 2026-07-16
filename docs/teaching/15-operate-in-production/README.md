@@ -555,11 +555,13 @@ Run easycat explain json-schema for CLI JSON.
   create/preflight/check/fix/docs/json-schema/run commands for each template
   (`uv run easycat init --list-templates --json` emits the
   same template catalog and post-scaffold command previews).
-- **`uv run easycat doctor`** — checks API keys, Python version, optional
-  extras, and provider reachability
-  (`src/easycat/cli/diagnose/doctor.py`). Run it first when
-  something's not working. If a scaffolded app stores keys in `.env`, run
-  `uv run easycat doctor --env-file .env`; add `--json`
+- **`uv run easycat doctor`** — reports Python/EasyCat versions, provider
+  credentials and reachability, optional `onnxruntime`, the dev-profile
+  microphone, journal writability, and disk space
+  (`src/easycat/cli/diagnose/doctor.py`). Use
+  `--environment production` to omit the local-microphone probe and
+  `--provider <name>` to require and probe one provider. If a scaffolded app
+  stores keys in `.env`, run `uv run easycat doctor --env-file .env`; add `--json`
   (`uv run easycat doctor --json`,
   `uv run easycat doctor --env-file .env --json`) for parseable first-run
   environment checks.
@@ -696,8 +698,9 @@ the same `Session` you've run since chapter 5.
 1. Add a second session to the manager before the first one stops.
    Two local-transport sessions on the same mic will fight for
    input — what does the journal show for each?
-2. Run `uv run easycat doctor` with `OPENAI_API_KEY` unset.
-   Compare with it set. Which health checks change?
+2. Compare scoped production JSON reports from
+   `uv run easycat doctor --provider openai --environment production --json`
+   with `OPENAI_API_KEY` unset and set. Which rows appear or change?
 3. Run `translate.py` against a ch 13 bundle; pipe the output into
    `evals.py` via a small adapter. Do the P50/P95 numbers look
    right?
