@@ -116,6 +116,29 @@ uv run python docs/teaching/11-journal/investigate.py \
 4. Do not infer dropped journal records from a filtered sequence gap;
    inspect the unfiltered source and its retention/export contract.
 
+## 5. Find the payload-schema boundary
+
+**Task.** Run the provider-free payload probe, then explain which types
+belong to the journal envelope and which belong to one record emitter:
+
+```bash
+uv run python docs/teaching/11-journal/payload_schema_probe.py
+```
+
+**Hints**
+
+1. `JournalRecord` declares stable envelope fields, including integer
+   `sequence`, string `session_id` / `name`, `JournalRecordKind`, and
+   `data: dict[str, Any]`.
+2. `dict[str, Any]` does not promise that `data["t_ms"]` is numeric. The
+   journal preserves the malformed string exactly as it was appended.
+3. Record emitters own payload schemas. A consumer that drives automation
+   must validate the fields and domain constraints it depends on—for this
+   metric, reject strings, booleans, infinity, and NaN.
+4. JSON avoids regex parsing, but serialization alone is not schema
+   validation. Use one stable schema per record name and version intentional
+   changes when downstream consumers share that contract.
+
 ## Self-check
 
 You should be able to: (a) open a bundle from any chapter and
@@ -123,4 +146,6 @@ identify the dominant time-cost without reading the chapter's
 README, (b) describe in one sentence what each of the three
 planted bugs was about, and (c) name the `JournalView` query you'd
 reach for first on a multi-turn bundle, and (d) distinguish a real
-absence from a typo or an empty filter intersection.
+absence from a typo or an empty filter intersection, and (e)
+distinguish the typed journal envelope from emitter-defined payload
+schemas.
