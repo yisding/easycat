@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = REPO_ROOT / "docs" / "teaching" / "12-evals-and-latency"
 
 
-def _load_chapter_module(filename: str):
+def _load_chapter_module(filename: str) -> types.ModuleType:
     path = CHAPTER / filename
     module_name = f"teaching_ch12_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -24,7 +26,7 @@ def _load_chapter_module(filename: str):
     return module
 
 
-def _first(records, name: str):
+def _first(records: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return next(record for record in records if record["name"] == name)
 
 
