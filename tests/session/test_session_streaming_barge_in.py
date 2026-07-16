@@ -131,18 +131,31 @@ async def test_session_barge_in_completes_tool_calls():
 
     tool_started: list[ToolCallStarted] = []
     tool_results: list[ToolCallResult] = []
-    session.event_bus.subscribe(ToolCallStarted, lambda e: tool_started.append(e))
-    session.event_bus.subscribe(ToolCallResult, lambda e: tool_results.append(e))
+    tool_started_event = asyncio.Event()
+    tool_result_event = asyncio.Event()
+
+    def record_tool_started(event: ToolCallStarted) -> None:
+        tool_started.append(event)
+        tool_started_event.set()
+
+    def record_tool_result(event: ToolCallResult) -> None:
+        tool_results.append(event)
+        tool_result_event.set()
+
+    session.event_bus.subscribe(ToolCallStarted, record_tool_started)
+    session.event_bus.subscribe(ToolCallResult, record_tool_result)
 
     await session.start()
-    await asyncio.sleep(0.1)
+    try:
+        await asyncio.wait_for(tool_started_event.wait(), timeout=1.0)
 
-    # Simulate barge-in while tool call is in-flight
-    if session.cancel_token:
+        # Simulate barge-in while tool call is in-flight.
+        assert session.cancel_token is not None
         session.cancel_token.cancel()
 
-    await asyncio.sleep(0.3)
-    await session.stop()
+        await asyncio.wait_for(tool_result_event.wait(), timeout=1.0)
+    finally:
+        await session.stop()
 
     # Tool call started AND result should both have been emitted
     assert len(tool_started) == 1

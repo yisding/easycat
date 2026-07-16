@@ -225,19 +225,23 @@ def main() -> None:
     print(f"  {'P50':38}  {p50:>6.0f} ms")
     print(f"  {'P95':38}  {p95:>6.0f} ms")
     print(f"  {'P95 / P50 ratio':38}  {ratio:>6.2f}")
-    sensitivity = p95_sensitivity(
-        {bundle.name: stats[bundle.name]["total_gap_ms"] for bundle in bundles}
-    )
-    print(
-        f"  {'P95 leave-one-out range':38}  "
-        f"{sensitivity['leave_one_out_min_ms']:.0f}–"
-        f"{sensitivity['leave_one_out_max_ms']:.0f} ms"
-    )
-    print(
-        f"  {'Most influential omission':38}  "
-        f"{sensitivity['most_influential_bundle']} "
-        f"({sensitivity['most_influential_delta_ms']:+.0f} ms)"
-    )
+    if len(bundles) < 2:
+        print(f"  {'P95 leave-one-out range':38}  n/a (requires at least two bundles)")
+        print(f"  {'Most influential omission':38}  n/a (requires at least two bundles)")
+    else:
+        sensitivity = p95_sensitivity(
+            {bundle.name: stats[bundle.name]["total_gap_ms"] for bundle in bundles}
+        )
+        print(
+            f"  {'P95 leave-one-out range':38}  "
+            f"{sensitivity['leave_one_out_min_ms']:.0f}–"
+            f"{sensitivity['leave_one_out_max_ms']:.0f} ms"
+        )
+        print(
+            f"  {'Most influential omission':38}  "
+            f"{sensitivity['most_influential_bundle']} "
+            f"({sensitivity['most_influential_delta_ms']:+.0f} ms)"
+        )
 
     # WER aggregated.
     print("\n=== WER ===")

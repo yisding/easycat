@@ -14,9 +14,7 @@ STT_RECORD_NAMES = frozenset({"stt.partial", "stt.final"})
 
 
 def _offset_ms(record: dict[str, Any] | None) -> float | None:
-    if record is None:
-        return None
-    value = (record.get("data") or {}).get("offset_ms")
+    value = ((record or {}).get("data") or {}).get("offset_ms")
     return float(value) if isinstance(value, (int, float)) else None
 
 

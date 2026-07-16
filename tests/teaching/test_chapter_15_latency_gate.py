@@ -103,6 +103,43 @@ def test_latency_gate_consumes_the_real_cli_envelope(tmp_path: Path) -> None:
     assert json.loads(invalid.stdout)["reason"] == "invalid_report"
 
 
+@pytest.mark.parametrize("report", ["[]", "null"])
+def test_latency_gate_rejects_non_object_json_with_stable_error(report: str) -> None:
+    result = _run_gate(report, max_ms=950, min_samples=5)
+
+    assert result.returncode == 2
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == {
+        "status": "error",
+        "reason": "invalid_report",
+        "message": "stdin is not a JSON object",
+    }
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        {"count": 5.5, "p95": 900},
+        {"count": 5, "p95": "900"},
+        {"count": 5, "p95": float("nan")},
+    ],
+)
+def test_latency_gate_rejects_malformed_metric_stats(stats: dict[str, object]) -> None:
+    report = json.dumps(
+        {
+            "command": "latency",
+            "path": "production.bundle",
+            "percentiles": {"vad->tts": stats},
+        }
+    )
+
+    result = _run_gate(report, max_ms=950, min_samples=5)
+
+    assert result.returncode == 2
+    assert result.stderr == ""
+    assert json.loads(result.stdout)["reason"] == "invalid_report"
+
+
 def test_chapter_does_not_route_production_bundles_through_teaching_fixtures() -> None:
     text = "\n".join(
         (CHAPTER / name).read_text(encoding="utf-8") for name in ("README.md", "EXERCISES.md")
@@ -113,3 +150,10 @@ def test_chapter_does_not_route_production_bundles_through_teaching_fixtures() -
     assert "pipe the output into `evals.py`" not in text
     assert "easycat latency PATH --json" in text
     assert "latency_gate.py" in text
+
+
+def test_shell_examples_quote_latency_metric_redirection() -> None:
+    for name in ("README.md", "EXERCISES.md", "latency_gate.py"):
+        text = (CHAPTER / name).read_text(encoding="utf-8")
+        assert "--metric 'vad->tts'" in text, name
+        assert "--metric vad->tts" not in text, name
