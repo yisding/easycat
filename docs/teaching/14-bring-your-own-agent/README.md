@@ -458,7 +458,7 @@ first executor that claims it via `supports()`.
 actions.enqueue(EndCallAction(reason="user requested hang-up"))
 ```
 
-The five action types:
+The seven action types:
 
 | Action | Typical executor |
 |---|---|
@@ -466,12 +466,14 @@ The five action types:
 | `TransferCallAction` | `TwilioSessionActionExecutor` (REST dial) |
 | `SendDTMFAction` | `TwilioSessionActionExecutor` (IVR) |
 | `SendSMSAction` | `TwilioSessionActionExecutor` |
+| `AddToDNCAction` | `CoreSessionActionExecutor` (updates the DNC store) |
+| `RemoveFromDNCAction` | `CoreSessionActionExecutor` (updates the DNC store) |
 | `CustomAction` | whatever you write |
 
 The Twilio executor lives in `src/easycat/telephony/session_actions.py`
 and needs `call_sid` off the transport — it's only useful on the
 Twilio transport. The core executor is provider-neutral and handles
-`EndCallAction` alone.
+`EndCallAction`, `AddToDNCAction`, and `RemoveFromDNCAction`.
 
 ### 3. Output processors (the pronunciation pipeline)
 
