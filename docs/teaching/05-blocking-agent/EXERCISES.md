@@ -18,9 +18,10 @@ each condition below, and for each one record which of the three
 
 1. Switching to `gpt-4o` mostly affects the `agent_ms` span — same
    prompt, slower model. The other two stay put.
-2. The one-word system prompt shrinks `tts_ms` (less text to
-   synthesise) and also shrinks `agent_ms` slightly (fewer tokens
-   to generate). `stt_to_agent_ms` is unchanged.
+2. The one-word system prompt shrinks `tts_enqueue_ms` (less text
+   to synthesise) and also shrinks `agent_ms` slightly (fewer tokens
+   to generate). `tts_ms` may move much less because provider startup
+   and the first audio chunk dominate it. `stt_to_agent_ms` is unchanged.
 3. `asyncio.sleep(0.5)` adds exactly 500 ms to `agent_ms`. Use
    this to verify your understanding of which code lives in which
    span.

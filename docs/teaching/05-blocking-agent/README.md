@@ -124,7 +124,7 @@ build movement (chapters 6-9) exists to close this gap.
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -65,127 +59,157 @@
+@@ -65,127 +59,187 @@
      async def frames(self, audio_iter):
          async for chunk in audio_iter:
              vad_events = [ev async for ev in self._vad.process(chunk)]
@@ -203,6 +203,20 @@ build movement (chapters 6-9) exists to close this gap.
 -            if collected_final.strip():
 -                print(f"  → parrot: {collected_final!r}")
 -                await speak(transport, collected_final)
++class FirstAudioProbe:
++    """Forward audio while recording when the first chunk is accepted."""
++
++    def __init__(self, transport) -> None:
++        self._transport = transport
++        self.first_audio_at: float | None = None
++
++    async def send_audio(self, chunk: AudioChunk) -> bool:
++        accepted = await self._transport.send_audio(chunk)
++        if accepted and self.first_audio_at is None:
++            self.first_audio_at = time.monotonic()
++        return accepted
++
++
 +def span(journal: InMemoryRingBuffer, name: str, t0: float, **extra) -> None:
 +    """Record a closed span with start→end wall time in ms."""
 +    elapsed_ms = (time.monotonic() - t0) * 1000
@@ -267,16 +281,28 @@ build movement (chapters 6-9) exists to close this gap.
 +        reply=reply,
 +    )
 +
-+    # Sub-gap 3: agent response → first TTS audio reaches the speaker.
-+    # The OpenAI TTS provider streams PCM back, so ``speak`` blocks
-+    # until the whole file is enqueued on the transport. For teaching
-+    # purposes we report the full synth-and-enqueue duration.
++    # Sub-gap 3: agent response → the first TTS audio chunk is handed
++    # to the transport. ``speak`` itself returns only after every chunk
++    # has been enqueued, so a forwarding probe captures the earlier
++    # first-audio milestone without changing the helper.
 +    tts_start = time.monotonic()
 +    print(f"  bot:  {reply!r}")
-+    await speak(transport, reply)
-+    span(journal, "stage.tts.execute", tts_start, text=reply)
++    audio_probe = FirstAudioProbe(transport)
++    await speak(audio_probe, reply)
++    tts_end = time.monotonic()
++    first_audio_t = audio_probe.first_audio_at
++    tts_first_audio_ms = None if first_audio_t is None else (first_audio_t - tts_start) * 1000
++    tts_enqueue_ms = (tts_end - tts_start) * 1000
++    span(
++        journal,
++        "stage.tts.execute",
++        tts_start,
++        text=reply,
++        first_audio_ms=tts_first_audio_ms,
++        enqueue_ms=tts_enqueue_ms,
++    )
 +
-+    total_gap = (time.monotonic() - stt_final_t) * 1000
++    total_gap = None if first_audio_t is None else (first_audio_t - stt_final_t) * 1000
 +    journal.append(
 +        kind=JournalRecordKind.EVENT,
 +        name="turn.gap",
@@ -286,11 +312,15 @@ build movement (chapters 6-9) exists to close this gap.
 +            "total_gap_ms": total_gap,
 +            "stt_to_agent_ms": (agent_dispatch - stt_final_t) * 1000,
 +            "agent_ms": (agent_end - agent_start) * 1000,
-+            "tts_ms": (time.monotonic() - tts_start) * 1000,
++            "tts_ms": tts_first_audio_ms,
++            "tts_enqueue_ms": tts_enqueue_ms,
 +            "text": reply,
 +        },
 +    )
-+    print(f"  (turn gap: {total_gap:.0f} ms — STT final → bot done speaking)")
++    if total_gap is None:
++        print("  (turn gap unavailable — TTS produced no audio)")
++    else:
++        print(f"  (turn gap: {total_gap:.0f} ms — STT final → first audio enqueued)")
  
  
  async def main() -> None:
@@ -387,7 +417,7 @@ flowchart LR
     style LLM fill:#ffe6cc,stroke:#d79b00,color:#000
 ```
 
-The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L88-L97)
+The <!-- auto:linkhash src=main.py symbol=blocking_agent -->[`blocking_agent`](./main.py#L102-L111)
 function in [`main.py`](./main.py) is the only new moving part — about ten lines:
 
 <!-- BEGIN auto:snippet src=main.py symbol=blocking_agent -->
@@ -416,21 +446,27 @@ It is also unshippable. This is what most naïve voice demos do.
 
 ## Decompose the gap
 
-The journal records three sub-spans between STT-final and the bot
-speaking. Open the bundle and list them:
+The journal records three sub-spans between STT-final and the first
+bot-audio chunk, plus the time required to enqueue the complete reply.
+Open the bundle and list them:
 
 ```python
 from pathlib import Path
 from easycat.debug.testing import load_bundle
 b = next(iter(Path("docs/teaching/05-blocking-agent/runs/").glob("*.bundle")))
 bundle = load_bundle(b)
+
+def format_ms(value):
+    return "unavailable" if value is None else f"{value:6.1f} ms"
+
 for r in bundle.records():
     if r["name"] == "turn.gap":
         d = r["data"]
-        print(f"  STT final → agent dispatch  {d['stt_to_agent_ms']:6.1f} ms")
-        print(f"  agent (LLM call)            {d['agent_ms']:6.1f} ms")
-        print(f"  TTS synth + first audio     {d['tts_ms']:6.1f} ms")
-        print(f"  TOTAL                       {d['total_gap_ms']:6.1f} ms")
+        print(f"  STT final → agent dispatch  {format_ms(d['stt_to_agent_ms'])}")
+        print(f"  agent (LLM call)            {format_ms(d['agent_ms'])}")
+        print(f"  TTS → first audio           {format_ms(d['tts_ms'])}")
+        print(f"  TOTAL → first audio         {format_ms(d['total_gap_ms'])}")
+        print(f"  full TTS synth + enqueue    {format_ms(d['tts_enqueue_ms'])}")
 ```
 
 You will see something like:
@@ -438,8 +474,9 @@ You will see something like:
 ```
   STT final → agent dispatch     0.4 ms
   agent (LLM call)            2134.0 ms
-  TTS synth + first audio      812.0 ms
-  TOTAL                       2946.4 ms
+  TTS → first audio            312.0 ms
+  TOTAL → first audio         2446.4 ms
+  full TTS synth + enqueue     812.0 ms
 ```
 
 Three sub-gaps, in order:
@@ -448,12 +485,20 @@ Three sub-gaps, in order:
    overhead. You can't optimise this; it doesn't matter.
 2. **Agent / LLM call** (~1-4 s): most of the silence. The
    dominant term. Model choice dominates.
-3. **Agent response → first TTS audio** (~300-800 ms): not
-   trivial either. Synth + network + first-chunk playback.
+3. **Agent response → first TTS audio** (~100-400 ms): not
+   trivial either. Synth + network + the first transport send.
 
-Total `turn.gap` is what the user *feels*. Humans turn-take in
-100-300 ms. We are an order of magnitude worse. That is why
-voice LLM products feel off when they do.
+`turn.gap` stops when the first audio chunk is accepted by the
+transport. That is the software milestone closest to what the user
+feels, not an acoustic measurement: `LocalTransport` still has a
+small speaker buffer, and measuring sound at the ear requires a
+loopback. `tts_enqueue_ms` ends later, after the complete reply has
+been synthesized and queued; it is useful for throughput and memory
+diagnosis but is not part of the silence before the bot starts.
+
+Humans turn-take in 100-300 ms. Even before device buffering, we are
+an order of magnitude worse. That is why voice LLM products feel off
+when they do.
 
 ## The two axes we'll attack
 

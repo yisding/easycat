@@ -133,7 +133,7 @@
  
      def __init__(self, vad, preroll_frames: int = PREROLL_FRAMES) -> None:
          self._vad = vad
-@@ -80,94 +128,152 @@
+@@ -80,101 +128,160 @@
                  self._preroll.append(chunk)
  
  
@@ -344,7 +344,8 @@
          synth_start = time.monotonic()
          async for event in tts.synthesize(TTSInput(text=sentence)):
              if event.type == TTSEventType.AUDIO and event.audio is not None:
--                if first_audio_t is None:
+-                accepted = await transport.send_audio(event.audio)
+-                if accepted and first_audio_t is None:
 -                    first_audio_t = time.monotonic()
 -                    journal.append(
 -                        kind=JournalRecordKind.EVENT,
@@ -352,10 +353,10 @@
 -                        session_id=SESSION_ID,
 -                        data={"stage": "tts", "t_ms": first_audio_t * 1000},
 -                    )
-                 await transport.send_audio(event.audio)
++                await transport.send_audio(event.audio)
          journal.append(
              kind=JournalRecordKind.EVENT,
-@@ -175,6 +281,7 @@
+             name="stage.tts.execute",
              session_id=SESSION_ID,
              data={
                  "stage": "tts",
