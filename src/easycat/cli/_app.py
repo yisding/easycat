@@ -443,6 +443,145 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature tools and actions",
+        "path": "docs/using-easycat/04-tools-actions/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Separate agent tools, session actions, events, and spoken-output rules.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/04-tools-actions/main.py preview",
+            "uv run python docs/using-easycat/04-tools-actions/main.py run",
+            "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
+        ),
+    },
+    {
+        "label": "Feature agent bridges",
+        "path": "docs/using-easycat/05-agent-bridges/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Choose a framework adapter or bring a custom workflow.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+            "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+            "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+        ),
+    },
+    {
+        "label": "Feature session control",
+        "path": "docs/using-easycat/06-session-control/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Own session lifecycle, events, text turns, resets, and teardown.",
+        "commands": (
+            "uv sync --extra quickstart --group dev",
+            "uv run easycat doctor",
+            "uv run easycat doctor --json",
+            "uv run easycat doctor --env-file .env",
+            "uv run easycat doctor --env-file .env --json",
+            "uv run python docs/using-easycat/06-session-control/main.py text",
+            "uv run python docs/using-easycat/06-session-control/main.py voice",
+            "uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice",
+        ),
+    },
+    {
+        "label": "Feature observability",
+        "path": "docs/using-easycat/07-observability/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Record, inspect, replay, and compare journals and debug bundles.",
+        "commands": (
+            "uv sync --group dev",
+            "uv sync --extra debugger --group dev",
+            (
+                "uv run python docs/using-easycat/07-observability/main.py pair "
+                ".easycat/tutorial/ch07"
+            ),
+            ("uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json"),
+            (
+                "uv run easycat replay .easycat/tutorial/ch07/baseline.bundle "
+                "--fidelity artifact --tool-policy deny --json"
+            ),
+            (
+                "uv run easycat diff .easycat/tutorial/ch07/baseline.bundle "
+                ".easycat/tutorial/ch07/candidate.bundle --json"
+            ),
+        ),
+    },
+    {
+        "label": "Feature testing and evals",
+        "path": "docs/using-easycat/08-testing-evals/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Test offline turns, evaluation oracles, and latency budgets.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/08-testing-evals/main.py",
+            "uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json",
+            "uv run easycat doctor --json",
+            "uv run easycat validate latency --smoke --json",
+        ),
+    },
+    {
+        "label": "Feature multi-caller servers",
+        "path": "docs/using-easycat/09-multi-caller/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Serve isolated callers with auth, capacity limits, and draining.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/09-multi-caller/main.py",
+        ),
+    },
+    {
+        "label": "Feature telephony",
+        "path": "docs/using-easycat/10-telephony/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Secure Twilio webhooks, media streams, callbacks, and call control.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/10-telephony/main.py",
+            "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+            "uv run easycat doctor --env-file .env --json",
+            (
+                "uv run --env-file .env uvicorn examples.twilio_app:create_app "
+                "--factory --host 0.0.0.0"
+            ),
+        ),
+    },
+    {
+        "label": "Feature production operations",
+        "path": "docs/using-easycat/11-production-ops/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Validate, deploy, observe, preserve, and drain production services.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/11-production-ops/main.py",
+            (
+                "uv run python docs/using-easycat/11-production-ops/main.py "
+                "--data-dir .easycat/tutorial/ch11"
+            ),
+            (
+                "uv run easycat inspect .easycat/tutorial/ch11/journals/"
+                "chapter-11-ops-checkpoint.sqlite --json"
+            ),
+            "uv run easycat validate quick --json",
+            "uv run easycat validate report .easycat/validation/latest.json --json",
+            "uv run easycat validate release --json",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

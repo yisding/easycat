@@ -15,6 +15,7 @@ See ``TEST_PLANS.md`` §14 and §15.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -64,12 +65,17 @@ class _StubSession:
 
     def __init__(self) -> None:
         self.events: list[str] = []
+        self.closed = asyncio.Event()
 
     async def start(self) -> None:
         self.events.append("start")
 
     async def stop(self, *, force: bool = False) -> None:
         self.events.append(f"stop(force={force})")
+        self.closed.set()
+
+    async def wait_closed(self) -> None:
+        await self.closed.wait()
 
     async def __aenter__(self) -> _StubSession:
         await self.start()
@@ -126,6 +132,50 @@ def test_run_session_uses_existing_session_async_context(
 
     assert installs == ["install"]
     assert session.events == ["start", "stop(force=True)"]
+
+
+@pytest.mark.parametrize("handlers_installed", [True, False])
+def test_run_session_exits_when_session_stops_itself(
+    monkeypatch: pytest.MonkeyPatch,
+    handlers_installed: bool,
+) -> None:
+    """Session actions can end the synchronous run path without an OS signal."""
+    from easycat.helpers import run_session
+
+    class SelfStoppingSession(_StubSession):
+        stop_task: asyncio.Task[None] | None = None
+
+        async def __aenter__(self) -> SelfStoppingSession:
+            await self.start()
+            self.stop_task = asyncio.create_task(self._stop_after_entry())
+            return self
+
+        async def _stop_after_entry(self) -> None:
+            await asyncio.sleep(0)
+            await self.stop()
+
+    session = SelfStoppingSession()
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
+    monkeypatch.setattr(
+        "easycat.helpers._install_shutdown_signal_handlers",
+        lambda _loop, _stop_event: handlers_installed,
+    )
+
+    real_asyncio_run = asyncio.run
+
+    def bounded_run(coro) -> None:  # noqa: ANN001
+        async def run_with_timeout() -> None:
+            await asyncio.wait_for(coro, timeout=0.5)
+
+        real_asyncio_run(run_with_timeout())
+
+    monkeypatch.setattr("easycat.helpers.asyncio.run", bounded_run)
+
+    run_session(session)
+
+    assert session.events == ["start", "stop(force=False)", "stop(force=True)"]
+    assert session.stop_task is not None
+    assert session.stop_task.done()
 
 
 def test_run_does_not_attach_feedback_under_pytest(

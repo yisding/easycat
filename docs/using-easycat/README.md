@@ -50,14 +50,14 @@ pretending unfinished lessons are runnable.
 | 1 | [`01-runtime-modes`](./01-runtime-modes/) | Browser, WebSocket, local, and Twilio runtime modes | Available |
 | 2 | [`02-providers-and-voices`](./02-providers-and-voices/) | STT/TTS provider specs, voices, and environment preflight | Available |
 | 3 | [`03-conversation-controls`](./03-conversation-controls/) | VAD, smart turn, interruption, push-to-talk, noise reduction, and AEC | Available |
-| 4 | Add tools and actions | Agent tools, fillers, session actions, and pronunciation rules | Planned |
-| 5 | Bring your agent | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Planned |
-| 6 | Control a session | `EasyConfig`, `Session`, events, text turns, and lifecycle | Planned |
-| 7 | See what happened | Journals, bundles, inspect, replay, diff, and the debugger | Planned |
-| 8 | Test the experience | Offline turns, assertions, evals, and latency budgets | Planned |
-| 9 | Serve many callers | Per-connection factories, authentication, limits, and supervision | Planned |
-| 10 | Answer the phone | Twilio streams, outbound calls, screening, IVR, and call control | Planned |
-| 11 | Ship and operate | Validation, deployment, durability, metrics, and production teardown | Planned |
+| 4 | [`04-tools-actions`](./04-tools-actions/) | Agent tools, tool events, session actions, and pronunciation rules | Available |
+| 5 | [`05-agent-bridges`](./05-agent-bridges/) | OpenAI Agents, PydanticAI, LangChain, LangGraph, LlamaAgents, and custom bridges | Available |
+| 6 | [`06-session-control`](./06-session-control/) | `EasyConfig`, `Session`, events, text turns, and lifecycle | Available |
+| 7 | [`07-observability`](./07-observability/) | Journals, bundles, inspect, replay, diff, and the debugger | Available |
+| 8 | [`08-testing-evals`](./08-testing-evals/) | Offline turns, assertions, evals, and latency budgets | Available |
+| 9 | [`09-multi-caller`](./09-multi-caller/) | Per-connection factories, authentication, limits, and supervision | Available |
+| 10 | [`10-telephony`](./10-telephony/) | Twilio streams, outbound calls, screening, IVR, and call control | Available |
+| 11 | [`11-production-ops`](./11-production-ops/) | Validation, deployment, durability, metrics, and production teardown | Available |
 
 ## Prerequisites
 

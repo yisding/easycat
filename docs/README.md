@@ -41,10 +41,18 @@ them. Multi-word audience filters accept hyphens or underscores, so
   [00-first-voice-app](using-easycat/00-first-voice-app/), then continue to
   [01-runtime-modes](using-easycat/01-runtime-modes/) and
   [02-providers-and-voices](using-easycat/02-providers-and-voices/), followed by
-  [03-conversation-controls](using-easycat/03-conversation-controls/). It
-  begins with the public `VoiceApp` API and adds runtime modes, providers,
-  conversation controls, tools, sessions, debugging, evals, servers,
-  telephony, and operations one capability at a time.
+  [03-conversation-controls](using-easycat/03-conversation-controls/) and
+  [04-tools-actions](using-easycat/04-tools-actions/), and
+  [05-agent-bridges](using-easycat/05-agent-bridges/), and
+  [06-session-control](using-easycat/06-session-control/),
+  [07-observability](using-easycat/07-observability/),
+  [08-testing-evals](using-easycat/08-testing-evals/),
+  [09-multi-caller](using-easycat/09-multi-caller/),
+  [10-telephony](using-easycat/10-telephony/), and
+  [11-production-ops](using-easycat/11-production-ops/). It begins with the public
+  `VoiceApp` API and adds runtime modes, providers, conversation controls,
+  tools, sessions, debugging, evals, servers, telephony, and operations one
+  capability at a time.
 - Building an application: scaffold with
   `uv run easycat init my-agent`, or run
   `uv run easycat init --list-templates` to compare templates with best-fit

@@ -276,6 +276,151 @@ uv run python docs/using-easycat/03-conversation-controls/push_to_talk.py
 uv run --env-file .env python docs/using-easycat/03-conversation-controls/main.py fast
 ```
 
+## Feature tools and actions
+
+- Path: docs/using-easycat/04-tools-actions/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/04-tools-actions
+- Audience: learners
+- Separate agent tools, session actions, events, and spoken-output rules.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/04-tools-actions/main.py preview
+uv run python docs/using-easycat/04-tools-actions/main.py run
+uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run
+```
+
+## Feature agent bridges
+
+- Path: docs/using-easycat/05-agent-bridges/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/05-agent-bridges
+- Audience: learners
+- Choose a framework adapter or bring a custom workflow.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/05-agent-bridges/main.py matrix
+uv run python docs/using-easycat/05-agent-bridges/main.py run
+uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run
+```
+
+## Feature session control
+
+- Path: docs/using-easycat/06-session-control/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/06-session-control
+- Audience: learners
+- Own session lifecycle, events, text turns, resets, and teardown.
+
+Commands:
+
+```bash
+uv sync --extra quickstart --group dev
+uv run easycat doctor
+uv run easycat doctor --json
+uv run easycat doctor --env-file .env
+uv run easycat doctor --env-file .env --json
+uv run python docs/using-easycat/06-session-control/main.py text
+uv run python docs/using-easycat/06-session-control/main.py voice
+uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice
+```
+
+## Feature observability
+
+- Path: docs/using-easycat/07-observability/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/07-observability
+- Audience: learners
+- Record, inspect, replay, and compare journals and debug bundles.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv sync --extra debugger --group dev
+uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07
+uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json
+uv run easycat replay .easycat/tutorial/ch07/baseline.bundle --fidelity artifact --tool-policy deny --json
+uv run easycat diff .easycat/tutorial/ch07/baseline.bundle .easycat/tutorial/ch07/candidate.bundle --json
+```
+
+## Feature testing and evals
+
+- Path: docs/using-easycat/08-testing-evals/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/08-testing-evals
+- Audience: learners
+- Test offline turns, evaluation oracles, and latency budgets.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/08-testing-evals/main.py
+uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json
+uv run easycat doctor --json
+uv run easycat validate latency --smoke --json
+```
+
+## Feature multi-caller servers
+
+- Path: docs/using-easycat/09-multi-caller/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/09-multi-caller
+- Audience: learners
+- Serve isolated callers with auth, capacity limits, and draining.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/09-multi-caller/main.py
+```
+
+## Feature telephony
+
+- Path: docs/using-easycat/10-telephony/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/10-telephony
+- Audience: learners
+- Secure Twilio webhooks, media streams, callbacks, and call control.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/10-telephony/main.py
+uv sync --extra openai --extra telephony --extra openai-agents --group dev
+uv run easycat doctor --env-file .env --json
+uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0
+```
+
+## Feature production operations
+
+- Path: docs/using-easycat/11-production-ops/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/11-production-ops
+- Audience: learners
+- Validate, deploy, observe, preserve, and drain production services.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/11-production-ops/main.py
+uv run python docs/using-easycat/11-production-ops/main.py --data-dir .easycat/tutorial/ch11
+uv run easycat inspect .easycat/tutorial/ch11/journals/chapter-11-ops-checkpoint.sqlite --json
+uv run easycat validate quick --json
+uv run easycat validate report .easycat/validation/latest.json --json
+uv run easycat validate release --json
+```
+
 ## Examples
 
 - Path: examples/README.md

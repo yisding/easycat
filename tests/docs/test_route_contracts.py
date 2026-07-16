@@ -377,6 +377,181 @@ def test_feature_conversation_controls_docs_route_matches_chapter_commands() -> 
         assert command in route["commands"]
 
 
+def test_feature_tools_actions_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "04-tools-actions" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/04-tools-actions/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/04-tools-actions/main.py preview",
+        "uv run python docs/using-easycat/04-tools-actions/main.py run",
+        "uv run --env-file .env python docs/using-easycat/04-tools-actions/main.py run",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_agent_bridges_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "05-agent-bridges" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/05-agent-bridges/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py matrix",
+        "uv run python docs/using-easycat/05-agent-bridges/main.py run",
+        "uv run --env-file .env python docs/using-easycat/05-agent-bridges/main.py run",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_session_control_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "06-session-control" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/06-session-control/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --extra quickstart --group dev",
+        "uv run easycat doctor",
+        "uv run easycat doctor --env-file .env",
+        "uv run python docs/using-easycat/06-session-control/main.py text",
+        "uv run python docs/using-easycat/06-session-control/main.py voice",
+        "uv run --env-file .env python docs/using-easycat/06-session-control/main.py voice",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_observability_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "07-observability" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/07-observability/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv sync --extra debugger --group dev",
+        "uv run python docs/using-easycat/07-observability/main.py pair .easycat/tutorial/ch07",
+        "uv run easycat bundles show .easycat/tutorial/ch07/baseline.bundle --json",
+        (
+            "uv run easycat replay .easycat/tutorial/ch07/baseline.bundle "
+            "--fidelity artifact --tool-policy deny --json"
+        ),
+        (
+            "uv run easycat diff .easycat/tutorial/ch07/baseline.bundle "
+            ".easycat/tutorial/ch07/candidate.bundle --json"
+        ),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_testing_evals_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "08-testing-evals" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/08-testing-evals/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/08-testing-evals/main.py",
+        "uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json",
+        "uv run easycat doctor --json",
+        "uv run easycat validate latency --smoke --json",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_multi_caller_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "09-multi-caller" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/09-multi-caller/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/09-multi-caller/main.py",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_telephony_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "10-telephony" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/10-telephony/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/10-telephony/main.py",
+        "uv sync --extra openai --extra telephony --extra openai-agents --group dev",
+        "uv run easycat doctor --env-file .env --json",
+        ("uv run --env-file .env uvicorn examples.twilio_app:create_app --factory --host 0.0.0.0"),
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
+def test_feature_production_ops_docs_route_matches_chapter_commands() -> None:
+    entries = {entry["path"]: entry for entry in _docs_entries()}
+    readme = (REPO_ROOT / "docs" / "using-easycat" / "11-production-ops" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    route = entries["docs/using-easycat/11-production-ops/"]
+
+    assert route["audience"] == "learners"
+    assert route["diataxis"] == "tutorial"
+    for command in (
+        "uv sync --group dev",
+        "uv run python docs/using-easycat/11-production-ops/main.py",
+        (
+            "uv run python docs/using-easycat/11-production-ops/main.py "
+            "--data-dir .easycat/tutorial/ch11"
+        ),
+        (
+            "uv run easycat inspect .easycat/tutorial/ch11/journals/"
+            "chapter-11-ops-checkpoint.sqlite --json"
+        ),
+        "uv run easycat validate quick --json",
+        "uv run easycat validate report .easycat/validation/latest.json --json",
+        "uv run easycat validate release --json",
+    ):
+        assert command in readme
+        assert command in route["commands"]
+
+
 def test_examples_docs_route_matches_examples_fast_path() -> None:
     entries = {entry["path"]: entry for entry in _docs_entries()}
     examples_readme = (REPO_ROOT / "examples" / "README.md").read_text(encoding="utf-8")

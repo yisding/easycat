@@ -35,6 +35,14 @@ def test_docs_index_routes_primary_reader_paths() -> None:
         "using-easycat/01-runtime-modes/",
         "using-easycat/02-providers-and-voices/",
         "using-easycat/03-conversation-controls/",
+        "using-easycat/04-tools-actions/",
+        "using-easycat/05-agent-bridges/",
+        "using-easycat/06-session-control/",
+        "using-easycat/07-observability/",
+        "using-easycat/08-testing-evals/",
+        "using-easycat/09-multi-caller/",
+        "using-easycat/10-telephony/",
+        "using-easycat/11-production-ops/",
         "../README.md#cli",
         "../examples/README.md",
         "../CLAUDE.md",
@@ -135,6 +143,14 @@ def test_cli_docs_routes_keep_primary_reader_order() -> None:
         "Feature runtime modes",
         "Feature providers and voices",
         "Feature conversation controls",
+        "Feature tools and actions",
+        "Feature agent bridges",
+        "Feature session control",
+        "Feature observability",
+        "Feature testing and evals",
+        "Feature multi-caller servers",
+        "Feature telephony",
+        "Feature production operations",
         "Examples",
         "Architecture",
         "Maintainer guide",
@@ -285,6 +301,30 @@ def test_cli_docs_routes_have_online_urls() -> None:
     )
     assert entries["docs/using-easycat/03-conversation-controls/"]["url"].endswith(
         "/tree/main/docs/using-easycat/03-conversation-controls"
+    )
+    assert entries["docs/using-easycat/04-tools-actions/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/04-tools-actions"
+    )
+    assert entries["docs/using-easycat/05-agent-bridges/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/05-agent-bridges"
+    )
+    assert entries["docs/using-easycat/06-session-control/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/06-session-control"
+    )
+    assert entries["docs/using-easycat/07-observability/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/07-observability"
+    )
+    assert entries["docs/using-easycat/08-testing-evals/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/08-testing-evals"
+    )
+    assert entries["docs/using-easycat/09-multi-caller/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/09-multi-caller"
+    )
+    assert entries["docs/using-easycat/10-telephony/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/10-telephony"
+    )
+    assert entries["docs/using-easycat/11-production-ops/"]["url"].endswith(
+        "/tree/main/docs/using-easycat/11-production-ops"
     )
     for route, entry in entries.items():
         route_path = route.split("#", 1)[0]
