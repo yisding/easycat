@@ -32,6 +32,7 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
     assert [row["chapter"] for row in rows] == list(range(16))
     assert [row["folder"] for row in rows] == chapter_dirs
     assert len({row["command"] for row in rows}) == len(rows)
+    assert len({row["prediction"] for row in rows}) == len(rows)
     assert len({row["evidence"] for row in rows}) == len(rows)
     for row in rows:
         path = ROOT / "docs" / "teaching" / row["folder"] / row["script"]
@@ -39,6 +40,7 @@ def test_offline_spine_tracks_one_checkpoint_per_chapter() -> None:
         assert path.is_file()
         assert row["setup_command"] == f"uv sync --extra {expected_extra} --group dev"
         assert row["command"] == f"uv run python {path.relative_to(ROOT).as_posix()}"
+        assert row["prediction"].strip()
         assert row["evidence"].strip()
 
 
@@ -85,7 +87,7 @@ def test_offline_spine_json_list_is_documented() -> None:
         root_readme
     )
     assert "uv run python docs/teaching/offline_spine.py --run --jobs 4" in root_readme
-    assert "concepts, setup commands, evidence cues, and individual commands" in readme
+    assert "concepts, prediction prompts, setup commands, evidence cues, and" in readme
     assert "uv sync --extra quickstart --group dev" in readme
     assert "--run --through 5 --jobs 4" in readme
     assert "--show-evidence" in readme
@@ -167,6 +169,7 @@ def test_offline_spine_human_run_can_show_observed_evidence() -> None:
     )
 
     assert "PASS     0  audio format boundaries" in completed.stdout
+    assert "Predict: Which rates belong to the wire" in completed.stdout
     assert "Observed:" in completed.stdout
     assert '"sample_rate_hz": 8000' in completed.stdout
 
@@ -175,7 +178,7 @@ def test_offline_spine_rejects_invalid_evidence_streams(tmp_path: Path) -> None:
     spine = _load_spine()
     script = tmp_path / "docs" / "teaching" / "probe.py"
     script.parent.mkdir(parents=True)
-    checkpoint = spine.Checkpoint(0, ".", "probe.py", "concept", "evidence")
+    checkpoint = spine.Checkpoint(0, ".", "probe.py", "concept", "prediction", "evidence")
     spine.REPO_ROOT = tmp_path
 
     script.write_text("print('not json')\n", encoding="utf-8")
@@ -214,10 +217,12 @@ def test_offline_spine_text_list_pairs_commands_with_evidence() -> None:
         text=True,
     )
 
+    assert completed.stdout.count("Predict:") == len(spine.catalog())
     assert completed.stdout.count("Setup:") == len(spine.catalog())
     assert completed.stdout.count("Run:") == len(spine.catalog())
     assert completed.stdout.count("Look for:") == len(spine.catalog())
     for row in spine.catalog():
+        assert row["prediction"] in completed.stdout
         assert row["setup_command"] in completed.stdout
         assert row["command"] in completed.stdout
         assert row["evidence"] in completed.stdout

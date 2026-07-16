@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `transport acceptance` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** How many chunks will be accepted or rejected, and does matching
+> `TransportLike` imply full `Transport` conformance?
+>
 > ```bash
 > uv run python docs/teaching/01-echo/transport_contract_probe.py
 > ```

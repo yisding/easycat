@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `audio format boundaries` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Which rates belong to the wire, pipeline/provider input, provider defaults,
+> and WebRTC media boundaries?
+>
 > ```bash
 > uv run python docs/teaching/00-hello-audio/format_boundaries.py
 > ```

@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `sentence-level TTS handoff` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Do per-sentence acceptance counts stay independent, and do they add up to
+> the turn totals?
+>
 > ```bash
 > uv run python docs/teaching/06-streaming-agent/tts_delivery_probe.py
 > ```

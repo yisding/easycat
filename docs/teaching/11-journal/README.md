@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `journal query coverage` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** How can marginal query counts distinguish an empty filter intersection from
+> a misspelled turn?
+>
 > ```bash
 > uv run python docs/teaching/11-journal/query_coverage_probe.py
 > ```

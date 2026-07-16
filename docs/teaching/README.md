@@ -40,7 +40,8 @@ prerequisites below when you continue into provider-backed chapters.
 
 Every chapter now has at least one deterministic checkpoint that needs no
 microphone, speaker, or provider credential. List the curated one-per-chapter
-spine with concepts, setup commands, evidence cues, and individual commands:
+spine with concepts, prediction prompts, setup commands, evidence cues, and
+individual commands:
 
 ```bash
 uv run python docs/teaching/offline_spine.py

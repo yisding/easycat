@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `silence-timeout tradeoff` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** Can either a 500 ms or 2,000 ms silence timeout avoid both false splits and
+> added commit latency?
+>
 > ```bash
 > uv run python docs/teaching/03-parrot-naive/timeout_policy_probe.py
 > ```

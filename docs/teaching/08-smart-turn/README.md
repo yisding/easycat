@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `endpoint wait decomposition` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** How do 200 ms early silence, 40 ms inference, and 800 ms fallback compare
+> with the 800 ms VAD baseline?
+>
 > ```bash
 > uv run python docs/teaching/08-smart-turn/endpoint_wait_probe.py
 > ```

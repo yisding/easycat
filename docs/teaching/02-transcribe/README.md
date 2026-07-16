@@ -11,6 +11,9 @@
 > **Hardware-free checkpoint:** prove `partial vs final commitment` without a microphone,
 > speakers, or provider credentials:
 >
+> **Predict first:** When a partial revises `fifteen` to `fifty`, which effects may happen before
+> `FINAL`, and which must wait?
+>
 > ```bash
 > uv run python docs/teaching/02-transcribe/partial_policy_probe.py
 > ```
