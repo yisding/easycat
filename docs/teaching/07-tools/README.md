@@ -608,6 +608,14 @@ visible.
 3. Make a tool that returns a 5 KB JSON blob. Verify none of it
    reaches TTS. If it does, find the leak.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 8 — Smart-turn](../08-smart-turn/) returns to the

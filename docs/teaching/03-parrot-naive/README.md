@@ -698,6 +698,14 @@ Three failure modes, minimum. You should be actively asking for
 VAD — for a signal that is "the microphone is currently carrying
 speech" rather than "STT has been quiet."
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 4 — VAD + pre-roll](../04-vad-preroll/) replaces the

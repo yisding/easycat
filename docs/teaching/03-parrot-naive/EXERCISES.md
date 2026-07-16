@@ -136,3 +136,11 @@ speech?", able to distinguish provider ingress from consumer dequeue, and able
 to distinguish synthesized, accepted, and played audio. You should also be
 able to identify the silence-timeout policy—not cleanup, cancellation, or
 normal stream exhaustion—as this chapter's deliberate defect.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 4 — VAD + Pre-roll →](../04-vad-preroll/)
+<!-- END auto:exercise-completion -->

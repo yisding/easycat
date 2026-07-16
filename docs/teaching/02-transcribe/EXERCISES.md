@@ -185,3 +185,11 @@ able to switch the Chapter 2 STT provider without editing its consumer loop and
 tell a provider wire target from an upstream input-rate restriction. You should
 also be able to prove that every concurrent task has stopped before its shared
 STT and transport resources begin teardown.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 3 — Parrot, the Naive Way →](../03-parrot-naive/)
+<!-- END auto:exercise-completion -->

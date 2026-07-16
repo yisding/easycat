@@ -767,6 +767,14 @@ VAD is still a threshold. It just trips on a much better feature
 than "has the STT stream been quiet?" The remaining false-fires
 are noise-reduction's job — [chapter 10](../10-cleaning-signal/).
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 5 — The blocking agent](../05-blocking-agent/) drops the

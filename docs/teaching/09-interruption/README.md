@@ -345,6 +345,14 @@ Expect:
    itself. Why does AEC fix this, and why is VAD alone not enough?
    (Preview of chapter 10.)
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 10 — Cleaning the signal](../10-cleaning-signal/). We

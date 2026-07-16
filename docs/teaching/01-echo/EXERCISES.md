@@ -78,3 +78,11 @@ from microphone input to speaker output, (b) distinguish a chunk being
 produced from `send_audio(...)` accepting it and explain why the loop uses
 async iteration, and (c) explain why the same control flow works with Local,
 WebSocket, WebRTC, or Twilio transports.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 2 — Transcribe →](../02-transcribe/)
+<!-- END auto:exercise-completion -->

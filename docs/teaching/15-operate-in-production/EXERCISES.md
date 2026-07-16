@@ -177,3 +177,11 @@ session:`, `await session.stop()`, `await session.stop(force=True)`,
 including why the cached view keeps its identity, and (c) sketch the
 `SessionManager` usage pattern for a WebSocket server in 10 lines
 without looking at the file.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Return to the teaching ladder](../)
+<!-- END auto:exercise-completion -->

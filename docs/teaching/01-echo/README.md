@@ -361,6 +361,14 @@ an *echo* rather than just "a delay"? (Hint: your brain is
 comparing direct sound reaching your skull with delayed sound
 reaching your ears.)
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 2 — Transcribe](../02-transcribe/) keeps the inbound

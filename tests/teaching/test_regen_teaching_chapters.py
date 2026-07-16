@@ -17,20 +17,26 @@ from easycat.events import (
 )
 from easycat.session._journal_sink import _SIMPLE_EVENT_RECORDS
 from scripts.regen_teaching_chapters import (
+    EXERCISE_COMPLETION_RE,
     NAVIGATION_RE,
     OFFLINE_CHECKPOINT_RE,
+    PRACTICE_HANDOFF_RE,
     ROOT,
     TEACHING,
     Chapter,
+    _ensure_exercise_completion,
     _ensure_navigation,
+    _ensure_practice_handoff,
     _resolve_child_path,
     discover_chapters,
     regen_exercises,
     regen_readme,
     render_diff,
+    render_exercise_completion,
     render_exercise_navigation,
     render_navigation,
     render_offline_checkpoint,
+    render_practice_handoff,
 )
 
 SOURCE_PATH_RE = re.compile(
@@ -178,6 +184,43 @@ def test_offline_checkpoint_comes_from_the_spine_manifest() -> None:
     )
 
 
+def test_each_chapter_has_one_current_generated_practice_handoff() -> None:
+    for chapter in discover_chapters():
+        readme = (chapter.path / "README.md").read_text(encoding="utf-8")
+        matches = list(PRACTICE_HANDOFF_RE.finditer(readme))
+        closing_heading = re.search(
+            r"^## (?:What's next|The ladder, complete \(really\))$",
+            readme,
+            re.MULTILINE,
+        )
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_practice_handoff()
+        assert matches[0].start() > readme.index("## Try breaking it")
+        assert closing_heading is not None
+        assert matches[0].end() < closing_heading.start()
+
+
+def test_practice_handoff_is_moved_before_the_closing_section() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:practice-handoff -->\n"
+        f"{render_practice_handoff()}\n"
+        "<!-- END auto:practice-handoff -->"
+    )
+    text = (
+        f"# Temporary chapter\n\n{misplaced}\n\n"
+        "## Try breaking it\n\nTry this.\n\n"
+        "## What's next\n\nContinue.\n"
+    )
+
+    updated = _ensure_practice_handoff(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:practice-handoff -->") == 1
+    assert updated.index("## Try breaking it") < updated.index(misplaced)
+    assert updated.index(misplaced) < updated.index("## What's next")
+
+
 def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> None:
     chapters = discover_chapters()
 
@@ -196,6 +239,26 @@ def test_render_exercise_navigation_handles_first_middle_and_last_chapters() -> 
     )
 
 
+def test_render_exercise_completion_handles_first_middle_and_last_chapters() -> None:
+    chapters = discover_chapters()
+
+    assert render_exercise_completion(chapters[0]) == (
+        "---\nSelf-check complete?\n\n"
+        "- [Review the chapter narrative](./README.md)\n"
+        "- [Continue to Chapter 1 — Echo →](../01-echo/)"
+    )
+    assert render_exercise_completion(chapters[8]) == (
+        "---\nSelf-check complete?\n\n"
+        "- [Review the chapter narrative](./README.md)\n"
+        "- [Continue to Chapter 9 — Interruption / Barge-in →](../09-interruption/)"
+    )
+    assert render_exercise_completion(chapters[-1]) == (
+        "---\nSelf-check complete?\n\n"
+        "- [Review the chapter narrative](./README.md)\n"
+        "- [Return to the teaching ladder](../)"
+    )
+
+
 def test_each_exercise_page_has_one_current_generated_navigation_block() -> None:
     for chapter in discover_chapters():
         exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
@@ -207,7 +270,34 @@ def test_each_exercise_page_has_one_current_generated_navigation_block() -> None
         assert matches[0].start() < exercises.find("\n## ")
 
 
-def test_teaching_exercises_match_regenerated_navigation() -> None:
+def test_each_exercise_page_ends_with_current_generated_completion() -> None:
+    for chapter in discover_chapters():
+        exercises = (chapter.path / "EXERCISES.md").read_text(encoding="utf-8")
+        matches = list(EXERCISE_COMPLETION_RE.finditer(exercises))
+
+        assert len(matches) == 1, chapter.slug
+        assert matches[0].group("body").strip() == render_exercise_completion(chapter)
+        assert matches[0].start() > exercises.index("## Self-check")
+        assert exercises.rstrip().endswith("<!-- END auto:exercise-completion -->")
+
+
+def test_exercise_completion_is_moved_after_the_self_check() -> None:
+    chapter = discover_chapters()[0]
+    misplaced = (
+        "<!-- BEGIN auto:exercise-completion -->\n"
+        f"{render_exercise_completion(chapter)}\n"
+        "<!-- END auto:exercise-completion -->"
+    )
+    text = f"# Exercises\n\n{misplaced}\n\n## Self-check\n\nAnswer from memory.\n"
+
+    updated = _ensure_exercise_completion(chapter, text)
+
+    assert updated.count("<!-- BEGIN auto:exercise-completion -->") == 1
+    assert updated.index("## Self-check") < updated.index(misplaced)
+    assert updated.rstrip().endswith("<!-- END auto:exercise-completion -->")
+
+
+def test_teaching_exercises_match_regenerated_auto_blocks() -> None:
     stale_exercises: list[str] = []
 
     for chapter in discover_chapters():
@@ -219,7 +309,7 @@ def test_teaching_exercises_match_regenerated_navigation() -> None:
             stale_exercises.append(exercises.relative_to(ROOT).as_posix())
 
     assert not stale_exercises, (
-        "Teaching exercise navigation is stale. Run "
+        "Teaching exercise auto blocks are stale. Run "
         "`uv run python scripts/regen_teaching_chapters.py`: " + ", ".join(stale_exercises)
     )
 

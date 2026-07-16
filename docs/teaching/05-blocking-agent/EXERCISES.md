@@ -103,3 +103,11 @@ looking them up, predict which one each chapter-6/8 fix attacks,
 and have visceral evidence for why both fixes matter. You should also be able
 to distinguish no synthesized audio from audio rejected before its first
 accepted chunk.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 6 — Streaming Agent + Sentence TTS →](../06-streaming-agent/)
+<!-- END auto:exercise-completion -->

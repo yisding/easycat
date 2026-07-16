@@ -336,6 +336,14 @@ first.
 Then plant your own bug in chapter 9c's code. Dump the bundle.
 Can a classmate (or your future self) find it?
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 12 — Evals + the latency budget](../12-evals-and-latency/). Reading

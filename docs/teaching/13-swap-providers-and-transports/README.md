@@ -268,6 +268,14 @@ promotes it to a measured column.
    asks for "press 1 to continue"). What does the journal show
    on the Twilio preset? What does a user on the phone hear?
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 You have swapped both halves of the STT / agent / TTS / transport

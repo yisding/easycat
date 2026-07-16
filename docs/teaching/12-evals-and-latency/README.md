@@ -385,6 +385,14 @@ hides exactly the regressions you care about.
 3. Write a pytest test that fails if the fixture set's P95 exceeds
    1200 ms. That is the seed of a latency regression suite.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 13 — Swap providers AND transports](../13-swap-providers-and-transports/).

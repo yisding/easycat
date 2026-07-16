@@ -170,7 +170,8 @@ Each chapter's README lists its own prerequisites up front.
   narrative in `README.md`, one or more applied tasks in the dedicated
   `EXERCISES.md`, and a closing self-check. Generated source diffs can make
   a README long; keep the hand-authored explanation skimmable and use focused
-  probes to isolate boundary claims.
+  probes to isolate boundary claims. Generated handoffs connect those steps
+  and only then point the learner to the next chapter.
 - **Journals are the single source of truth.** From chapter 2
   onward each runnable chapter dumps a `RunBundle` to
   `runs/*.bundle` in its own folder. The `runs/` directory is

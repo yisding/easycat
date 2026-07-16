@@ -182,3 +182,11 @@ absence from a typo or an empty filter intersection, and (e)
 distinguish the typed journal envelope from emitter-defined payload
 schemas, and (f) decide when a strict turn query needs same-session
 unscoped context.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 12 — Evals + the Latency Budget →](../12-evals-and-latency/)
+<!-- END auto:exercise-completion -->

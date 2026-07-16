@@ -153,3 +153,11 @@ which utterances will break it (lists, soft talkers, leading
 quiet syllables) without running them, and explain who ends and closes each
 per-turn STT provider. You should also preserve transport rejection evidence
 without confusing accepted audio with played audio.
+
+<!-- BEGIN auto:exercise-completion -->
+---
+Self-check complete?
+
+- [Review the chapter narrative](./README.md)
+- [Continue to Chapter 5 — The Blocking Agent →](../05-blocking-agent/)
+<!-- END auto:exercise-completion -->

@@ -907,6 +907,14 @@ does not leak the prior list.
    author-owned artifact data, so the probe exposes that field. Remove it;
    the lesson is to allowlist safe metadata, never to test with a real secret.
 
+<!-- BEGIN auto:practice-handoff -->
+## Practice and self-check
+
+Work through [the chapter exercises](./EXERCISES.md), then try their closing
+self-check from memory. If an answer is weak, rerun the hardware-free
+checkpoint or revisit the section that owns the gap.
+<!-- END auto:practice-handoff -->
+
 ## What's next
 
 [Chapter 15 — Operate in production](../15-operate-in-production/)
