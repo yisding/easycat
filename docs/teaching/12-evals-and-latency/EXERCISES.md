@@ -1,8 +1,10 @@
 # Chapter 12 — Exercises
 
+[← Back to chapter](./README.md) · [Ladder index](../)
+
 ## 1. Find the budget-blower, propose a fix without coding it
 
-**Task.** Run `latency_budget.py` over each of the five turn
+**Task.** Run `latency_budget.py` over each of the six turn
 bundles. Identify the slowest. Which stage blew its budget?
 Propose a fix — model swap, prompt cache, warmer pool, smarter
 turn detection — *without implementing it*. The point is

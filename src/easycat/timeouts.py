@@ -118,7 +118,8 @@ async def with_agent_timeout(
     error event and raises AgentTimeoutError.
     """
     try:
-        return await asyncio.wait_for(coro, timeout=timeout)
+        async with asyncio.timeout(timeout):
+            return await coro
     except TimeoutError:
         err = AgentTimeoutError(timeout)
         logger.warning(str(err))
@@ -148,7 +149,8 @@ async def with_tts_timeout(
             try:
                 wait_time = timeout if not first_received else None
                 if wait_time is not None:
-                    event = await asyncio.wait_for(events_iter.__anext__(), timeout=wait_time)
+                    async with asyncio.timeout(wait_time):
+                        event = await events_iter.__anext__()
                 else:
                     event = await events_iter.__anext__()
                 first_received = True

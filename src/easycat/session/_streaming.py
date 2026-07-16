@@ -174,22 +174,23 @@ class _SentenceStreamBuffer:
         # non-space, non-``(`` continuation disambiguates that case, so we
         # recheck eagerly rather than waiting for a markdown-closer character.
         self._awaiting_link_dest = False
+        self._payload_count = 0
 
     def replace(self, text: str) -> None:
         """Replace the pending buffer wholesale (used by the ``done`` event)."""
         self._text = text
 
-    async def add_delta(self, delta: str) -> None:
-        """Buffer *delta* and queue any newly-completed sentences."""
+    async def add_delta(self, delta: str) -> bool:
+        """Buffer *delta* and report whether it queued a TTS payload."""
         if self._strip_md:
-            await self._add_markdown_delta(delta)
-            return
+            return await self._add_markdown_delta(delta)
         self._text += delta
         ready, self._text = self._split_pending(self._text)
         if ready:
-            await self._put_payload(ready, is_final=False)
+            return await self._put_payload(ready, is_final=False)
+        return False
 
-    async def _add_markdown_delta(self, delta: str) -> None:
+    async def _add_markdown_delta(self, delta: str) -> bool:
         had_trailing_numeric_separator = self._has_trailing_numeric_separator(self._text)
         self._text += delta
 
@@ -209,7 +210,7 @@ class _SentenceStreamBuffer:
             if not recheck and self._awaiting_link_dest:
                 recheck = any(not ch.isspace() and ch != "(" for ch in delta)
             if not recheck:
-                return
+                return False
         else:
             triggers = _STREAMING_SENTENCE_TRIGGER_CHARS
             if self._first_payload_pending:
@@ -226,26 +227,39 @@ class _SentenceStreamBuffer:
                 and not had_trailing_numeric_separator
                 and not any(ch in delta for ch in triggers)
             ):
-                return
+                return False
 
         self._markdown_window_open, self._awaiting_link_dest = markdown_open_state(self._text)
         if self._markdown_window_open:
-            return
+            return False
 
         stripped_window = strip_markdown(self._text, trim=False, normalize_code_spans=True)
         ready, remaining = self._split_pending(stripped_window)
-        if ready:
-            await self._put_payload(ready, is_final=False)
+        # Commit the split before queueing.  The first-payload handoff yields
+        # after the payload is accepted, so cancellation in that window must
+        # not leave the already-emitted prefix in the pending buffer for a
+        # later flush to duplicate.
         self._text = remaining
+        queued = False
+        if ready:
+            queued = await self._put_payload(ready, is_final=False)
+        return queued
 
-    async def flush(self) -> None:
-        """Queue whatever is still buffered as a final streaming payload."""
+    async def flush(self) -> bool:
+        """Queue remaining text and report whether it produced a payload."""
+        queued = False
         if self._text.strip():
             text = self._text
             if self._strip_md:
                 text = strip_markdown(text, normalize_code_spans=True)
-            await self._put_payload(text, is_final=True)
+            # Commit the flush before queueing. The first-payload handoff
+            # yields after the payload is accepted, so cancellation in that
+            # window must not leave the already-queued final text pending for
+            # a later flush to duplicate.
+            self._text = ""
+            queued = await self._put_payload(text, is_final=True)
         self._text = ""
+        return queued
 
     def _split_pending(self, text: str) -> tuple[str, str]:
         """Split *text* for emission, honouring the first-payload window.
@@ -272,10 +286,22 @@ class _SentenceStreamBuffer:
     def _has_trailing_numeric_separator(text: str) -> bool:
         return len(text) >= 2 and text[-2].isdigit() and text[-1] in ".．:"
 
-    async def _put_payload(self, text: str, *, is_final: bool) -> None:
+    async def _put_payload(self, text: str, *, is_final: bool) -> bool:
         payload = self._prepare(text, is_streaming=True, is_final=is_final)
         if payload.text.strip():
             await self._tts_queue.put(payload)
+            first_payload = self._payload_count == 0
+            self._payload_count += 1
+            if first_payload:
+                # Two turns are intentional. The first wakes the waiting TTS
+                # consumer; that consumer creates the synthesis task and yields
+                # once to start it. The second lets the new task enter the TTS
+                # provider before this agent task consumes a terminal/done event.
+                # Public lifecycle/audio remains held by first_tts_payload_ready.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+            return True
+        return False
 
 
 async def consume_agent_stream(
@@ -287,6 +313,7 @@ async def consume_agent_stream(
     prepare_tts_payload: Callable[..., TTSInput],
     strip_md: bool,
     turn: TurnContext,
+    first_tts_payload_ready: asyncio.Future[bool] | None = None,
 ) -> AgentStreamResult:
     """Consume an :class:`AgentBridgeEvent` stream and queue TTS payloads.
 
@@ -309,6 +336,7 @@ async def consume_agent_stream(
         prepare_tts_payload=prepare_tts_payload,
         strip_md=strip_md,
         turn=turn,
+        first_tts_payload_ready=first_tts_payload_ready,
     )
     return await consumer.run(stream_factory)
 
@@ -331,11 +359,13 @@ class _AgentStreamConsumer:
         prepare_tts_payload: Callable[..., TTSInput],
         strip_md: bool,
         turn: TurnContext,
+        first_tts_payload_ready: asyncio.Future[bool] | None,
     ) -> None:
         self._cancel_token = cancel_token
         self._tts_queue = tts_queue
         self._emit = emit
         self._turn = turn
+        self._first_tts_payload_ready = first_tts_payload_ready
         self._buffer = _SentenceStreamBuffer(
             tts_queue=tts_queue,
             prepare_tts_payload=prepare_tts_payload,
@@ -418,13 +448,33 @@ class _AgentStreamConsumer:
 
     async def _consume_text_delta(self, event: Any) -> None:
         self.result.text += event.text
-        await self._emit(AgentDelta(text=event.text))
+        gate = self._first_tts_payload_ready
+        if gate is None or gate.done():
+            await self._emit(AgentDelta(text=event.text))
+            if self._turn.first_agent_time is None:
+                self._turn.first_agent_time = time.monotonic()
+            await self._buffer.add_delta(event.text)
+            return
 
-        # Record first-token latency
+        delta_event = AgentDelta(text=event.text)
         if self._turn.first_agent_time is None:
-            self._turn.first_agent_time = time.monotonic()
+            self._turn.first_agent_time = delta_event.timestamp
 
-        await self._buffer.add_delta(event.text)
+        queued = False
+        try:
+            # Admit the first complete clause before dispatching observers so
+            # the provider can overlap its TTFB with async AgentDelta handlers.
+            # The TTS consumer holds public lifecycle/audio events behind the
+            # gate until dispatch completes below.
+            queued = await self._buffer.add_delta(event.text)
+            await self._emit(delta_event)
+        except BaseException:
+            if queued and not gate.done():
+                gate.set_result(False)
+            raise
+        else:
+            if queued and not gate.done():
+                gate.set_result(True)
 
     async def _consume_done(self, event: Any) -> None:
         if event.text:
@@ -433,7 +483,8 @@ class _AgentStreamConsumer:
             self.result.text = event.text
         if getattr(event, "structured_output", None) is not None:
             self.result.structured_output = event.structured_output
-        await self._buffer.flush()
+        queued = await self._buffer.flush()
+        self._resolve_first_tts_payload_gate(queued)
         self._done_received = True
 
     def _capture_done_payload(self, event: Any) -> None:
@@ -463,7 +514,12 @@ class _AgentStreamConsumer:
             not self._cancel_token or not self._cancel_token.is_cancelled
         )
         if stream_succeeded:
-            await self._buffer.flush()
+            queued = await self._buffer.flush()
+            self._resolve_first_tts_payload_gate(queued)
+        else:
+            gate = self._first_tts_payload_ready
+            if gate is not None and not gate.done():
+                gate.set_result(False)
         # Sentinel to stop the TTS task.
         #
         # On a clean completion the consumer is still actively draining the
@@ -484,3 +540,8 @@ class _AgentStreamConsumer:
                 self._tts_queue.put_nowait(None)
             except asyncio.QueueFull:
                 logger.debug("tts_queue full; skipping stop sentinel (consumer already stopped)")
+
+    def _resolve_first_tts_payload_gate(self, queued: bool) -> None:
+        gate = self._first_tts_payload_ready
+        if queued and gate is not None and not gate.done():
+            gate.set_result(True)
