@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -14,6 +15,14 @@ from easycat.runtime import InMemoryRingBuffer, JournalRecordKind
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER = ROOT / "docs" / "teaching" / "03-parrot-naive"
 INSPECTOR = CHAPTER / "inspect_timeout.py"
+
+
+def _load_inspector():
+    spec = importlib.util.spec_from_file_location("teaching_ch03_timeout_inspector", INSPECTOR)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_timeout_inspector_uses_latest_stt_event_and_reports_overshoot(tmp_path: Path) -> None:
@@ -121,3 +130,35 @@ def test_timeout_lesson_rejects_exact_deadline_claim() -> None:
     assert "post_fire_ingress_gap_ms" in exercises
     assert "post_fire_consumer_gap_ms" in exercises
     assert "consumer_backlog_ms" in exercises
+
+
+def test_timeout_inspector_handles_absent_and_legacy_next_partial_ingress() -> None:
+    inspector = _load_inspector()
+    records = [
+        {"sequence": 1, "name": "stt.final", "data": {"offset_ms": 100.0, "text": "hi"}},
+        {
+            "sequence": 2,
+            "name": "parrot.fire",
+            "data": {"offset_ms": 650.0, "silence_timeout_s": 0.5},
+        },
+    ]
+
+    no_next_partial = inspector.analyze_records(records)[0]
+    assert no_next_partial["next_partial"] is None
+    assert no_next_partial["next_partial_ingress"] is None
+    assert no_next_partial["post_fire_consumer_gap_ms"] is None
+    assert no_next_partial["post_fire_ingress_gap_ms"] is None
+    assert no_next_partial["consumer_backlog_ms"] is None
+
+    records.append(
+        {
+            "sequence": 3,
+            "name": "stt.partial",
+            "data": {"offset_ms": 900.0, "received_offset_ms": 700.0, "text": "again"},
+        }
+    )
+    legacy_next_partial = inspector.analyze_records(records)[0]
+    assert legacy_next_partial["next_partial_ingress"] is None
+    assert legacy_next_partial["post_fire_consumer_gap_ms"] == 250.0
+    assert legacy_next_partial["post_fire_ingress_gap_ms"] == 50.0
+    assert legacy_next_partial["consumer_backlog_ms"] == 200.0
