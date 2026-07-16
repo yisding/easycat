@@ -518,6 +518,20 @@ _DOCS_LINKS: list[_DocsLink] = [
         ),
     },
     {
+        "label": "Feature testing and evals",
+        "path": "docs/using-easycat/08-testing-evals/",
+        "audience": "learners",
+        "diataxis": "tutorial",
+        "description": "Test offline turns, evaluation oracles, and latency budgets.",
+        "commands": (
+            "uv sync --group dev",
+            "uv run python docs/using-easycat/08-testing-evals/main.py",
+            "uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json",
+            "uv run easycat doctor --json",
+            "uv run easycat validate latency --smoke --json",
+        ),
+    },
+    {
         "label": "Examples",
         "path": "examples/README.md",
         "audience": "app builders",

@@ -354,6 +354,23 @@ uv run easycat replay .easycat/tutorial/ch07/baseline.bundle --fidelity artifact
 uv run easycat diff .easycat/tutorial/ch07/baseline.bundle .easycat/tutorial/ch07/candidate.bundle --json
 ```
 
+## Feature testing and evals
+
+- Path: docs/using-easycat/08-testing-evals/
+- URL: https://github.com/yisding/easycat/tree/main/docs/using-easycat/08-testing-evals
+- Audience: learners
+- Test offline turns, evaluation oracles, and latency budgets.
+
+Commands:
+
+```bash
+uv sync --group dev
+uv run python docs/using-easycat/08-testing-evals/main.py
+uv run easycat latency .easycat/tutorial/ch07/baseline.bundle --json
+uv run easycat doctor --json
+uv run easycat validate latency --smoke --json
+```
+
 ## Examples
 
 - Path: examples/README.md
