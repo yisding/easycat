@@ -7,8 +7,8 @@ frame-by-frame into ``nr.process(chunk)`` and
 ``aec.feed_reference(ref_chunk)`` in matched time.
 
     uv run python docs/teaching/10-cleaning-signal/replay.py \\
-        --mic recordings/speakerphone_loop.mic.wav \\
-        --ref recordings/speakerphone_loop.ref.wav \\
+        --mic docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.mic.wav \\
+        --ref docs/teaching/10-cleaning-signal/recordings/speakerphone_loop.ref.wav \\
         --nr on --aec on
 
 Produces a bundle in ``runs/`` with per-frame NR/AEC output stats
@@ -40,6 +40,7 @@ from easycat.vad import VADConfig
 from easycat.vad.factory import create_vad
 
 FRAME_MS = 20
+REPLAY_METADATA_RECORDS = 2  # audio.config + replay.summary
 RUNS_DIR = Path(__file__).parent / "runs"
 
 
@@ -76,6 +77,11 @@ def _chunks(data: bytes, fmt: AudioFormat):
         yield AudioChunk(data=data[offset : offset + frame_bytes], format=fmt)
 
 
+def _frame_count(data: bytes, fmt: AudioFormat) -> int:
+    frame_bytes = fmt.sample_rate * FRAME_MS // 1000 * fmt.frame_size
+    return len(data) // frame_bytes
+
+
 def _pcm16_power(data: bytes) -> tuple[int, int]:
     """Return sum-of-squares and sample count for little-endian PCM16."""
     if len(data) % 2:
@@ -104,9 +110,8 @@ def _validate_reference(
     ref_path: Path | None,
     aec_flag: str,
 ) -> None:
-    frame_bytes = audio_format.sample_rate * FRAME_MS // 1000 * audio_format.frame_size
-    mic_frame_count = len(mic_data) // frame_bytes
-    ref_frame_count = len(ref_data) // frame_bytes
+    mic_frame_count = _frame_count(mic_data, audio_format)
+    ref_frame_count = _frame_count(ref_data, audio_format)
     if aec_flag == "on" and ref_path is None:
         raise SystemExit("--ref is required when --aec on")
     if aec_flag == "on" and ref_frame_count != mic_frame_count:
@@ -173,7 +178,11 @@ async def run(
 
     _validate_reference(mic_data, ref_data, mic_fmt, ref_path, aec_flag)
 
-    journal = InMemoryRingBuffer(capacity=10_000)
+    # Retain the complete offline evidence contract regardless of recording
+    # length: one record per whole mic frame plus config and summary records.
+    journal = InMemoryRingBuffer(
+        capacity=_frame_count(mic_data, mic_fmt) + REPLAY_METADATA_RECORDS
+    )
     session_id = f"ch10-replay-{mic_path.stem}-nr{nr_flag}-aec{aec_flag}-{int(time.time())}"
     metrics = ReplayMetrics()
 

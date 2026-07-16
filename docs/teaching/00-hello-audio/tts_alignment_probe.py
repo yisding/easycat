@@ -23,8 +23,11 @@ from easycat.transports.websocket import WebSocketTransportConfig
 from easycat.tts.cartesia_tts import CartesiaTTSConfig
 from easycat.tts.deepgram_tts import DeepgramTTSConfig
 from easycat.tts.elevenlabs_tts import ElevenLabsTTSConfig
-from easycat.tts.openai_tts import OpenAITTSConfig
+from easycat.tts.openai_tts import _OPENAI_PCM_FORMAT, OpenAITTSConfig
 
+# OpenAI's raw PCM rate is a fixed provider boundary, not a configurable
+# request field. This repo-local drift probe reads the runtime constant;
+# application code should not import underscore-prefixed names.
 TTS_FACTORIES: dict[str, Callable[[], object]] = {
     "cartesia": lambda: CartesiaTTSConfig(api_key="provider-free-probe"),
     "deepgram": lambda: DeepgramTTSConfig(api_key="provider-free-probe"),
@@ -53,7 +56,7 @@ def _provider_request_rate_hz(tts: object) -> int:
     if isinstance(tts, (DeepgramTTSConfig, CartesiaTTSConfig)):
         return tts.sample_rate
     if isinstance(tts, OpenAITTSConfig):
-        return tts.output_format.sample_rate
+        return _OPENAI_PCM_FORMAT.sample_rate
     raise TypeError(f"Unsupported TTS config: {type(tts).__name__}")
 
 
