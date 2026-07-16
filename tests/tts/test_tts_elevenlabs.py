@@ -131,6 +131,7 @@ class TestElevenLabsTTSConfig:
         assert config.output_format == "pcm_24000"
         assert config.stream_mode == ElevenLabsStreamMode.WEBSOCKET
         assert config.persistent_ws is True
+        assert config.auto_mode is True
         assert config.warmup_timeout_s == 5.0
 
     @pytest.mark.parametrize("timeout", [0, -1, float("inf"), True])
@@ -186,6 +187,7 @@ class TestElevenLabsTTSConfig:
             ElevenLabsTTSConfig(api_key="key", stream_mode=ElevenLabsStreamMode.HTTP)
         )
         assert http.version_info()["sdk_version"] == get_package_version("httpx")
+        assert http._config.persistent_ws is False
 
 
 class TestElevenLabsTTSValidation:
@@ -380,10 +382,10 @@ class TestElevenLabsTTSHTTP:
 
 class TestElevenLabsTTSWebSocket:
     def _make_provider(self, **kwargs) -> ElevenLabsTTS:
+        kwargs.setdefault("persistent_ws", False)
         config = ElevenLabsTTSConfig(
             api_key="test-key",
             stream_mode=ElevenLabsStreamMode.WEBSOCKET,
-            persistent_ws=False,
             **kwargs,
         )
         return ElevenLabsTTS(config)
@@ -436,6 +438,7 @@ class TestElevenLabsTTSWebSocket:
 
         url = mock_ctor.call_args.kwargs["url"]
         assert "apply_text_normalization=on" in url
+        assert "auto_mode=true" in url
 
     async def test_synthesize_ws_sends_init_text_and_eos(self):
         provider = self._make_provider()
@@ -676,12 +679,12 @@ class FakePersistentWS:
             raise RuntimeError("send failed")
         self.sent.append(message)
         msg = json.loads(message)
-        # Respond to the EOS frame (empty text) with audio + isFinal for ctx.
+        # The multi-context endpoint uses snake_case ``is_final``.
         if msg.get("text") == "" and "context_id" in msg:
             ctx_id = msg["context_id"]
             audio = base64.b64encode(_pcm16_bytes(120)).decode()
             await self._queue.put(json.dumps({"audio": audio, "contextId": ctx_id}))
-            await self._queue.put(json.dumps({"isFinal": True, "contextId": ctx_id}))
+            await self._queue.put(json.dumps({"is_final": True, "contextId": ctx_id}))
 
     async def recv_iter(self):
         while True:
@@ -717,6 +720,7 @@ class TestElevenLabsPersistent:
         url = provider._multi_stream_url()
         assert "/multi-stream-input?" in url
         assert "inactivity_timeout=25" in url
+        assert "auto_mode=true" in url
 
     def test_persistent_rejects_out_of_range_inactivity_timeout(self):
         with pytest.raises(ValueError, match=r"inactivity_timeout must be in \[1, 180\]"):
@@ -746,6 +750,8 @@ class TestElevenLabsPersistent:
 
         with patch.object(provider, "_build_multi_ws", factory):
             await provider.warmup()
+            assert factory.call_count == 1
+            assert provider._mgr is not None and provider._mgr._contexts == {}
             async for _ in provider.synthesize("first"):
                 pass
 
@@ -912,6 +918,10 @@ class TestElevenLabsPersistent:
         }
         # Two distinct contexts across the two utterances.
         assert len(ctx_ids) == 2
+        close_frames = [
+            json.loads(s) for s in fake.sent if json.loads(s).get("close_context") is True
+        ]
+        assert len(close_frames) == 2
         await provider.close()
 
     async def test_synthesize_yields_audio(self):

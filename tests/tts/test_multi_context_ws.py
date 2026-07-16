@@ -94,6 +94,24 @@ def _make_adapter(ws, **overrides) -> MultiContextAdapter:
 
 
 class TestMultiContextWSManager:
+    async def test_connect_warms_socket_without_opening_context(self):
+        ws = FakeMultiContextWS()
+        connect_calls = 0
+
+        def _connect_factory(_hook):
+            nonlocal connect_calls
+            connect_calls += 1
+            return ws
+
+        mgr = MultiContextWSManager(_make_adapter(ws, connect_factory=_connect_factory))
+        await mgr.connect()
+        await mgr.connect()
+
+        assert connect_calls == 1
+        assert mgr._ws is ws
+        assert mgr._contexts == {}
+        await mgr.aclose()
+
     async def test_fresh_uuid_per_open_context(self):
         ws = FakeMultiContextWS()
         mgr = MultiContextWSManager(_make_adapter(ws))

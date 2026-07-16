@@ -74,11 +74,11 @@ class CartesiaTTSConfig:
     reconnect_max_delay: float = 30.0
     # Persistent multi-context socket. Default ``True`` keeps one WebSocket
     # warm across turns and removes connection setup from reply latency. Each
-    # utterance scoped by a fresh context_id, and barge-in cancels just the
+    # utterance is scoped by a fresh context_id, and barge-in cancels just the
     # context (falling back to a full socket close) rather than tearing the
     # socket down. Set ``False`` to restore the one-shot-per-synthesize path.
-    # Accepted tradeoff: a mid-stream reconnect replays the
-    # context from the top (audible repetition). Socket warmth between turns
+    # Accepted tradeoff: a mid-stream reconnect replays the context from the
+    # top (audible repetition). Socket warmth between turns
     # relies on WebSocket-level ping/pong; after a very long idle gap the socket
     # may be closed server-side and is transparently reconnected on the next
     # utterance.

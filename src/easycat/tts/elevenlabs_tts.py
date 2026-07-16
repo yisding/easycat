@@ -76,6 +76,9 @@ class ElevenLabsTTSConfig:
     # "off" disables it. Note: "on" requires an Enterprise plan for
     # ``eleven_flash_v2_5``.
     apply_text_normalization: str = "auto"
+    # Disable the server's chunk schedule for the complete clauses/sentences
+    # EasyCat sends, avoiding an unnecessary text-buffer wait before synthesis.
+    auto_mode: bool = True
     stream_mode: ElevenLabsStreamMode = ElevenLabsStreamMode.WEBSOCKET
     base_url: str = "https://api.elevenlabs.io/v1"
     ws_base_url: str = "wss://api.elevenlabs.io/v1"
@@ -221,15 +224,7 @@ class ElevenLabsTTS(_WSTTSBase):
 
     async def _warmup_persistent_ws(self) -> None:
         """Best-effort connect the shared multi-stream socket before traffic."""
-        manager = self._get_mgr()
-        context: _Context | None = None
-        try:
-            # open_context() lazily establishes the socket. No request frame is
-            # sent, so this performs only the authenticated WebSocket handshake.
-            context = await manager.open_context()
-        finally:
-            if context is not None:
-                manager.finish_context(context)
+        await self._get_mgr().connect()
 
     async def synthesize(self, payload: TTSInput | str) -> AsyncIterator[TTSEvent]:
         """Synthesize text using the configured streaming mode.
@@ -417,6 +412,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"/stream-input?model_id={self._config.model_id}"
             f"&output_format={self._config.output_format}"
             f"&apply_text_normalization={self._config.apply_text_normalization}"
+            f"&auto_mode={str(self._config.auto_mode).lower()}"
         )
         self._ws = self._make_ws(ws_url, self._replay_request)
         await self._ws.connect()
@@ -432,6 +428,7 @@ class ElevenLabsTTS(_WSTTSBase):
             f"&output_format={self._config.output_format}"
             f"&apply_text_normalization={self._config.apply_text_normalization}"
             f"&inactivity_timeout={self._config.inactivity_timeout}"
+            f"&auto_mode={str(self._config.auto_mode).lower()}"
         )
 
     def _build_multi_ws(self, on_reconnect) -> ReconnectingWebSocket:
@@ -534,7 +531,13 @@ class ElevenLabsTTS(_WSTTSBase):
                 raise
         finally:
             if ctx is not None:
-                mgr.finish_context(ctx)
+                if ctx.cancelled:
+                    mgr.finish_context(ctx)
+                else:
+                    # ElevenLabs recommends closing completed contexts
+                    # promptly; otherwise rapid turns can leave up to the
+                    # inactivity timeout's worth of server-side contexts open.
+                    await mgr.cancel_context(ctx)
             self._end_synthesis()
 
     async def _decode_persistent_frames(self, ctx: _Context) -> AsyncIterator[TTSEvent]:

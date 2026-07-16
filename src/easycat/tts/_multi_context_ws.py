@@ -170,6 +170,16 @@ class MultiContextWSManager:
 
     # ── public surface ────────────────────────────────────────────
 
+    async def connect(self) -> None:
+        """Establish the shared socket without opening an utterance context.
+
+        This is safe to call concurrently and lets provider warmup move DNS,
+        TLS, and WebSocket-upgrade latency out of the first spoken reply.
+        """
+        if self._closed:
+            raise RuntimeError("MultiContextWSManager is closed")
+        await self._ensure_socket()
+
     async def warmup(self) -> None:
         """Open the shared socket without creating a synthesis context.
 
@@ -177,15 +187,13 @@ class MultiContextWSManager:
         WebSocket-upgrade latency out of the first spoken reply. The next
         :meth:`open_context` reuses the connected socket.
         """
-        if self._closed:
-            raise RuntimeError("MultiContextWSManager is closed")
-        await self._ensure_socket()
+        await self.connect()
 
     async def open_context(self) -> _Context:
         """Register a fresh context, lazily connecting the socket on first use."""
         if self._closed:
             raise RuntimeError("MultiContextWSManager is closed")
-        await self._ensure_socket()
+        await self.connect()
         ctx = _Context(
             context_id=str(uuid4()),
             queue=asyncio.Queue(maxsize=self._adapter.context_queue_maxsize),

@@ -190,6 +190,9 @@ class TestCartesiaPersistent:
 
         with patch.object(provider, "_build_ws", factory):
             await provider.warmup()
+            assert factory.call_count == 1
+            assert provider._mgr is not None and provider._mgr._contexts == {}
+
             async for _ in provider.synthesize("first"):
                 pass
 
@@ -207,6 +210,7 @@ class TestCartesiaPersistent:
         factory = MagicMock(side_effect=[FailingConnectWS(), working])
         with patch.object(provider, "_build_ws", factory):
             await provider.warmup()
+            assert provider._mgr is not None and provider._mgr._contexts == {}
             async for _ in provider.synthesize("retry"):
                 pass
 
@@ -417,6 +421,7 @@ class TestCartesiaTTSConfig:
         assert config.add_timestamps is True
         assert config.persistent_ws is True
         assert config.base_url.startswith("wss://api.cartesia.ai")
+        assert config.persistent_ws is True
 
     def test_rejects_unsupported_encoding(self):
         with pytest.raises(ValueError, match="Unsupported Cartesia encoding"):
@@ -459,7 +464,8 @@ class TestCartesiaTTSConfig:
 
 class TestCartesiaTTS:
     def _make_provider(self, **kwargs) -> CartesiaTTS:
-        return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", persistent_ws=False, **kwargs))
+        kwargs.setdefault("persistent_ws", False)
+        return CartesiaTTS(CartesiaTTSConfig(api_key="test-key", **kwargs))
 
     async def test_synthesize_yields_audio_events(self):
         provider = self._make_provider()
